@@ -1,7 +1,7 @@
 import os
 from datetime import date
 import streamlit as st
-from core.news_store import download_range, load_local_day
+from core.news_store import download_range, load_local_day, prescan_days
 
 def render_news_tab():
     st.subheader("📥 News cache")
@@ -60,12 +60,13 @@ def render_news_tab():
             saved_path = evt.get("saved_path", "")
             ok = evt.get("content_ok", 0)
             fail = evt.get("content_fail", 0)
-            synt = evt.get("synthetic_days", 0)
-            real = evt.get("real_days", 0)
+            days_ready = evt.get("days_with_news", 0)
             skipped = evt.get("skipped_existing", 0)
 
             progress.progress(min(1.0, cnt["i"] / total_days))
-            status.write(f"{day}: **{prov}** → `{saved_path}` · content ok={ok} fail={fail} · real={real} synthetic={synt} · skipped={skipped}")
+            status.write(
+                f"{day}: **{prov}** → `{saved_path}` · content ok={ok} fail={fail} · days ready={days_ready} · skipped={skipped}"
+            )
 
         stats = download_range(
             symbol,
@@ -81,10 +82,42 @@ def render_news_tab():
         st.success(
             f"{stats.get('saved',0)}/{total_days} saved — "
             f"{stats.get('last_date','')} last · "
-            f"real={stats.get('real_days',0)} synthetic={stats.get('synthetic_days',0)} | "
+            f"days with news={stats.get('days_with_news',0)} | "
             f"content ok={stats.get('content_ok',0)} fail={stats.get('content_fail',0)} · "
             f"skipped={stats.get('skipped_existing',0)}"
         )
+
+        summary = prescan_days(
+            symbol,
+            start_iso,
+            end_iso,
+            K=int(K),
+            base_dir=base_dir,
+            full_content=bool(full),
+        )
+        if summary:
+            import pandas as pd
+
+            df = pd.DataFrame(summary)
+            if "available" in df.columns:
+                df["status"] = df["available"].apply(
+                    lambda val: "✅ complete" if int(val or 0) >= int(K) else "⚠️ missing"
+                )
+            else:
+                df["status"] = ""
+            st.caption("Current local news coverage for the selected range")
+            st.dataframe(
+                df[[col for col in ["date", "available", "exists", "status", "provider", "decision"] if col in df.columns]],
+                use_container_width=True,
+            )
+            missing_days = [row["date"] for row in summary if int(row.get("available", 0)) < int(K)]
+            if missing_days:
+                st.warning(
+                    "Days still missing enough articles: " + ", ".join(missing_days)
+                )
+            else:
+                st.info("All selected days have saved news.")
+
         st.session_state["NEWS_LOCAL_DIR"] = base_dir
         os.environ["NEWS_LOCAL_DIR"] = base_dir
 

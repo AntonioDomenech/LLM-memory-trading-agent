@@ -100,7 +100,7 @@ def _as_str(x):
 
 
 def _is_synth(a: dict) -> bool:
-    """Detect synthetic placeholder articles robustly, handling dict fields and non-strings."""
+    """Detect placeholder articles that should not be counted as usable news."""
     if not isinstance(a, dict):
         return False
     src_val = _as_str(a.get("source")).strip().lower()
@@ -202,7 +202,7 @@ def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) ->
 
 def prescan_days(symbol: str, start_iso: str, end_iso: str, K: int,
                  base_dir: str = None, full_content: bool = False):
-    """Return a list of {date, path, exists, count, non_synth, provider, decision} for diagnostics."""
+    """Return a list of {date, path, exists, count, available, provider, decision} for diagnostics."""
     plan = []
     for day in daterange(start_iso, end_iso):
         p = local_day_path(symbol, day, base_dir)
@@ -216,10 +216,10 @@ def prescan_days(symbol: str, start_iso: str, end_iso: str, K: int,
                 provider = d.get("provider") or d.get("reason") or "local"
             except Exception as e:
                 pre_arts, provider = [], f"local:error:{e}"
-        non_synth_list = [a for a in pre_arts if not _is_synth(a)]
-        non_synth = len(non_synth_list)
-        enough = non_synth >= K
-        need_cont = bool(full_content) and any((not _has_content(a)) for a in non_synth_list[:K])
+        usable_list = [a for a in pre_arts if not _is_synth(a)]
+        usable_count = len(usable_list)
+        enough = usable_count >= K
+        need_cont = bool(full_content) and any((not _has_content(a)) for a in usable_list[:K])
         if exists and enough and not need_cont:
             decision = "skip_existing"
         elif exists and (not enough or need_cont):
@@ -228,7 +228,7 @@ def prescan_days(symbol: str, start_iso: str, end_iso: str, K: int,
             decision = "fetch_new"
         plan.append({
             "date": day, "path": p, "exists": bool(exists),
-            "count": len(pre_arts), "non_synth": int(non_synth),
+            "count": len(pre_arts), "available": int(usable_count),
             "provider": provider, "decision": decision
         })
     return plan
@@ -246,11 +246,10 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
         "saved": 0,
         "content_ok": 0,
         "content_fail": 0,
-        "synthetic_days": 0,
-        "real_days": 0,
+        "days_with_news": 0,
         "skipped_existing": 0,
     }
-    for _k in ("saved", "content_ok", "content_fail", "synthetic_days", "real_days", "skipped_existing"):
+    for _k in ("saved", "content_ok", "content_fail", "days_with_news", "skipped_existing"):
         if _k not in stats:
             stats[_k] = 0
 
@@ -286,16 +285,16 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                 except Exception:
                     pre_arts, pre_provider = [], ""
 
-            # Decide action with correct counting (ALL non-synthetic in the file)
-            non_synth_list = [a for a in pre_arts if not _is_synth(a)]
-            non_synth = len(non_synth_list)
-            enough_count = non_synth >= K
-            need_content = bool(full_content) and any((not _has_content(a)) for a in non_synth_list[:K])
+            # Decide action with correct counting (all usable articles in the file)
+            usable_existing = [a for a in pre_arts if not _is_synth(a)]
+            usable_count = len(usable_existing)
+            enough_count = usable_count >= K
+            need_content = bool(full_content) and any((not _has_content(a)) for a in usable_existing[:K])
 
             # 1) Full skip
             if pre_arts and enough_count and not need_content:
                 stats["skipped_existing"] += 1
-                cleaned = [a for a in pre_arts if not _is_synth(a)]
+                cleaned = usable_existing
                 provider_label = pre_provider or "local"
                 path = p
                 if cleaned != pre_arts or _provider_mentions_synth(pre_provider):
@@ -303,22 +302,18 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                     path = save_local_day(symbol, day, cleaned,
                                           provider_label, "local:normalized_cached_metadata", base_dir)
                     stats["saved"] += 1
-                    if provider_label.lower().startswith("synthetic"):
-                        stats["synthetic_days"] += 1
-                    else:
-                        stats["real_days"] += 1
+                stats["days_with_news"] += 1
                 if on_event:
                     on_event({"type": "progress", "date": day, "provider": provider_label,
                               "saved_path": path, "content_ok": stats["content_ok"],
                               "content_fail": stats["content_fail"],
-                              "synthetic_days": stats["synthetic_days"],
-                              "real_days": stats["real_days"],
+                              "days_with_news": stats["days_with_news"],
                               "skipped_existing": stats["skipped_existing"]})
                 continue
 
             # 2) Content-only enrichment (no provider API calls)
             if pre_arts and enough_count and need_content:
-                work = non_synth_list[:K]
+                work = usable_existing[:K]
                 _enrich_content_only(work, content_delay, stats)
                 # Write back enriched items
                 by_key = {_key(a): a for a in work}
@@ -330,19 +325,23 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                 path = save_local_day(symbol, day, pre_arts[:K],
                                       pre_provider or "local+content", "content_enriched", base_dir)
                 stats["saved"] += 1
+                stats["days_with_news"] += 1
                 if on_event:
                     on_event({"type": "progress", "date": day,
                               "provider": pre_provider or "local+content",
                               "saved_path": path, "content_ok": stats["content_ok"],
                               "content_fail": stats["content_fail"],
-                              "synthetic_days": stats["synthetic_days"],
-                              "real_days": stats["real_days"],
+                              "days_with_news": stats["days_with_news"],
                               "skipped_existing": stats["skipped_existing"]})
                 continue
 
             # 3) Fetch headlines (providers)
             arts, reason = fetch_fn(symbol, day, K)
             prov_label = (reason or "").split(":", 1)[0].lower() if reason else ""
+            prov_label = _clean_provider_label(prov_label)
+
+            # Filter out placeholder articles from providers
+            arts = [a for a in (arts or []) if not _is_synth(a)]
 
             if not arts:
                 # No new data from providers; keep existing file as-is and emit progress
@@ -362,8 +361,7 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                         "saved_path": p if pre_exists else "",
                         "content_ok": stats["content_ok"],
                         "content_fail": stats["content_fail"],
-                        "synthetic_days": stats["synthetic_days"],
-                        "real_days": stats["real_days"],
+                        "days_with_news": stats["days_with_news"],
                         "skipped_existing": stats["skipped_existing"],
                     })
                 continue
@@ -397,28 +395,39 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                         except Exception:
                             stats["content_fail"] += 1
 
-            # Remove synthetics if providers gave real data
-            if prov_label != "synthetic":
-                pre_arts = [a for a in pre_arts if not _is_synth(a)]
+            # Remove placeholder articles from cached data before merging
+            pre_arts = [a for a in pre_arts if not _is_synth(a)]
 
             # Merge and save
             final_arts = _merge_articles_for_k(pre_arts, arts, K,
                                                require_content=bool(full_content))
+            if not final_arts:
+                # Nothing usable to save; remove empty placeholder file if needed
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
+                if on_event:
+                    on_event({"type": "progress", "date": day, "provider": prov_label or "none",
+                              "saved_path": "", "content_ok": stats["content_ok"],
+                              "content_fail": stats["content_fail"],
+                              "days_with_news": stats["days_with_news"],
+                              "skipped_existing": stats["skipped_existing"]})
+                continue
+
             label_to_save = prov_label if not pre_arts or len(final_arts) == len(arts) else f"{prov_label}+local"
+            label_to_save = _clean_provider_label(label_to_save)
             path = save_local_day(symbol, day, final_arts,
                                   label_to_save or "unknown", str(reason or ""), base_dir)
             stats["saved"] += 1
-            if (label_to_save or "").lower().startswith("synthetic"):
-                stats["synthetic_days"] += 1
-            else:
-                stats["real_days"] += 1
+            stats["days_with_news"] += 1
 
             if on_event:
                 on_event({"type": "progress", "date": day, "provider": label_to_save,
                           "saved_path": path, "content_ok": stats["content_ok"],
                           "content_fail": stats["content_fail"],
-                          "synthetic_days": stats["synthetic_days"],
-                          "real_days": stats["real_days"],
+                          "days_with_news": stats["days_with_news"],
                           "skipped_existing": stats["skipped_existing"]})
 
         except Exception as e:
