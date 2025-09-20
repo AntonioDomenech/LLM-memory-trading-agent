@@ -164,6 +164,20 @@ def _merge_articles_for_k(existing: List[Dict], new: List[Dict], K: int,
     return out[:K]
 
 
+def _retry_delay_seconds(meta: Dict) -> float:
+    if not isinstance(meta, dict):
+        return 300.0
+    retry_after = meta.get("retry_after")
+    if isinstance(retry_after, (int, float)) and retry_after > 0:
+        return float(retry_after)
+    attempts = meta.get("attempts")
+    if isinstance(attempts, int) and attempts > 0:
+        # Exponential backoff capped at 15 minutes
+        delay = 2 ** attempts
+        return float(max(60.0, min(delay * 60.0, 900.0)))
+    return 300.0
+
+
 def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) -> None:
     """Fill missing content for given articles in-place using article_scraper, updating stats.
     Does NOT fetch headlines; only enriches body text from each article's own URL.
@@ -174,6 +188,7 @@ def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) ->
         fetch_fulltext = None
     if not fetch_fulltext or not arts:
         return
+    now = time.time
     for it in arts:
         try:
             if isinstance(it, dict) and isinstance(it.get("content"), str) and it.get("content").strip():
@@ -181,20 +196,47 @@ def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) ->
             u = it.get("url", "")
             if not isinstance(u, str) or not u.strip():
                 continue
-            text = ""
-            try:
-                text = fetch_fulltext(u)
-            except Exception:
-                text = ""
+            status_flag = it.get("_content_status")
+            if status_flag == "failed":
+                continue
+            retry_at = it.get("_content_retry_at")
+            if status_flag == "retry" and isinstance(retry_at, (int, float)):
+                if retry_at > now():
+                    continue
+            result = fetch_fulltext(u)
+            if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
+                text, meta = result
+            else:
+                text, meta = result, {}
             if isinstance(text, str) and text.strip():
                 it["content"] = text
+                it.pop("_content_status", None)
+                it.pop("_content_retry_at", None)
+                if meta.get("error"):
+                    it["_content_error"] = meta.get("error")
+                else:
+                    it.pop("_content_error", None)
                 stats["content_ok"] = stats.get("content_ok", 0) + 1
             else:
+                meta = meta or {}
+                retryable = bool(meta.get("retryable"))
+                it["_content_error"] = meta.get("error") or "unknown"
+                if retryable:
+                    it["_content_status"] = "retry"
+                    delay = _retry_delay_seconds(meta)
+                    it["_content_retry_at"] = now() + delay
+                else:
+                    it["_content_status"] = "failed"
+                    it.pop("_content_retry_at", None)
                 stats["content_fail"] = stats.get("content_fail", 0) + 1
             if content_delay and content_delay > 0:
                 time.sleep(content_delay)
         except Exception:
             stats["content_fail"] = stats.get("content_fail", 0) + 1
+            if isinstance(it, dict):
+                it["_content_status"] = "retry"
+                it["_content_error"] = "exception"
+                it["_content_retry_at"] = now() + 300.0
             continue
 
 
@@ -368,32 +410,7 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
 
             # Optional content enrichment
             if full_content:
-                try:
-                    from .article_scraper import fetch_fulltext
-                except Exception:
-                    fetch_fulltext = None
-                if fetch_fulltext:
-                    for it in arts:
-                        try:
-                            if isinstance(it.get("content"), str) and it.get("content").strip():
-                                continue
-                            u = it.get("url", "")
-                            if not isinstance(u, str) or not u:
-                                continue
-                            text = ""
-                            try:
-                                text = fetch_fulltext(u)
-                            except Exception:
-                                text = ""
-                            if isinstance(text, str) and text.strip():
-                                it["content"] = text
-                                stats["content_ok"] += 1
-                            else:
-                                stats["content_fail"] += 1
-                            if content_delay and content_delay > 0:
-                                time.sleep(content_delay)
-                        except Exception:
-                            stats["content_fail"] += 1
+                _enrich_content_only(arts, content_delay, stats)
 
             # Remove placeholder articles from cached data before merging
             pre_arts = [a for a in pre_arts if not _is_synth(a)]
