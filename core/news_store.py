@@ -203,7 +203,10 @@ def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) ->
             if status_flag == "retry" and isinstance(retry_at, (int, float)):
                 if retry_at > now():
                     continue
-            result = fetch_fulltext(u)
+            try:
+                result = fetch_fulltext(u, return_meta=True)
+            except TypeError:
+                result = fetch_fulltext(u)
             if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
                 text, meta = result
             else:

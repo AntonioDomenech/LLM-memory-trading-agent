@@ -3,7 +3,7 @@ import re, html, time
 from urllib.parse import urljoin, urlparse
 from html.parser import HTMLParser
 import requests
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Tuple, Any, Optional, Union
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -77,16 +77,23 @@ def _parse_retry_after(value: Optional[str]) -> Optional[float]:
         return None
 
 
-def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 20000
-                   ) -> Tuple[str, Dict[str, Any]]:
+def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 20000,
+                   *, return_meta: bool = False) -> Union[str, Tuple[str, Dict[str, Any]]]:
     """Best-effort article text extraction with stdlib only.
-       Returns (plain text, metadata).
-       Metadata contains status / retry info so callers can distinguish failures.
+       Returns plain text by default for backward compatibility.
+       When return_meta=True, returns (plain text, metadata) where metadata contains
+       status / retry info so callers can distinguish failures.
     """
-    meta: Dict[str, Any] = {"status": None, "error": None, "retryable": False, "attempts": 0}
+    meta: Dict[str, Any] = {
+        "status": None,
+        "error": None,
+        "retryable": False,
+        "attempts": 0,
+        "retry_after": None,
+    }
     if not url:
         meta.update({"error": "no_url", "retryable": False})
-        return "", meta
+        return ("", meta) if return_meta else ""
     headers = {"User-Agent": ua or DEFAULT_UA, "Accept":"text/html,application/xhtml+xml"}
     backoff = 1.0
     last_exc: Optional[BaseException] = None
@@ -128,16 +135,16 @@ def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 2
     if response is None:
         if last_exc and meta.get("error") is None:
             meta.update({"error": f"exception:{type(last_exc).__name__}", "retryable": True})
-        return "", meta
+        return ("", meta) if return_meta else ""
 
     status = response.status_code
     if status != 200:
-        return "", meta
+        return ("", meta) if return_meta else ""
 
     ctype = (response.headers.get("Content-Type","").split(";")[0] or "").lower()
     if "text/html" not in ctype and "application/xhtml" not in ctype:
         meta.update({"error": "unsupported_content_type", "retryable": False})
-        return "", meta
+        return ("", meta) if return_meta else ""
 
     html_str = response.text
     # Heuristic pre-trim: drop nav/header/footer blocks crudely
@@ -152,9 +159,9 @@ def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 2
     txt = p.text()
     if not txt:
         meta.update({"error": "empty_text", "retryable": False})
-        return "", meta
+        return ("", meta) if return_meta else ""
     txt = txt.strip()
     if len(txt) > max_len:
         txt = txt[:max_len] + " ..."
     meta.update({"error": None, "retryable": False})
-    return txt, meta
+    return (txt, meta) if return_meta else txt
