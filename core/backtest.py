@@ -1,26 +1,15 @@
 
-import os, json
-from datetime import datetime
 import numpy as np, pandas as pd
 from .logger import get_logger
 from .config import load_config
 from .data_fetcher import get_daily_bars
 from .indicators import add_indicators
-from .news_fetcher import fetch_news_with_reason
-from .capsules import build_capsule
 from .llm import chat_json
 from .metrics import compute_metrics
 from .plots import plot_equity, plot_drawdown
+from .pipeline import prepare_daily_context
 
 log = get_logger()
-
-def _prov_label(reason: str) -> str:
-    parts = (reason or "").split(":")
-    if not parts:
-        return "unknown"
-    if parts[0] == "cache" and len(parts) > 1:
-        return f"cache->{parts[1]}"
-    return parts[0]
 
 def _get(cfg, *path, default=None):
     obj = cfg
@@ -72,21 +61,10 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
-        # Headlines
-        arts, reason = ([], "K_news_per_day=0")
-        provider_used = "Off"
-        if cfg.K_news_per_day > 0 and cfg.news_source != "Off":
-            arts, reason = fetch_news_with_reason(cfg.symbol, d_iso, cfg.K_news_per_day)
-            provider_used = _prov_label(reason)
+        ctx = prepare_daily_context(cfg, d_iso, pr)
+        cap = ctx.capsule
 
-        # Capsule + policy
-        regime = {"market": "up" if pr.get("trend_up",0)==1 else "down_or_sideways",
-                  "vol_bucket": "high" if float(pr.get("atr",0))/max(1.0,float(pr.get("price",1.0))) > 0.02 else "low"}
-        cap = build_capsule(d_iso, cfg.symbol, pr, arts, [], regime)
-
-        sys_pol = {"role":"system","content": open("prompts/policy_head.txt","r",encoding="utf-8").read()}
-        usr_pol = {"role":"user","content": json.dumps({"capsule": cap})}
-        raw = chat_json([sys_pol, usr_pol], model=cfg.decision_model, max_tokens=120)
+        raw = chat_json(ctx.policy_prompt.as_messages(), model=cfg.decision_model, max_tokens=120)
         action = str(raw.get("action","HOLD")).strip().upper()
 
         # --- Exposure normalization ---
@@ -155,7 +133,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         # Record decision periodically
         if i % max(1, event_rate) == 0:
             dec = {**raw, "action": action, "target_exposure": float(target_exposure),
-                   "provider": provider_used, "norm": normalized or ""}
+                   "provider": ctx.provider_label, "norm": normalized or ""}
             emit({"type":"decision","date":d_iso,"decision": dec})
             emit({"type":"progress","i":i+1,"n":len(dates)})
 
