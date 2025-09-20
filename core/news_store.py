@@ -244,10 +244,11 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
             stats["last_date"] = day
             p = local_day_path(symbol, day, base_dir)
 
-            # Load pre-existing
+            # Load pre-existing (always inspect so we can avoid redundant fetches)
+            pre_exists = os.path.exists(p)
             pre_arts: List[Dict] = []
             pre_provider = ""
-            if skip_existing and os.path.exists(p):
+            if pre_exists:
                 try:
                     with open(p, "r", encoding="utf-8") as f:
                         d = json.load(f)
@@ -301,6 +302,30 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
             # 3) Fetch headlines (providers)
             arts, reason = fetch_fn(symbol, day, K)
             prov_label = (reason or "").split(":", 1)[0].lower() if reason else ""
+
+            if not arts:
+                # No new data from providers; keep existing file as-is and emit progress
+                if pre_exists and (not pre_arts or all(_is_synth(a) for a in pre_arts)):
+                    try:
+                        os.remove(p)
+                        pre_exists = False
+                    except FileNotFoundError:
+                        pre_exists = False
+                    except Exception:
+                        pass
+                if on_event:
+                    on_event({
+                        "type": "progress",
+                        "date": day,
+                        "provider": prov_label or "none",
+                        "saved_path": p if pre_exists else "",
+                        "content_ok": stats["content_ok"],
+                        "content_fail": stats["content_fail"],
+                        "synthetic_days": stats["synthetic_days"],
+                        "real_days": stats["real_days"],
+                        "skipped_existing": stats["skipped_existing"],
+                    })
+                continue
 
             # Optional content enrichment
             if full_content:

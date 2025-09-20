@@ -232,7 +232,7 @@ _PROVIDERS = {
 }
 
 def fetch_day(symbol: str, day_iso: str, K: int):
-    """Try providers in NEWS_PROVIDER_CHAIN until one returns articles; else synthetic."""
+    """Try providers in NEWS_PROVIDER_CHAIN until one returns articles; otherwise return none."""
     chain = get_provider_chain()
     attempts = []
     for prov in chain:
@@ -248,16 +248,14 @@ def fetch_day(symbol: str, day_iso: str, K: int):
         # mild backoff on rate limits
         if "rate" in str(reason).lower():
             time.sleep(1.0)
-    # Synthetic fallback
-    placeholder = [{"title": f"No reliable articles found for {symbol} on {day_iso}", "source": "synthetic", "url": ""}]
     trace_str = ";".join(attempts) if attempts else "no_attempts"
-    _write_cache({"provider": "synthetic", "symbol": symbol, "date": day_iso, "articles": placeholder, "reason": f"synthetic:{trace_str}"})
-    return placeholder, f"synthetic:{trace_str}"
+    _write_cache({"provider": "none", "symbol": symbol, "date": day_iso, "articles": [], "reason": f"none:{trace_str}"})
+    return [], f"none:{trace_str}"
 
 
 def fetch_news_with_reason(symbol: str, day_iso: str, K: int):
     """Compatibility wrapper for older code paths.
-    Returns (articles, reason) where reason begins with Provider or 'synthetic'.
+    Returns (articles, reason) where reason begins with Provider or 'none'.
     """
     arts, reason = fetch_day(symbol, day_iso, K)
     return arts, reason
