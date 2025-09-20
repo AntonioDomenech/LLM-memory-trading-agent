@@ -23,6 +23,7 @@ from core.config import load_config
 from core.train import run_training
 from core.backtest import run_backtest
 from ui.news_tab import render_news_tab
+from ui.config_editor import render_config_tab
 
 st.set_page_config(page_title="FinMem Pro", layout="wide")
 st.title("FinMem Pro")
@@ -33,11 +34,21 @@ with st.sidebar:
     if "NEWS_LOCAL_DIR" in os.environ:
         st.caption(f"NEWS_LOCAL_DIR = {os.environ['NEWS_LOCAL_DIR']}")
 
-tabs = st.tabs(["Entrenamiento", "Backtest", "News cache"])
+tabs = st.tabs(["Config", "Entrenamiento", "Backtest", "News cache"])
+
+# --- Config tab ---
+with tabs[0]:
+    render_config_tab(cfg_path)
 
 # --- Training tab ---
-with tabs[0]:
+with tabs[1]:
     st.subheader("Entrenamiento")
+    st.caption(f"Usando configuración: {cfg_path}")
+    cfg_snapshot = st.session_state.get("CONFIG_LAST")
+    if cfg_snapshot:
+        st.caption(
+            f"Símbolo {cfg_snapshot.get('symbol','?')} · Entrenamiento {cfg_snapshot.get('train_start','?')} → {cfg_snapshot.get('train_end','?')}"
+        )
     spot = st.empty()
     prog = st.progress(0.0, text="Idle")
     log = st.container()
@@ -66,8 +77,14 @@ with tabs[0]:
         st.json(res.get("memory_snapshot", {}))
 
 # --- Backtest tab ---
-with tabs[1]:
+with tabs[2]:
     st.subheader("Backtest")
+    st.caption(f"Usando configuración: {cfg_path}")
+    cfg_snapshot_bt = st.session_state.get("CONFIG_LAST")
+    if cfg_snapshot_bt:
+        st.caption(
+            f"Símbolo {cfg_snapshot_bt.get('symbol','?')} · Backtest {cfg_snapshot_bt.get('test_start','?')} → {cfg_snapshot_bt.get('test_end','?')}"
+        )
     update_rate = st.number_input("Event rate (days)", min_value=1, max_value=50, value=10)
     spot2 = st.empty()
     prog2 = st.progress(0.0, text="Idle")
@@ -100,5 +117,5 @@ with tabs[1]:
             st.dataframe(res["trades_tail"])
 
 # --- News cache tab ---
-with tabs[2]:
+with tabs[3]:
     render_news_tab()

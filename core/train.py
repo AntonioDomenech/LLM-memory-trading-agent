@@ -2,7 +2,7 @@
 import json
 import pandas as pd
 from .logger import get_logger
-from .config import load_config
+from .config import load_config, resolve_memory_path
 from .data_fetcher import get_daily_bars
 from .indicators import add_indicators
 from .memory import MemoryBank
@@ -44,7 +44,7 @@ def run_training(config_path="config.json", on_event=None):
     df["date"] = pd.to_datetime(df["date"]).dt.date
     dates = list(df["date"].astype("datetime64[ns]").dt.date)
 
-    memory_path = getattr(cfg, "memory_path", None) or "data/memory_bank.json"
+    memory_path = resolve_memory_path(cfg, prefer_existing=True, ensure_parent=True)
     bank = MemoryBank(memory_path, emb_model=cfg.embedding_model)
     cap_path = capsule_path(cfg.symbol, cfg.train_start, cfg.train_end)
 

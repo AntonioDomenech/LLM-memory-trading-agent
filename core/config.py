@@ -1,6 +1,6 @@
 
 from dataclasses import dataclass, field, asdict
-import json, os
+import json, os, re
 from typing import Dict, Any
 
 @dataclass
@@ -27,6 +27,7 @@ class RiskCfg:
     slippage_bps: float = 8.0
     min_trade_value: float = 0.0
     min_trade_shares: int = 1
+    allow_short: bool = False
 
 @dataclass
 class Config:
@@ -49,8 +50,10 @@ class Config:
 def load_config(path: str) -> Config:
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
+    symbol = raw.get("symbol", "AAPL")
+    memory_path = raw.get("memory_path") or _find_preferred_memory_path(symbol)
     cfg = Config(
-        symbol = raw.get("symbol", "AAPL"),
+        symbol = symbol,
         train_start = raw.get("train_start", "2022-01-01"),
         train_end   = raw.get("train_end", "2022-12-31"),
         test_start  = raw.get("test_start", "2023-01-01"),
@@ -59,13 +62,15 @@ def load_config(path: str) -> Config:
         K_news_per_day = int(raw.get("K_news_per_day", 5)),
         embedding_model = raw.get("embedding_model","text-embedding-3-small"),
         decision_model  = raw.get("decision_model","gpt-4o-mini"),
-        memory_path = raw.get("memory_path", "data/memory_bank.json"),
+        memory_path = memory_path,
         retrieval = RetrievalCfg(**raw.get("retrieval", {})),
         risk = RiskCfg(**raw.get("risk", {})),
     )
+    resolve_memory_path(cfg, prefer_existing=True)
     return cfg
 
 def save_config(path: str, cfg: Config):
+    resolve_memory_path(cfg, prefer_existing=False, ensure_parent=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg.to_dict(), f, indent=2)
 
@@ -73,3 +78,67 @@ def get_alpaca_keys():
     key = os.environ.get("ALPACA_API_KEY_ID") or os.environ.get("ALPACA_KEY")
     secret = os.environ.get("ALPACA_API_SECRET_KEY") or os.environ.get("ALPACA_SECRET")
     return key, secret
+
+
+def _normalize_path(path: str) -> str:
+    expanded = os.path.expanduser(path or "")
+    normalized = os.path.normpath(expanded)
+    return normalized
+
+
+def _symbol_slug(symbol: str) -> str:
+    clean = (symbol or "default").strip().upper()
+    return re.sub(r"[^A-Z0-9_-]+", "_", clean) or "DEFAULT"
+
+
+def default_memory_path(symbol: str) -> str:
+    slug = _symbol_slug(symbol)
+    return os.path.join("data", "memory", f"{slug}_memory.json")
+
+
+def _legacy_memory_candidates() -> Dict[str, str]:
+    return {
+        "legacy": "data/memory_bank.json",
+    }
+
+
+def _find_preferred_memory_path(symbol: str) -> str:
+    default_path = default_memory_path(symbol)
+    for path in [default_path, *_legacy_memory_candidates().values()]:
+        if os.path.exists(_normalize_path(path)):
+            return path
+    return default_path
+
+
+def resolve_memory_path(cfg: Config, prefer_existing: bool = True, ensure_parent: bool = False) -> str:
+    symbol = getattr(cfg, "symbol", "AAPL")
+    explicit = getattr(cfg, "memory_path", None)
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+    default_path = default_memory_path(symbol)
+    if default_path not in candidates:
+        candidates.append(default_path)
+    for legacy in _legacy_memory_candidates().values():
+        if legacy not in candidates:
+            candidates.append(legacy)
+
+    chosen = None
+    if prefer_existing:
+        for cand in candidates:
+            norm = _normalize_path(cand)
+            if os.path.exists(norm):
+                chosen = cand
+                break
+
+    if chosen is None:
+        chosen = candidates[0]
+
+    normalized = _normalize_path(chosen)
+    if ensure_parent:
+        parent = os.path.dirname(normalized)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+    cfg.memory_path = normalized
+    return normalized

@@ -1,7 +1,7 @@
 
 import numpy as np, pandas as pd
 from .logger import get_logger
-from .config import load_config
+from .config import load_config, resolve_memory_path
 from .data_fetcher import get_daily_bars
 from .indicators import add_indicators
 from .llm import chat_json
@@ -59,6 +59,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             except Exception: pass
 
     cfg = load_config(config_path)
+    memory_path = resolve_memory_path(cfg, prefer_existing=True, ensure_parent=True)
 
     retrieval_cfg = getattr(cfg, "retrieval", None)
     use_memory = False
@@ -69,7 +70,6 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                 break
     memory_bank = None
     if use_memory:
-        memory_path = getattr(cfg, "memory_path", None) or "data/memory_bank.json"
         memory_bank = MemoryBank(path=memory_path, emb_model=cfg.embedding_model)
 
     max_pos_shares = float(_get(cfg, "risk", "max_position", default=0) or 0)
