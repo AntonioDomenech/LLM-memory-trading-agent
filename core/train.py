@@ -44,7 +44,8 @@ def run_training(config_path="config.json", on_event=None):
     df["date"] = pd.to_datetime(df["date"]).dt.date
     dates = list(df["date"].astype("datetime64[ns]").dt.date)
 
-    bank = MemoryBank("data/memory_bank.json", emb_model=cfg.embedding_model)
+    memory_path = getattr(cfg, "memory_path", None) or "data/memory_bank.json"
+    bank = MemoryBank(memory_path, emb_model=cfg.embedding_model)
     cap_path = capsule_path(cfg.symbol, cfg.train_start, cfg.train_end)
 
     emit({"type":"phase","label":"Training loop","state":"running"})
@@ -58,7 +59,7 @@ def run_training(config_path="config.json", on_event=None):
             continue
         pr = row.iloc[0].to_dict()
 
-        ctx = prepare_daily_context(cfg, d_iso, pr)
+        ctx = prepare_daily_context(cfg, d_iso, pr, memory_bank=bank)
 
         arts = list(ctx.articles)
         if not arts:

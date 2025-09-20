@@ -39,6 +39,7 @@ class Config:
     K_news_per_day: int = 5
     embedding_model: str = "text-embedding-3-small"
     decision_model: str = "gpt-4o-mini"
+    memory_path: str = "data/memory_bank.json"
     retrieval: RetrievalCfg = field(default_factory=RetrievalCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
 
@@ -58,6 +59,7 @@ def load_config(path: str) -> Config:
         K_news_per_day = int(raw.get("K_news_per_day", 5)),
         embedding_model = raw.get("embedding_model","text-embedding-3-small"),
         decision_model  = raw.get("decision_model","gpt-4o-mini"),
+        memory_path = raw.get("memory_path", "data/memory_bank.json"),
         retrieval = RetrievalCfg(**raw.get("retrieval", {})),
         risk = RiskCfg(**raw.get("risk", {})),
     )
