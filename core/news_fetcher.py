@@ -35,6 +35,34 @@ def _day_plus_one(day_iso: str) -> str:
     d = datetime.fromisoformat(day_iso).date()
     return (d + timedelta(days=1)).strftime("%Y-%m-%d")
 
+def _as_str(value):
+    """Best-effort conversion of nested structures (dict/list) into readable strings."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("name", "title", "source", "publisher"):
+            v = value.get(key)
+            if isinstance(v, str) and v.strip():
+                return v
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return ""
+    if isinstance(value, (list, tuple, set)):
+        parts = []
+        for item in value:
+            s = _as_str(item).strip()
+            if s and s not in parts:
+                parts.append(s)
+        return ", ".join(parts)
+    if value is None:
+        return ""
+    try:
+        return str(value)
+    except Exception:
+        return ""
+
+
 def _map_articles(items, mapping_keys, K):
     out = []
     for it in items or []:
@@ -62,7 +90,11 @@ def _map_articles(items, mapping_keys, K):
                         cur = cur.get(key) if isinstance(cur, dict) else None
                     if cur: content = cur; break
             if title and url:
-                rec = {"title": title, "source": source or "", "url": url}
+                rec = {
+                    "title": title,
+                    "source": _as_str(source).strip() if source is not None else "",
+                    "url": url,
+                }
                 if content: rec["content"] = content
                 out.append(rec)
                 if len(out) >= K:
@@ -123,7 +155,7 @@ def _polygon(symbol, day_iso, K):
     if err: return [], err
     arts = _map_articles(
         data.get("results", []),
-        (["title"], ["publisher","name"] if isinstance(data.get("results", [{}])[0].get("publisher", {}), dict) else [["publisher","name"]], ["article_url"], ["description"]),
+        (["title"], [["publisher", "name"], "publisher"], ["article_url"], ["description"]),
         K
     )
     return arts, "fetched" if arts else "empty"
