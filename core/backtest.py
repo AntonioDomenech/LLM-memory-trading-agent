@@ -86,6 +86,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     cash = 100000.0
     position = 0
     eq_series, bh_series, trades = [], [], []
+    pending_feedback = None
 
     emit({"type":"phase","label":"Backtest loop","state":"running"})
     for i, d in enumerate(dates):
@@ -96,6 +97,56 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             continue
         pr = row.iloc[0].to_dict()
         price = float(pr["close"])
+
+        # --- Evaluate feedback from the previous decision (if any) ---
+        if pending_feedback is not None:
+            entry_price = pending_feedback.get("entry_price")
+            prev_position = pending_feedback.get("position_after", 0)
+            realized_pnl = 0.0
+            realized_return = 0.0
+            if entry_price not in (None, 0) and prev_position != 0:
+                realized_pnl = (price - entry_price) * prev_position
+                realized_return = realized_pnl / (abs(prev_position) * entry_price)
+            elif entry_price not in (None, 0):
+                realized_pnl = 0.0
+                realized_return = 0.0
+
+            if use_memory and memory_bank is not None:
+                prev_date = pending_feedback.get("date", "")
+                action_prev = pending_feedback.get("action", "")
+                shares_after = int(pending_feedback.get("position_after", 0))
+                ret_pct = realized_return * 100.0
+                summary = (
+                    f"{prev_date}: {action_prev} {abs(shares_after)}"
+                    f" → {ret_pct:+.2f}% next day"
+                )
+                importance = max(
+                    1.0,
+                    10.0 + 50.0 * realized_return + 20.0 * abs(realized_return),
+                )
+                feedback_meta = {
+                    "date": f"{prev_date}-feedback",
+                    "decision_date": prev_date,
+                    "observed_on": d_iso,
+                    "action": action_prev,
+                    "target_exposure": float(
+                        pending_feedback.get("target_exposure", 0.0)
+                    ),
+                    "position": shares_after,
+                    "entry_price": float(entry_price) if entry_price is not None else None,
+                    "realized_return": float(realized_return),
+                    "realized_pnl": float(realized_pnl),
+                    "shares_delta": int(pending_feedback.get("shares_delta", 0)),
+                }
+                memory_bank.add_item(
+                    "shallow",
+                    summary,
+                    feedback_meta,
+                    base_importance=importance,
+                    seen_date=d_iso,
+                )
+
+            pending_feedback = None
 
         # Buy&Hold benchmark
         if i == 0:
@@ -227,6 +278,15 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         equity = cash + position * price
         eq_series.append((d_iso, equity))
+
+        pending_feedback = {
+            "date": d_iso,
+            "action": action,
+            "target_exposure": float(target_exposure),
+            "position_after": int(position),
+            "entry_price": float(price),
+            "shares_delta": int(delta),
+        }
 
     m = pd.DataFrame(eq_series, columns=["date","equity"]).set_index("date")["equity"]
     bh = pd.DataFrame(bh_series, columns=["date","equity"]).set_index("date")["equity"]
