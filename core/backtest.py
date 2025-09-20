@@ -7,6 +7,7 @@ from .indicators import add_indicators
 from .llm import chat_json
 from .metrics import compute_metrics
 from .plots import plot_equity, plot_drawdown
+from .memory import MemoryBank
 from .pipeline import prepare_daily_context
 
 log = get_logger()
@@ -29,6 +30,18 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             except Exception: pass
 
     cfg = load_config(config_path)
+
+    retrieval_cfg = getattr(cfg, "retrieval", None)
+    use_memory = False
+    if retrieval_cfg is not None:
+        for key in ("k_shallow", "k_intermediate", "k_deep"):
+            if getattr(retrieval_cfg, key, 0) > 0:
+                use_memory = True
+                break
+    memory_bank = None
+    if use_memory:
+        memory_path = getattr(cfg, "memory_path", None) or "data/memory_bank.json"
+        memory_bank = MemoryBank(path=memory_path, emb_model=cfg.embedding_model)
 
     max_pos_shares = float(_get(cfg, "risk", "max_position", default=0) or 0)
     slippage_bps   = float(_get(cfg, "risk", "slippage_bps", default=0.0) or 0.0)
@@ -61,7 +74,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
-        ctx = prepare_daily_context(cfg, d_iso, pr)
+        ctx = prepare_daily_context(cfg, d_iso, pr, memory_bank=memory_bank)
         cap = ctx.capsule
 
         raw = chat_json(ctx.policy_prompt.as_messages(), model=cfg.decision_model, max_tokens=120)

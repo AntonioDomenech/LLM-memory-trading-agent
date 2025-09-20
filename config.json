@@ -8,6 +8,7 @@
   "K_news_per_day": 3,
   "embedding_model": "text-embedding-3-small",
   "decision_model": "gpt-4o-mini",
+  "memory_path": "data/memory_bank.json",
   "retrieval": {
     "k_shallow": 3,
     "k_intermediate": 0,
