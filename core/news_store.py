@@ -109,6 +109,35 @@ def _is_synth(a: dict) -> bool:
     return (src_val == "synthetic") or (not url_val and title_val.startswith("no reliable articles found"))
 
 
+def _provider_mentions_synth(label: str) -> bool:
+    if not label:
+        return False
+    try:
+        parts = str(label).split("+")
+    except Exception:
+        parts = [str(label)]
+    for part in parts:
+        if part and part.strip().lower().startswith("synthetic"):
+            return True
+    return False
+
+
+def _clean_provider_label(label: str) -> str:
+    if not label:
+        return "local"
+    try:
+        parts = [p.strip() for p in str(label).split("+")]
+    except Exception:
+        parts = [str(label).strip()]
+    clean_parts = []
+    for part in parts:
+        if not part or part.lower().startswith("synthetic"):
+            continue
+        if part not in clean_parts:
+            clean_parts.append(part)
+    return "+".join(clean_parts) if clean_parts else "local"
+
+
 def _merge_articles_for_k(existing: List[Dict], new: List[Dict], K: int,
                           require_content: bool) -> List[Dict]:
     out: List[Dict] = []
@@ -266,9 +295,21 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
             # 1) Full skip
             if pre_arts and enough_count and not need_content:
                 stats["skipped_existing"] += 1
+                cleaned = [a for a in pre_arts if not _is_synth(a)]
+                provider_label = pre_provider or "local"
+                path = p
+                if cleaned != pre_arts or _provider_mentions_synth(pre_provider):
+                    provider_label = _clean_provider_label(pre_provider)
+                    path = save_local_day(symbol, day, cleaned,
+                                          provider_label, "local:normalized_cached_metadata", base_dir)
+                    stats["saved"] += 1
+                    if provider_label.lower().startswith("synthetic"):
+                        stats["synthetic_days"] += 1
+                    else:
+                        stats["real_days"] += 1
                 if on_event:
-                    on_event({"type": "progress", "date": day, "provider": "local",
-                              "saved_path": p, "content_ok": stats["content_ok"],
+                    on_event({"type": "progress", "date": day, "provider": provider_label,
+                              "saved_path": path, "content_ok": stats["content_ok"],
                               "content_fail": stats["content_fail"],
                               "synthetic_days": stats["synthetic_days"],
                               "real_days": stats["real_days"],
