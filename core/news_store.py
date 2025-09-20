@@ -374,8 +374,8 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
             enough_count = usable_count >= K
             need_content = bool(full_content) and any((not _has_content(a)) for a in usable_existing[:K])
 
-            # 1) Full skip
-            if pre_arts and enough_count and not need_content:
+            # 1) Full skip (optional via skip_existing flag)
+            if skip_existing and pre_arts and enough_count and not need_content:
                 stats["skipped_existing"] += 1
                 cleaned = usable_existing
                 provider_label = pre_provider or "local"
