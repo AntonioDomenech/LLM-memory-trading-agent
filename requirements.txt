@@ -9,3 +9,4 @@ openai>=1.30.0
 matplotlib>=3.8.0,<3.9
 
 python-dotenv>=1.0.1
+readability-lxml>=0.8.1
