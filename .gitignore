@@ -53,6 +53,7 @@ htmlcov/
 logs/
 
 # Project data (optional: uncomment if you don't want runs in git)
+data/
 data/runs/
 data/cache/
 data/tmp/
