@@ -1,6 +1,9 @@
 import os, json, time, requests
 from datetime import datetime, timedelta
 
+# Local store helpers
+from .news_store import load_local_day, save_local_day, _is_synth
+
 # Simple logger fallback
 def _log(msg):
     try:
@@ -253,9 +256,28 @@ def fetch_day(symbol: str, day_iso: str, K: int):
     return [], f"none:{trace_str}"
 
 
-def fetch_news_with_reason(symbol: str, day_iso: str, K: int):
+def fetch_news_with_reason(symbol: str, day_iso: str, K: int, base_dir: str = None):
     """Compatibility wrapper for older code paths.
     Returns (articles, reason) where reason begins with Provider or 'none'.
     """
+    local_dir = base_dir or os.environ.get("NEWS_LOCAL_DIR")
+    try:
+        cached_arts, cached_provider = load_local_day(symbol, day_iso, base_dir=local_dir)
+    except Exception:
+        cached_arts, cached_provider = [], ""
+
+    usable_cached = [a for a in (cached_arts or []) if not _is_synth(a)]
+    if len(usable_cached) >= K:
+        reason = f"local:{cached_provider or 'cached'}"
+        return usable_cached[:K], reason
+
     arts, reason = fetch_day(symbol, day_iso, K)
+
+    if arts:
+        provider = reason.split(":", 1)[0] if reason else "unknown"
+        try:
+            save_local_day(symbol, day_iso, arts, provider, reason, base_dir=local_dir)
+        except Exception:
+            pass
+
     return arts, reason
