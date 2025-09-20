@@ -51,6 +51,22 @@ def run_training(config_path="config.json", on_event=None):
     emit({"type":"phase","label":"Training loop","state":"running"})
     emit({"type":"progress","i":0,"n":max(1,len(dates)-1)})
 
+    risk_cfg = getattr(cfg, "risk", None)
+    risk_snapshot = {}
+    if risk_cfg is not None:
+        risk_snapshot = {key: value for key, value in vars(risk_cfg).items()}
+    risk_snapshot["allow_short"] = bool(getattr(risk_cfg, "allow_short", False))
+    default_portfolio_state = {
+        "cash": 0.0,
+        "position": 0,
+        "equity": 0.0,
+        "max_position": float(getattr(risk_cfg, "max_position", 0.0) or 0.0),
+        "slippage_bps": float(getattr(risk_cfg, "slippage_bps", 0.0) or 0.0),
+        "commission_per_trade": float(getattr(risk_cfg, "commission_per_trade", 0.0) or 0.0),
+        "commission_per_share": float(getattr(risk_cfg, "commission_per_share", 0.0) or 0.0),
+        "risk": risk_snapshot,
+    }
+
     for i, d in enumerate(dates[:-1]):
         d_iso = d.strftime("%Y-%m-%d")
         row = df.loc[df["date"] == d]
@@ -59,7 +75,13 @@ def run_training(config_path="config.json", on_event=None):
             continue
         pr = row.iloc[0].to_dict()
 
-        ctx = prepare_daily_context(cfg, d_iso, pr, memory_bank=bank)
+        ctx = prepare_daily_context(
+            cfg,
+            d_iso,
+            pr,
+            memory_bank=bank,
+            portfolio_state=default_portfolio_state,
+        )
 
         arts = list(ctx.articles)
         if not arts:
