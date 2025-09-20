@@ -74,7 +74,30 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
-        ctx = prepare_daily_context(cfg, d_iso, pr, memory_bank=memory_bank)
+        equity = cash + position * price
+        risk_cfg = getattr(cfg, "risk", None)
+        risk_snapshot = {}
+        if risk_cfg is not None:
+            risk_snapshot = {key: value for key, value in vars(risk_cfg).items()}
+        risk_snapshot["allow_short"] = bool(allow_short)
+        portfolio_state = {
+            "cash": float(cash),
+            "position": int(position),
+            "equity": float(equity),
+            "max_position": float(max_pos_shares),
+            "slippage_bps": float(slippage_bps),
+            "commission_per_trade": float(c_per_trade),
+            "commission_per_share": float(c_per_share),
+            "risk": risk_snapshot,
+        }
+
+        ctx = prepare_daily_context(
+            cfg,
+            d_iso,
+            pr,
+            memory_bank=memory_bank,
+            portfolio_state=portfolio_state,
+        )
         cap = ctx.capsule
 
         raw = chat_json(ctx.policy_prompt.as_messages(), model=cfg.decision_model, max_tokens=120)

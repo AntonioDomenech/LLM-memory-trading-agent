@@ -36,6 +36,7 @@ class DailyContext:
     policy_prompt: PromptBundle
     memory_retrieval: Dict[str, Sequence[Dict[str, Any]]] = field(default_factory=dict)
     memory_highlights: Sequence[Dict[str, Any]] = field(default_factory=list)
+    portfolio_state: Dict[str, Any] = field(default_factory=dict)
 
 
 @lru_cache(maxsize=None)
@@ -119,6 +120,7 @@ def prepare_daily_context(
     price_row: Dict[str, Any],
     *,
     memory_bank: Optional[MemoryBank] = None,
+    portfolio_state: Optional[Dict[str, Any]] = None,
 ) -> DailyContext:
     """Fetch headlines, build a capsule and prepare prompts for a trading day."""
 
@@ -172,7 +174,12 @@ def prepare_daily_context(
 
     factor_payload = dict(capsule)
     factor_payload["memory_highlights"] = memory_highlights
-    policy_payload = {"capsule": capsule, "memory_highlights": memory_highlights}
+    portfolio_payload = dict(portfolio_state or {})
+    policy_payload = {
+        "capsule": capsule,
+        "memory_highlights": memory_highlights,
+        "portfolio_state": portfolio_payload,
+    }
 
     factor_prompt = PromptBundle(
         system={"role": "system", "content": _load_prompt(os.path.join("prompts", "factor_head.txt"))},
@@ -190,6 +197,7 @@ def prepare_daily_context(
         articles=article_list,
         memory_retrieval=memory_layers,
         memory_highlights=memory_highlights,
+        portfolio_state=portfolio_payload,
         factor_prompt=factor_prompt,
         policy_prompt=policy_prompt,
     )

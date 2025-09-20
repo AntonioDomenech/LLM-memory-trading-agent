@@ -27,6 +27,8 @@ def test_prepare_daily_context_memory_section_empty(tmp_path):
 
     policy_payload = json.loads(ctx.policy_prompt.user["content"])
     assert policy_payload["memory_highlights"] == []
+    assert policy_payload["portfolio_state"] == {}
+    assert ctx.portfolio_state == {}
 
 
 def test_prepare_daily_context_with_retrieved_memory(tmp_path):
@@ -45,11 +47,23 @@ def test_prepare_daily_context_with_retrieved_memory(tmp_path):
         seen_date="2024-01-01",
     )
 
+    portfolio_state = {
+        "cash": 10000.0,
+        "position": 25,
+        "equity": 12500.0,
+        "max_position": 100,
+        "slippage_bps": 5.0,
+        "commission_per_trade": 1.0,
+        "commission_per_share": 0.01,
+        "risk": {"allow_short": False},
+    }
+
     ctx = prepare_daily_context(
         cfg,
         "2024-01-02",
         _base_price_row(),
         memory_bank=bank,
+        portfolio_state=portfolio_state,
     )
 
     assert ctx.memory_highlights, "Expected retrieved highlights"
@@ -67,3 +81,5 @@ def test_prepare_daily_context_with_retrieved_memory(tmp_path):
 
     policy_payload = json.loads(ctx.policy_prompt.user["content"])
     assert policy_payload["memory_highlights"][0]["text"].startswith("AAPL narrative")
+    assert policy_payload["portfolio_state"] == portfolio_state
+    assert ctx.portfolio_state == portfolio_state
