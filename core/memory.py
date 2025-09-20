@@ -1,8 +1,14 @@
 
-import json, os, math, numpy as np
+import json, os, math, hashlib, numpy as np
 from .logger import get_logger
 from .embeddings import embed_texts
 log = get_logger()
+
+
+def _deterministic_id(text: str) -> str:
+    """Return a stable identifier for the provided text."""
+    normalized = (text or "").strip().encode("utf-8")
+    return hashlib.sha1(normalized).hexdigest()
 class MemoryBank:
     def __init__(self, path="data/memory_bank.json", emb_model="text-embedding-3-small"):
         self.path = path; self.emb_model = emb_model
@@ -17,10 +23,33 @@ class MemoryBank:
         with open(self.path, "w", encoding="utf-8") as f: json.dump(self.layers, f, indent=2)
     def _embed(self, texts): return embed_texts(texts, model=self.emb_model)
     def add_item(self, layer: str, text: str, meta, base_importance: float = 10.0, seen_date: str = None):
-        emb = self._embed([text])[0]
-        item = {"id": f"id_{abs(hash(text))}", "text": text.strip(), "meta": meta, "importance": float(base_importance),
-                "seen_date": seen_date, "access": 0, "embedding": emb}
-        self.layers[layer].append(item)
+        clean_text = (text or "").strip()
+        item_id = _deterministic_id(clean_text)
+        meta = meta or {}
+        layer_items = self.layers.setdefault(layer, [])
+        target_date = meta.get("date")
+        existing = None
+        for it in layer_items:
+            if it.get("id") == item_id:
+                existing = it
+                break
+            existing_meta = it.get("meta") or {}
+            if target_date is not None and existing_meta.get("date") == target_date:
+                existing = it
+                break
+        emb = self._embed([clean_text])[0]
+        if existing is not None:
+            existing["id"] = item_id
+            existing["text"] = clean_text
+            existing["meta"] = meta
+            existing["importance"] = float(base_importance)
+            existing["seen_date"] = seen_date
+            existing["embedding"] = emb
+        else:
+            item = {"id": item_id, "text": clean_text, "meta": meta, "importance": float(base_importance),
+                    "seen_date": seen_date, "access": 0, "embedding": emb}
+            layer_items.append(item)
+        self.save()
     def promote(self, n_sh_to_int=5, n_int_to_deep=2):
         for src, dst, n in [("shallow","intermediate",n_sh_to_int),("intermediate","deep",n_int_to_deep)]:
             sorted_src = sorted(self.layers[src], key=lambda x: x.get("importance",0), reverse=True)
