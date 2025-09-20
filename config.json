@@ -1,0 +1,32 @@
+{
+  "symbol": "AAPL",
+  "train_start": "2023-01-01",
+  "train_end": "2024-06-30",
+  "test_start": "2024-07-01",
+  "test_end": "2025-08-31",
+  "news_source": "NewsAPI",
+  "K_news_per_day": 3,
+  "embedding_model": "text-embedding-3-small",
+  "decision_model": "gpt-4o-mini",
+  "retrieval": {
+    "k_shallow": 3,
+    "k_intermediate": 0,
+    "k_deep": 0,
+    "Q_shallow": 10,
+    "Q_intermediate": 20,
+    "Q_deep": 30,
+    "alpha_shallow": 0.4,
+    "alpha_intermediate": 0.3,
+    "alpha_deep": 0.3
+  },
+  "risk": {
+    "risk_per_trade": 0.03,
+    "max_position": 5000,
+    "stop_loss_atr_mult": 5.0,
+    "trailing_stop_atr_mult": 15.0,
+    "take_profit_atr_mult": 0.0,
+    "commission_per_trade": 0.0,
+    "commission_per_share": 0.0,
+    "slippage_bps": 5.0
+  }
+}
