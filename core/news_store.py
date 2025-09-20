@@ -2,7 +2,7 @@ import os
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Tuple, List, Dict, Callable
+from typing import Tuple, List, Dict, Callable, Any
 
 DEFAULT_DIR = "data/news_local"
 
@@ -164,6 +164,42 @@ def _merge_articles_for_k(existing: List[Dict], new: List[Dict], K: int,
     return out[:K]
 
 
+def _content_diag_string(diag: Any) -> str:
+    if not diag:
+        return ""
+    if isinstance(diag, str):
+        return diag
+    try:
+        return json.dumps(diag, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        try:
+            return str(diag)
+        except Exception:
+            return "unserializable_diagnostic"
+
+
+def _register_content_error(stats: Dict, diag: Any) -> str:
+    diag_str = _content_diag_string(diag) or "unknown"
+    bucket = stats.setdefault("content_error_types", {})
+    bucket[diag_str] = bucket.get(diag_str, 0) + 1
+    return diag_str
+
+
+def _apply_content_result(article: Dict, text: str, diag: Any, stats: Dict) -> None:
+    text_val = text.strip() if isinstance(text, str) else ""
+    if text_val:
+        if isinstance(article, dict):
+            article["content"] = text_val
+            article.pop("_content_error", None)
+        stats["content_ok"] = stats.get("content_ok", 0) + 1
+        return
+
+    stats["content_fail"] = stats.get("content_fail", 0) + 1
+    diag_str = _register_content_error(stats, diag)
+    if isinstance(article, dict):
+        article["_content_error"] = diag_str
+
+
 def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) -> None:
     """Fill missing content for given articles in-place using article_scraper, updating stats.
     Does NOT fetch headlines; only enriches body text from each article's own URL.
@@ -181,20 +217,19 @@ def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) ->
             u = it.get("url", "")
             if not isinstance(u, str) or not u.strip():
                 continue
-            text = ""
+            text, diag = "", {}
             try:
-                text = fetch_fulltext(u)
-            except Exception:
-                text = ""
-            if isinstance(text, str) and text.strip():
-                it["content"] = text
-                stats["content_ok"] = stats.get("content_ok", 0) + 1
-            else:
-                stats["content_fail"] = stats.get("content_fail", 0) + 1
+                text, diag = fetch_fulltext(u)
+            except Exception as e:
+                text, diag = "", {"phase": "exception", "error": type(e).__name__, "message": str(e)}
+            _apply_content_result(it, text, diag, stats)
             if content_delay and content_delay > 0:
                 time.sleep(content_delay)
-        except Exception:
+        except Exception as e:
             stats["content_fail"] = stats.get("content_fail", 0) + 1
+            diag = {"phase": "unexpected", "error": type(e).__name__, "message": str(e)}
+            if isinstance(it, dict):
+                it["_content_error"] = _register_content_error(stats, diag)
             continue
 
 
@@ -248,10 +283,13 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
         "content_fail": 0,
         "days_with_news": 0,
         "skipped_existing": 0,
+        "content_error_types": {},
     }
     for _k in ("saved", "content_ok", "content_fail", "days_with_news", "skipped_existing"):
         if _k not in stats:
             stats[_k] = 0
+    if "content_error_types" not in stats:
+        stats["content_error_types"] = {}
 
     if fetch_fn is None:
         from .news_fetcher import fetch_day as fetch_fn
@@ -308,7 +346,8 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                               "saved_path": path, "content_ok": stats["content_ok"],
                               "content_fail": stats["content_fail"],
                               "days_with_news": stats["days_with_news"],
-                              "skipped_existing": stats["skipped_existing"]})
+                              "skipped_existing": stats["skipped_existing"],
+                              "content_error_types": dict(stats.get("content_error_types", {}))})
                 continue
 
             # 2) Content-only enrichment (no provider API calls)
@@ -332,7 +371,8 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                               "saved_path": path, "content_ok": stats["content_ok"],
                               "content_fail": stats["content_fail"],
                               "days_with_news": stats["days_with_news"],
-                              "skipped_existing": stats["skipped_existing"]})
+                              "skipped_existing": stats["skipped_existing"],
+                              "content_error_types": dict(stats.get("content_error_types", {}))})
                 continue
 
             # 3) Fetch headlines (providers)
@@ -363,6 +403,7 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                         "content_fail": stats["content_fail"],
                         "days_with_news": stats["days_with_news"],
                         "skipped_existing": stats["skipped_existing"],
+                        "content_error_types": dict(stats.get("content_error_types", {})),
                     })
                 continue
 
@@ -380,20 +421,19 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                             u = it.get("url", "")
                             if not isinstance(u, str) or not u:
                                 continue
-                            text = ""
+                            text, diag = "", {}
                             try:
-                                text = fetch_fulltext(u)
-                            except Exception:
-                                text = ""
-                            if isinstance(text, str) and text.strip():
-                                it["content"] = text
-                                stats["content_ok"] += 1
-                            else:
-                                stats["content_fail"] += 1
+                                text, diag = fetch_fulltext(u)
+                            except Exception as e:
+                                text, diag = "", {"phase": "exception", "error": type(e).__name__, "message": str(e)}
+                            _apply_content_result(it, text, diag, stats)
                             if content_delay and content_delay > 0:
                                 time.sleep(content_delay)
-                        except Exception:
+                        except Exception as e:
                             stats["content_fail"] += 1
+                            diag = {"phase": "unexpected", "error": type(e).__name__, "message": str(e)}
+                            if isinstance(it, dict):
+                                it["_content_error"] = _register_content_error(stats, diag)
 
             # Remove placeholder articles from cached data before merging
             pre_arts = [a for a in pre_arts if not _is_synth(a)]
@@ -413,7 +453,8 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                               "saved_path": "", "content_ok": stats["content_ok"],
                               "content_fail": stats["content_fail"],
                               "days_with_news": stats["days_with_news"],
-                              "skipped_existing": stats["skipped_existing"]})
+                              "skipped_existing": stats["skipped_existing"],
+                              "content_error_types": dict(stats.get("content_error_types", {}))})
                 continue
 
             label_to_save = prov_label if not pre_arts or len(final_arts) == len(arts) else f"{prov_label}+local"
@@ -428,7 +469,8 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                           "saved_path": path, "content_ok": stats["content_ok"],
                           "content_fail": stats["content_fail"],
                           "days_with_news": stats["days_with_news"],
-                          "skipped_existing": stats["skipped_existing"]})
+                          "skipped_existing": stats["skipped_existing"],
+                          "content_error_types": dict(stats.get("content_error_types", {}))})
 
         except Exception as e:
             # Emit error and continue
