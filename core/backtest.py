@@ -12,6 +12,35 @@ from .pipeline import prepare_daily_context
 
 log = get_logger()
 
+
+def _to_float(x, default=0.0):
+    try:
+        if isinstance(x, str):
+            xs = x.strip()
+            if xs.endswith("%"):
+                return float(xs[:-1]) / 100.0
+            return float(xs)
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def _coerce_factor_numbers(factor: dict) -> dict:
+    if not isinstance(factor, dict):
+        return {}
+    keys = [
+        "mood_score",
+        "narrative_bias",
+        "novelty",
+        "credibility",
+        "regime_alignment",
+        "confidence",
+    ]
+    for k in keys:
+        factor[k] = _to_float(factor.get(k, 0.0), 0.0)
+    return factor
+
+
 def _get(cfg, *path, default=None):
     obj = cfg
     for key in path:
@@ -98,6 +127,29 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             memory_bank=memory_bank,
             portfolio_state=portfolio_state,
         )
+
+        if use_memory and memory_bank is not None:
+            factor_raw = chat_json(
+                ctx.factor_prompt.as_messages(),
+                model=cfg.decision_model,
+                max_tokens=120,
+            )
+            factor = _coerce_factor_numbers(factor_raw)
+            summary = (
+                f"[{d_iso}] "
+                f"mood={factor.get('mood_score', 0.0):.2f} "
+                f"bias={factor.get('narrative_bias', 0.0):+.2f} "
+                f"nov={factor.get('novelty', 0.0):.2f} "
+                f"cred={factor.get('credibility', 0.0):.2f}"
+            )
+            memory_bank.add_item(
+                "shallow",
+                summary,
+                {"date": d_iso, "factor": factor},
+                base_importance=10.0,
+                seen_date=d_iso,
+            )
+
         cap = ctx.capsule
 
         raw = chat_json(ctx.policy_prompt.as_messages(), model=cfg.decision_model, max_tokens=120)
