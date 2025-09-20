@@ -1,15 +1,20 @@
-
 import re, html, time
 from urllib.parse import urljoin, urlparse
 from html.parser import HTMLParser
 import requests
+from typing import Dict, Tuple, Any, Optional, Union
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from readability import Document
 
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
 
-BLOCK_TAGS = {"script","style","noscript","svg","canvas","footer","nav","aside","form","iframe","amp-auto-ads"}
-PRIORITY_IDS = {"article","main","content","story","post","entry","read"}
-PRIORITY_CLASSES = {"article","content","story","post","entry","article-body","post-content","main-content"}
+RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+BLOCK_TAGS = {"script", "style", "noscript", "svg", "canvas", "footer", "nav", "aside", "form", "iframe", "amp-auto-ads"}
+PRIORITY_IDS = {"article", "main", "content", "story", "post", "entry", "read"}
+PRIORITY_CLASSES = {"article", "content", "story", "post", "entry", "article-body", "post-content", "main-content"}
+
 
 class _TextCollector(HTMLParser):
     def __init__(self):
@@ -30,7 +35,7 @@ class _TextCollector(HTMLParser):
             self._stack.pop()
         if tag in BLOCK_TAGS:
             self._in_block = False
-        if tag in ("p","br","div","li","h1","h2","h3","h4"):
+        if tag in ("p", "br", "div", "li", "h1", "h2", "h3", "h4"):
             self._bufs.append("\n")
 
     def handle_data(self, data):
@@ -189,22 +194,140 @@ def _readability_fallback(html_str: str) -> str:
             text = f"{title}\n\n{text}" if text else title
     return text
 
-def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 20000) -> str:
-    """Best-effort article text extraction with readability fallback.
-       Returns plain text, or "" if not parseable."""
-    if not url:
-        return ""
-    headers = {"User-Agent": ua or DEFAULT_UA, "Accept":"text/html,application/xhtml+xml"}
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
     try:
-        r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        delay = float(value)
+        if delay >= 0:
+            return delay
+    except (TypeError, ValueError):
+        pass
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delay = (dt - now).total_seconds()
+        return delay if delay > 0 else None
     except Exception:
-        return ""
-    ctype = (r.headers.get("Content-Type","").split(";")[0] or "").lower()
+        return None
+
+
+def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 20000,
+                   *, return_meta: bool = False) -> Union[str, Tuple[str, Dict[str, Any]]]:
+    """Best-effort article text extraction with readability fallback and diagnostics."""
+
+    meta: Dict[str, Any] = {
+        "status": None,
+        "error": None,
+        "retryable": False,
+        "attempts": 0,
+        "retry_after": None,
+        "phase": "pre",
+    }
+
+    def _result(text: str) -> Union[str, Tuple[str, Dict[str, Any]]]:
+        if return_meta:
+            return text, meta
+        return text
+
+    if not url:
+        meta.update({"error": "no_url", "retryable": False, "phase": "pre"})
+        return _result("")
+
+    headers = {"User-Agent": ua or DEFAULT_UA, "Accept": "text/html,application/xhtml+xml"}
+    backoff = 1.0
+    last_exc: Optional[BaseException] = None
+    response = None
+
+    for attempt in range(3):
+        meta["attempts"] = attempt + 1
+        start_ts = time.time()
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        except requests.RequestException as exc:
+            elapsed = int((time.time() - start_ts) * 1000)
+            last_exc = exc
+            meta.update({
+                "status": None,
+                "error": f"request:{type(exc).__name__}",
+                "retryable": True,
+                "phase": "request",
+                "elapsed_ms": elapsed,
+                "message": str(exc) or None,
+            })
+        except Exception as exc:
+            elapsed = int((time.time() - start_ts) * 1000)
+            last_exc = exc
+            meta.update({
+                "status": None,
+                "error": f"exception:{type(exc).__name__}",
+                "retryable": False,
+                "phase": "exception",
+                "elapsed_ms": elapsed,
+                "message": str(exc) or None,
+            })
+            break
+        else:
+            elapsed = int((time.time() - start_ts) * 1000)
+            status = getattr(response, "status_code", None)
+            meta.update({
+                "status": status,
+                "phase": "request",
+                "elapsed_ms": elapsed,
+            })
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            if retry_after is not None:
+                meta["retry_after"] = retry_after
+            if status != 200:
+                meta.update({
+                    "error": f"http:{status}",
+                    "retryable": bool(status in RETRYABLE_STATUS),
+                    "phase": "http_error",
+                })
+                if meta["retryable"] and attempt < 2:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                break
+            break
+
+        if attempt < 2:
+            time.sleep(backoff)
+            backoff *= 2
+    else:
+        response = None
+
+    if response is None:
+        if last_exc and meta.get("error") is None:
+            meta.update({
+                "error": f"exception:{type(last_exc).__name__}",
+                "retryable": True,
+                "phase": "exception",
+            })
+        return _result("")
+
+    status = response.status_code
+    if status != 200:
+        return _result("")
+
+    ctype = (response.headers.get("Content-Type", "").split(";")[0] or "").lower()
+    meta["content_type"] = ctype
     if "text/html" not in ctype and "application/xhtml" not in ctype:
-        return ""
-    html_str = r.text
+        meta.update({"error": "unsupported_content_type", "retryable": False, "phase": "content_type"})
+        return _result("")
+
+    html_str = response.text
     # Heuristic pre-trim: drop nav/header/footer blocks crudely
     html_str = re.sub(r"<(nav|footer|aside|script|style|noscript)[\\s\\S]*?</\\1>", " ", html_str, flags=re.I)
+
     best_txt = ""
     for region_html in _iter_candidate_regions(html_str):
         candidate_txt = _collect_text(region_html)
@@ -212,19 +335,47 @@ def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 2
             continue
         if len(candidate_txt) >= 400 or candidate_txt.count("\n") >= 3:
             best_txt = candidate_txt
+            meta["extraction"] = "candidate_region"
             break
         if len(candidate_txt) > len(best_txt):
             best_txt = candidate_txt
 
     if not best_txt:
-        best_txt = _readability_fallback(html_str)
+        readability_txt = _readability_fallback(html_str)
+        if readability_txt:
+            best_txt = readability_txt
+            meta["extraction"] = "readability"
+
+    parse_error: Optional[BaseException] = None
+    if not best_txt:
+        parser = _TextCollector()
+        try:
+            parser.feed(html_str)
+            parser.close()
+        except Exception as exc:
+            parse_error = exc
+        best_txt = (parser.text() or "").strip()
+        if parse_error:
+            meta["parser_error"] = f"{type(parse_error).__name__}: {parse_error}"
+        if best_txt:
+            meta["extraction"] = "fallback_parser"
 
     if not best_txt:
-        best_txt = _collect_text(html_str)
+        meta.update({"error": "empty_text", "retryable": False, "phase": "extract"})
+        return _result("")
 
-    if not best_txt:
-        return ""
-
+    best_txt = best_txt.strip()
     if len(best_txt) > max_len:
         best_txt = best_txt[:max_len] + " ..."
-    return best_txt.strip()
+        meta["truncated"] = True
+
+    meta.update({
+        "error": None,
+        "retryable": False,
+        "phase": "success",
+        "length": len(best_txt),
+    })
+    if parse_error and "parser_error" not in meta:
+        meta["parser_warning"] = f"{type(parse_error).__name__}: {parse_error}"
+
+    return _result(best_txt)
