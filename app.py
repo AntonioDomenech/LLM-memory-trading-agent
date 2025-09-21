@@ -421,6 +421,11 @@ with tabs[2]:
         render_metric_card(drawdown_metric, "Drawdown", "0.00%", "Desde el máximo")
         render_metric_card(decisions_metric, "Señales", "0", "Decisiones emitidas")
         render_metric_card(messages_metric, "Mensajes", "0 info / 0 warn", "Logs recibidos")
+        row4 = metrics_box.columns(2)
+        pnl_metric = row4[0].empty()
+        pnl_pct_metric = row4[1].empty()
+        render_metric_card(pnl_metric, "Ganancia/Pérdida", fmt_currency(0.0), "Sobre capital invertido")
+        render_metric_card(pnl_pct_metric, "Rentabilidad", fmt_percent(0.0), "Equity vs. aportes")
 
     with charts_col:
         st.markdown("#### Evolución del patrimonio")
@@ -510,6 +515,13 @@ with tabs[2]:
         drawdown_chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     stats_bt = {"decisions": 0, "infos": 0, "warnings": 0}
+    cfg_initial_cash = 0.0
+    if cfg_snapshot_bt is not None:
+        try:
+            cfg_initial_cash = float(cfg_snapshot_bt.get("initial_cash", 0.0) or 0.0)
+        except Exception:
+            cfg_initial_cash = 0.0
+    last_equity_point = None
 
     def update_messages_metric():
         """Update the UI metric that counts LLM calls."""
@@ -524,6 +536,7 @@ with tabs[2]:
     def on_test_event(evt):
         """Handle backtest events and refresh visual elements."""
 
+        nonlocal last_equity_point
         t = evt.get("type")
         if t == "phase":
             status_bt.info(f"Fase: {evt.get('label')} → {evt.get('state')}")
@@ -569,6 +582,23 @@ with tabs[2]:
                 fmt_shares(evt.get("position", 0.0)),
                 "Acciones netas",
             )
+            total_contributions = float(evt.get("total_contributions", 0.0) or 0.0)
+            invested_capital = cfg_initial_cash + total_contributions
+            pnl_amount = float(evt.get("equity", 0.0) or 0.0) - invested_capital
+            pnl_pct = (pnl_amount / invested_capital) if invested_capital > 0 else 0.0
+            render_metric_card(
+                pnl_metric,
+                "Ganancia/Pérdida",
+                fmt_currency(pnl_amount),
+                f"Capital invertido: {fmt_currency(invested_capital)}",
+            )
+            render_metric_card(
+                pnl_pct_metric,
+                "Rentabilidad",
+                fmt_percent(pnl_pct),
+                "Equity vs. aportes",
+            )
+            last_equity_point = dict(evt)
             contribution = float(evt.get("contribution", 0.0) or 0.0)
             if contribution > 0:
                 message_container.info(
@@ -585,9 +615,12 @@ with tabs[2]:
         render_metric_card(drawdown_metric, "Drawdown", "0.00%", "Desde el máximo")
         render_metric_card(decisions_metric, "Señales", "0", "Decisiones emitidas")
         render_metric_card(messages_metric, "Mensajes", "0 info / 0 warn", "Logs recibidos")
+        render_metric_card(pnl_metric, "Ganancia/Pérdida", fmt_currency(0.0), "Sobre capital invertido")
+        render_metric_card(pnl_pct_metric, "Rentabilidad", fmt_percent(0.0), "Equity vs. aportes")
         equity_chart_placeholder.info("La curva de equity se dibujará al recibir los primeros datos.")
         drawdown_chart_placeholder.info("El drawdown aparecerá en tiempo real durante el backtest.")
         stats_bt.update({"decisions": 0, "infos": 0, "warnings": 0})
+        last_equity_point = None
         res = run_backtest(cfg_path, on_event=on_test_event, event_rate=int(update_rate))
         st.success("Backtest completado")
 
@@ -615,6 +648,26 @@ with tabs[2]:
                 f"**Aportes periódicos:** {fmt_currency(contrib.get('amount', 0.0))} · "
                 f"Frecuencia: {contrib.get('frequency', 'none')} · "
                 f"Total inyectado: {fmt_currency(contrib.get('total_added', 0.0))}"
+            )
+
+        if last_equity_point:
+            total_contributions = float(last_equity_point.get("total_contributions", 0.0) or 0.0)
+            invested_capital = cfg_initial_cash + total_contributions
+            pnl_amount = float(last_equity_point.get("equity", 0.0) or 0.0) - invested_capital
+            pnl_pct = (pnl_amount / invested_capital) if invested_capital > 0 else 0.0
+            st.markdown("#### Resultado acumulado")
+            summary_cols = st.columns(2)
+            render_metric_card(
+                summary_cols[0].empty(),
+                "Ganancia/Pérdida",
+                fmt_currency(pnl_amount),
+                f"Capital invertido: {fmt_currency(invested_capital)}",
+            )
+            render_metric_card(
+                summary_cols[1].empty(),
+                "Rentabilidad",
+                fmt_percent(pnl_pct),
+                "Equity vs. aportes",
             )
 
         st.markdown("#### Reportes finales")
