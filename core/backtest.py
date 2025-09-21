@@ -106,6 +106,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     eq_series, bh_series, trades = [], [], []
     contributions_series = []
     total_contributions = 0.0
+    peak_equity = 0.0
     pending_feedback = None
 
     emit({"type":"phase","label":"Backtest loop","state":"running"})
@@ -353,6 +354,23 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         eq_series.append((d_iso, equity))
         contributions_series.append((d_iso, contribution_today))
 
+        peak_equity = max(peak_equity, equity)
+        drawdown = 0.0 if peak_equity <= 0 else (equity / peak_equity) - 1.0
+
+        emit(
+            {
+                "type": "equity_point",
+                "date": d_iso,
+                "equity": float(equity),
+                "benchmark": float(equity_bh),
+                "cash": float(cash),
+                "position": int(position),
+                "drawdown": float(drawdown),
+                "contribution": float(contribution_today),
+                "total_contributions": float(total_contributions),
+            }
+        )
+
         pending_feedback = {
             "date": d_iso,
             "action": action,
@@ -371,6 +389,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     fig_eq = plot_equity(m, bh)
     fig_dd = plot_drawdown(m)
     trades_df = pd.DataFrame(trades).tail(25)
+    emit({"type": "done"})
     return {
         "metrics": metrics,
         "fig_equity": fig_eq,

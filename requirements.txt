@@ -7,6 +7,7 @@ requests>=2.31.0
 pyarrow>=15.0.0
 openai>=1.30.0
 matplotlib>=3.8.0,<3.9
+plotly>=5.20.0
 
 python-dotenv>=1.0.1
 readability-lxml>=0.8.1
