@@ -52,6 +52,10 @@ def _get(cfg, *path, default=None):
 def _clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
+
+def _append_norm_label(current, label):
+    return f"{current};{label}" if current else label
+
 def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     def emit(evt):
         if on_event:
@@ -82,13 +86,26 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     df = add_indicators(get_daily_bars(cfg.symbol, cfg.test_start, cfg.test_end))
     df["date"] = pd.to_datetime(df["date"]).dt.date
     dates = list(df["date"].astype("datetime64[ns]").dt.date)
+    first_trading_days = {}
+    for dt in dates:
+        key = (dt.year, dt.month)
+        if key not in first_trading_days:
+            first_trading_days[key] = dt
 
     initial_cash = _to_float(getattr(cfg, "initial_cash", 100000.0), 100000.0)
     cash = initial_cash
     position = 0
     bh_shares = 0
     bh_cash = initial_cash
+    periodic_contribution = max(0.0, _to_float(getattr(cfg, "periodic_contribution", 0.0), 0.0))
+    freq_raw = str(getattr(cfg, "contribution_frequency", "none") or "none").strip().lower()
+    if freq_raw in {"monthly", "mensual", "mes", "month", "m"}:
+        contribution_frequency = "monthly"
+    else:
+        contribution_frequency = "none"
     eq_series, bh_series, trades = [], [], []
+    contributions_series = []
+    total_contributions = 0.0
     pending_feedback = None
 
     emit({"type":"phase","label":"Backtest loop","state":"running"})
@@ -100,6 +117,24 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             continue
         pr = row.iloc[0].to_dict()
         price = float(pr["close"])
+
+        contribution_today = 0.0
+        if periodic_contribution > 0.0 and contribution_frequency == "monthly":
+            if first_trading_days.get((d.year, d.month)) == d:
+                cash += periodic_contribution
+                bh_cash += periodic_contribution
+                contribution_today = periodic_contribution
+                total_contributions += contribution_today
+                trades.append(
+                    {
+                        "date": d_iso,
+                        "action": "CONTRIBUTION",
+                        "shares_delta": 0,
+                        "fill_price": None,
+                        "amount": float(contribution_today),
+                        "note": "Aporte mensual automático",
+                    }
+                )
 
         # --- Evaluate feedback from the previous decision (if any) ---
         if pending_feedback is not None:
@@ -153,8 +188,8 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         # Buy&Hold benchmark
         if i == 0:
-            bh_shares = int(initial_cash // price)
-            bh_cash = initial_cash - bh_shares * price
+            bh_shares = int(bh_cash // price)
+            bh_cash = bh_cash - bh_shares * price
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
@@ -217,21 +252,54 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             target_exposure = 0.0 if action == "SELL" else 1.0 if action == "BUY" else (position * price) / max(1e-9, (cash + position*price))
             normalized = f"defaulted:{target_exposure:.2f}"
         else:
-            try:
-                target_exposure = float(target_exposure)
-            except Exception:
+            raw_target = target_exposure
+            target_exposure = _to_float(raw_target, default=0.0)
+            parsed_from_percent = False
+            parse_failed = False
+
+            if isinstance(raw_target, str):
+                stripped = raw_target.strip()
+                if stripped.endswith("%"):
+                    try:
+                        float(stripped[:-1])
+                    except Exception:
+                        parse_failed = True
+                    else:
+                        parsed_from_percent = True
+                        normalized = _append_norm_label(
+                            normalized, f"percent_to_frac:{target_exposure:.2f}"
+                        )
+                elif stripped:
+                    try:
+                        float(stripped)
+                    except Exception:
+                        parse_failed = True
+                else:
+                    parse_failed = True
+            elif not isinstance(raw_target, (int, float, np.number)):
+                parse_failed = True
+
+            if parse_failed:
                 target_exposure = 0.0
-                normalized = "non_numeric->0.0"
-            # Interpret 5..100 as percentages
-            if target_exposure > 1.0 and target_exposure <= 100.0:
+                normalized = _append_norm_label(normalized, "non_numeric->0.0")
+
+            if (
+                not parsed_from_percent
+                and target_exposure > 1.0
+                and target_exposure <= 100.0
+            ):
                 target_exposure = target_exposure / 100.0
-                normalized = f"percent_to_frac:{target_exposure:.2f}"
-            # Clamp exposure
+                normalized = _append_norm_label(
+                    normalized, f"percent_to_frac:{target_exposure:.2f}"
+                )
+
             lo = 0.0 if not allow_short else -1.0
             te_before = target_exposure
             target_exposure = _clamp(target_exposure, lo, 1.0)
             if te_before != target_exposure:
-                normalized = f"clamped:{te_before:.3f}->{target_exposure:.3f}"
+                normalized = _append_norm_label(
+                    normalized, f"clamped:{te_before:.3f}->{target_exposure:.3f}"
+                )
 
         # --- Translate exposure to shares with guardrails ---
         equity = cash + position * price
@@ -259,7 +327,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                 affordable = int(max(0.0, (cash - c_per_trade)) // per_share_total)
             if affordable < delta:
                 delta = affordable
-                normalized = (normalized + ";afford_limited" if normalized else "afford_limited")
+                normalized = _append_norm_label(normalized, "afford_limited")
 
         # Execute
         if delta != 0:
@@ -271,6 +339,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
             trades.append({"date": d_iso, "action": "BUY" if delta>0 else "SELL",
                            "shares_delta": int(delta), "fill_price": float(fill),
+                           "amount": None,
                            "note": normalized or ""})
 
         # Record decision periodically
@@ -282,6 +351,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         equity = cash + position * price
         eq_series.append((d_iso, equity))
+        contributions_series.append((d_iso, contribution_today))
 
         pending_feedback = {
             "date": d_iso,
@@ -294,9 +364,14 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
     m = pd.DataFrame(eq_series, columns=["date", "equity"]).set_index("date")["equity"]
     bh = pd.DataFrame(bh_series, columns=["date", "equity"]).set_index("date")["equity"]
+    contrib = (
+        pd.DataFrame(contributions_series, columns=["date", "contribution"])
+        .set_index("date")["contribution"]
+        .astype(float)
+    )
     m = m.clip(lower=1e-6)  # avoid divide-by-zero weirdness
 
-    metrics = compute_metrics(m, bh)
+    metrics = compute_metrics(m, bh, contributions=contrib)
     fig_eq = plot_equity(m, bh)
     fig_dd = plot_drawdown(m)
 
@@ -330,4 +405,9 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         "trades_tail": trades_df,
         "equity_curve": equity_curve,
         "drawdown_curve": drawdown_curve,
+        "contributions": {
+            "frequency": contribution_frequency,
+            "amount": float(periodic_contribution),
+            "total_added": float(total_contributions),
+        },
     }
