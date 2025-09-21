@@ -42,6 +42,8 @@ class Config:
     decision_model: str = "gpt-4o-mini"
     memory_path: str = "data/memory_bank.json"
     initial_cash: float = 100000.0
+    periodic_contribution: float = 0.0
+    contribution_frequency: str = "none"
     retrieval: RetrievalCfg = field(default_factory=RetrievalCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
 
@@ -54,10 +56,16 @@ def load_config(path: str) -> Config:
     symbol = raw.get("symbol", "AAPL")
     memory_path = raw.get("memory_path") or _find_preferred_memory_path(symbol)
     initial_cash_raw = raw.get("initial_cash", 100000.0)
+    periodic_contribution_raw = raw.get("periodic_contribution", 0.0)
     try:
         initial_cash = float(initial_cash_raw)
     except (TypeError, ValueError):
         initial_cash = 100000.0
+    try:
+        periodic_contribution = max(0.0, float(periodic_contribution_raw))
+    except (TypeError, ValueError):
+        periodic_contribution = 0.0
+    contribution_frequency = str(raw.get("contribution_frequency", "none") or "none").strip().lower()
 
     cfg = Config(
         symbol = symbol,
@@ -71,6 +79,8 @@ def load_config(path: str) -> Config:
         decision_model  = raw.get("decision_model","gpt-4o-mini"),
         memory_path = memory_path,
         initial_cash = initial_cash,
+        periodic_contribution = periodic_contribution,
+        contribution_frequency = contribution_frequency,
         retrieval = RetrievalCfg(**raw.get("retrieval", {})),
         risk = RiskCfg(**raw.get("risk", {})),
     )
