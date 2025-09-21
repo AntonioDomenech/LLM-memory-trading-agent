@@ -586,3 +586,64 @@ def test_min_trade_shares_blocks_when_floor_unreachable(tmp_path, monkeypatch):
     result = run_backtest(config_path=str(config_path))
     trades = result["trades_tail"]
     assert trades.empty
+
+
+def test_benchmark_reinvests_periodic_contributions(tmp_path, monkeypatch):
+    """Benchmark equity should deploy contributions instead of holding cash."""
+
+    memory_path = tmp_path / "bank_contrib.json"
+    config_path = tmp_path / "config_contrib.json"
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+    )
+
+    cfg_raw = json.loads(config_path.read_text())
+    cfg_raw["initial_cash"] = 100.0
+    cfg_raw["periodic_contribution"] = 100.0
+    cfg_raw["contribution_frequency"] = "monthly"
+    config_path.write_text(json.dumps(cfg_raw))
+
+    bars = _dummy_bars()
+
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+
+    def fake_add_indicators(df):
+        out = df.copy()
+        out["atr"] = 1.0
+        out["trend_up"] = 1
+        out["sma200"] = out["close"]
+        out["sma100"] = out["close"]
+        return out
+
+    monkeypatch.setattr("core.backtest.add_indicators", fake_add_indicators)
+
+    captured = {}
+
+    def fake_plot_equity(equity, benchmark):
+        captured["bh"] = benchmark.copy()
+        return "fig_eq"
+
+    monkeypatch.setattr("core.backtest.plot_equity", fake_plot_equity)
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        return {"action": "HOLD", "target_exposure": 0.0}
+
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    result = run_backtest(config_path=str(config_path))
+
+    bh_series = captured.get("bh")
+    assert bh_series is not None, "benchmark series was not captured"
+
+    first_price = bars["close"].iloc[0]
+    last_price = bars["close"].iloc[-1]
+    initial_shares = int(cfg_raw["initial_cash"] // first_price)
+    leftover_cash = cfg_raw["initial_cash"] - initial_shares * first_price
+    expected_shares = initial_shares + cfg_raw["periodic_contribution"] / first_price
+    expected_bh_equity = expected_shares * last_price + leftover_cash
+
+    assert bh_series.iloc[-1] == pytest.approx(expected_bh_equity)
+    assert result["contributions"]["total_added"] == pytest.approx(cfg_raw["periodic_contribution"])
