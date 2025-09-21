@@ -1,6 +1,7 @@
 
+import math
 import os, json, hashlib, re
-from typing import List, Dict
+from typing import Any, List, Dict, Optional
 
 
 def _canon(s: str) -> str:
@@ -38,19 +39,53 @@ def build_capsule(
         for a in macro
         if a.get("title")
     ]
+    price = _rounded_indicator(price_row.get("close", 0), 4, default=0.0)
+    rsi = _rounded_indicator(price_row.get("rsi", 0), 3, default=0.0)
+    macd_hist = _rounded_indicator(price_row.get("macd_hist", 0), 5, default=0.0)
+    atr = _rounded_indicator(price_row.get("atr", 0), 5, default=0.0)
+    sma200 = _rounded_indicator(price_row.get("sma200", 0), 4, default=0.0)
+    sma100 = _rounded_indicator(price_row.get("sma100", 0), 4, default=0.0)
+
     cap = {
         "date": date_iso,
         "symbol": symbol,
-        "price": round(float(price_row.get("close", 0)), 4),
-        "rsi": round(float(price_row.get("rsi", 0)), 3),
-        "macd_hist": round(float(price_row.get("macd_hist", 0)), 5),
-        "atr": round(float(price_row.get("atr", 0)), 5),
+        "price": price,
+        "rsi": rsi,
+        "macd_hist": macd_hist,
+        "atr": atr,
         "trend_up": int(price_row.get("trend_up", 0)),
-        "sma200": round(float(price_row.get("sma200", 0) or 0), 4),
-        "sma100": round(float(price_row.get("sma100", 0) or 0), 4),
+        "sma200": sma200,
+        "sma100": sma100,
         "regime": regime,
         "headlines": headlines[:5],
         "macro": macro_h[:3],
     }
     cap["hash"] = hashlib.sha256(json.dumps(cap, sort_keys=True).encode()).hexdigest()
     return cap
+
+
+def _finite_or_default(value: Any, *, default: Optional[float] = 0.0) -> Optional[float]:
+    """Return a finite float or ``default`` when the input is not usable."""
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = default
+    if numeric is None:
+        return None
+    if not math.isfinite(numeric):
+        numeric = default
+    if numeric is None:
+        return None
+    return numeric
+
+
+def _rounded_indicator(
+    value: Any, digits: int, *, default: Optional[float] = 0.0
+) -> Optional[float]:
+    """Round indicator values after ensuring they are finite numbers."""
+
+    numeric = _finite_or_default(value, default=default)
+    if numeric is None:
+        return None
+    return round(numeric, digits)
