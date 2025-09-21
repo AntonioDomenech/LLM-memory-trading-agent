@@ -138,6 +138,14 @@ def render_config_tab(cfg_path: str) -> None:
             help="Ruta donde se guarda la memoria entrenada. Si la dejas vacía se utilizará una carpeta dedicada por símbolo para reutilizar sesiones anteriores.",
         )
 
+        initial_cash_input = st.number_input(
+            "Capital inicial",
+            min_value=0.0,
+            value=float(getattr(cfg, "initial_cash", 100000.0)),
+            step=1000.0,
+            help="Monto de efectivo disponible al inicio del backtest. Afecta el tamaño absoluto de las posiciones y el benchmark buy & hold.",
+        )
+
         st.markdown("### Recuperación de memoria")
         k_cols = st.columns(3)
         k_shallow = k_cols[0].number_input(
@@ -319,6 +327,7 @@ def render_config_tab(cfg_path: str) -> None:
         embedding_model=embedding_model.strip() or cfg.embedding_model,
         decision_model=decision_model.strip() or cfg.decision_model,
         memory_path=memory_path_clean,
+        initial_cash=float(initial_cash_input),
         retrieval=RetrievalCfg(
             k_shallow=int(k_shallow),
             k_intermediate=int(k_intermediate),

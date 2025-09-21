@@ -33,6 +33,7 @@ def _write_config(path, memory_path, retrieval):
         "decision_model": "test-model",
         "embedding_model": "text-embedding-3-small",
         "memory_path": str(memory_path),
+        "initial_cash": 100000.0,
         "retrieval": retrieval,
     }
     path.write_text(json.dumps(cfg))
