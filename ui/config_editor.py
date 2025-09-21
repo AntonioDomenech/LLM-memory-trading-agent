@@ -158,7 +158,7 @@ def render_config_tab(cfg_path: str) -> None:
             min_value=0.0,
             value=float(getattr(cfg, "periodic_contribution", 0.0)),
             step=100.0,
-            help="Capital adicional que se ingresará automáticamente según la frecuencia elegida. Déjalo en 0 para desactivar los aportes.",
+            help="Capital adicional que se ingresará automáticamente según la frecuencia elegida. El benchmark buy & hold reinvierte estos aportes y puedes dejar el valor en 0 para desactivarlos.",
         )
         freq_options = {
             "Sin aportes": "none",
@@ -180,7 +180,7 @@ def render_config_tab(cfg_path: str) -> None:
         )
         contribution_frequency_value = freq_options[contribution_frequency_label]
         st.caption(
-            "Los aportes se aplican al inicio del primer día de mercado de cada mes y quedan registrados en el historial de operaciones."
+            "Los aportes se aplican al inicio del primer día de mercado de cada mes, se reinvierten automáticamente en el benchmark buy & hold y quedan registrados en el historial de operaciones."
         )
 
         st.markdown("### Recuperación de memoria")

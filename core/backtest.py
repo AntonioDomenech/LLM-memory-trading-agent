@@ -134,7 +134,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     initial_cash = _to_float(getattr(cfg, "initial_cash", 100000.0), 100000.0)
     cash = initial_cash
     position = 0.0
-    bh_shares = 0
+    bh_shares = 0.0
     bh_cash = initial_cash
     periodic_contribution = max(0.0, _to_float(getattr(cfg, "periodic_contribution", 0.0), 0.0))
     freq_raw = str(getattr(cfg, "contribution_frequency", "none") or "none").strip().lower()
@@ -163,6 +163,10 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             if first_trading_days.get((d.year, d.month)) == d:
                 cash += periodic_contribution
                 bh_cash += periodic_contribution
+                if price > 0:
+                    shares_added = periodic_contribution / price
+                    bh_shares += shares_added
+                    bh_cash -= shares_added * price
                 contribution_today = periodic_contribution
                 total_contributions += contribution_today
                 trades.append(
@@ -230,9 +234,11 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             pending_feedback = None
 
         # Buy&Hold benchmark
-        if i == 0:
-            bh_shares = int(bh_cash // price)
-            bh_cash = bh_cash - bh_shares * price
+        if i == 0 and price > 0:
+            initial_shares = int(bh_cash // price)
+            if initial_shares > 0:
+                bh_shares += float(initial_shares)
+                bh_cash -= initial_shares * price
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
