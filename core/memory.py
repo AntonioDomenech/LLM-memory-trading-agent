@@ -33,7 +33,9 @@ class MemoryBank:
     def save(self) -> None:
         """Persist the memory layers to ``self.path``."""
 
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        directory = os.path.dirname(self.path) or "."
+        if directory not in ("", "."):
+            os.makedirs(directory, exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.layers, f, indent=2)
 
