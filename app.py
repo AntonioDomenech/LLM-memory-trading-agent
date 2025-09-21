@@ -1,6 +1,7 @@
 
+import json
 import os
-from datetime import datetime
+from datetime import datetime, date
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -72,6 +73,40 @@ def fmt_shares(value: float) -> str:
     if not formatted or formatted == "-0":
         formatted = "0"
     return f"{formatted} sh"
+
+
+def _json_default(obj):
+    """Serialize complex objects (numpy, pandas, datetimes) for JSON export."""
+
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, pd.DataFrame):
+        return obj.to_dict(orient="records")
+    if isinstance(obj, (list, tuple, set)):
+        return list(obj)
+    if hasattr(obj, "isoformat"):
+        try:
+            return obj.isoformat()
+        except Exception:
+            pass
+    if hasattr(obj, "tolist"):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    if hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    if hasattr(obj, "__dict__"):
+        try:
+            return obj.__dict__
+        except Exception:
+            pass
+    return str(obj)
 
 st.set_page_config(page_title="FinMem Pro", layout="wide")
 
@@ -247,6 +282,7 @@ with tabs[1]:
         factor_table_placeholder.info("Sin factores registrados todavía.")
 
     factor_history: list[dict] = []
+    train_event_records: list[dict] = []
     stats = {"capsules": 0, "factors": 0, "infos": 0, "warnings": 0}
 
     def render_factor_chart():
@@ -326,6 +362,20 @@ with tabs[1]:
     def on_train_event(evt):
         """Handle training callbacks and update the UI."""
 
+        timestamp = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+        record = {"timestamp": timestamp}
+        if isinstance(evt, dict):
+            try:
+                record.update(json.loads(json.dumps(evt, default=_json_default)))
+            except Exception:
+                record.update({k: evt.get(k) for k in evt})
+        else:
+            try:
+                record["event"] = json.loads(json.dumps(evt, default=_json_default))
+            except Exception:
+                record["event"] = str(evt)
+        train_event_records.append(record)
+
         t = evt.get("type")
         if t == "phase":
             status_placeholder.info(f"Fase: {evt.get('label')} → {evt.get('state')}")
@@ -368,6 +418,7 @@ with tabs[1]:
     if st.button("Ejecutar entrenamiento", type="primary"):
         stats.update({"capsules": 0, "factors": 0, "infos": 0, "warnings": 0})
         factor_history.clear()
+        train_event_records.clear()
         render_metric_card(capsules_metric, "Cápsulas", "0", "Generadas")
         render_metric_card(factors_metric, "Factores", "0", "Evaluados")
         render_metric_card(info_metric, "Mensajes", "0", "Info")
@@ -378,6 +429,39 @@ with tabs[1]:
         st.success("Entrenamiento completado")
         st.subheader("📦 Snapshot de memoria")
         st.json(res.get("memory_snapshot", {}))
+
+        stats_snapshot = dict(stats)
+        log_payload = {
+            "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "stage": "training",
+            "config_path": cfg_path,
+            "config_snapshot": cfg_snapshot,
+            "stats": stats_snapshot,
+            "factor_history": list(factor_history),
+            "events": list(train_event_records),
+            "result": res,
+        }
+        train_log_bytes = json.dumps(
+            log_payload,
+            ensure_ascii=False,
+            indent=2,
+            default=_json_default,
+        ).encode("utf-8")
+        train_log_name = f"training_log_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}Z.json"
+        st.session_state["TRAIN_LOG_FILE"] = {
+            "file_name": train_log_name,
+            "data": train_log_bytes,
+        }
+
+    train_log_state = st.session_state.get("TRAIN_LOG_FILE")
+    if train_log_state and train_log_state.get("data"):
+        st.download_button(
+            "⬇️ Descargar log de entrenamiento",
+            data=train_log_state["data"],
+            file_name=train_log_state.get("file_name", "training_log.json"),
+            mime="application/json",
+            key="download_training_log",
+        )
 
 # --- Backtest tab ---
 with tabs[2]:
@@ -444,6 +528,7 @@ with tabs[2]:
         message_container = st.container()
 
     equity_history: list[dict] = []
+    test_event_records: list[dict] = []
 
     def render_equity_chart():
         """Render the backtest equity curve and benchmark chart."""
@@ -537,6 +622,20 @@ with tabs[2]:
         """Handle backtest events and refresh visual elements."""
 
         nonlocal last_equity_point
+        timestamp = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+        record = {"timestamp": timestamp}
+        if isinstance(evt, dict):
+            try:
+                record.update(json.loads(json.dumps(evt, default=_json_default)))
+            except Exception:
+                record.update({k: evt.get(k) for k in evt})
+        else:
+            try:
+                record["event"] = json.loads(json.dumps(evt, default=_json_default))
+            except Exception:
+                record["event"] = str(evt)
+        test_event_records.append(record)
+
         t = evt.get("type")
         if t == "phase":
             status_bt.info(f"Fase: {evt.get('label')} → {evt.get('state')}")
@@ -609,6 +708,7 @@ with tabs[2]:
 
     if st.button("Ejecutar backtest", type="primary"):
         equity_history.clear()
+        test_event_records.clear()
         render_metric_card(equity_metric, "Equity", fmt_currency(0.0), "Valor de la cartera")
         render_metric_card(cash_metric, "Efectivo", fmt_currency(0.0), "Disponible")
         render_metric_card(position_metric, "Posición", fmt_shares(0.0), "Acciones netas")
@@ -677,6 +777,42 @@ with tabs[2]:
         if "trades_tail" in res:
             st.markdown("#### Últimas operaciones ejecutadas")
             st.dataframe(res["trades_tail"], use_container_width=True)
+
+        stats_bt_snapshot = dict(stats_bt)
+        res_for_log = {k: v for k, v in res.items() if k not in {"fig_equity", "fig_drawdown"}}
+        log_payload = {
+            "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "stage": "backtest",
+            "config_path": cfg_path,
+            "config_snapshot": cfg_snapshot_bt,
+            "event_rate": int(update_rate),
+            "stats": stats_bt_snapshot,
+            "equity_history": list(equity_history),
+            "last_equity_point": last_equity_point,
+            "events": list(test_event_records),
+            "result": res_for_log,
+        }
+        backtest_log_bytes = json.dumps(
+            log_payload,
+            ensure_ascii=False,
+            indent=2,
+            default=_json_default,
+        ).encode("utf-8")
+        backtest_log_name = f"backtest_log_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}Z.json"
+        st.session_state["BACKTEST_LOG_FILE"] = {
+            "file_name": backtest_log_name,
+            "data": backtest_log_bytes,
+        }
+
+    backtest_log_state = st.session_state.get("BACKTEST_LOG_FILE")
+    if backtest_log_state and backtest_log_state.get("data"):
+        st.download_button(
+            "⬇️ Descargar log de backtest",
+            data=backtest_log_state["data"],
+            file_name=backtest_log_state.get("file_name", "backtest_log.json"),
+            mime="application/json",
+            key="download_backtest_log",
+        )
 
 # --- News cache tab ---
 with tabs[3]:
