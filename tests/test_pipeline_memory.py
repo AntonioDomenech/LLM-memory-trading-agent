@@ -89,3 +89,28 @@ def test_prepare_daily_context_with_retrieved_memory(tmp_path):
     assert policy_payload["memory_highlights"][0]["text"].startswith("AAPL narrative")
     assert policy_payload["portfolio_state"] == portfolio_state
     assert ctx.portfolio_state == portfolio_state
+
+
+def test_memory_access_persists_after_retrieval(tmp_path):
+    """Access counters should increment and persist after reloading the bank."""
+
+    cfg = Config()
+    cfg.memory_path = str(tmp_path / "bank.json")
+    cfg.retrieval = RetrievalCfg(k_shallow=2, k_intermediate=0, k_deep=0)
+
+    bank = MemoryBank(cfg.memory_path, emb_model=cfg.embedding_model)
+    bank.add_item(
+        "shallow",
+        "AAPL narrative: bullish momentum noted",
+        {"date": "2024-01-01", "tag": "summary"},
+        base_importance=12.0,
+        seen_date="2024-01-01",
+    )
+
+    bank.retrieve("bullish momentum", "2024-01-02", cfg.retrieval)
+    bank.retrieve("bullish momentum", "2024-01-02", cfg.retrieval)
+
+    reloaded = MemoryBank(cfg.memory_path, emb_model=cfg.embedding_model)
+    stored = reloaded.layers["shallow"][0]
+
+    assert stored["access"] == 2
