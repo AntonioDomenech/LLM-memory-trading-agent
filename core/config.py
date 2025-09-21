@@ -41,6 +41,7 @@ class Config:
     embedding_model: str = "text-embedding-3-small"
     decision_model: str = "gpt-4o-mini"
     memory_path: str = "data/memory_bank.json"
+    initial_cash: float = 100000.0
     retrieval: RetrievalCfg = field(default_factory=RetrievalCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
 
@@ -52,6 +53,12 @@ def load_config(path: str) -> Config:
         raw = json.load(f)
     symbol = raw.get("symbol", "AAPL")
     memory_path = raw.get("memory_path") or _find_preferred_memory_path(symbol)
+    initial_cash_raw = raw.get("initial_cash", 100000.0)
+    try:
+        initial_cash = float(initial_cash_raw)
+    except (TypeError, ValueError):
+        initial_cash = 100000.0
+
     cfg = Config(
         symbol = symbol,
         train_start = raw.get("train_start", "2022-01-01"),
@@ -63,6 +70,7 @@ def load_config(path: str) -> Config:
         embedding_model = raw.get("embedding_model","text-embedding-3-small"),
         decision_model  = raw.get("decision_model","gpt-4o-mini"),
         memory_path = memory_path,
+        initial_cash = initial_cash,
         retrieval = RetrievalCfg(**raw.get("retrieval", {})),
         risk = RiskCfg(**raw.get("risk", {})),
     )

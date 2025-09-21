@@ -83,8 +83,11 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     df["date"] = pd.to_datetime(df["date"]).dt.date
     dates = list(df["date"].astype("datetime64[ns]").dt.date)
 
-    cash = 100000.0
+    initial_cash = _to_float(getattr(cfg, "initial_cash", 100000.0), 100000.0)
+    cash = initial_cash
     position = 0
+    bh_shares = 0
+    bh_cash = initial_cash
     eq_series, bh_series, trades = [], [], []
     pending_feedback = None
 
@@ -150,7 +153,8 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         # Buy&Hold benchmark
         if i == 0:
-            bh_shares = int(cash // price); bh_cash = cash - bh_shares * price
+            bh_shares = int(initial_cash // price)
+            bh_cash = initial_cash - bh_shares * price
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
