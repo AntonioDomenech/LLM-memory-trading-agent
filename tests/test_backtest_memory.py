@@ -1,5 +1,4 @@
 import json
-import math
 
 import pandas as pd
 import pytest
@@ -356,7 +355,7 @@ def test_run_backtest_allows_fractional_positions(tmp_path, monkeypatch):
     assert calls["policy"] == len(bars)
 
 def test_run_backtest_enforces_min_notional(tmp_path, monkeypatch):
-    """Minimum notional constraints should impose floor on share counts."""
+    """Minimum notional buys below the floor should be cancelled."""
 
     memory_path = tmp_path / "bank_floor.json"
     config_path = tmp_path / "config_floor.json"
@@ -407,13 +406,78 @@ def test_run_backtest_enforces_min_notional(tmp_path, monkeypatch):
 
     monkeypatch.setattr("core.backtest.chat_json", fake_chat)
 
-    result = run_backtest(config_path=str(config_path))
+    events = []
+
+    result = run_backtest(
+        config_path=str(config_path), on_event=events.append, event_rate=1
+    )
 
     trades = result["trades_tail"]
-    buy_trades = trades[trades["action"] == "BUY"]
-    assert not buy_trades.empty
+    assert trades.empty
 
-    expected_floor = math.ceil(risk["min_trade_value"] / bars.iloc[0]["close"])
-    last_buy = buy_trades.iloc[-1]
-    assert int(last_buy["shares_delta"]) >= expected_floor
-    assert "min_trade_floor" in (last_buy.get("note") or "")
+    decision_norms = [
+        evt.get("decision", {}).get("norm", "")
+        for evt in events
+        if evt.get("type") == "decision"
+    ]
+    assert any("min_trade_floor_cancel" in norm for norm in decision_norms)
+
+
+def test_min_trade_floor_does_not_flip_short_cover(tmp_path, monkeypatch):
+    """Covering a short below the floor must not flip the position long."""
+
+    memory_path = tmp_path / "bank_short.json"
+    config_path = tmp_path / "config_short.json"
+    risk = {
+        "allow_short": True,
+        "min_trade_value": 500.0,
+    }
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+        risk=risk,
+    )
+
+    bars = _dummy_bars()
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+    monkeypatch.setattr("core.backtest.add_indicators", lambda df: df.copy())
+    monkeypatch.setattr("core.backtest.plot_equity", lambda *args, **kwargs: "fig_eq")
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    policy_sequence = [
+        {"action": "SELL", "target_exposure": -0.002},
+        {"action": "BUY", "target_exposure": 0.0},
+    ]
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
+        if not policy_sequence:
+            pytest.fail("unexpected chat_json call")
+        return dict(policy_sequence.pop(0))
+
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    events = []
+    result = run_backtest(
+        config_path=str(config_path), on_event=events.append, event_rate=1
+    )
+
+    equity_positions = [
+        evt.get("position")
+        for evt in events
+        if evt.get("type") == "equity_point"
+    ]
+    assert equity_positions, "expected equity events"
+    assert equity_positions[-1] == pytest.approx(-2.0)
+
+    trades = result["trades_tail"]
+    assert (trades["action"] == "BUY").sum() == 0
+
+    decision_norms = [
+        evt.get("decision", {}).get("norm", "")
+        for evt in events
+        if evt.get("type") == "decision"
+    ]
+    assert any("min_trade_floor_cancel" in norm for norm in decision_norms)

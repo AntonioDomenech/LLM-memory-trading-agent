@@ -358,6 +358,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         is_buy = delta > 0
         floor_applied = False
+        floor_blocked = False
         min_notional_shares = 0.0
         planned_delta = delta
         remaining_capacity = None
@@ -367,13 +368,18 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             if min_trade_value > 0.0 and price > 0.0:
                 min_notional_shares = min_trade_value / price
             if min_notional_shares > 0.0:
+                desired_delta = planned_delta
                 if remaining_capacity is not None and remaining_capacity < min_notional_shares:
                     planned_delta = 0.0
                 else:
                     if planned_delta < min_notional_shares:
-                        planned_delta = min_notional_shares
-                        floor_applied = True
-                    if remaining_capacity is not None:
+                        if min_notional_shares <= desired_delta + 1e-9:
+                            planned_delta = min_notional_shares
+                            floor_applied = True
+                        else:
+                            planned_delta = 0.0
+                            floor_blocked = True
+                    if planned_delta > 0 and remaining_capacity is not None:
                         planned_delta = min(planned_delta, remaining_capacity)
 
         planned_delta = float(planned_delta)
@@ -417,6 +423,13 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                     normalized,
                     f"min_trade_floor:{_format_quantity(max(min_notional_shares, 0.0))}",
                 )
+            if floor_blocked:
+                label = "min_trade_floor_cancel"
+                if min_notional_shares > 0.0:
+                    label = (
+                        f"{label}:{_format_quantity(max(min_notional_shares, 0.0))}"
+                    )
+                normalized = _append_norm_label(normalized, label)
         else:
             affordable = None
 
