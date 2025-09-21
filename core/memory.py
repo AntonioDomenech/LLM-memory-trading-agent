@@ -200,10 +200,22 @@ class MemoryBank:
         )
         deep = score_layer(self.layers["deep"], cfg.Q_deep, cfg.alpha_deep, cfg.k_deep)
 
+        access_dirty = False
+        for item in shallow + intermediate + deep:
+            prev_raw = item.get("access", 0)
+            try:
+                prev_access = int(prev_raw)
+            except (TypeError, ValueError):
+                prev_access = 0
+            new_access = prev_access + 1
+            if prev_raw != new_access:
+                access_dirty = True
+            item["access"] = new_access
+
+        if access_dirty:
+            needs_save = True
+
         if needs_save:
             self.save()
-
-        for item in shallow + intermediate + deep:
-            item["access"] = int(item.get("access", 0)) + 1
 
         return shallow, intermediate, deep
