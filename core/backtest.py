@@ -1,4 +1,6 @@
 
+from typing import Callable, Optional
+
 import numpy as np, pandas as pd
 from .logger import get_logger
 from .config import load_config, resolve_memory_path
@@ -89,7 +91,12 @@ def _format_quantity(value, precision=6):
     return formatted
 
 
-def run_backtest(config_path="config.json", on_event=None, event_rate=10):
+def run_backtest(
+    config_path="config.json",
+    on_event=None,
+    event_rate=10,
+    should_stop: Optional[Callable[[], bool]] = None,
+):
     """Simulate the trading agent using the stored configuration and memory."""
 
     def emit(evt):
@@ -98,6 +105,16 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         if on_event:
             try: on_event(evt)
             except Exception: pass
+
+    def stop_requested() -> bool:
+        """Determine if the caller asked to abort the simulation."""
+
+        if not should_stop:
+            return False
+        try:
+            return bool(should_stop())
+        except Exception:
+            return False
 
     cfg = load_config(config_path)
     memory_path = resolve_memory_path(cfg, prefer_existing=True, ensure_parent=True)
@@ -149,7 +166,11 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     pending_feedback = None
 
     emit({"type":"phase","label":"Backtest loop","state":"running"})
+    stopped = False
     for i, d in enumerate(dates):
+        if stop_requested():
+            stopped = True
+            break
         d_iso = d.strftime("%Y-%m-%d")
         row = df.loc[df["date"] == d]
         if row.empty:
@@ -541,16 +562,26 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             "shares_delta": _round_quantity(delta),
         }
 
-    m = pd.DataFrame(eq_series, columns=["date","equity"]).set_index("date")["equity"]
-    bh = pd.DataFrame(bh_series, columns=["date","equity"]).set_index("date")["equity"]
-    contrib = pd.DataFrame(contributions_series, columns=["date", "contribution"]).set_index("date")["contribution"].astype(float)
-    m = m.clip(lower=1e-6)  # avoid divide-by-zero weirdness
+    if eq_series:
+        m = pd.DataFrame(eq_series, columns=["date","equity"]).set_index("date")["equity"]
+        bh = pd.DataFrame(bh_series, columns=["date","equity"]).set_index("date")["equity"]
+        contrib = (
+            pd.DataFrame(contributions_series, columns=["date", "contribution"])
+            .set_index("date")["contribution"]
+            .astype(float)
+        )
+        m = m.clip(lower=1e-6)  # avoid divide-by-zero weirdness
 
-    metrics = compute_metrics(m, bh, contributions=contrib)
-    fig_eq = plot_equity(m, bh)
-    fig_dd = plot_drawdown(m)
+        metrics = compute_metrics(m, bh, contributions=contrib)
+        fig_eq = plot_equity(m, bh)
+        fig_dd = plot_drawdown(m)
+    else:
+        metrics = {}
+        fig_eq = None
+        fig_dd = None
+
     trades_df = pd.DataFrame(trades).tail(25)
-    emit({"type": "done"})
+    emit({"type": "done", "status": "stopped" if stopped else "completed"})
     return {
         "metrics": metrics,
         "fig_equity": fig_eq,
@@ -561,4 +592,5 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             "amount": float(periodic_contribution),
             "total_added": float(total_contributions),
         },
+        "stopped": stopped,
     }
