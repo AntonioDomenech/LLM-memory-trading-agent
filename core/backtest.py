@@ -119,6 +119,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     c_per_share    = float(_get(cfg, "risk", "commission_per_share", default=0.0) or 0.0)
     allow_short    = bool(_get(cfg, "risk", "allow_short", default=False))
     min_trade_value = max(0.0, float(_get(cfg, "risk", "min_trade_value", default=0.0) or 0.0))
+    min_trade_shares = max(0.0, float(_get(cfg, "risk", "min_trade_shares", default=0.0) or 0.0))
 
     emit({"type":"phase","label":"Load prices","state":"running"})
     df = add_indicators(get_daily_bars(cfg.symbol, cfg.test_start, cfg.test_end))
@@ -359,6 +360,8 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         is_buy = delta > 0
         floor_applied = False
         floor_blocked = False
+        share_floor_applied = False
+        share_floor_blocked = False
         min_notional_shares = 0.0
         planned_delta = delta
         remaining_capacity = None
@@ -435,6 +438,48 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         if is_buy and final_delta > 0 and affordability_limited:
             normalized = _append_norm_label(normalized, "afford_limited")
+
+        if min_trade_shares > 0.0:
+            abs_final = abs(final_delta)
+            if abs_final > 0.0 and abs_final + 1e-12 < min_trade_shares:
+                sign = 1.0 if final_delta > 0 else -1.0
+                candidate = sign * min_trade_shares
+                can_round = True
+
+                if sign > 0:
+                    if remaining_capacity is not None and remaining_capacity + 1e-12 < min_trade_shares:
+                        can_round = False
+                    if affordable is not None and affordable + 1e-12 < min_trade_shares:
+                        can_round = False
+                else:
+                    new_position = position + candidate
+                    if not allow_short:
+                        if position < min_trade_shares - 1e-12:
+                            can_round = False
+                        elif new_position < -1e-12:
+                            can_round = False
+                    if allow_short and max_pos_shares > 0:
+                        lower_bound = -float(max_pos_shares)
+                        if new_position < lower_bound - 1e-12:
+                            can_round = False
+
+                if can_round:
+                    final_delta = candidate
+                    share_floor_applied = True
+                else:
+                    final_delta = 0.0
+                    share_floor_blocked = True
+
+        if share_floor_applied:
+            normalized = _append_norm_label(
+                normalized,
+                f"min_share_floor:{_format_quantity(max(min_trade_shares, 0.0))}",
+            )
+        if share_floor_blocked:
+            label = "min_share_floor_cancel"
+            if min_trade_shares > 0.0:
+                label = f"{label}:{_format_quantity(max(min_trade_shares, 0.0))}"
+            normalized = _append_norm_label(normalized, label)
 
         delta = _round_quantity(final_delta)
 
