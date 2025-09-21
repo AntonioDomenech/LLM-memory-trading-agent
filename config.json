@@ -31,6 +31,9 @@
     "take_profit_atr_mult": 0.0,
     "commission_per_trade": 0.0,
     "commission_per_share": 0.0,
-    "slippage_bps": 5.0
+    "slippage_bps": 5.0,
+    "min_trade_value": 0.0,
+    "min_trade_shares": 1,
+    "allow_short": false
   }
 }
