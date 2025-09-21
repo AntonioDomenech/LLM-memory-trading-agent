@@ -606,7 +606,7 @@ with tabs[2]:
             cfg_initial_cash = float(cfg_snapshot_bt.get("initial_cash", 0.0) or 0.0)
         except Exception:
             cfg_initial_cash = 0.0
-    last_equity_point = None
+    last_equity_point_state = {"value": None}
 
     def update_messages_metric():
         """Update the UI metric that counts LLM calls."""
@@ -621,7 +621,6 @@ with tabs[2]:
     def on_test_event(evt):
         """Handle backtest events and refresh visual elements."""
 
-        nonlocal last_equity_point
         timestamp = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
         record = {"timestamp": timestamp}
         if isinstance(evt, dict):
@@ -697,7 +696,7 @@ with tabs[2]:
                 fmt_percent(pnl_pct),
                 "Equity vs. aportes",
             )
-            last_equity_point = dict(evt)
+            last_equity_point_state["value"] = dict(evt)
             contribution = float(evt.get("contribution", 0.0) or 0.0)
             if contribution > 0:
                 message_container.info(
@@ -720,7 +719,7 @@ with tabs[2]:
         equity_chart_placeholder.info("La curva de equity se dibujará al recibir los primeros datos.")
         drawdown_chart_placeholder.info("El drawdown aparecerá en tiempo real durante el backtest.")
         stats_bt.update({"decisions": 0, "infos": 0, "warnings": 0})
-        last_equity_point = None
+        last_equity_point_state["value"] = None
         res = run_backtest(cfg_path, on_event=on_test_event, event_rate=int(update_rate))
         st.success("Backtest completado")
 
@@ -750,6 +749,7 @@ with tabs[2]:
                 f"Total inyectado: {fmt_currency(contrib.get('total_added', 0.0))}"
             )
 
+        last_equity_point = last_equity_point_state["value"]
         if last_equity_point:
             total_contributions = float(last_equity_point.get("total_contributions", 0.0) or 0.0)
             invested_capital = cfg_initial_cash + total_contributions
@@ -788,7 +788,7 @@ with tabs[2]:
             "event_rate": int(update_rate),
             "stats": stats_bt_snapshot,
             "equity_history": list(equity_history),
-            "last_equity_point": last_equity_point,
+            "last_equity_point": last_equity_point_state["value"],
             "events": list(test_event_records),
             "result": res_for_log,
         }
