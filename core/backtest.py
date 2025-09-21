@@ -1,4 +1,6 @@
 
+import math
+
 import numpy as np, pandas as pd
 from .logger import get_logger
 from .config import load_config, resolve_memory_path
@@ -81,6 +83,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     c_per_trade    = float(_get(cfg, "risk", "commission_per_trade", default=0.0) or 0.0)
     c_per_share    = float(_get(cfg, "risk", "commission_per_share", default=0.0) or 0.0)
     allow_short    = bool(_get(cfg, "risk", "allow_short", default=False))
+    min_trade_value = max(0.0, float(_get(cfg, "risk", "min_trade_value", default=0.0) or 0.0))
 
     emit({"type":"phase","label":"Load prices","state":"running"})
     df = add_indicators(get_daily_bars(cfg.symbol, cfg.test_start, cfg.test_end))
@@ -307,28 +310,83 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         desired_value = target_exposure * equity
         target_shares = int(desired_value // max(price, 1e-9))
         if max_pos_shares > 0:
-            target_shares = int(_clamp(target_shares, 0 if not allow_short else -max_pos_shares, max_pos_shares))
+            target_shares = int(
+                _clamp(
+                    target_shares,
+                    0 if not allow_short else -max_pos_shares,
+                    max_pos_shares,
+                )
+            )
         delta = target_shares - position
+
+        is_buy = delta > 0
+        floor_applied = False
+        min_notional_shares = 0
+        planned_delta = delta
+        remaining_capacity = None
+        if max_pos_shares > 0:
+            remaining_capacity = max(0, int(max_pos_shares) - position)
+        if is_buy:
+            floor_shares = 0
+            if min_trade_value > 0.0 and price > 0.0:
+                floor_shares = int(math.ceil(min_trade_value / price))
+            if floor_shares > 0:
+                min_notional_shares = floor_shares
+                if remaining_capacity is not None and remaining_capacity < floor_shares:
+                    planned_delta = 0
+                else:
+                    if planned_delta < floor_shares:
+                        planned_delta = floor_shares
+                        floor_applied = True
+                    if remaining_capacity is not None:
+                        planned_delta = min(planned_delta, remaining_capacity)
+
+        planned_delta = int(planned_delta)
 
         # Fill price and commissions
         slip = (slippage_bps / 10000.0)
-        fill = price * (1 + (slip if delta>0 else -slip))
+        fill = price * (1 + (slip if is_buy else -slip))
 
         # No shorting by default
-        if not allow_short and delta < 0:
-            delta = max(delta, -position)
+        final_delta = planned_delta
+        if not allow_short and final_delta < 0:
+            final_delta = max(final_delta, -position)
 
         # No margin: limit buys to affordable shares
-        if delta > 0:
-            # account for per-trade + per-share commission in affordability
-            per_share_total = fill + c_per_share
-            if per_share_total <= 0:
+        affordability_limited = False
+        if is_buy:
+            if final_delta <= 0:
                 affordable = 0
             else:
-                affordable = int(max(0.0, (cash - c_per_trade)) // per_share_total)
-            if affordable < delta:
-                delta = affordable
-                normalized = _append_norm_label(normalized, "afford_limited")
+                per_share_total = fill + c_per_share
+                if per_share_total <= 0:
+                    affordable = 0
+                else:
+                    affordable = int(max(0.0, (cash - c_per_trade)) // per_share_total)
+                if min_notional_shares > 0 and affordable < min_notional_shares:
+                    affordable = 0
+            if final_delta > 0:
+                if affordable <= 0:
+                    final_delta = 0
+                    affordability_limited = True
+                else:
+                    if affordable < final_delta:
+                        final_delta = affordable
+                        affordability_limited = True
+            else:
+                final_delta = 0
+
+            if floor_applied and final_delta > 0:
+                normalized = _append_norm_label(
+                    normalized, f"min_trade_floor:{max(min_notional_shares, 0)}"
+                )
+        else:
+            affordable = None
+
+        if is_buy and final_delta > 0 and affordability_limited:
+            normalized = _append_norm_label(normalized, "afford_limited")
+
+        delta = int(final_delta)
 
         # Execute
         if delta != 0:

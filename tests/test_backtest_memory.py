@@ -1,4 +1,5 @@
 import json
+import math
 
 import pandas as pd
 import pytest
@@ -21,7 +22,7 @@ def _dummy_bars():
     )
 
 
-def _write_config(path, memory_path, retrieval):
+def _write_config(path, memory_path, retrieval, risk=None):
     cfg = {
         "symbol": "AAPL",
         "train_start": "2022-01-01",
@@ -36,6 +37,8 @@ def _write_config(path, memory_path, retrieval):
         "initial_cash": 100000.0,
         "retrieval": retrieval,
     }
+    if risk is not None:
+        cfg["risk"] = risk
     path.write_text(json.dumps(cfg))
 
 
@@ -262,3 +265,63 @@ def test_run_backtest_parses_percent_exposure(tmp_path, monkeypatch):
     assert str(first_trade.get("note", "")).startswith("percent_to_frac:0.75")
 
     assert calls["policy"] == len(bars)
+
+
+def test_run_backtest_enforces_min_notional(tmp_path, monkeypatch):
+    memory_path = tmp_path / "bank_floor.json"
+    config_path = tmp_path / "config_floor.json"
+    risk = {
+        "max_position": 1000,
+        "commission_per_trade": 0.0,
+        "commission_per_share": 0.0,
+        "slippage_bps": 0.0,
+        "min_trade_value": 500.0,
+        "allow_short": False,
+    }
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+        risk=risk,
+    )
+
+    bars = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2023-01-02", "2023-01-03"]),
+            "open": [20.0, 21.0],
+            "high": [21.0, 22.0],
+            "low": [19.0, 20.0],
+            "close": [20.0, 21.0],
+            "volume": [1000, 1100],
+        }
+    )
+
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+    monkeypatch.setattr("core.backtest.add_indicators", lambda df: df.copy())
+    monkeypatch.setattr("core.backtest.plot_equity", lambda *args, **kwargs: "fig_eq")
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    policy_sequence = [
+        {"action": "BUY", "target_exposure": 0.001},
+        {"action": "HOLD", "target_exposure": 0.0},
+    ]
+    calls = {"policy": 0}
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        idx = min(calls["policy"], len(policy_sequence) - 1)
+        resp = dict(policy_sequence[idx])
+        calls["policy"] += 1
+        return resp
+
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    result = run_backtest(config_path=str(config_path))
+
+    trades = result["trades_tail"]
+    buy_trades = trades[trades["action"] == "BUY"]
+    assert not buy_trades.empty
+
+    expected_floor = math.ceil(risk["min_trade_value"] / bars.iloc[0]["close"])
+    last_buy = buy_trades.iloc[-1]
+    assert int(last_buy["shares_delta"]) >= expected_floor
+    assert "min_trade_floor" in (last_buy.get("note") or "")
