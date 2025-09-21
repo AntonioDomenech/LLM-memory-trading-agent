@@ -54,6 +54,17 @@ def fmt_percent(value: float) -> str:
     except Exception:
         return str(value)
 
+
+def fmt_shares(value: float) -> str:
+    try:
+        rounded = round(float(value), 6)
+    except Exception:
+        return f"{value} sh"
+    formatted = f"{rounded:.6f}".rstrip("0").rstrip(".")
+    if not formatted or formatted == "-0":
+        formatted = "0"
+    return f"{formatted} sh"
+
 st.set_page_config(page_title="FinMem Pro", layout="wide")
 
 st.markdown(
@@ -392,7 +403,7 @@ with tabs[2]:
         messages_metric = row3[1].empty()
         render_metric_card(equity_metric, "Equity", fmt_currency(0.0), "Valor de la cartera")
         render_metric_card(cash_metric, "Efectivo", fmt_currency(0.0), "Disponible")
-        render_metric_card(position_metric, "Posición", "0 sh", "Acciones netas")
+        render_metric_card(position_metric, "Posición", fmt_shares(0.0), "Acciones netas")
         render_metric_card(drawdown_metric, "Drawdown", "0.00%", "Desde el máximo")
         render_metric_card(decisions_metric, "Señales", "0", "Decisiones emitidas")
         render_metric_card(messages_metric, "Mensajes", "0 info / 0 warn", "Logs recibidos")
@@ -533,7 +544,7 @@ with tabs[2]:
             render_metric_card(
                 position_metric,
                 "Posición",
-                f"{int(evt.get('position', 0))} sh",
+                fmt_shares(evt.get("position", 0.0)),
                 "Acciones netas",
             )
             contribution = float(evt.get("contribution", 0.0) or 0.0)
@@ -548,7 +559,7 @@ with tabs[2]:
         equity_history.clear()
         render_metric_card(equity_metric, "Equity", fmt_currency(0.0), "Valor de la cartera")
         render_metric_card(cash_metric, "Efectivo", fmt_currency(0.0), "Disponible")
-        render_metric_card(position_metric, "Posición", "0 sh", "Acciones netas")
+        render_metric_card(position_metric, "Posición", fmt_shares(0.0), "Acciones netas")
         render_metric_card(drawdown_metric, "Drawdown", "0.00%", "Desde el máximo")
         render_metric_card(decisions_metric, "Señales", "0", "Decisiones emitidas")
         render_metric_card(messages_metric, "Mensajes", "0 info / 0 warn", "Logs recibidos")
