@@ -330,13 +330,22 @@ def render_config_tab(cfg_path: str) -> None:
             min_value=0.0,
             value=float(getattr(risk, "min_trade_value", 0.0)),
             step=100.0,
-            help="Mínimo de capital que debe involucrar una operación. Útil para simular restricciones de ciertos brokers.",
+            help=(
+                "Mínimo de capital que debe involucrar una operación. Útil para simular"
+                " restricciones de ciertos brokers. Si también defines un lote mínimo de"
+                " acciones, la orden debe cumplir ambas condiciones."
+            ),
         )
         min_trade_shares = risk_cols4[1].number_input(
             "Mínimo de acciones",
             min_value=0,
-            value=int(getattr(risk, "min_trade_shares", 1)),
-            help="Cantidad mínima de acciones por orden. Sirve para emular lotes predeterminados en mercados específicos.",
+            value=int(getattr(risk, "min_trade_shares", 0)),
+            help=(
+                "Cantidad mínima de acciones por orden. Sirve para emular lotes"
+                " predeterminados en mercados específicos. Se aplica luego del"
+                " control de valor mínimo, redondeando hacia arriba cuando el capital lo"
+                " permite o cancelando la operación si no se alcanza el piso."
+            ),
         )
 
         submitted = st.form_submit_button("Guardar configuración", type="primary")

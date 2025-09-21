@@ -30,7 +30,7 @@ class RiskCfg:
     commission_per_share: float = 0.0
     slippage_bps: float = 8.0
     min_trade_value: float = 0.0
-    min_trade_shares: int = 1
+    min_trade_shares: int = 0
     allow_short: bool = False
 
 @dataclass

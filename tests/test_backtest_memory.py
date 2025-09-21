@@ -481,3 +481,108 @@ def test_min_trade_floor_does_not_flip_short_cover(tmp_path, monkeypatch):
         if evt.get("type") == "decision"
     ]
     assert any("min_trade_floor_cancel" in norm for norm in decision_norms)
+
+
+def test_min_trade_shares_rounding_and_sell_floor(tmp_path, monkeypatch):
+    """When min_trade_shares is set the simulator rounds up or blocks trades."""
+
+    memory_path = tmp_path / "bank_shares.json"
+    config_path = tmp_path / "config_shares.json"
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+        risk={
+            "max_position": 100,
+            "slippage_bps": 0.0,
+            "commission_per_trade": 0.0,
+            "commission_per_share": 0.0,
+            "min_trade_value": 0.0,
+            "min_trade_shares": 5,
+            "allow_short": False,
+        },
+    )
+
+    bars = _dummy_bars()
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+    monkeypatch.setattr("core.backtest.add_indicators", lambda df: df.copy())
+    monkeypatch.setattr("core.backtest.plot_equity", lambda *args, **kwargs: "fig_eq")
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    policy_responses = [
+        {"action": "BUY", "target_exposure": 0.002},
+        {"action": "SELL", "target_exposure": 0.00303},
+    ]
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        content = messages[0].get("content", "")
+        if "equity narrative analyst" in content:
+            return {}
+        idx = fake_chat.calls
+        fake_chat.calls = min(fake_chat.calls + 1, len(policy_responses) - 1)
+        return dict(policy_responses[idx])
+
+    fake_chat.calls = 0
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    result = run_backtest(config_path=str(config_path))
+    trades = result["trades_tail"]
+    assert len(trades) == 2
+    first_trade, second_trade = trades.iloc[0], trades.iloc[1]
+    assert first_trade["action"] == "BUY"
+    assert first_trade["shares_delta"] == 5.0
+    assert "min_share_floor:5" in (first_trade.get("note") or "")
+    assert second_trade["action"] == "SELL"
+    assert second_trade["shares_delta"] == -5.0
+    assert "min_share_floor:5" in (second_trade.get("note") or "")
+
+
+def test_min_trade_shares_blocks_when_floor_unreachable(tmp_path, monkeypatch):
+    """Trades under the share floor should be skipped when the floor is unaffordable."""
+
+    memory_path = tmp_path / "bank_shares_block.json"
+    config_path = tmp_path / "config_shares_block.json"
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+        risk={
+            "max_position": 100,
+            "slippage_bps": 0.0,
+            "commission_per_trade": 0.0,
+            "commission_per_share": 0.0,
+            "min_trade_value": 0.0,
+            "min_trade_shares": 5,
+            "allow_short": False,
+        },
+    )
+
+    cfg_raw = json.loads(config_path.read_text())
+    cfg_raw["initial_cash"] = 450.0
+    config_path.write_text(json.dumps(cfg_raw))
+
+    bars = _dummy_bars()
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+    monkeypatch.setattr("core.backtest.add_indicators", lambda df: df.copy())
+    monkeypatch.setattr("core.backtest.plot_equity", lambda *args, **kwargs: "fig_eq")
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    policy_responses = [
+        {"action": "BUY", "target_exposure": 0.8889},
+        {"action": "HOLD", "target_exposure": 0.8889},
+    ]
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        content = messages[0].get("content", "")
+        if "equity narrative analyst" in content:
+            return {}
+        idx = fake_chat.calls
+        fake_chat.calls = min(fake_chat.calls + 1, len(policy_responses) - 1)
+        return dict(policy_responses[idx])
+
+    fake_chat.calls = 0
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    result = run_backtest(config_path=str(config_path))
+    trades = result["trades_tail"]
+    assert trades.empty
