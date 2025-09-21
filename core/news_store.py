@@ -171,6 +171,8 @@ def _merge_articles_for_k(existing: List[Dict], new: List[Dict], K: int,
     def _add(a):
         """Add article ``a`` to ``out`` if it has not been seen."""
 
+        if require_content and not _has_content(a):
+            return False
         k = _key(a)
         if not k or k in seen:
             return False
