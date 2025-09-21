@@ -4,6 +4,8 @@ import streamlit as st
 from core.news_store import download_range, load_local_day, prescan_days
 
 def render_news_tab():
+    """Render the Streamlit interface for managing the news cache."""
+
     st.subheader("📥 News cache")
 
     with st.expander("Settings", expanded=True):
@@ -41,6 +43,8 @@ def render_news_tab():
         plan_holder = st.expander("Plan (pre-scan)", expanded=False)
 
         def on_evt(evt: dict):
+            """React to download events by updating progress widgets."""
+
             if evt.get("type") == "plan":
                 plan = evt.get("plan", [])
                 if plan:

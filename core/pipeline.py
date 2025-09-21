@@ -21,6 +21,8 @@ class PromptBundle:
     user: Dict[str, Any]
 
     def as_messages(self) -> List[Dict[str, Any]]:
+        """Return the bundle as a chat completion message list."""
+
         return [self.system, self.user]
 
 
@@ -41,11 +43,15 @@ class DailyContext:
 
 @lru_cache(maxsize=None)
 def _load_prompt(path: str) -> str:
+    """Load a prompt template from disk with UTF-8 decoding."""
+
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def _prov_label(reason: str) -> str:
+    """Derive a human readable provider label from a reason string."""
+
     parts = (reason or "").split(":")
     if not parts:
         return "unknown"
@@ -55,6 +61,8 @@ def _prov_label(reason: str) -> str:
 
 
 def _build_regime(price_row: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize market regime information from a price row."""
+
     price_val = price_row.get("price", price_row.get("close", 1.0))
     try:
         price = float(price_val)
@@ -70,6 +78,8 @@ def _build_regime(price_row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _should_use_memory(retrieval_cfg: Any) -> bool:
+    """Return ``True`` if the retrieval config enables any memory layer."""
+
     if retrieval_cfg is None:
         return False
     keys = ("k_shallow", "k_intermediate", "k_deep")
@@ -83,6 +93,8 @@ _MEMORY_CACHE: Dict[Tuple[str, str], MemoryBank] = {}
 
 
 def _resolve_memory_bank(cfg, memory_bank: Optional[MemoryBank]) -> Optional[MemoryBank]:
+    """Reuse an existing ``MemoryBank`` instance or open one from ``cfg``."""
+
     if memory_bank is not None:
         return memory_bank
     path = getattr(cfg, "memory_path", None)
@@ -98,6 +110,8 @@ def _resolve_memory_bank(cfg, memory_bank: Optional[MemoryBank]) -> Optional[Mem
 
 
 def _sanitize_memory_items(layer: str, items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize memory item dictionaries for UI/test consumption."""
+
     sanitized: List[Dict[str, Any]] = []
     for it in items or []:
         sanitized.append(

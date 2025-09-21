@@ -16,6 +16,8 @@ from core.config import (
 
 
 def _parse_date(value: str, fallback: date) -> date:
+    """Convert ISO strings from the config file to ``date`` objects."""
+
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
     except Exception:
@@ -23,10 +25,14 @@ def _parse_date(value: str, fallback: date) -> date:
 
 
 def _format_symbol(value: str) -> str:
+    """Normalise ticker symbols to uppercase without surrounding spaces."""
+
     return (value or "").strip().upper()
 
 
 def render_config_tab(cfg_path: str) -> None:
+    """Render the Streamlit configuration editor for the trading agent."""
+
     st.subheader("⚙️ Editor de configuración")
     st.caption(
         "Ajusta el archivo JSON que controla el entrenamiento, la memoria y el backtest."

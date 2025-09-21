@@ -14,6 +14,8 @@ log = get_logger()
 
 
 def _to_float(x, default=0.0):
+    """Parse numeric inputs that may include percentage strings."""
+
     try:
         if isinstance(x, str):
             xs = x.strip()
@@ -26,6 +28,8 @@ def _to_float(x, default=0.0):
 
 
 def _coerce_factor_numbers(factor: dict) -> dict:
+    """Ensure factor dictionary fields are floats for downstream math."""
+
     if not isinstance(factor, dict):
         return {}
     keys = [
@@ -42,6 +46,8 @@ def _coerce_factor_numbers(factor: dict) -> dict:
 
 
 def _get(cfg, *path, default=None):
+    """Traverse ``cfg`` following ``path`` attributes with a default."""
+
     obj = cfg
     for key in path:
         if not hasattr(obj, key):
@@ -50,14 +56,20 @@ def _get(cfg, *path, default=None):
     return obj
 
 def _clamp(x, lo, hi):
+    """Clamp ``x`` between ``lo`` and ``hi``."""
+
     return max(lo, min(hi, x))
 
 
 def _append_norm_label(current, label):
+    """Append a normalisation label keeping semi-colon separation."""
+
     return f"{current};{label}" if current else label
 
 
 def _round_quantity(value, precision=8):
+    """Return ``value`` rounded for stable reporting."""
+
     try:
         return float(round(float(value), precision))
     except Exception:
@@ -65,6 +77,8 @@ def _round_quantity(value, precision=8):
 
 
 def _format_quantity(value, precision=6):
+    """Format share quantities removing trailing zeros."""
+
     try:
         rounded = round(float(value), precision)
     except Exception:
@@ -76,7 +90,11 @@ def _format_quantity(value, precision=6):
 
 
 def run_backtest(config_path="config.json", on_event=None, event_rate=10):
+    """Simulate the trading agent using the stored configuration and memory."""
+
     def emit(evt):
+        """Forward events to the optional callback without raising."""
+
         if on_event:
             try: on_event(evt)
             except Exception: pass

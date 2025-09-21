@@ -1,7 +1,11 @@
 
 import pandas as pd
 import ta
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Return ``df`` with technical indicators required by the agent."""
+
     df = df.copy()
     for c in ("open","high","low","close","volume"):
         if c in df.columns:

@@ -29,6 +29,8 @@ from ui.config_editor import render_config_tab
 
 
 def render_metric_card(target, title: str, value: str, caption: str = "") -> None:
+    """Render a stylised KPI card inside the provided Streamlit container."""
+
     target.markdown(
         f"""
         <div class=\"metric-card\">
@@ -42,6 +44,8 @@ def render_metric_card(target, title: str, value: str, caption: str = "") -> Non
 
 
 def fmt_currency(value: float) -> str:
+    """Format ``value`` as a whole-dollar currency string."""
+
     try:
         return f"${value:,.0f}"
     except Exception:
@@ -49,6 +53,8 @@ def fmt_currency(value: float) -> str:
 
 
 def fmt_percent(value: float) -> str:
+    """Format a fraction as a percentage string."""
+
     try:
         return f"{value * 100:.2f}%"
     except Exception:
@@ -56,6 +62,8 @@ def fmt_percent(value: float) -> str:
 
 
 def fmt_shares(value: float) -> str:
+    """Format share quantities trimming trailing zeros."""
+
     try:
         rounded = round(float(value), 6)
     except Exception:
@@ -242,6 +250,8 @@ with tabs[1]:
     stats = {"capsules": 0, "factors": 0, "infos": 0, "warnings": 0}
 
     def render_factor_chart():
+        """Plot the evolution of AI-derived factor scores."""
+
         if not factor_history:
             return
         df = pd.DataFrame(factor_history)
@@ -278,6 +288,8 @@ with tabs[1]:
         factor_chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     def render_factor_table():
+        """Display the latest factor breakdown in a table."""
+
         if not factor_history:
             return
         df = pd.DataFrame(factor_history)
@@ -312,6 +324,8 @@ with tabs[1]:
         factor_table_placeholder.dataframe(tbl.tail(15), use_container_width=True)
 
     def on_train_event(evt):
+        """Handle training callbacks and update the UI."""
+
         t = evt.get("type")
         if t == "phase":
             status_placeholder.info(f"Fase: {evt.get('label')} → {evt.get('state')}")
@@ -427,6 +441,8 @@ with tabs[2]:
     equity_history: list[dict] = []
 
     def render_equity_chart():
+        """Render the backtest equity curve and benchmark chart."""
+
         if not equity_history:
             return
         df = pd.DataFrame(equity_history)
@@ -463,6 +479,8 @@ with tabs[2]:
         equity_chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     def render_drawdown_chart():
+        """Render the backtest drawdown chart."""
+
         if not equity_history:
             return
         df = pd.DataFrame(equity_history)
@@ -494,6 +512,8 @@ with tabs[2]:
     stats_bt = {"decisions": 0, "infos": 0, "warnings": 0}
 
     def update_messages_metric():
+        """Update the UI metric that counts LLM calls."""
+
         render_metric_card(
             messages_metric,
             "Mensajes",
@@ -502,6 +522,8 @@ with tabs[2]:
         )
 
     def on_test_event(evt):
+        """Handle backtest events and refresh visual elements."""
+
         t = evt.get("type")
         if t == "phase":
             status_bt.info(f"Fase: {evt.get('label')} → {evt.get('state')}")

@@ -11,21 +11,29 @@ DEFAULT_DIR = "data/news_local"
 # ---- Paths & IO helpers -----------------------------------------------------
 
 def _dir(base_dir: str = None) -> str:
+    """Return the effective local news directory."""
+
     return base_dir or os.environ.get("NEWS_LOCAL_DIR") or DEFAULT_DIR
 
 
 def local_day_path(symbol: str, day_iso: str, base_dir: str = None) -> str:
+    """Compute the file path storing news for ``symbol`` on ``day_iso``."""
+
     d = _dir(base_dir)
     sym = (symbol or "UNKNOWN").upper()
     return os.path.join(d, sym, f"{day_iso}.json")
 
 
 def ensure_dirs(path: str) -> None:
+    """Ensure the parent directory for ``path`` exists."""
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
 def save_local_day(symbol: str, day_iso: str, articles: List[Dict], provider: str, reason: str,
                    base_dir: str = None) -> str:
+    """Persist downloaded news articles and return the saved path."""
+
     p = local_day_path(symbol, day_iso, base_dir)
     ensure_dirs(p)
     rec = {"symbol": symbol, "date": day_iso, "provider": provider, "reason": reason, "articles": articles}
@@ -35,6 +43,8 @@ def save_local_day(symbol: str, day_iso: str, articles: List[Dict], provider: st
 
 
 def load_local_day(symbol: str, day_iso: str, base_dir: str = None) -> Tuple[List[Dict], str]:
+    """Load cached news articles if available, returning ``(articles, provider)``."""
+
     p = local_day_path(symbol, day_iso, base_dir)
     if not os.path.exists(p):
         return [], ""
@@ -47,6 +57,8 @@ def load_local_day(symbol: str, day_iso: str, base_dir: str = None) -> Tuple[Lis
 
 
 def daterange(start_iso: str, end_iso: str):
+    """Yield ISO date strings from ``start_iso`` to ``end_iso`` inclusive."""
+
     d0 = datetime.fromisoformat(start_iso).date()
     d1 = datetime.fromisoformat(end_iso).date()
     cur = d0
@@ -58,6 +70,8 @@ def daterange(start_iso: str, end_iso: str):
 # ---- Article helpers ---------------------------------------------------------
 
 def _has_content(a: dict) -> bool:
+    """Return ``True`` when an article dictionary contains substantive text."""
+
     if not isinstance(a, dict):
         return False
     c = a.get("content") or a.get("text") or a.get("body")
@@ -68,6 +82,8 @@ def _has_content(a: dict) -> bool:
 
 
 def _key(a: dict) -> str:
+    """Return a stable deduplication key for an article."""
+
     if not isinstance(a, dict):
         return ""
     u = a.get("url")
@@ -86,6 +102,8 @@ def _key(a: dict) -> str:
 
 
 def _as_str(x):
+    """Convert nested structures to a representative string."""
+
     if isinstance(x, str):
         return x
     if isinstance(x, dict):
@@ -111,6 +129,8 @@ def _is_synth(a: dict) -> bool:
 
 
 def _provider_mentions_synth(label: str) -> bool:
+    """Check whether a provider label references synthetic content."""
+
     if not label:
         return False
     try:
@@ -124,6 +144,8 @@ def _provider_mentions_synth(label: str) -> bool:
 
 
 def _clean_provider_label(label: str) -> str:
+    """Remove synthetic markers and duplicates from a provider label."""
+
     if not label:
         return "local"
     try:
@@ -141,10 +163,14 @@ def _clean_provider_label(label: str) -> str:
 
 def _merge_articles_for_k(existing: List[Dict], new: List[Dict], K: int,
                           require_content: bool) -> List[Dict]:
+    """Merge existing and new articles keeping at most ``K`` unique entries."""
+
     out: List[Dict] = []
     seen = set()
 
     def _add(a):
+        """Add article ``a`` to ``out`` if it has not been seen."""
+
         k = _key(a)
         if not k or k in seen:
             return False
@@ -166,6 +192,8 @@ def _merge_articles_for_k(existing: List[Dict], new: List[Dict], K: int,
 
 
 def _retry_delay_seconds(meta: Dict) -> float:
+    """Determine how long to wait before retrying content extraction."""
+
     if not isinstance(meta, dict):
         return 300.0
     retry_after = meta.get("retry_after")
@@ -180,6 +208,8 @@ def _retry_delay_seconds(meta: Dict) -> float:
 
 
 def _content_diag_string(diag: Any) -> str:
+    """Serialise diagnostic objects for logging or counting."""
+
     if not diag:
         return ""
     if isinstance(diag, str):
@@ -194,6 +224,8 @@ def _content_diag_string(diag: Any) -> str:
 
 
 def _register_content_error(stats: Dict, diag: Any) -> str:
+    """Track a content extraction error and return its bucket label."""
+
     diag_str = _content_diag_string(diag) or "unknown"
     bucket = stats.setdefault("content_error_types", {})
     bucket[diag_str] = bucket.get(diag_str, 0) + 1
@@ -201,6 +233,8 @@ def _register_content_error(stats: Dict, diag: Any) -> str:
 
 
 def _apply_content_result(article: Dict, text: str, diag: Any, stats: Dict) -> None:
+    """Update ``article`` in-place using the scraped text/diagnostics."""
+
     diag_dict = diag if isinstance(diag, dict) else ({"detail": diag} if diag else {})
     text_val = text.strip() if isinstance(text, str) else ""
     if text_val:
@@ -231,6 +265,8 @@ def _apply_content_result(article: Dict, text: str, diag: Any, stats: Dict) -> N
 
 
 def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) -> None:
+    """Fetch missing article body text without contacting headline providers."""
+
     """Fill missing content for given articles in-place using article_scraper, updating stats.
     Does NOT fetch headlines; only enriches body text from each article's own URL.
     """
@@ -282,6 +318,8 @@ def _enrich_content_only(arts: List[Dict], content_delay: float, stats: Dict) ->
 
 def prescan_days(symbol: str, start_iso: str, end_iso: str, K: int,
                  base_dir: str = None, full_content: bool = False):
+    """Inspect cached files to plan which days need fetching or enrichment."""
+
     """Return a list of {date, path, exists, count, available, provider, decision} for diagnostics."""
     plan = []
     for day in daterange(start_iso, end_iso):
@@ -319,6 +357,8 @@ def prescan_days(symbol: str, start_iso: str, end_iso: str, K: int,
 def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_dir: str = None,
                    fetch_fn: Callable = None, on_event: Callable = None, full_content: bool = False,
                    content_delay: float = 0.2, skip_existing: bool = True):
+    """Download and optionally enrich local news files across a date range."""
+
     """Download (and optionally content-enrich) daily news and save locally.
     Resumable and top-up aware.
     """

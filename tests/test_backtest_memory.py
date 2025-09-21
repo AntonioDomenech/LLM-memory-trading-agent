@@ -9,6 +9,8 @@ from core.memory import MemoryBank
 
 
 def _dummy_bars():
+    """Return a minimal OHLCV DataFrame for backtest tests."""
+
     dates = pd.to_datetime(["2023-01-02", "2023-01-03"])
     return pd.DataFrame(
         {
@@ -23,6 +25,8 @@ def _dummy_bars():
 
 
 def _write_config(path, memory_path, retrieval, risk=None):
+    """Write a temporary configuration JSON file for tests."""
+
     cfg = {
         "symbol": "AAPL",
         "train_start": "2022-01-01",
@@ -43,6 +47,8 @@ def _write_config(path, memory_path, retrieval, risk=None):
 
 
 def test_run_backtest_records_factor_memory(tmp_path, monkeypatch):
+    """Backtest should log factors and persist them into the memory bank."""
+
     memory_path = tmp_path / "bank.json"
     config_path = tmp_path / "config.json"
     _write_config(
@@ -56,6 +62,8 @@ def test_run_backtest_records_factor_memory(tmp_path, monkeypatch):
     monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
 
     def fake_add_indicators(df):
+        """Simplified indicator calculator for deterministic tests."""
+
         out = df.copy()
         out["atr"] = 1.0
         out["trend_up"] = 1
@@ -86,6 +94,8 @@ def test_run_backtest_records_factor_memory(tmp_path, monkeypatch):
     calls = {"factor": 0, "policy": 0}
 
     def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
         content = messages[0].get("content", "")
         if "equity narrative analyst" in content:
             calls["factor"] += 1
@@ -114,6 +124,8 @@ def test_run_backtest_records_factor_memory(tmp_path, monkeypatch):
 
 
 def test_run_backtest_skips_factor_memory_when_disabled(tmp_path, monkeypatch):
+    """No factor entries should be saved when retrieval is turned off."""
+
     memory_path = tmp_path / "bank_disabled.json"
     config_path = tmp_path / "config_disabled.json"
     _write_config(
@@ -131,6 +143,8 @@ def test_run_backtest_skips_factor_memory_when_disabled(tmp_path, monkeypatch):
     calls = {"factor": 0, "policy": 0}
 
     def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
         content = messages[0].get("content", "")
         if "equity narrative analyst" in content:
             calls["factor"] += 1
@@ -151,6 +165,8 @@ def test_run_backtest_skips_factor_memory_when_disabled(tmp_path, monkeypatch):
 
 
 def test_run_backtest_writes_feedback_memory(tmp_path, monkeypatch):
+    """Feedback summaries must be saved alongside factor memories."""
+
     memory_path = tmp_path / "bank_feedback.json"
     config_path = tmp_path / "config_feedback.json"
     _write_config(
@@ -163,6 +179,8 @@ def test_run_backtest_writes_feedback_memory(tmp_path, monkeypatch):
     monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
 
     def fake_add_indicators(df):
+        """Simplified indicator calculator for deterministic tests."""
+
         out = df.copy()
         out["atr"] = 1.0
         out["trend_up"] = 1
@@ -191,6 +209,8 @@ def test_run_backtest_writes_feedback_memory(tmp_path, monkeypatch):
     calls = {"factor": 0, "policy": 0}
 
     def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
         content = messages[0].get("content", "")
         if "equity narrative analyst" in content:
             calls["factor"] += 1
@@ -226,6 +246,8 @@ def test_run_backtest_writes_feedback_memory(tmp_path, monkeypatch):
 
 
 def test_run_backtest_parses_percent_exposure(tmp_path, monkeypatch):
+    """Percent strings should be normalised to fractional exposures."""
+
     memory_path = tmp_path / "bank_percent.json"
     config_path = tmp_path / "config_percent.json"
     _write_config(
@@ -248,6 +270,8 @@ def test_run_backtest_parses_percent_exposure(tmp_path, monkeypatch):
     calls = {"policy": 0}
 
     def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
         idx = min(calls["policy"], len(policy_sequence) - 1)
         calls["policy"] += 1
         return dict(policy_sequence[idx])
@@ -268,6 +292,8 @@ def test_run_backtest_parses_percent_exposure(tmp_path, monkeypatch):
 
 
 def test_run_backtest_allows_fractional_positions(tmp_path, monkeypatch):
+    """Backtest must support fractional quantities when max_position is small."""
+
     memory_path = tmp_path / "bank_fractional.json"
     config_path = tmp_path / "config_fractional.json"
     _write_config(
@@ -300,6 +326,8 @@ def test_run_backtest_allows_fractional_positions(tmp_path, monkeypatch):
     calls = {"policy": 0}
 
     def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
         idx = min(calls["policy"], len(policy_sequence) - 1)
         calls["policy"] += 1
         return dict(policy_sequence[idx])
@@ -309,6 +337,8 @@ def test_run_backtest_allows_fractional_positions(tmp_path, monkeypatch):
     equity_events = []
 
     def on_event(evt):
+        """Collect emitted equity events for verification."""
+
         if evt.get("type") == "equity_point":
             equity_events.append(evt)
 
@@ -326,6 +356,8 @@ def test_run_backtest_allows_fractional_positions(tmp_path, monkeypatch):
     assert calls["policy"] == len(bars)
 
 def test_run_backtest_enforces_min_notional(tmp_path, monkeypatch):
+    """Minimum notional constraints should impose floor on share counts."""
+
     memory_path = tmp_path / "bank_floor.json"
     config_path = tmp_path / "config_floor.json"
     risk = {
@@ -366,6 +398,8 @@ def test_run_backtest_enforces_min_notional(tmp_path, monkeypatch):
     calls = {"policy": 0}
 
     def fake_chat(messages, model=None, max_tokens=None):
+        """Return scripted LLM responses for deterministic assertions."""
+
         idx = min(calls["policy"], len(policy_sequence) - 1)
         resp = dict(policy_sequence[idx])
         calls["policy"] += 1
