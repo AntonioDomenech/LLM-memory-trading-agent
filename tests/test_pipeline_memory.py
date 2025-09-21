@@ -1,4 +1,5 @@
 import json
+import math
 
 from core.config import Config, RetrievalCfg
 from core.memory import MemoryBank
@@ -33,6 +34,41 @@ def test_prepare_daily_context_memory_section_empty(tmp_path):
     assert policy_payload["memory_highlights"] == []
     assert policy_payload["portfolio_state"] == {}
     assert ctx.portfolio_state == {}
+
+
+def test_prepare_daily_context_sanitises_nan_fields():
+    """Capsules and prompts should remain JSON-serialisable when indicators are NaN."""
+
+    cfg = Config()
+    cfg.K_news_per_day = 0
+    cfg.news_source = "Off"
+
+    price_row = {
+        "close": math.nan,
+        "rsi": math.nan,
+        "macd_hist": math.nan,
+        "atr": math.nan,
+        "trend_up": 1,
+        "sma200": math.nan,
+        "sma100": math.nan,
+    }
+
+    ctx = prepare_daily_context(cfg, "2024-01-02", price_row)
+
+    capsule_json = json.dumps(ctx.capsule, sort_keys=True)
+    assert "NaN" not in capsule_json
+    capsule_loaded = json.loads(capsule_json)
+
+    for field in ("price", "rsi", "macd_hist", "atr", "sma200", "sma100"):
+        assert field in capsule_loaded
+        assert capsule_loaded[field] in (0.0, None)
+
+    factor_payload = ctx.factor_prompt.user["content"]
+    policy_payload = ctx.policy_prompt.user["content"]
+
+    for payload in (factor_payload, policy_payload):
+        assert "NaN" not in payload
+        json.loads(payload)
 
 
 def test_prepare_daily_context_with_retrieved_memory(tmp_path):
