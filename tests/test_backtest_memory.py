@@ -220,3 +220,45 @@ def test_run_backtest_writes_feedback_memory(tmp_path, monkeypatch):
     assert meta.get("target_exposure") == pytest.approx(0.2)
     assert meta.get("position") == 200
     assert meta.get("realized_return") == pytest.approx(0.01, rel=1e-6)
+
+
+def test_run_backtest_parses_percent_exposure(tmp_path, monkeypatch):
+    memory_path = tmp_path / "bank_percent.json"
+    config_path = tmp_path / "config_percent.json"
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+    )
+
+    bars = _dummy_bars()
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+    monkeypatch.setattr("core.backtest.add_indicators", lambda df: df.copy())
+    monkeypatch.setattr("core.backtest.plot_equity", lambda *args, **kwargs: "fig_eq")
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    policy_sequence = [
+        {"action": "BUY", "target_exposure": "75%"},
+        {"action": "HOLD", "target_exposure": "75%"},
+    ]
+
+    calls = {"policy": 0}
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        idx = min(calls["policy"], len(policy_sequence) - 1)
+        calls["policy"] += 1
+        return dict(policy_sequence[idx])
+
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    result = run_backtest(config_path=str(config_path))
+
+    trades_tail = result["trades_tail"]
+    assert not trades_tail.empty
+
+    first_trade = trades_tail.iloc[0]
+    assert first_trade["action"] == "BUY"
+    assert first_trade["shares_delta"] == 750
+    assert str(first_trade.get("note", "")).startswith("percent_to_frac:0.75")
+
+    assert calls["policy"] == len(bars)

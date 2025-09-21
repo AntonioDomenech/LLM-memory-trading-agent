@@ -52,6 +52,10 @@ def _get(cfg, *path, default=None):
 def _clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
+
+def _append_norm_label(current, label):
+    return f"{current};{label}" if current else label
+
 def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     def emit(evt):
         if on_event:
@@ -248,21 +252,54 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             target_exposure = 0.0 if action == "SELL" else 1.0 if action == "BUY" else (position * price) / max(1e-9, (cash + position*price))
             normalized = f"defaulted:{target_exposure:.2f}"
         else:
-            try:
-                target_exposure = float(target_exposure)
-            except Exception:
+            raw_target = target_exposure
+            target_exposure = _to_float(raw_target, default=0.0)
+            parsed_from_percent = False
+            parse_failed = False
+
+            if isinstance(raw_target, str):
+                stripped = raw_target.strip()
+                if stripped.endswith("%"):
+                    try:
+                        float(stripped[:-1])
+                    except Exception:
+                        parse_failed = True
+                    else:
+                        parsed_from_percent = True
+                        normalized = _append_norm_label(
+                            normalized, f"percent_to_frac:{target_exposure:.2f}"
+                        )
+                elif stripped:
+                    try:
+                        float(stripped)
+                    except Exception:
+                        parse_failed = True
+                else:
+                    parse_failed = True
+            elif not isinstance(raw_target, (int, float, np.number)):
+                parse_failed = True
+
+            if parse_failed:
                 target_exposure = 0.0
-                normalized = "non_numeric->0.0"
-            # Interpret 5..100 as percentages
-            if target_exposure > 1.0 and target_exposure <= 100.0:
+                normalized = _append_norm_label(normalized, "non_numeric->0.0")
+
+            if (
+                not parsed_from_percent
+                and target_exposure > 1.0
+                and target_exposure <= 100.0
+            ):
                 target_exposure = target_exposure / 100.0
-                normalized = f"percent_to_frac:{target_exposure:.2f}"
-            # Clamp exposure
+                normalized = _append_norm_label(
+                    normalized, f"percent_to_frac:{target_exposure:.2f}"
+                )
+
             lo = 0.0 if not allow_short else -1.0
             te_before = target_exposure
             target_exposure = _clamp(target_exposure, lo, 1.0)
             if te_before != target_exposure:
-                normalized = f"clamped:{te_before:.3f}->{target_exposure:.3f}"
+                normalized = _append_norm_label(
+                    normalized, f"clamped:{te_before:.3f}->{target_exposure:.3f}"
+                )
 
         # --- Translate exposure to shares with guardrails ---
         equity = cash + position * price
@@ -290,7 +327,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                 affordable = int(max(0.0, (cash - c_per_trade)) // per_share_total)
             if affordable < delta:
                 delta = affordable
-                normalized = (normalized + ";afford_limited" if normalized else "afford_limited")
+                normalized = _append_norm_label(normalized, "afford_limited")
 
         # Execute
         if delta != 0:
