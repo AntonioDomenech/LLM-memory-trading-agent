@@ -1,5 +1,7 @@
 
 import json
+from typing import Callable, Optional
+
 import pandas as pd
 from .logger import get_logger
 from .config import load_config, resolve_memory_path
@@ -45,7 +47,11 @@ def _coerce_factor_numbers(factor: dict) -> dict:
     return factor
 
 
-def run_training(config_path="config.json", on_event=None):
+def run_training(
+    config_path="config.json",
+    on_event=None,
+    should_stop: Optional[Callable[[], bool]] = None,
+):
     """Train the memory bank by generating daily capsules from configuration."""
 
     def emit(evt):
@@ -56,6 +62,16 @@ def run_training(config_path="config.json", on_event=None):
                 on_event(evt)
             except Exception:
                 pass
+
+    def stop_requested() -> bool:
+        """Check if the caller asked to halt the training loop."""
+
+        if not should_stop:
+            return False
+        try:
+            return bool(should_stop())
+        except Exception:
+            return False
 
     cfg = load_config(config_path)
 
@@ -87,7 +103,12 @@ def run_training(config_path="config.json", on_event=None):
         "risk": risk_snapshot,
     }
 
+    stopped = False
+
     for i, d in enumerate(dates[:-1]):
+        if stop_requested():
+            stopped = True
+            break
         d_iso = d.strftime("%Y-%m-%d")
         row = df.loc[df["date"] == d]
         if row.empty:
@@ -137,5 +158,9 @@ def run_training(config_path="config.json", on_event=None):
             emit({"type":"progress","i":i,"n":max(1,len(dates)-1)})
 
     bank.save()
-    emit({"type":"done"})
-    return {"memory_snapshot": bank.snapshot(), "artifacts": {"capsules_path": cap_path}}
+    emit({"type": "done", "status": "stopped" if stopped else "completed"})
+    return {
+        "memory_snapshot": bank.snapshot(),
+        "artifacts": {"capsules_path": cap_path},
+        "stopped": stopped,
+    }

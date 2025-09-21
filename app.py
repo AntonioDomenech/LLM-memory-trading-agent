@@ -413,9 +413,32 @@ with tabs[1]:
             render_metric_card(warn_metric, "Alertas", str(stats["warnings"]), "Warnings")
             event_log_container.warning(evt.get("message", ""))
         elif t == "done":
-            status_placeholder.success("Entrenamiento finalizado")
+            status = evt.get("status", "completed")
+            if status == "stopped":
+                status_placeholder.warning("Entrenamiento detenido por el usuario")
+                prog.progress(0.0, text="Detenido")
+            else:
+                status_placeholder.success("Entrenamiento finalizado")
+                prog.progress(1.0, text="Completado")
 
-    if st.button("Ejecutar entrenamiento", type="primary"):
+    train_stop_key = "TRAINING_STOP_REQUESTED"
+    if train_stop_key not in st.session_state:
+        st.session_state[train_stop_key] = False
+
+    def should_stop_training() -> bool:
+        return bool(st.session_state.get(train_stop_key, False))
+
+    action_cols = st.columns(2)
+    start_training = action_cols[0].button("Ejecutar entrenamiento", type="primary")
+    stop_training = action_cols[1].button("Detener entrenamiento", type="secondary")
+
+    if stop_training:
+        st.session_state[train_stop_key] = True
+        status_placeholder.warning("Detención solicitada. El proceso se detendrá tras la iteración en curso.")
+        prog.progress(0.0, text="Deteniendo…")
+
+    if start_training:
+        st.session_state[train_stop_key] = False
         stats.update({"capsules": 0, "factors": 0, "infos": 0, "warnings": 0})
         factor_history.clear()
         train_event_records.clear()
@@ -425,10 +448,18 @@ with tabs[1]:
         render_metric_card(warn_metric, "Alertas", "0", "Warnings")
         factor_chart_placeholder.info("Los factores aparecerán automáticamente al procesar la primera fecha.")
         factor_table_placeholder.info("Sin factores registrados todavía.")
-        res = run_training(cfg_path, on_event=on_train_event)
-        st.success("Entrenamiento completado")
-        st.subheader("📦 Snapshot de memoria")
-        st.json(res.get("memory_snapshot", {}))
+        res = run_training(
+            cfg_path,
+            on_event=on_train_event,
+            should_stop=should_stop_training,
+        )
+        st.session_state[train_stop_key] = False
+        if res.get("stopped"):
+            st.warning("Entrenamiento detenido por el usuario")
+        else:
+            st.success("Entrenamiento completado")
+            st.subheader("📦 Snapshot de memoria")
+            st.json(res.get("memory_snapshot", {}))
 
         stats_snapshot = dict(stats)
         log_payload = {
@@ -703,9 +734,32 @@ with tabs[2]:
                     f"{evt.get('date', '')}: aporte automático de {fmt_currency(contribution)}"
                 )
         elif t == "done":
-            status_bt.success("Backtest finalizado")
+            status = evt.get("status", "completed")
+            if status == "stopped":
+                status_bt.warning("Backtest detenido por el usuario")
+                prog2.progress(0.0, text="Detenido")
+            else:
+                status_bt.success("Backtest finalizado")
+                prog2.progress(1.0, text="Completado")
 
-    if st.button("Ejecutar backtest", type="primary"):
+    backtest_stop_key = "BACKTEST_STOP_REQUESTED"
+    if backtest_stop_key not in st.session_state:
+        st.session_state[backtest_stop_key] = False
+
+    def should_stop_backtest() -> bool:
+        return bool(st.session_state.get(backtest_stop_key, False))
+
+    bt_action_cols = st.columns(2)
+    start_backtest = bt_action_cols[0].button("Ejecutar backtest", type="primary")
+    stop_backtest = bt_action_cols[1].button("Detener backtest", type="secondary")
+
+    if stop_backtest:
+        st.session_state[backtest_stop_key] = True
+        status_bt.warning("Detención solicitada. El backtest se detendrá tras el paso en curso.")
+        prog2.progress(0.0, text="Deteniendo…")
+
+    if start_backtest:
+        st.session_state[backtest_stop_key] = False
         equity_history.clear()
         test_event_records.clear()
         render_metric_card(equity_metric, "Equity", fmt_currency(0.0), "Valor de la cartera")
@@ -720,63 +774,76 @@ with tabs[2]:
         drawdown_chart_placeholder.info("El drawdown aparecerá en tiempo real durante el backtest.")
         stats_bt.update({"decisions": 0, "infos": 0, "warnings": 0})
         last_equity_point_state["value"] = None
-        res = run_backtest(cfg_path, on_event=on_test_event, event_rate=int(update_rate))
-        st.success("Backtest completado")
+        res = run_backtest(
+            cfg_path,
+            on_event=on_test_event,
+            event_rate=int(update_rate),
+            should_stop=should_stop_backtest,
+        )
+        st.session_state[backtest_stop_key] = False
+        if res.get("stopped"):
+            st.warning("Backtest detenido por el usuario")
+        else:
+            st.success("Backtest completado")
 
-        metrics = res.get("metrics", {})
-        if metrics:
-            st.markdown("#### Indicadores de rendimiento")
-            metric_cols = st.columns(4)
-            render_metric_card(metric_cols[0].empty(), "CAGR", fmt_percent(metrics.get("CAGR", 0.0)), "Estrategia")
-            render_metric_card(metric_cols[1].empty(), "Sharpe", f"{metrics.get('Sharpe', 0.0):.2f}", "Rendimiento ajustado")
-            render_metric_card(metric_cols[2].empty(), "Sortino", f"{metrics.get('Sortino', 0.0):.2f}", "Riesgo a la baja")
-            render_metric_card(
-                metric_cols[3].empty(),
-                "Max DD",
-                fmt_percent(metrics.get("MaxDrawdown", 0.0)),
-                "Caída máxima",
-            )
-            extra_cols = st.columns(3)
-            render_metric_card(extra_cols[0].empty(), "Volatilidad", fmt_percent(metrics.get("Volatilidad", 0.0)), "Anualizada")
-            render_metric_card(extra_cols[1].empty(), "BH CAGR", fmt_percent(metrics.get("BH_CAGR", 0.0)), "Buy & Hold")
-            render_metric_card(extra_cols[2].empty(), "Active Return", f"{metrics.get('ActiveReturn', 0.0):.2f}", "vs. benchmark")
+            metrics = res.get("metrics", {})
+            if metrics:
+                st.markdown("#### Indicadores de rendimiento")
+                metric_cols = st.columns(4)
+                render_metric_card(metric_cols[0].empty(), "CAGR", fmt_percent(metrics.get("CAGR", 0.0)), "Estrategia")
+                render_metric_card(metric_cols[1].empty(), "Sharpe", f"{metrics.get('Sharpe', 0.0):.2f}", "Rendimiento ajustado")
+                render_metric_card(metric_cols[2].empty(), "Sortino", f"{metrics.get('Sortino', 0.0):.2f}", "Riesgo a la baja")
+                render_metric_card(
+                    metric_cols[3].empty(),
+                    "Max DD",
+                    fmt_percent(metrics.get("MaxDrawdown", 0.0)),
+                    "Caída máxima",
+                )
+                extra_cols = st.columns(3)
+                render_metric_card(extra_cols[0].empty(), "Volatilidad", fmt_percent(metrics.get("Volatilidad", 0.0)), "Anualizada")
+                render_metric_card(extra_cols[1].empty(), "BH CAGR", fmt_percent(metrics.get("BH_CAGR", 0.0)), "Buy & Hold")
+                render_metric_card(extra_cols[2].empty(), "Active Return", f"{metrics.get('ActiveReturn', 0.0):.2f}", "vs. benchmark")
 
-        contrib = res.get("contributions")
-        if contrib:
-            st.markdown(
-                f"**Aportes periódicos:** {fmt_currency(contrib.get('amount', 0.0))} · "
-                f"Frecuencia: {contrib.get('frequency', 'none')} · "
-                f"Total inyectado: {fmt_currency(contrib.get('total_added', 0.0))}"
-            )
+            contrib = res.get("contributions")
+            if contrib:
+                st.markdown(
+                    f"**Aportes periódicos:** {fmt_currency(contrib.get('amount', 0.0))} · "
+                    f"Frecuencia: {contrib.get('frequency', 'none')} · "
+                    f"Total inyectado: {fmt_currency(contrib.get('total_added', 0.0))}"
+                )
 
-        last_equity_point = last_equity_point_state["value"]
-        if last_equity_point:
-            total_contributions = float(last_equity_point.get("total_contributions", 0.0) or 0.0)
-            invested_capital = cfg_initial_cash + total_contributions
-            pnl_amount = float(last_equity_point.get("equity", 0.0) or 0.0) - invested_capital
-            pnl_pct = (pnl_amount / invested_capital) if invested_capital > 0 else 0.0
-            st.markdown("#### Resultado acumulado")
-            summary_cols = st.columns(2)
-            render_metric_card(
-                summary_cols[0].empty(),
-                "Ganancia/Pérdida",
-                fmt_currency(pnl_amount),
-                f"Capital invertido: {fmt_currency(invested_capital)}",
-            )
-            render_metric_card(
-                summary_cols[1].empty(),
-                "Rentabilidad",
-                fmt_percent(pnl_pct),
-                "Equity vs. aportes",
-            )
+            last_equity_point = last_equity_point_state["value"]
+            if last_equity_point:
+                total_contributions = float(last_equity_point.get("total_contributions", 0.0) or 0.0)
+                invested_capital = cfg_initial_cash + total_contributions
+                pnl_amount = float(last_equity_point.get("equity", 0.0) or 0.0) - invested_capital
+                pnl_pct = (pnl_amount / invested_capital) if invested_capital > 0 else 0.0
+                st.markdown("#### Resultado acumulado")
+                summary_cols = st.columns(2)
+                render_metric_card(
+                    summary_cols[0].empty(),
+                    "Ganancia/Pérdida",
+                    fmt_currency(pnl_amount),
+                    f"Capital invertido: {fmt_currency(invested_capital)}",
+                )
+                render_metric_card(
+                    summary_cols[1].empty(),
+                    "Rentabilidad",
+                    fmt_percent(pnl_pct),
+                    "Equity vs. aportes",
+                )
 
-        st.markdown("#### Reportes finales")
-        st.pyplot(res.get("fig_equity"))
-        st.pyplot(res.get("fig_drawdown"))
+            st.markdown("#### Reportes finales")
+            fig_equity = res.get("fig_equity")
+            fig_drawdown = res.get("fig_drawdown")
+            if fig_equity is not None:
+                st.pyplot(fig_equity)
+            if fig_drawdown is not None:
+                st.pyplot(fig_drawdown)
 
-        if "trades_tail" in res:
-            st.markdown("#### Últimas operaciones ejecutadas")
-            st.dataframe(res["trades_tail"], use_container_width=True)
+            if "trades_tail" in res:
+                st.markdown("#### Últimas operaciones ejecutadas")
+                st.dataframe(res["trades_tail"], use_container_width=True)
 
         stats_bt_snapshot = dict(stats_bt)
         res_for_log = {k: v for k, v in res.items() if k not in {"fig_equity", "fig_drawdown"}}
