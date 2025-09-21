@@ -6,6 +6,8 @@ from .news_store import load_local_day, save_local_day, _is_synth
 
 # Simple logger fallback
 def _log(msg):
+    """Log ``msg`` using the project logger when available."""
+
     try:
         from .logger import get_logger
         get_logger().info(msg)
@@ -15,6 +17,8 @@ def _log(msg):
 CACHE_PATH = os.environ.get("NEWS_CACHE_PATH", "data/news_cache.jsonl")
 
 def _write_cache(entry: dict):
+    """Append a JSON encoded cache entry to the local cache file."""
+
     try:
         os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
         with open(CACHE_PATH, "a", encoding="utf-8") as f:
@@ -23,11 +27,13 @@ def _write_cache(entry: dict):
         pass
 
 def _try_request_json(url, params=None, headers=None, timeout=20):
+    """Execute a GET request and return ``(json, error_label)``."""
+
     try:
         r = requests.get(url, params=params, headers=headers, timeout=timeout)
         if r.status_code != 200:
             return None, f"http_{r.status_code}"
-        ct = r.headers.get("content-type","")
+        ct = r.headers.get("content-type", "")
         if "json" not in ct:
             return None, "not_json"
         return r.json(), None
@@ -35,6 +41,8 @@ def _try_request_json(url, params=None, headers=None, timeout=20):
         return None, f"error:{e}"
 
 def _day_plus_one(day_iso: str) -> str:
+    """Return the ISO date string for the day after ``day_iso``."""
+
     d = datetime.fromisoformat(day_iso).date()
     return (d + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -67,6 +75,8 @@ def _as_str(value):
 
 
 def _map_articles(items, mapping_keys, K):
+    """Map provider-specific payloads to the canonical article dict format."""
+
     out = []
     for it in items or []:
         try:
@@ -116,6 +126,8 @@ ALIASES = {
 }
 
 def get_provider_chain():
+    """Return the normalized provider chain configured via environment variables."""
+
     raw = os.environ.get("NEWS_PROVIDER_CHAIN", "Finnhub,Polygon,NewsAPI")
     chain = []
     for token in raw.split(","):
@@ -126,6 +138,8 @@ def get_provider_chain():
     return chain
 
 def _newsapi(symbol, day_iso, K):
+    """Fetch articles from NewsAPI for ``symbol`` on ``day_iso``."""
+
     k = os.environ.get("NEWSAPI_KEY") or os.environ.get("NEWS_API_KEY")
     if not k:
         return [], "missing_key"
@@ -145,6 +159,8 @@ def _newsapi(symbol, day_iso, K):
     return arts, "fetched" if arts else "empty"
 
 def _polygon(symbol, day_iso, K):
+    """Fetch articles from Polygon.io for ``symbol`` on ``day_iso``."""
+
     k = os.environ.get("POLYGON_KEY") or os.environ.get("POLYGON_API_KEY")
     if not k:
         return [], "missing_key"
@@ -164,6 +180,8 @@ def _polygon(symbol, day_iso, K):
     return arts, "fetched" if arts else "empty"
 
 def _finnhub(symbol, day_iso, K):
+    """Fetch articles from Finnhub for ``symbol`` on ``day_iso``."""
+
     k = os.environ.get("FINNHUB_KEY")
     if not k:
         return [], "missing_key"
@@ -179,6 +197,8 @@ def _finnhub(symbol, day_iso, K):
     return arts, "fetched" if arts else "empty"
 
 def _marketaux(symbol, day_iso, K):
+    """Fetch articles from MarketAux for ``symbol`` on ``day_iso``."""
+
     k = os.environ.get("MARKETAUX_KEY") or os.environ.get("MARKET_AUX_KEY")
     if not k:
         return [], "missing_key"
@@ -194,6 +214,8 @@ def _marketaux(symbol, day_iso, K):
     return arts, "fetched" if arts else "empty"
 
 def _fmp(symbol, day_iso, K):
+    """Fetch articles from Financial Modeling Prep for ``symbol`` on ``day_iso``."""
+
     k = os.environ.get("FMP_API_KEY")
     if not k:
         return [], "missing_key"
@@ -210,6 +232,8 @@ def _fmp(symbol, day_iso, K):
     return arts, "fetched" if arts else "empty"
 
 def _bing(symbol, day_iso, K):
+    """Fetch news results from Bing for ``symbol`` on ``day_iso``."""
+
     k = os.environ.get("BING_API_KEY") or os.environ.get("BING_KEY")
     if not k:
         return [], "missing_key"
@@ -235,7 +259,7 @@ _PROVIDERS = {
 }
 
 def fetch_day(symbol: str, day_iso: str, K: int):
-    """Try providers in NEWS_PROVIDER_CHAIN until one returns articles; otherwise return none."""
+    """Fetch up to ``K`` articles for ``symbol`` by iterating the provider chain."""
     chain = get_provider_chain()
     attempts = []
     for prov in chain:
@@ -257,9 +281,7 @@ def fetch_day(symbol: str, day_iso: str, K: int):
 
 
 def fetch_news_with_reason(symbol: str, day_iso: str, K: int, base_dir: str = None):
-    """Compatibility wrapper for older code paths.
-    Returns (articles, reason) where reason begins with Provider or 'none'.
-    """
+    """Return ``(articles, reason)`` while honoring cached local copies."""
     local_dir = base_dir or os.environ.get("NEWS_LOCAL_DIR")
     try:
         cached_arts, cached_provider = load_local_day(symbol, day_iso, base_dir=local_dir)

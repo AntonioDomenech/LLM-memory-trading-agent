@@ -13,15 +13,21 @@ log = get_logger()
 # ----------------- helpers -----------------
 
 def _cache_path(symbol, start, end):
+    """Return the parquet cache path for a ``(symbol, start, end)`` tuple."""
+
     key = f"{symbol}_{start}_{end}".encode()
     h = hashlib.md5(key).hexdigest()
     return os.path.join("data", f"cache_{h}.parquet")
 
 def _ensure_parent(path: str):
+    """Create the parent directory for ``path`` if it does not exist."""
+
     parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
 
 def _parse_date_any(x: str):
+    """Parse loosely formatted date strings into ``datetime`` objects."""
+
     try:
         return pd.to_datetime(x).to_pydatetime()
     except Exception:
@@ -53,6 +59,8 @@ def _standardize_ohlc_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names and drop duplicates for downstream use."""
+
     df = _flatten_cols(df)
     df = _standardize_ohlc_names(df)
     # remove duplicated columns that sometimes appear after rename
@@ -120,11 +128,15 @@ def _clean_bars(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """Wrapper used to emphasize bar cleaning as the canonical normalization."""
+
     return _clean_bars(df)
 
 # ----------------- public API -----------------
 
 def get_daily_bars(symbol: str, start: str, end: str) -> pd.DataFrame:
+    """Fetch daily OHLCV bars with caching and multiple vendor fallbacks."""
+
     cpath = _cache_path(symbol, start, end)
     if os.path.exists(cpath):
         try:

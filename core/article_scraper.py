@@ -17,19 +17,24 @@ PRIORITY_CLASSES = {"article", "content", "story", "post", "entry", "article-bod
 
 
 class _TextCollector(HTMLParser):
+    """HTMLParser that collects readable text while skipping boilerplate."""
+
     def __init__(self):
+        """Initialise parser state for accumulating text fragments."""
         super().__init__(convert_charrefs=True)
         self._stack = []
         self._bufs = []
         self._in_block = False
 
     def handle_starttag(self, tag, attrs):
+        """Record entering tags and mark blocks that should be skipped."""
         tag = tag.lower()
         self._stack.append(tag)
         if tag in BLOCK_TAGS:
             self._in_block = True
 
     def handle_endtag(self, tag):
+        """Finalize captures when closing tags are encountered."""
         tag = tag.lower()
         if self._stack:
             self._stack.pop()
@@ -39,6 +44,7 @@ class _TextCollector(HTMLParser):
             self._bufs.append("\n")
 
     def handle_data(self, data):
+        """Append textual data to all active capture buffers."""
         if self._in_block:
             return
         if not data or not data.strip():
@@ -46,6 +52,7 @@ class _TextCollector(HTMLParser):
         self._bufs.append(data)
 
     def text(self):
+        """Return the cleaned text accumulated so far."""
         txt = "".join(self._bufs)
         # Collapse whitespace
         txt = re.sub(r"[ \t]+", " ", txt)
@@ -54,7 +61,10 @@ class _TextCollector(HTMLParser):
 
 
 class _CandidateRegionFinder(HTMLParser):
+    """Parser that captures potential article regions for extraction."""
+
     def __init__(self):
+        """Initialise tracking structures for region extraction."""
         super().__init__(convert_charrefs=True)
         self._stack = []
         self._captures = []  # list of tuples (depth, buffer list)
@@ -63,6 +73,7 @@ class _CandidateRegionFinder(HTMLParser):
         self._body_region = ""
 
     def handle_starttag(self, tag, attrs):
+        """Record entering tags and mark blocks that should be skipped."""
         tag = tag.lower()
         attr_map = {k.lower(): (v or "") for k, v in attrs}
         id_val = attr_map.get("id", "").lower()
@@ -89,6 +100,7 @@ class _CandidateRegionFinder(HTMLParser):
             self._captures.append((len(self._stack), buf))
 
     def handle_endtag(self, tag):
+        """Finalize captures when closing tags are encountered."""
         tag = tag.lower()
         closing = f"</{tag}>"
         for _, buf in self._captures:
@@ -110,6 +122,7 @@ class _CandidateRegionFinder(HTMLParser):
             self._body_buf = None
 
     def handle_data(self, data):
+        """Append textual data to all active capture buffers."""
         if not data:
             return
         for _, buf in self._captures:
@@ -118,6 +131,7 @@ class _CandidateRegionFinder(HTMLParser):
             self._body_buf.append(data)
 
     def handle_startendtag(self, tag, attrs):
+        """Record self-closing tags inside captured regions."""
         tag = tag.lower()
         start_txt = self.get_starttag_text() or f"<{tag}/>"
         for _, buf in self._captures:
@@ -127,14 +141,17 @@ class _CandidateRegionFinder(HTMLParser):
 
     @property
     def regions(self):
+        """Return captured HTML fragments that resemble article bodies."""
         return self._regions
 
     @property
     def body_region(self):
+        """Return the <body> markup captured during parsing."""
         return self._body_region
 
 
 def _iter_candidate_regions(html_str: str):
+    """Yield unique HTML fragments that may contain the main article."""
     finder = _CandidateRegionFinder()
     try:
         finder.feed(html_str)
@@ -158,6 +175,7 @@ def _iter_candidate_regions(html_str: str):
 
 
 def _collect_text(fragment: str) -> str:
+    """Extract and normalise readable text from an HTML fragment."""
     if not fragment:
         return ""
     collector = _TextCollector()
@@ -170,6 +188,7 @@ def _collect_text(fragment: str) -> str:
 
 
 def _readability_fallback(html_str: str) -> str:
+    """Use python-readability as a fallback when heuristics fail."""
     try:
         doc = Document(html_str)
     except Exception:
@@ -196,6 +215,7 @@ def _readability_fallback(html_str: str) -> str:
 
 
 def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Interpret Retry-After headers into a positive delay in seconds."""
     if not value:
         return None
     value = value.strip()
@@ -234,6 +254,7 @@ def fetch_fulltext(url: str, timeout: int = 12, ua: str = None, max_len: int = 2
     }
 
     def _result(text: str) -> Union[str, Tuple[str, Dict[str, Any]]]:
+        """Return text directly or pair it with metadata when requested."""
         if return_meta:
             return text, meta
         return text

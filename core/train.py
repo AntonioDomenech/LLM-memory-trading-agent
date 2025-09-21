@@ -12,7 +12,10 @@ from .pipeline import prepare_daily_context
 
 log = get_logger()
 
+
 def _to_float(x, default=0.0):
+    """Convert ``x`` to ``float`` while tolerating percents and blanks."""
+
     try:
         if isinstance(x, str):
             xs = x.strip()
@@ -23,19 +26,36 @@ def _to_float(x, default=0.0):
     except Exception:
         return float(default)
 
+
 def _coerce_factor_numbers(factor: dict) -> dict:
+    """Ensure numeric keys in the factor dictionary are floats."""
+
     if not isinstance(factor, dict):
         return {}
-    keys = ["mood_score","narrative_bias","novelty","credibility","regime_alignment","confidence"]
+    keys = [
+        "mood_score",
+        "narrative_bias",
+        "novelty",
+        "credibility",
+        "regime_alignment",
+        "confidence",
+    ]
     for k in keys:
         factor[k] = _to_float(factor.get(k, 0.0), 0.0)
     return factor
 
+
 def run_training(config_path="config.json", on_event=None):
+    """Train the memory bank by generating daily capsules from configuration."""
+
     def emit(evt):
+        """Send structured events to ``on_event`` while swallowing handler errors."""
+
         if on_event:
-            try: on_event(evt)
-            except Exception: pass
+            try:
+                on_event(evt)
+            except Exception:
+                pass
 
     cfg = load_config(config_path)
 

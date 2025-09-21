@@ -5,6 +5,8 @@ from typing import Dict, Any
 
 @dataclass
 class RetrievalCfg:
+    """Memory retrieval knobs used by both training and backtest flows."""
+
     k_shallow: int = 3
     k_intermediate: int = 0
     k_deep: int = 0
@@ -17,6 +19,8 @@ class RetrievalCfg:
 
 @dataclass
 class RiskCfg:
+    """Risk management parameters injected into prompts and simulators."""
+
     risk_per_trade: float = 0.01
     max_position: int = 1000
     stop_loss_atr_mult: float = 3.0
@@ -31,6 +35,8 @@ class RiskCfg:
 
 @dataclass
 class Config:
+    """Top-level configuration file representation used by the app."""
+
     symbol: str = "AAPL"
     train_start: str = "2022-01-01"
     train_end: str = "2022-12-31"
@@ -48,9 +54,13 @@ class Config:
     risk: RiskCfg = field(default_factory=RiskCfg)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable dictionary representation."""
+
         return asdict(self)
 
 def load_config(path: str) -> Config:
+    """Load configuration from ``path`` and normalize derived values."""
+
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     symbol = raw.get("symbol", "AAPL")
@@ -88,39 +98,53 @@ def load_config(path: str) -> Config:
     return cfg
 
 def save_config(path: str, cfg: Config):
+    """Persist ``cfg`` to ``path`` after resolving memory locations."""
+
     resolve_memory_path(cfg, prefer_existing=False, ensure_parent=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg.to_dict(), f, indent=2)
 
 def get_alpaca_keys():
+    """Return ``(key, secret)`` credentials for the Alpaca data API."""
+
     key = os.environ.get("ALPACA_API_KEY_ID") or os.environ.get("ALPACA_KEY")
     secret = os.environ.get("ALPACA_API_SECRET_KEY") or os.environ.get("ALPACA_SECRET")
     return key, secret
 
 
 def _normalize_path(path: str) -> str:
+    """Expand ``~`` and collapse redundant path components."""
+
     expanded = os.path.expanduser(path or "")
     normalized = os.path.normpath(expanded)
     return normalized
 
 
 def _symbol_slug(symbol: str) -> str:
+    """Return a filesystem-friendly slug derived from ``symbol``."""
+
     clean = (symbol or "default").strip().upper()
     return re.sub(r"[^A-Z0-9_-]+", "_", clean) or "DEFAULT"
 
 
 def default_memory_path(symbol: str) -> str:
+    """Return the default JSON memory bank path for ``symbol``."""
+
     slug = _symbol_slug(symbol)
     return os.path.join("data", "memory", f"{slug}_memory.json")
 
 
 def _legacy_memory_candidates() -> Dict[str, str]:
+    """Return known legacy locations for backwards compatibility."""
+
     return {
         "legacy": "data/memory_bank.json",
     }
 
 
 def _find_preferred_memory_path(symbol: str) -> str:
+    """Choose the best existing memory path for ``symbol`` if available."""
+
     default_path = default_memory_path(symbol)
     for path in [default_path, *_legacy_memory_candidates().values()]:
         if os.path.exists(_normalize_path(path)):
@@ -129,6 +153,8 @@ def _find_preferred_memory_path(symbol: str) -> str:
 
 
 def resolve_memory_path(cfg: Config, prefer_existing: bool = True, ensure_parent: bool = False) -> str:
+    """Resolve ``cfg.memory_path`` with optional preference for existing files."""
+
     symbol = getattr(cfg, "symbol", "AAPL")
     explicit = getattr(cfg, "memory_path", None)
     candidates = []

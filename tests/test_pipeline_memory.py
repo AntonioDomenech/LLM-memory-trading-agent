@@ -6,10 +6,14 @@ from core.pipeline import prepare_daily_context
 
 
 def _base_price_row():
+    """Return a minimal price row used across pipeline tests."""
+
     return {"close": 100.0, "atr": 1.5, "trend_up": 1}
 
 
 def test_prepare_daily_context_memory_section_empty(tmp_path):
+    """Memory retrieval section should be empty when retrieval is disabled."""
+
     cfg = Config()
     cfg.K_news_per_day = 0
     cfg.news_source = "Off"
@@ -32,6 +36,8 @@ def test_prepare_daily_context_memory_section_empty(tmp_path):
 
 
 def test_prepare_daily_context_with_retrieved_memory(tmp_path):
+    """Ensure memory highlights and prompts include retrieved items."""
+
     cfg = Config()
     cfg.K_news_per_day = 0
     cfg.news_source = "Off"
