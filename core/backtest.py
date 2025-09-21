@@ -83,8 +83,11 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     df["date"] = pd.to_datetime(df["date"]).dt.date
     dates = list(df["date"].astype("datetime64[ns]").dt.date)
 
-    cash = 100000.0
+    initial_cash = _to_float(getattr(cfg, "initial_cash", 100000.0), 100000.0)
+    cash = initial_cash
     position = 0
+    bh_shares = 0
+    bh_cash = initial_cash
     eq_series, bh_series, trades = [], [], []
     pending_feedback = None
 
@@ -150,7 +153,8 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         # Buy&Hold benchmark
         if i == 0:
-            bh_shares = int(cash // price); bh_cash = cash - bh_shares * price
+            bh_shares = int(initial_cash // price)
+            bh_cash = initial_cash - bh_shares * price
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
@@ -288,12 +292,42 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             "shares_delta": int(delta),
         }
 
-    m = pd.DataFrame(eq_series, columns=["date","equity"]).set_index("date")["equity"]
-    bh = pd.DataFrame(bh_series, columns=["date","equity"]).set_index("date")["equity"]
+    m = pd.DataFrame(eq_series, columns=["date", "equity"]).set_index("date")["equity"]
+    bh = pd.DataFrame(bh_series, columns=["date", "equity"]).set_index("date")["equity"]
     m = m.clip(lower=1e-6)  # avoid divide-by-zero weirdness
 
     metrics = compute_metrics(m, bh)
     fig_eq = plot_equity(m, bh)
     fig_dd = plot_drawdown(m)
+
+    if eq_series:
+        equity_curve = (
+            pd.DataFrame(eq_series, columns=["date", "equity"])
+            .assign(date=lambda df: pd.to_datetime(df["date"]))
+            .set_index("date")
+            .rename(columns={"equity": "strategy_equity"})
+        )
+        bh_curve = (
+            pd.DataFrame(bh_series, columns=["date", "equity"])
+            .assign(date=lambda df: pd.to_datetime(df["date"]))
+            .set_index("date")
+            .rename(columns={"equity": "benchmark_equity"})
+        )
+        equity_curve = equity_curve.join(bh_curve, how="left")
+        drawdown_curve = (
+            (equity_curve["strategy_equity"] / equity_curve["strategy_equity"].cummax() - 1.0)
+            .to_frame(name="drawdown")
+        )
+    else:
+        equity_curve = pd.DataFrame(columns=["strategy_equity", "benchmark_equity"])
+        drawdown_curve = pd.DataFrame(columns=["drawdown"])
+
     trades_df = pd.DataFrame(trades).tail(25)
-    return {"metrics": metrics, "fig_equity": fig_eq, "fig_drawdown": fig_dd, "trades_tail": trades_df}
+    return {
+        "metrics": metrics,
+        "fig_equity": fig_eq,
+        "fig_drawdown": fig_dd,
+        "trades_tail": trades_df,
+        "equity_curve": equity_curve,
+        "drawdown_curve": drawdown_curve,
+    }
