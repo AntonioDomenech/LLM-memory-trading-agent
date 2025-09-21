@@ -146,6 +146,37 @@ def render_config_tab(cfg_path: str) -> None:
             help="Monto de efectivo disponible al inicio del backtest. Afecta el tamaño absoluto de las posiciones y el benchmark buy & hold.",
         )
 
+        contrib_cols = st.columns(2)
+        periodic_contribution_input = contrib_cols[0].number_input(
+            "Aporte periódico",
+            min_value=0.0,
+            value=float(getattr(cfg, "periodic_contribution", 0.0)),
+            step=100.0,
+            help="Capital adicional que se ingresará automáticamente según la frecuencia elegida. Déjalo en 0 para desactivar los aportes.",
+        )
+        freq_options = {
+            "Sin aportes": "none",
+            "Mensual (primer día hábil)": "monthly",
+        }
+        freq_labels = list(freq_options.keys())
+        freq_value_to_label = {v: k for k, v in freq_options.items()}
+        current_freq_value = str(getattr(cfg, "contribution_frequency", "none") or "none").strip().lower()
+        current_freq_label = freq_value_to_label.get(current_freq_value, "Sin aportes")
+        try:
+            freq_index = freq_labels.index(current_freq_label)
+        except ValueError:
+            freq_index = 0
+        contribution_frequency_label = contrib_cols[1].selectbox(
+            "Frecuencia de aportes",
+            options=freq_labels,
+            index=freq_index,
+            help="Define cada cuánto se ejecuta el aporte programado. Escoge 'Sin aportes' o establece el monto en 0 para desactivarlos.",
+        )
+        contribution_frequency_value = freq_options[contribution_frequency_label]
+        st.caption(
+            "Los aportes se aplican al inicio del primer día de mercado de cada mes y quedan registrados en el historial de operaciones."
+        )
+
         st.markdown("### Recuperación de memoria")
         k_cols = st.columns(3)
         k_shallow = k_cols[0].number_input(
@@ -328,6 +359,8 @@ def render_config_tab(cfg_path: str) -> None:
         decision_model=decision_model.strip() or cfg.decision_model,
         memory_path=memory_path_clean,
         initial_cash=float(initial_cash_input),
+        periodic_contribution=float(periodic_contribution_input),
+        contribution_frequency=contribution_frequency_value,
         retrieval=RetrievalCfg(
             k_shallow=int(k_shallow),
             k_intermediate=int(k_intermediate),

@@ -82,13 +82,26 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     df = add_indicators(get_daily_bars(cfg.symbol, cfg.test_start, cfg.test_end))
     df["date"] = pd.to_datetime(df["date"]).dt.date
     dates = list(df["date"].astype("datetime64[ns]").dt.date)
+    first_trading_days = {}
+    for dt in dates:
+        key = (dt.year, dt.month)
+        if key not in first_trading_days:
+            first_trading_days[key] = dt
 
     initial_cash = _to_float(getattr(cfg, "initial_cash", 100000.0), 100000.0)
     cash = initial_cash
     position = 0
     bh_shares = 0
     bh_cash = initial_cash
+    periodic_contribution = max(0.0, _to_float(getattr(cfg, "periodic_contribution", 0.0), 0.0))
+    freq_raw = str(getattr(cfg, "contribution_frequency", "none") or "none").strip().lower()
+    if freq_raw in {"monthly", "mensual", "mes", "month", "m"}:
+        contribution_frequency = "monthly"
+    else:
+        contribution_frequency = "none"
     eq_series, bh_series, trades = [], [], []
+    contributions_series = []
+    total_contributions = 0.0
     pending_feedback = None
 
     emit({"type":"phase","label":"Backtest loop","state":"running"})
@@ -100,6 +113,24 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             continue
         pr = row.iloc[0].to_dict()
         price = float(pr["close"])
+
+        contribution_today = 0.0
+        if periodic_contribution > 0.0 and contribution_frequency == "monthly":
+            if first_trading_days.get((d.year, d.month)) == d:
+                cash += periodic_contribution
+                bh_cash += periodic_contribution
+                contribution_today = periodic_contribution
+                total_contributions += contribution_today
+                trades.append(
+                    {
+                        "date": d_iso,
+                        "action": "CONTRIBUTION",
+                        "shares_delta": 0,
+                        "fill_price": None,
+                        "amount": float(contribution_today),
+                        "note": "Aporte mensual automático",
+                    }
+                )
 
         # --- Evaluate feedback from the previous decision (if any) ---
         if pending_feedback is not None:
@@ -153,8 +184,8 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         # Buy&Hold benchmark
         if i == 0:
-            bh_shares = int(initial_cash // price)
-            bh_cash = initial_cash - bh_shares * price
+            bh_shares = int(bh_cash // price)
+            bh_cash = bh_cash - bh_shares * price
         equity_bh = bh_shares * price + bh_cash
         bh_series.append((d_iso, equity_bh))
 
@@ -271,6 +302,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
             trades.append({"date": d_iso, "action": "BUY" if delta>0 else "SELL",
                            "shares_delta": int(delta), "fill_price": float(fill),
+                           "amount": None,
                            "note": normalized or ""})
 
         # Record decision periodically
@@ -282,6 +314,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
         equity = cash + position * price
         eq_series.append((d_iso, equity))
+        contributions_series.append((d_iso, contribution_today))
 
         pending_feedback = {
             "date": d_iso,
@@ -294,10 +327,21 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
     m = pd.DataFrame(eq_series, columns=["date","equity"]).set_index("date")["equity"]
     bh = pd.DataFrame(bh_series, columns=["date","equity"]).set_index("date")["equity"]
+    contrib = pd.DataFrame(contributions_series, columns=["date", "contribution"]).set_index("date")["contribution"].astype(float)
     m = m.clip(lower=1e-6)  # avoid divide-by-zero weirdness
 
-    metrics = compute_metrics(m, bh)
+    metrics = compute_metrics(m, bh, contributions=contrib)
     fig_eq = plot_equity(m, bh)
     fig_dd = plot_drawdown(m)
     trades_df = pd.DataFrame(trades).tail(25)
-    return {"metrics": metrics, "fig_equity": fig_eq, "fig_drawdown": fig_dd, "trades_tail": trades_df}
+    return {
+        "metrics": metrics,
+        "fig_equity": fig_eq,
+        "fig_drawdown": fig_dd,
+        "trades_tail": trades_df,
+        "contributions": {
+            "frequency": contribution_frequency,
+            "amount": float(periodic_contribution),
+            "total_added": float(total_contributions),
+        },
+    }
