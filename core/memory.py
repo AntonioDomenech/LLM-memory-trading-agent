@@ -1,5 +1,5 @@
 
-import json, os, math, hashlib, numpy as np
+import json, os, math, hashlib, datetime as _dt, numpy as np
 from .logger import get_logger
 from .embeddings import embed_texts
 log = get_logger()
@@ -9,6 +9,31 @@ def _deterministic_id(text: str) -> str:
     """Return a stable identifier for the provided text."""
     normalized = (text or "").strip().encode("utf-8")
     return hashlib.sha1(normalized).hexdigest()
+
+
+def _parse_iso_date(value):
+    """Return ``datetime.date`` for ISO strings or ``None`` when parsing fails."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return _dt.datetime.strptime(value, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _item_date(item):
+    """Derive the most relevant date attached to a memory item."""
+
+    if not isinstance(item, dict):
+        return None
+    seen = _parse_iso_date(item.get("seen_date"))
+    if seen is not None:
+        return seen
+    meta = item.get("meta") or {}
+    if isinstance(meta, dict):
+        return _parse_iso_date(meta.get("date"))
+    return None
 class MemoryBank:
     """Persistent multi-layer memory store for daily trading context."""
 
@@ -103,6 +128,76 @@ class MemoryBank:
             self.layers[dst].extend(top)
         self.save()
 
+    def prune_layer(self, layer, *, min_importance=None, before_date=None, max_items=None):
+        """Remove stale items from ``layer`` based on importance, recency or size."""
+
+        if layer not in self.layers:
+            return 0
+
+        items = list(self.layers.get(layer) or [])
+        if not items:
+            return 0
+
+        if min_importance is not None:
+            try:
+                min_importance = float(min_importance)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("min_importance must be numeric") from exc
+
+        cutoff = None
+        if before_date is not None:
+            cutoff = _parse_iso_date(before_date)
+            if cutoff is None:
+                raise ValueError("before_date must be YYYY-MM-DD")
+
+        limit = None
+        if max_items is not None:
+            try:
+                limit = int(max_items)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("max_items must be an integer") from exc
+            limit = max(0, limit)
+
+        filtered = []
+        for it in items:
+            importance = it.get("importance", 0.0)
+            try:
+                importance_val = float(importance)
+            except (TypeError, ValueError):
+                importance_val = 0.0
+            if min_importance is not None and importance_val < min_importance:
+                continue
+            if cutoff is not None:
+                item_date = _item_date(it)
+                if item_date is not None and item_date < cutoff:
+                    continue
+            filtered.append(it)
+
+        if limit is not None and len(filtered) > limit:
+            def _key(it):
+                imp = it.get("importance", 0.0)
+                try:
+                    imp_val = float(imp)
+                except (TypeError, ValueError):
+                    imp_val = 0.0
+                dt_obj = _item_date(it)
+                date_ord = dt_obj.toordinal() if dt_obj is not None else -1
+                try:
+                    access_val = int(it.get("access", 0) or 0)
+                except (TypeError, ValueError):
+                    access_val = 0
+                return (imp_val, date_ord, access_val, it.get("id", ""))
+
+            filtered = sorted(filtered, key=_key, reverse=True)[:limit]
+
+        removed = len(items) - len(filtered)
+        if removed <= 0:
+            return 0
+
+        self.layers[layer] = list(filtered)
+        self.save()
+        return removed
+
     def snapshot(self):
         """Return a summary of how many memories exist per layer."""
 
@@ -111,14 +206,11 @@ class MemoryBank:
     def _recency_weight(self, event_date: str, on_date: str, Q: int) -> float:
         """Compute an exponential decay weight favouring recent experiences."""
 
-        import datetime as _dt
-
-        try:
-            d_evt = _dt.datetime.strptime(event_date or "1970-01-01", "%Y-%m-%d").date()
-            d_on = _dt.datetime.strptime(on_date, "%Y-%m-%d").date()
-            delta = max(0, (d_on - d_evt).days)
-        except Exception:
+        d_evt = _parse_iso_date(event_date) or _parse_iso_date("1970-01-01")
+        d_on = _parse_iso_date(on_date)
+        if d_evt is None or d_on is None:
             return 0.5
+        delta = max(0, (d_on - d_evt).days)
         return math.exp(-delta / max(1, Q))
 
     def retrieve(self, query_text: str, on_date: str, cfg):
