@@ -267,6 +267,64 @@ def test_run_backtest_parses_percent_exposure(tmp_path, monkeypatch):
     assert calls["policy"] == len(bars)
 
 
+def test_run_backtest_allows_fractional_positions(tmp_path, monkeypatch):
+    memory_path = tmp_path / "bank_fractional.json"
+    config_path = tmp_path / "config_fractional.json"
+    _write_config(
+        config_path,
+        memory_path,
+        {"k_shallow": 0, "k_intermediate": 0, "k_deep": 0},
+        risk={
+            "max_position": 10,
+            "commission_per_trade": 0.0,
+            "commission_per_share": 0.0,
+            "slippage_bps": 0.0,
+            "allow_short": False,
+        },
+    )
+
+    cfg_raw = json.loads(config_path.read_text())
+    cfg_raw["initial_cash"] = 100.0
+    config_path.write_text(json.dumps(cfg_raw))
+
+    bars = _dummy_bars()
+    monkeypatch.setattr("core.backtest.get_daily_bars", lambda *args, **kwargs: bars.copy())
+    monkeypatch.setattr("core.backtest.add_indicators", lambda df: df.copy())
+    monkeypatch.setattr("core.backtest.plot_equity", lambda *args, **kwargs: "fig_eq")
+    monkeypatch.setattr("core.backtest.plot_drawdown", lambda *args, **kwargs: "fig_dd")
+
+    policy_sequence = [
+        {"action": "BUY", "target_exposure": 0.5},
+        {"action": "HOLD", "target_exposure": 0.5},
+    ]
+    calls = {"policy": 0}
+
+    def fake_chat(messages, model=None, max_tokens=None):
+        idx = min(calls["policy"], len(policy_sequence) - 1)
+        calls["policy"] += 1
+        return dict(policy_sequence[idx])
+
+    monkeypatch.setattr("core.backtest.chat_json", fake_chat)
+
+    equity_events = []
+
+    def on_event(evt):
+        if evt.get("type") == "equity_point":
+            equity_events.append(evt)
+
+    result = run_backtest(config_path=str(config_path), on_event=on_event, event_rate=1)
+
+    trades = result["trades_tail"]
+    buy_trades = trades[trades["action"] == "BUY"]
+    assert not buy_trades.empty
+    assert buy_trades.iloc[0]["shares_delta"] == pytest.approx(0.5)
+
+    assert equity_events, "expected at least one equity event"
+    first_equity = equity_events[0]
+    assert first_equity.get("position") == pytest.approx(0.5)
+
+    assert calls["policy"] == len(bars)
+
 def test_run_backtest_enforces_min_notional(tmp_path, monkeypatch):
     memory_path = tmp_path / "bank_floor.json"
     config_path = tmp_path / "config_floor.json"

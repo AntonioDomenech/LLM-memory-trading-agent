@@ -1,6 +1,4 @@
 
-import math
-
 import numpy as np, pandas as pd
 from .logger import get_logger
 from .config import load_config, resolve_memory_path
@@ -58,6 +56,25 @@ def _clamp(x, lo, hi):
 def _append_norm_label(current, label):
     return f"{current};{label}" if current else label
 
+
+def _round_quantity(value, precision=8):
+    try:
+        return float(round(float(value), precision))
+    except Exception:
+        return 0.0
+
+
+def _format_quantity(value, precision=6):
+    try:
+        rounded = round(float(value), precision)
+    except Exception:
+        return "0"
+    formatted = f"{rounded:.{precision}f}".rstrip("0").rstrip(".")
+    if not formatted or formatted == "-0":
+        return "0"
+    return formatted
+
+
 def run_backtest(config_path="config.json", on_event=None, event_rate=10):
     def emit(evt):
         if on_event:
@@ -97,7 +114,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
 
     initial_cash = _to_float(getattr(cfg, "initial_cash", 100000.0), 100000.0)
     cash = initial_cash
-    position = 0
+    position = 0.0
     bh_shares = 0
     bh_cash = initial_cash
     periodic_contribution = max(0.0, _to_float(getattr(cfg, "periodic_contribution", 0.0), 0.0))
@@ -133,7 +150,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                     {
                         "date": d_iso,
                         "action": "CONTRIBUTION",
-                        "shares_delta": 0,
+                        "shares_delta": 0.0,
                         "fill_price": None,
                         "amount": float(contribution_today),
                         "note": "Aporte mensual automático",
@@ -156,10 +173,11 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             if use_memory and memory_bank is not None:
                 prev_date = pending_feedback.get("date", "")
                 action_prev = pending_feedback.get("action", "")
-                shares_after = int(pending_feedback.get("position_after", 0))
+                shares_after = float(pending_feedback.get("position_after", 0.0) or 0.0)
+                shares_after_fmt = _format_quantity(abs(shares_after))
                 ret_pct = realized_return * 100.0
                 summary = (
-                    f"{prev_date}: {action_prev} {abs(shares_after)}"
+                    f"{prev_date}: {action_prev} {shares_after_fmt}"
                     f" → {ret_pct:+.2f}% next day"
                 )
                 importance = max(
@@ -174,11 +192,13 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                     "target_exposure": float(
                         pending_feedback.get("target_exposure", 0.0)
                     ),
-                    "position": shares_after,
+                    "position": _round_quantity(shares_after),
                     "entry_price": float(entry_price) if entry_price is not None else None,
                     "realized_return": float(realized_return),
                     "realized_pnl": float(realized_pnl),
-                    "shares_delta": int(pending_feedback.get("shares_delta", 0)),
+                    "shares_delta": _round_quantity(
+                        pending_feedback.get("shares_delta", 0.0)
+                    ),
                 }
                 memory_bank.add_item(
                     "shallow",
@@ -205,7 +225,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         risk_snapshot["allow_short"] = bool(allow_short)
         portfolio_state = {
             "cash": float(cash),
-            "position": int(position),
+            "position": _round_quantity(position),
             "equity": float(equity),
             "max_position": float(max_pos_shares),
             "slippage_bps": float(slippage_bps),
@@ -308,40 +328,37 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         # --- Translate exposure to shares with guardrails ---
         equity = cash + position * price
         desired_value = target_exposure * equity
-        target_shares = int(desired_value // max(price, 1e-9))
+        if price <= 0.0:
+            target_shares = 0.0
+        else:
+            target_shares = desired_value / price
         if max_pos_shares > 0:
-            target_shares = int(
-                _clamp(
-                    target_shares,
-                    0 if not allow_short else -max_pos_shares,
-                    max_pos_shares,
-                )
-            )
+            upper_bound = float(max_pos_shares)
+            lower_bound = -upper_bound if allow_short else 0.0
+            target_shares = _clamp(target_shares, lower_bound, upper_bound)
         delta = target_shares - position
 
         is_buy = delta > 0
         floor_applied = False
-        min_notional_shares = 0
+        min_notional_shares = 0.0
         planned_delta = delta
         remaining_capacity = None
         if max_pos_shares > 0:
-            remaining_capacity = max(0, int(max_pos_shares) - position)
+            remaining_capacity = max(0.0, float(max_pos_shares) - position)
         if is_buy:
-            floor_shares = 0
             if min_trade_value > 0.0 and price > 0.0:
-                floor_shares = int(math.ceil(min_trade_value / price))
-            if floor_shares > 0:
-                min_notional_shares = floor_shares
-                if remaining_capacity is not None and remaining_capacity < floor_shares:
-                    planned_delta = 0
+                min_notional_shares = min_trade_value / price
+            if min_notional_shares > 0.0:
+                if remaining_capacity is not None and remaining_capacity < min_notional_shares:
+                    planned_delta = 0.0
                 else:
-                    if planned_delta < floor_shares:
-                        planned_delta = floor_shares
+                    if planned_delta < min_notional_shares:
+                        planned_delta = min_notional_shares
                         floor_applied = True
                     if remaining_capacity is not None:
                         planned_delta = min(planned_delta, remaining_capacity)
 
-        planned_delta = int(planned_delta)
+        planned_delta = float(planned_delta)
 
         # Fill price and commissions
         slip = (slippage_bps / 10000.0)
@@ -356,29 +373,31 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         affordability_limited = False
         if is_buy:
             if final_delta <= 0:
-                affordable = 0
+                affordable = 0.0
             else:
                 per_share_total = fill + c_per_share
-                if per_share_total <= 0:
-                    affordable = 0
+                available_cash = cash - c_per_trade
+                if per_share_total <= 0 or available_cash <= 0:
+                    affordable = 0.0
                 else:
-                    affordable = int(max(0.0, (cash - c_per_trade)) // per_share_total)
-                if min_notional_shares > 0 and affordable < min_notional_shares:
-                    affordable = 0
+                    affordable = max(0.0, available_cash / per_share_total)
+                if min_notional_shares > 0.0 and affordable < min_notional_shares:
+                    affordable = 0.0
             if final_delta > 0:
-                if affordable <= 0:
-                    final_delta = 0
+                if affordable <= 0.0:
+                    final_delta = 0.0
                     affordability_limited = True
                 else:
                     if affordable < final_delta:
                         final_delta = affordable
                         affordability_limited = True
             else:
-                final_delta = 0
+                final_delta = 0.0
 
             if floor_applied and final_delta > 0:
                 normalized = _append_norm_label(
-                    normalized, f"min_trade_floor:{max(min_notional_shares, 0)}"
+                    normalized,
+                    f"min_trade_floor:{_format_quantity(max(min_notional_shares, 0.0))}",
                 )
         else:
             affordable = None
@@ -386,18 +405,20 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
         if is_buy and final_delta > 0 and affordability_limited:
             normalized = _append_norm_label(normalized, "afford_limited")
 
-        delta = int(final_delta)
+        delta = _round_quantity(final_delta)
 
         # Execute
         if delta != 0:
+            abs_delta = abs(delta)
             if delta > 0:
-                cash -= delta * fill + c_per_trade + delta * c_per_share
+                cash -= delta * fill + c_per_trade + abs_delta * c_per_share
             else:
-                cash += (-delta) * fill - (c_per_trade + (-delta) * c_per_share)
+                cash += abs_delta * fill - (c_per_trade + abs_delta * c_per_share)
             position += delta
+            position = _round_quantity(position)
 
             trades.append({"date": d_iso, "action": "BUY" if delta>0 else "SELL",
-                           "shares_delta": int(delta), "fill_price": float(fill),
+                           "shares_delta": _round_quantity(delta), "fill_price": float(fill),
                            "amount": None,
                            "note": normalized or ""})
 
@@ -422,7 +443,7 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
                 "equity": float(equity),
                 "benchmark": float(equity_bh),
                 "cash": float(cash),
-                "position": int(position),
+                "position": _round_quantity(position),
                 "drawdown": float(drawdown),
                 "contribution": float(contribution_today),
                 "total_contributions": float(total_contributions),
@@ -433,9 +454,9 @@ def run_backtest(config_path="config.json", on_event=None, event_rate=10):
             "date": d_iso,
             "action": action,
             "target_exposure": float(target_exposure),
-            "position_after": int(position),
+            "position_after": _round_quantity(position),
             "entry_price": float(price),
-            "shares_delta": int(delta),
+            "shares_delta": _round_quantity(delta),
         }
 
     m = pd.DataFrame(eq_series, columns=["date","equity"]).set_index("date")["equity"]

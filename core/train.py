@@ -58,7 +58,7 @@ def run_training(config_path="config.json", on_event=None):
     risk_snapshot["allow_short"] = bool(getattr(risk_cfg, "allow_short", False))
     default_portfolio_state = {
         "cash": 0.0,
-        "position": 0,
+        "position": 0.0,
         "equity": 0.0,
         "max_position": float(getattr(risk_cfg, "max_position", 0.0) or 0.0),
         "slippage_bps": float(getattr(risk_cfg, "slippage_bps", 0.0) or 0.0),
