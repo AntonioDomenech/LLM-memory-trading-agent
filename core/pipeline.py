@@ -35,12 +35,12 @@ class DailyContext:
     provider_label: str
     news_reason: str
     articles: Sequence[Dict[str, Any]]
-    content_policy: str = "auto"
     factor_prompt: PromptBundle
     policy_prompt: PromptBundle
     memory_retrieval: Dict[str, Sequence[Dict[str, Any]]] = field(default_factory=dict)
     memory_highlights: Sequence[Dict[str, Any]] = field(default_factory=list)
     portfolio_state: Dict[str, Any] = field(default_factory=dict)
+    content_policy: str = "auto"
 
 
 @lru_cache(maxsize=None)

@@ -414,7 +414,8 @@ def prescan_days(symbol: str, start_iso: str, end_iso: str, K: int,
 
 def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_dir: str = None,
                    fetch_fn: Callable = None, on_event: Callable = None, full_content: bool = False,
-                   content_delay: float = 0.2, skip_existing: bool = True):
+                   content_delay: float = 0.2, skip_existing: bool = True,
+                   should_stop: Callable[[], bool] = None):
     """Download and optionally enrich local news files across a date range."""
 
     """Download (and optionally content-enrich) daily news and save locally.
@@ -428,6 +429,7 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
         "skipped_existing": 0,
         "content_error_types": {},
         "retry_queue": [],
+        "paused": False,
     }
     for _k in ("saved", "content_ok", "content_fail", "days_with_news", "skipped_existing"):
         if _k not in stats:
@@ -456,6 +458,10 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
 
     while day_queue:
         day, not_before = day_queue.popleft()
+        if should_stop and should_stop():
+            stats["paused"] = True
+            day_queue.appendleft((day, not_before))
+            break
         now = time.time()
         if not_before and now < not_before:
             wait = not_before - now
@@ -711,4 +717,5 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
             continue
 
     stats["retry_queue"] = list(retry_meta.values())
+    stats["remaining_days"] = [day for day, _ in day_queue]
     return stats
