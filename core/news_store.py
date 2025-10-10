@@ -172,15 +172,8 @@ def _retry_delay_for_reason(reason: str, attempt: int) -> float:
     base_default = _env_float("NEWS_RETRY_BASE_SECONDS", 5.0)
     cap_default = _env_float("NEWS_RETRY_MAX_SECONDS", 300.0)
 
-    if any(token in lowered for token in ("429", "rate", "too many", "quota", "limit")):
-        base = base_default
-    elif any(token in lowered for token in ("http_5", "timeout", "temporar", "gateway", "unavailable")):
-        base = max(2.0, base_default / 2.0)
-    else:
-        base = max(1.0, base_default / 5.0)
-
-    delay = base * (2 ** (attempt - 1))
-    return max(1.0, min(delay, cap_default))
+    # Skip waiting; append the day to the end of the queue with no enforced delay.
+    return 0.0
 
 
 

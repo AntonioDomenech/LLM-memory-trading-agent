@@ -329,10 +329,8 @@ def _register_rate_limit_penalty(provider: str) -> float:
 
     streak = _PROVIDER_RATE_STREAK.get(provider, 0) + 1
     _PROVIDER_RATE_STREAK[provider] = streak
-    base = max(1.0, _env_float_provider("NEWS_RATE_LIMIT_BASE_SECONDS", provider, 5.0))
-    cap = max(base, _env_float_provider("NEWS_RATE_LIMIT_MAX_SECONDS", provider, 120.0))
-    delay = base * (2 ** max(0, streak - 1))
-    return min(delay, cap)
+    # Caller now skips immediate waiting; retain streak bookkeeping but return zero delay.
+    return 0.0
 
 def fetch_day(symbol: str, day_iso: str, K: int):
     """Fetch up to ``K`` articles for ``symbol`` by iterating the provider chain."""
@@ -352,9 +350,7 @@ def fetch_day(symbol: str, day_iso: str, K: int):
             _write_cache({"provider": prov, "symbol": symbol, "date": day_iso, "articles": arts, "reason": reason})
             return arts, f"{prov}:{reason}"
         if _is_rate_limited_reason(reason):
-            delay = _register_rate_limit_penalty(prov)
-            if delay > 0.0:
-                time.sleep(delay)
+            _register_rate_limit_penalty(prov)
         else:
             _PROVIDER_RATE_STREAK.pop(prov, None)
     trace_str = ";".join(attempts) if attempts else "no_attempts"
