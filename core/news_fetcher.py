@@ -1,5 +1,6 @@
 import os, json, time, requests
 from datetime import datetime, timedelta
+from typing import Dict
 
 # Local store helpers
 from .news_store import load_local_day, save_local_day, _is_synth
@@ -258,23 +259,104 @@ _PROVIDERS = {
     "Bing": _bing,
 }
 
+_PROVIDER_LAST_CALL: Dict[str, float] = {}
+_PROVIDER_RATE_STREAK: Dict[str, int] = {}
+
+
+def _provider_token(prov: str) -> str:
+    """Return an uppercase token usable in environment variable names."""
+
+    if not prov:
+        return ""
+    token = "".join(ch if ch.isalnum() else "_" for ch in prov.upper())
+    return token
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float environment variable with a safe fallback."""
+
+    try:
+        raw = os.environ.get(name)
+        if raw is None or str(raw).strip() == "":
+            return float(default)
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _env_float_provider(prefix: str, provider: str, default: float) -> float:
+    """Read a provider-specific float env var with a global fallback."""
+
+    token = _provider_token(provider)
+    if token:
+        specific_name = f"{prefix}_{token}"
+        if os.environ.get(specific_name) is not None:
+            return _env_float(specific_name, default)
+    return _env_float(prefix, default)
+
+
+def _min_interval_for_provider(provider: str) -> float:
+    """Minimum seconds between consecutive calls to ``provider``."""
+
+    return max(0.0, _env_float_provider("NEWS_PROVIDER_MIN_INTERVAL", provider, 0.0))
+
+
+def _respect_provider_pacing(provider: str) -> None:
+    """Sleep when necessary to honour provider pacing constraints."""
+
+    interval = _min_interval_for_provider(provider)
+    if interval <= 0.0:
+        return
+    last_call = _PROVIDER_LAST_CALL.get(provider)
+    if not last_call:
+        return
+    wait = interval - (time.time() - last_call)
+    if wait > 0.0:
+        time.sleep(wait)
+
+
+def _is_rate_limited_reason(reason: str) -> bool:
+    """Return ``True`` when ``reason`` indicates rate limiting."""
+
+    if not reason:
+        return False
+    lowered = str(reason).lower()
+    return any(token in lowered for token in ("429", "rate", "too many", "quota", "limit"))
+
+
+def _register_rate_limit_penalty(provider: str) -> float:
+    """Increment rate-limit streak for ``provider`` and return a backoff delay."""
+
+    streak = _PROVIDER_RATE_STREAK.get(provider, 0) + 1
+    _PROVIDER_RATE_STREAK[provider] = streak
+    base = max(1.0, _env_float_provider("NEWS_RATE_LIMIT_BASE_SECONDS", provider, 5.0))
+    cap = max(base, _env_float_provider("NEWS_RATE_LIMIT_MAX_SECONDS", provider, 120.0))
+    delay = base * (2 ** max(0, streak - 1))
+    return min(delay, cap)
+
 def fetch_day(symbol: str, day_iso: str, K: int):
     """Fetch up to ``K`` articles for ``symbol`` by iterating the provider chain."""
     chain = get_provider_chain()
     attempts = []
     for prov in chain:
+        _respect_provider_pacing(prov)
         fn = _PROVIDERS.get(prov)
         if not fn:
             attempts.append(f"{prov}=unsupported")
             continue
         arts, reason = fn(symbol, day_iso, K)
+        _PROVIDER_LAST_CALL[prov] = time.time()
         attempts.append(f"{prov}={reason}")
         if arts:
+            _PROVIDER_RATE_STREAK.pop(prov, None)
             _write_cache({"provider": prov, "symbol": symbol, "date": day_iso, "articles": arts, "reason": reason})
             return arts, f"{prov}:{reason}"
-        # mild backoff on rate limits
-        if "rate" in str(reason).lower():
-            time.sleep(1.0)
+        if _is_rate_limited_reason(reason):
+            delay = _register_rate_limit_penalty(prov)
+            if delay > 0.0:
+                time.sleep(delay)
+        else:
+            _PROVIDER_RATE_STREAK.pop(prov, None)
     trace_str = ";".join(attempts) if attempts else "no_attempts"
     _write_cache({"provider": "none", "symbol": symbol, "date": day_iso, "articles": [], "reason": f"none:{trace_str}"})
     return [], f"none:{trace_str}"

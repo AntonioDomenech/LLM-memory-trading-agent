@@ -1,6 +1,7 @@
 import json
 import math
 
+import core.pipeline as pipeline_mod
 from core.config import Config, RetrievalCfg
 from core.memory import MemoryBank
 from core.pipeline import prepare_daily_context
@@ -125,6 +126,68 @@ def test_prepare_daily_context_with_retrieved_memory(tmp_path):
     assert policy_payload["memory_highlights"][0]["text"].startswith("AAPL narrative")
     assert policy_payload["portfolio_state"] == portfolio_state
     assert ctx.portfolio_state == portfolio_state
+
+
+def test_prepare_daily_context_headline_only_policy(monkeypatch):
+    """Headline-only policy should blank article bodies while keeping metadata."""
+
+    cfg = Config()
+    cfg.K_news_per_day = 2
+    cfg.news_source = "Mock"
+
+    articles = [
+        {"title": "Alpha", "content": "A" * 200, "url": "http://alpha"},
+        {"title": "Beta", "content": "B" * 200, "summary": "Long summary", "url": "http://beta"},
+    ]
+
+    def fake_fetch(symbol, day_iso, k):
+        assert symbol == cfg.symbol
+        return articles, "mock:fetched"
+
+    monkeypatch.setattr(pipeline_mod, "fetch_news_with_reason", fake_fetch)
+
+    ctx = pipeline_mod.prepare_daily_context(
+        cfg,
+        "2024-01-02",
+        _base_price_row(),
+        content_policy="headline_only",
+    )
+
+    assert ctx.content_policy == "headline_only"
+    assert len(ctx.articles) == 2
+    for art in ctx.articles:
+        assert art.get("content", "") == ""
+        assert art.get("summary", "") == ""
+
+
+def test_prepare_daily_context_full_only_policy(monkeypatch):
+    """Full-only policy should drop articles without enriched content."""
+
+    cfg = Config()
+    cfg.K_news_per_day = 3
+    cfg.news_source = "Mock"
+
+    articles = [
+        {"title": "Complete", "content": "C" * 200, "url": "http://complete"},
+        {"title": "Short", "content": "tiny", "url": "http://short"},
+        {"title": "Missing", "url": "http://missing"},
+    ]
+
+    def fake_fetch(symbol, day_iso, k):
+        return articles, "mock:fetched"
+
+    monkeypatch.setattr(pipeline_mod, "fetch_news_with_reason", fake_fetch)
+
+    ctx = pipeline_mod.prepare_daily_context(
+        cfg,
+        "2024-01-02",
+        _base_price_row(),
+        content_policy="full_only",
+    )
+
+    assert ctx.content_policy == "full_only"
+    assert len(ctx.articles) == 1
+    assert ctx.articles[0]["title"] == "Complete"
 
 
 def test_memory_access_persists_after_retrieval(tmp_path):

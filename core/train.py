@@ -74,6 +74,7 @@ def run_training(
             return False
 
     cfg = load_config(config_path)
+    train_policy = str(getattr(cfg, "train_news_content_mode", "auto") or "auto")
 
     emit({"type":"phase","label":"Load prices","state":"running"})
     df = add_indicators(get_daily_bars(cfg.symbol, cfg.train_start, cfg.train_end))
@@ -120,6 +121,7 @@ def run_training(
             cfg,
             d_iso,
             pr,
+            content_policy=train_policy,
             memory_bank=bank,
             portfolio_state=default_portfolio_state,
         )

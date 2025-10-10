@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .capsules import build_capsule
 from .memory import MemoryBank
 from .news_fetcher import fetch_news_with_reason
+from .news_store import _has_content as _news_has_content
 
 
 @dataclass
@@ -34,6 +35,7 @@ class DailyContext:
     provider_label: str
     news_reason: str
     articles: Sequence[Dict[str, Any]]
+    content_policy: str = "auto"
     factor_prompt: PromptBundle
     policy_prompt: PromptBundle
     memory_retrieval: Dict[str, Sequence[Dict[str, Any]]] = field(default_factory=dict)
@@ -89,6 +91,54 @@ def _should_use_memory(retrieval_cfg: Any) -> bool:
     return False
 
 
+_TEXTUAL_CONTENT_KEYS = {
+    "content",
+    "text",
+    "body",
+    "description",
+    "summary",
+    "snippet",
+    "full_text",
+    "fullText",
+    "readable_text",
+}
+
+
+def _normalize_content_policy(policy: Optional[str]) -> str:
+    """Return a sanitized content policy label."""
+
+    if policy is None:
+        return "auto"
+    value = str(policy).strip().lower()
+    if value in {"auto", "full_only", "headline_only"}:
+        return value
+    return "auto"
+
+
+def _apply_content_policy(raw_articles: Sequence[Dict[str, Any]], policy: str) -> List[Dict[str, Any]]:
+    """Return articles transformed according to the selected policy."""
+
+    if not raw_articles:
+        return []
+
+    if policy == "full_only":
+        return [dict(article) for article in raw_articles if _news_has_content(article)]
+
+    if policy == "headline_only":
+        cleaned: List[Dict[str, Any]] = []
+        for article in raw_articles:
+            clone = dict(article)
+            for key in list(clone.keys()):
+                if key in _TEXTUAL_CONTENT_KEYS:
+                    clone[key] = ""
+            if "content" not in clone:
+                clone["content"] = ""
+            cleaned.append(clone)
+        return cleaned
+
+    return [dict(article) for article in raw_articles]
+
+
 _MEMORY_CACHE: Dict[Tuple[str, str], MemoryBank] = {}
 
 
@@ -133,6 +183,7 @@ def prepare_daily_context(
     date_iso: str,
     price_row: Dict[str, Any],
     *,
+    content_policy: str = "auto",
     memory_bank: Optional[MemoryBank] = None,
     portfolio_state: Optional[Dict[str, Any]] = None,
 ) -> DailyContext:
@@ -148,8 +199,9 @@ def prepare_daily_context(
     else:
         articles, reason = [], "K_news_per_day=0"
 
+    policy_applied = _normalize_content_policy(content_policy)
     regime = _build_regime(price_row)
-    article_list = list(articles)
+    article_list = _apply_content_policy(list(articles), policy_applied)
     capsule = build_capsule(date_iso, cfg.symbol, price_row, article_list, [], regime)
     capsule["headlines_source"] = provider_used
 
@@ -209,6 +261,7 @@ def prepare_daily_context(
         provider_label=provider_used,
         news_reason=reason,
         articles=article_list,
+        content_policy=policy_applied,
         memory_retrieval=memory_layers,
         memory_highlights=memory_highlights,
         portfolio_state=portfolio_payload,

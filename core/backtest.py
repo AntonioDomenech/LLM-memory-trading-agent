@@ -117,6 +117,14 @@ def run_backtest(
             return False
 
     cfg = load_config(config_path)
+    test_policy = str(
+        getattr(
+            cfg,
+            "test_news_content_mode",
+            getattr(cfg, "train_news_content_mode", "auto"),
+        )
+        or "auto"
+    )
     memory_path = resolve_memory_path(cfg, prefer_existing=True, ensure_parent=True)
 
     retrieval_cfg = getattr(cfg, "retrieval", None)
@@ -284,6 +292,7 @@ def run_backtest(
             cfg,
             d_iso,
             pr,
+            content_policy=test_policy,
             memory_bank=memory_bank,
             portfolio_state=portfolio_state,
         )

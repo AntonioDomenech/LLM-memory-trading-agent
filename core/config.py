@@ -44,6 +44,8 @@ class Config:
     test_end: str = "2023-08-31"
     news_source: str = "NewsAPI"
     K_news_per_day: int = 5
+    train_news_content_mode: str = "auto"
+    test_news_content_mode: str = "auto"
     embedding_model: str = "text-embedding-3-small"
     decision_model: str = "gpt-4o-mini"
     memory_path: str = "data/memory_bank.json"
@@ -85,6 +87,10 @@ def load_config(path: str) -> Config:
         test_end    = raw.get("test_end", "2023-08-31"),
         news_source = raw.get("news_source", "NewsAPI"),
         K_news_per_day = int(raw.get("K_news_per_day", 5)),
+        train_news_content_mode = str(raw.get("train_news_content_mode", "auto") or "auto").strip().lower(),
+        test_news_content_mode = str(
+            raw.get("test_news_content_mode", raw.get("train_news_content_mode", "auto")) or "auto"
+        ).strip().lower(),
         embedding_model = raw.get("embedding_model","text-embedding-3-small"),
         decision_model  = raw.get("decision_model","gpt-4o-mini"),
         memory_path = memory_path,

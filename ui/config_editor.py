@@ -127,6 +127,34 @@ def render_config_tab(cfg_path: str) -> None:
             help="Cantidad de noticias más relevantes que se almacenan por jornada. Un valor mayor aumenta el contexto para el LLM, pero también el costo de procesamiento.",
         )
 
+        content_modes = {
+            "auto": "Automático (usar todo el contexto disponible)",
+            "full_only": "Solo noticias con texto completo",
+            "headline_only": "Solo titulares (sin cuerpo)",
+        }
+        mode_keys = list(content_modes.keys())
+        train_mode_default = str(getattr(cfg, "train_news_content_mode", "auto") or "auto").lower()
+        if train_mode_default not in content_modes:
+            train_mode_default = "auto"
+        test_mode_default = str(getattr(cfg, "test_news_content_mode", train_mode_default) or train_mode_default).lower()
+        if test_mode_default not in content_modes:
+            test_mode_default = "auto"
+        col_train_mode, col_test_mode = st.columns(2)
+        train_mode = col_train_mode.selectbox(
+            "Contenido para entrenamiento",
+            options=mode_keys,
+            index=mode_keys.index(train_mode_default),
+            format_func=lambda key: content_modes[key],
+            help="Define si el entrenamiento usa titulares con cuerpo completo, solo titulares o lo que haya disponible en el caché local.",
+        )
+        test_mode = col_test_mode.selectbox(
+            "Contenido para backtest",
+            options=mode_keys,
+            index=mode_keys.index(test_mode_default),
+            format_func=lambda key: content_modes[key],
+            help="Configura cómo se construyen las cápsulas durante la simulación: titulares completos, solo titulares o modo automático.",
+        )
+
         embedding_model = st.text_input(
             "Modelo de embeddings",
             value=cfg.embedding_model,
@@ -370,6 +398,8 @@ def render_config_tab(cfg_path: str) -> None:
         test_end=test_end.isoformat(),
         news_source=news_source.strip() or cfg.news_source,
         K_news_per_day=int(k_news),
+        train_news_content_mode=train_mode,
+        test_news_content_mode=test_mode,
         embedding_model=embedding_model.strip() or cfg.embedding_model,
         decision_model=decision_model.strip() or cfg.decision_model,
         memory_path=memory_path_clean,

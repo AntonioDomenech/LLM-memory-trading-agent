@@ -2,6 +2,7 @@ import os
 import os
 import json
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Tuple, List, Dict, Callable, Any
 
@@ -126,6 +127,61 @@ def _is_synth(a: dict) -> bool:
     url_val = _as_str(a.get("url")).strip().lower()
     title_val = _as_str(a.get("title")).strip().lower()
     return (src_val == "synthetic") or (not url_val and title_val.startswith("no reliable articles found"))
+
+
+def _content_failed(a: dict) -> bool:
+    """Return True when an article is explicitly marked as failed content extraction."""
+
+    if not isinstance(a, dict):
+        return False
+    status = a.get("_content_status")
+    if isinstance(status, str):
+        return status.strip().lower() == "failed"
+    return False
+
+
+def _is_retryable_reason(reason: str) -> bool:
+    """Heuristically decide whether a provider response is worth retrying later."""
+
+    if not reason:
+        return True
+    lowered = str(reason).lower()
+    non_retry_tokens = (
+        "missing_key",
+        "invalid",
+        "unauthorized",
+        "forbidden",
+        "permission",
+        "unsupported",
+    )
+    return not any(token in lowered for token in non_retry_tokens)
+
+
+def _retry_delay_for_reason(reason: str, attempt: int) -> float:
+    """Return a delay (in seconds) before retrying provider downloads."""
+
+    attempt = max(1, int(attempt or 1))
+    lowered = str(reason or "").lower()
+
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except Exception:
+            return default
+
+    base_default = _env_float("NEWS_RETRY_BASE_SECONDS", 5.0)
+    cap_default = _env_float("NEWS_RETRY_MAX_SECONDS", 300.0)
+
+    if any(token in lowered for token in ("429", "rate", "too many", "quota", "limit")):
+        base = base_default
+    elif any(token in lowered for token in ("http_5", "timeout", "temporar", "gateway", "unavailable")):
+        base = max(2.0, base_default / 2.0)
+    else:
+        base = max(1.0, base_default / 5.0)
+
+    delay = base * (2 ** (attempt - 1))
+    return max(1.0, min(delay, cap_default))
+
 
 
 def _provider_mentions_synth(label: str) -> bool:
@@ -371,6 +427,7 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
         "days_with_news": 0,
         "skipped_existing": 0,
         "content_error_types": {},
+        "retry_queue": [],
     }
     for _k in ("saved", "content_ok", "content_fail", "days_with_news", "skipped_existing"):
         if _k not in stats:
@@ -392,7 +449,20 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
         except Exception:
             pass
 
-    for day in days_list:
+    day_queue = deque((day, 0.0) for day in days_list)
+    retry_attempts: Dict[str, int] = {}
+    retry_meta: Dict[str, Dict[str, Any]] = {}
+    max_retries = 1
+
+    while day_queue:
+        day, not_before = day_queue.popleft()
+        now = time.time()
+        if not_before and now < not_before:
+            wait = not_before - now
+            if wait > 0:
+                time.sleep(wait)
+            now = time.time()
+        attempt = retry_attempts.get(day, 0)
         try:
             stats["last_date"] = day
             p = local_day_path(symbol, day, base_dir)
@@ -410,14 +480,36 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                 except Exception:
                     pre_arts, pre_provider = [], ""
 
-            # Decide action with correct counting (all usable articles in the file)
-            usable_existing = [a for a in pre_arts if not _is_synth(a)]
-            usable_count = len(usable_existing)
-            enough_count = usable_count >= K
-            need_content = bool(full_content) and any((not _has_content(a)) for a in usable_existing[:K])
+            fails_removed = False
+            if full_content and pre_arts:
+                if any(_content_failed(a) for a in pre_arts):
+                    fails_removed = True
+                    pre_arts = [a for a in pre_arts if not _content_failed(a)]
+                    if pre_exists and not pre_arts:
+                        try:
+                            os.remove(p)
+                            pre_exists = False
+                        except FileNotFoundError:
+                            pre_exists = False
+                        except Exception:
+                            pass
+
+            non_synth = [a for a in pre_arts if not _is_synth(a)]
+            if full_content:
+                missing_content = [a for a in non_synth if not _has_content(a)]
+                usable_existing = [a for a in non_synth if _has_content(a)]
+            else:
+                missing_content = []
+                usable_existing = list(non_synth)
+            have_headlines = len(non_synth) >= K
+            enough_count = len(usable_existing) >= K
+            need_content = bool(full_content and missing_content)
+            needs_replacement = bool(full_content and fails_removed)
 
             # 1) Full skip (optional via skip_existing flag)
-            if skip_existing and pre_arts and enough_count and not need_content:
+            if skip_existing and pre_arts and enough_count and not need_content and not needs_replacement:
+                retry_meta.pop(day, None)
+                retry_attempts.pop(day, None)
                 stats["skipped_existing"] += 1
                 cleaned = usable_existing
                 provider_label = pre_provider or "local"
@@ -438,40 +530,65 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                 continue
 
             # 2) Content-only enrichment (no provider API calls)
-            if pre_arts and enough_count and need_content:
-                work = usable_existing[:K]
-                _enrich_content_only(work, content_delay, stats)
-                # Write back enriched items
-                by_key = {_key(a): a for a in work}
-                new_pre = []
-                for a in pre_arts:
-                    k = _key(a)
-                    new_pre.append(by_key.get(k, a))
-                pre_arts = new_pre
-                path = save_local_day(symbol, day, pre_arts[:K],
-                                      pre_provider or "local+content", "content_enriched", base_dir)
-                stats["saved"] += 1
-                stats["days_with_news"] += 1
-                if on_event:
-                    on_event({"type": "progress", "date": day,
-                              "provider": pre_provider or "local+content",
-                              "saved_path": path, "content_ok": stats["content_ok"],
-                              "content_fail": stats["content_fail"],
-                              "days_with_news": stats["days_with_news"],
-                              "skipped_existing": stats["skipped_existing"],
-                              "content_error_types": dict(stats.get("content_error_types", {}))})
-                continue
+            if pre_arts and have_headlines and need_content and not needs_replacement:
+                work = missing_content[:K]
+                if work:
+                    _enrich_content_only(work, content_delay, stats)
+                non_synth = [a for a in pre_arts if not _is_synth(a)]
+                if full_content:
+                    missing_content = [a for a in non_synth if not _has_content(a)]
+                    usable_existing = [a for a in non_synth if _has_content(a)]
+                else:
+                    missing_content = []
+                    usable_existing = list(non_synth)
+                have_headlines = len(non_synth) >= K
+                enough_count = len(usable_existing) >= K
+                need_content = bool(full_content and missing_content)
+                if have_headlines and enough_count and not need_content:
+                    retry_meta.pop(day, None)
+                    provider_to_save = _clean_provider_label(pre_provider or "local+content")
+                    final_articles = usable_existing[:K]
+                    path = save_local_day(symbol, day, final_articles,
+                                          provider_to_save or "local+content",
+                                          "content_enriched", base_dir)
+                    stats["saved"] += 1
+                    stats["days_with_news"] += 1
+                    if on_event:
+                        on_event({"type": "progress", "date": day,
+                                  "provider": provider_to_save,
+                                  "saved_path": path, "content_ok": stats["content_ok"],
+                                  "content_fail": stats["content_fail"],
+                                  "days_with_news": stats["days_with_news"],
+                                  "skipped_existing": stats["skipped_existing"],
+                                  "content_error_types": dict(stats.get("content_error_types", {}))})
+                    continue
+                # fallthrough to provider fetch to top-up with new headlines
 
             # 3) Fetch headlines (providers)
             arts, reason = fetch_fn(symbol, day, K)
-            prov_label = (reason or "").split(":", 1)[0].lower() if reason else ""
-            prov_label = _clean_provider_label(prov_label)
+            prov_label_raw = (reason or "").split(":", 1)[0].lower() if reason else ""
+            prov_label = _clean_provider_label(prov_label_raw)
 
             # Filter out placeholder articles from providers
             arts = [a for a in (arts or []) if not _is_synth(a)]
 
             if not arts:
-                # No new data from providers; keep existing file as-is and emit progress
+                retryable = _is_retryable_reason(reason)
+                will_retry = retryable and attempt < max_retries
+                delay = _retry_delay_for_reason(reason, attempt + 1) if will_retry else 0.0
+                retry_meta[day] = {
+                    "date": day,
+                    "reason": str(reason or ""),
+                    "attempt": attempt + 1,
+                    "retryable": bool(retryable),
+                    "scheduled": will_retry,
+                    "retry_after": float(delay),
+                }
+                if will_retry:
+                    retry_attempts[day] = attempt + 1
+                    day_queue.append((day, time.time() + delay))
+                else:
+                    retry_attempts.pop(day, None)
                 if pre_exists and (not pre_arts or all(_is_synth(a) for a in pre_arts)):
                     try:
                         os.remove(p)
@@ -480,21 +597,30 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                         pre_exists = False
                     except Exception:
                         pass
+                provider_display = prov_label or "none"
+                if will_retry:
+                    provider_display = f"{provider_display or 'none'}+retry"
+                else:
+                    provider_display = f"{provider_display or 'none'}+blocked"
                 if on_event:
                     on_event({
                         "type": "progress",
                         "date": day,
-                        "provider": prov_label or "none",
+                        "provider": provider_display,
                         "saved_path": p if pre_exists else "",
                         "content_ok": stats["content_ok"],
                         "content_fail": stats["content_fail"],
                         "days_with_news": stats["days_with_news"],
                         "skipped_existing": stats["skipped_existing"],
                         "content_error_types": dict(stats.get("content_error_types", {})),
+                        "status_note": "queued_retry" if will_retry else "no_data",
+                        "retry_reason": str(reason or ""),
+                        "retry_attempt": attempt + 1,
+                        "retry_after": float(delay),
                     })
                 continue
 
-            # Optional content enrichment
+            # Optional content enrichment on freshly fetched headlines
             if full_content:
                 _enrich_content_only(arts, content_delay, stats)
 
@@ -505,21 +631,53 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
             final_arts = _merge_articles_for_k(pre_arts, arts, K,
                                                require_content=bool(full_content))
             if not final_arts:
-                # Nothing usable to save; remove empty placeholder file if needed
+                retryable = _is_retryable_reason(reason)
+                will_retry = retryable and attempt < max_retries
+                delay = _retry_delay_for_reason(reason, attempt + 1) if will_retry else 0.0
+                retry_meta[day] = {
+                    "date": day,
+                    "reason": str(reason or ""),
+                    "attempt": attempt + 1,
+                    "retryable": bool(retryable),
+                    "scheduled": will_retry,
+                    "retry_after": float(delay),
+                }
+                if will_retry:
+                    retry_attempts[day] = attempt + 1
+                    day_queue.append((day, time.time() + delay))
+                else:
+                    retry_attempts.pop(day, None)
                 try:
                     if os.path.exists(p):
                         os.remove(p)
+                        pre_exists = False
                 except Exception:
                     pass
+                provider_display = prov_label or "none"
+                if will_retry:
+                    provider_display = f"{provider_display or 'none'}+retry"
+                else:
+                    provider_display = f"{provider_display or 'none'}+blocked"
                 if on_event:
-                    on_event({"type": "progress", "date": day, "provider": prov_label or "none",
-                              "saved_path": "", "content_ok": stats["content_ok"],
-                              "content_fail": stats["content_fail"],
-                              "days_with_news": stats["days_with_news"],
-                              "skipped_existing": stats["skipped_existing"],
-                              "content_error_types": dict(stats.get("content_error_types", {}))})
+                    on_event({
+                        "type": "progress",
+                        "date": day,
+                        "provider": provider_display,
+                        "saved_path": "",
+                        "content_ok": stats["content_ok"],
+                        "content_fail": stats["content_fail"],
+                        "days_with_news": stats["days_with_news"],
+                        "skipped_existing": stats["skipped_existing"],
+                        "content_error_types": dict(stats.get("content_error_types", {})),
+                        "status_note": "queued_retry" if will_retry else "no_data",
+                        "retry_reason": str(reason or ""),
+                        "retry_attempt": attempt + 1,
+                        "retry_after": float(delay),
+                    })
                 continue
 
+            retry_meta.pop(day, None)
+            retry_attempts.pop(day, None)
             label_to_save = prov_label if not pre_arts or len(final_arts) == len(arts) else f"{prov_label}+local"
             label_to_save = _clean_provider_label(label_to_save)
             path = save_local_day(symbol, day, final_arts,
@@ -536,7 +694,15 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                           "content_error_types": dict(stats.get("content_error_types", {}))})
 
         except Exception as e:
-            # Emit error and continue
+            retry_meta[day] = {
+                "date": day,
+                "reason": f"exception:{type(e).__name__}",
+                "attempt": attempt + 1,
+                "retryable": False,
+                "scheduled": False,
+                "retry_after": 0.0,
+            }
+            retry_attempts.pop(day, None)
             if on_event:
                 try:
                     on_event({"type": "error", "date": day, "error": f"{type(e).__name__}: {e}"})
@@ -544,4 +710,5 @@ def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_d
                     pass
             continue
 
+    stats["retry_queue"] = list(retry_meta.values())
     return stats

@@ -1,0 +1,280 @@
+def download_range(symbol: str, start_iso: str, end_iso: str, K: int = 5, base_dir: str = None,
+                   fetch_fn: Callable = None, on_event: Callable = None, full_content: bool = False,
+                   content_delay: float = 0.2, skip_existing: bool = True):
+    """Download and optionally enrich local news files across a date range."""
+
+    """Download (and optionally content-enrich) daily news and save locally.
+    Resumable and top-up aware.
+    """
+    stats: Dict = {
+        "saved": 0,
+        "content_ok": 0,
+        "content_fail": 0,
+        "days_with_news": 0,
+        "skipped_existing": 0,
+        "content_error_types": {},
+        "retry_queue": [],
+    }
+    for _k in ("saved", "content_ok", "content_fail", "days_with_news", "skipped_existing"):
+        if _k not in stats:
+            stats[_k] = 0
+    if "content_error_types" not in stats:
+        stats["content_error_types"] = {}
+
+    if fetch_fn is None:
+        from .news_fetcher import fetch_day as fetch_fn
+
+    days_list = list(daterange(start_iso, end_iso))
+    total_days = len(days_list)
+
+    if on_event:
+        try:
+            on_event({"type": "plan",
+                      "plan": prescan_days(symbol, start_iso, end_iso, K, base_dir=base_dir,
+                                           full_content=bool(full_content))})
+        except Exception:
+            pass
+
+    day_queue = deque(days_list)
+    retry_attempts: Dict[str, int] = {}
+    retry_meta: Dict[str, Dict[str, Any]] = {}
+    max_retries = 1
+
+    while day_queue:
+        day = day_queue.popleft()
+        attempt = retry_attempts.get(day, 0)
+        try:
+            stats["last_date"] = day
+            p = local_day_path(symbol, day, base_dir)
+
+            # Load pre-existing (always inspect so we can avoid redundant fetches)
+            pre_exists = os.path.exists(p)
+            pre_arts: List[Dict] = []
+            pre_provider = ""
+            if pre_exists:
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        d = json.load(f)
+                    pre_arts = d.get("articles", []) or []
+                    pre_provider = d.get("provider") or d.get("reason") or "local"
+                except Exception:
+                    pre_arts, pre_provider = [], ""
+
+            fails_removed = False
+            if full_content and pre_arts:
+                if any(_content_failed(a) for a in pre_arts):
+                    fails_removed = True
+                    pre_arts = [a for a in pre_arts if not _content_failed(a)]
+                    if pre_exists and not pre_arts:
+                        try:
+                            os.remove(p)
+                            pre_exists = False
+                        except FileNotFoundError:
+                            pre_exists = False
+                        except Exception:
+                            pass
+
+            non_synth = [a for a in pre_arts if not _is_synth(a)]
+            if full_content:
+                missing_content = [a for a in non_synth if not _has_content(a)]
+                usable_existing = [a for a in non_synth if _has_content(a)]
+            else:
+                missing_content = []
+                usable_existing = list(non_synth)
+            have_headlines = len(non_synth) >= K
+            enough_count = len(usable_existing) >= K
+            need_content = bool(full_content and missing_content)
+            needs_replacement = bool(full_content and fails_removed)
+
+            # 1) Full skip (optional via skip_existing flag)
+            if skip_existing and pre_arts and enough_count and not need_content and not needs_replacement:
+                retry_meta.pop(day, None)
+                stats["skipped_existing"] += 1
+                cleaned = usable_existing
+                provider_label = pre_provider or "local"
+                path = p
+                if cleaned != pre_arts or _provider_mentions_synth(pre_provider):
+                    provider_label = _clean_provider_label(pre_provider)
+                    path = save_local_day(symbol, day, cleaned,
+                                          provider_label, "local:normalized_cached_metadata", base_dir)
+                    stats["saved"] += 1
+                stats["days_with_news"] += 1
+                if on_event:
+                    on_event({"type": "progress", "date": day, "provider": provider_label,
+                              "saved_path": path, "content_ok": stats["content_ok"],
+                              "content_fail": stats["content_fail"],
+                              "days_with_news": stats["days_with_news"],
+                              "skipped_existing": stats["skipped_existing"],
+                              "content_error_types": dict(stats.get("content_error_types", {}))})
+                continue
+
+            # 2) Content-only enrichment (no provider API calls)
+            if pre_arts and have_headlines and need_content and not needs_replacement:
+                work = missing_content[:K]
+                if work:
+                    _enrich_content_only(work, content_delay, stats)
+                non_synth = [a for a in pre_arts if not _is_synth(a)]
+                if full_content:
+                    missing_content = [a for a in non_synth if not _has_content(a)]
+                    usable_existing = [a for a in non_synth if _has_content(a)]
+                else:
+                    missing_content = []
+                    usable_existing = list(non_synth)
+                have_headlines = len(non_synth) >= K
+                enough_count = len(usable_existing) >= K
+                need_content = bool(full_content and missing_content)
+                if have_headlines and enough_count and not need_content:
+                    retry_meta.pop(day, None)
+                    provider_to_save = _clean_provider_label(pre_provider or "local+content")
+                    final_articles = usable_existing[:K]
+                    path = save_local_day(symbol, day, final_articles,
+                                          provider_to_save or "local+content",
+                                          "content_enriched", base_dir)
+                    stats["saved"] += 1
+                    stats["days_with_news"] += 1
+                    if on_event:
+                        on_event({"type": "progress", "date": day,
+                                  "provider": provider_to_save,
+                                  "saved_path": path, "content_ok": stats["content_ok"],
+                                  "content_fail": stats["content_fail"],
+                                  "days_with_news": stats["days_with_news"],
+                                  "skipped_existing": stats["skipped_existing"],
+                                  "content_error_types": dict(stats.get("content_error_types", {}))})
+                    continue
+                # fallthrough to provider fetch to top-up with new headlines
+
+            # 3) Fetch headlines (providers)
+            arts, reason = fetch_fn(symbol, day, K)
+            prov_label_raw = (reason or "").split(":", 1)[0].lower() if reason else ""
+            prov_label = _clean_provider_label(prov_label_raw)
+
+            # Filter out placeholder articles from providers
+            arts = [a for a in (arts or []) if not _is_synth(a)]
+
+            if not arts:
+                retryable = _is_retryable_reason(reason)
+                will_retry = retryable and attempt < max_retries
+                retry_meta[day] = {
+                    "date": day,
+                    "reason": str(reason or ""),
+                    "attempt": attempt + 1,
+                    "retryable": bool(retryable),
+                    "scheduled": will_retry,
+                }
+                if will_retry:
+                    retry_attempts[day] = attempt + 1
+                    day_queue.append(day)
+                if pre_exists and (not pre_arts or all(_is_synth(a) for a in pre_arts)):
+                    try:
+                        os.remove(p)
+                        pre_exists = False
+                    except FileNotFoundError:
+                        pre_exists = False
+                    except Exception:
+                        pass
+                provider_display = prov_label or "none"
+                if will_retry:
+                    provider_display = f"{provider_display or 'none'}+retry"
+                else:
+                    provider_display = f"{provider_display or 'none'}+blocked"
+                if on_event:
+                    on_event({
+                        "type": "progress",
+                        "date": day,
+                        "provider": provider_display,
+                        "saved_path": p if pre_exists else "",
+                        "content_ok": stats["content_ok"],
+                        "content_fail": stats["content_fail"],
+                        "days_with_news": stats["days_with_news"],
+                        "skipped_existing": stats["skipped_existing"],
+                        "content_error_types": dict(stats.get("content_error_types", {})),
+                        "status_note": "queued_retry" if will_retry else "no_data",
+                        "retry_reason": str(reason or ""),
+                        "retry_attempt": attempt + 1,
+                    })
+                continue
+
+            # Optional content enrichment on freshly fetched headlines
+            if full_content:
+                _enrich_content_only(arts, content_delay, stats)
+
+            # Remove placeholder articles from cached data before merging
+            pre_arts = [a for a in pre_arts if not _is_synth(a)]
+
+            # Merge and save
+            final_arts = _merge_articles_for_k(pre_arts, arts, K,
+                                               require_content=bool(full_content))
+            if not final_arts:
+                retryable = _is_retryable_reason(reason)
+                will_retry = retryable and attempt < max_retries
+                retry_meta[day] = {
+                    "date": day,
+                    "reason": str(reason or ""),
+                    "attempt": attempt + 1,
+                    "retryable": bool(retryable),
+                    "scheduled": will_retry,
+                }
+                if will_retry:
+                    retry_attempts[day] = attempt + 1
+                    day_queue.append(day)
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                        pre_exists = False
+                except Exception:
+                    pass
+                provider_display = prov_label or "none"
+                if will_retry:
+                    provider_display = f"{provider_display or 'none'}+retry"
+                else:
+                    provider_display = f"{provider_display or 'none'}+blocked"
+                if on_event:
+                    on_event({
+                        "type": "progress",
+                        "date": day,
+                        "provider": provider_display,
+                        "saved_path": "",
+                        "content_ok": stats["content_ok"],
+                        "content_fail": stats["content_fail"],
+                        "days_with_news": stats["days_with_news"],
+                        "skipped_existing": stats["skipped_existing"],
+                        "content_error_types": dict(stats.get("content_error_types", {})),
+                        "status_note": "queued_retry" if will_retry else "no_data",
+                        "retry_reason": str(reason or ""),
+                        "retry_attempt": attempt + 1,
+                    })
+                continue
+
+            retry_meta.pop(day, None)
+            label_to_save = prov_label if not pre_arts or len(final_arts) == len(arts) else f"{prov_label}+local"
+            label_to_save = _clean_provider_label(label_to_save)
+            path = save_local_day(symbol, day, final_arts,
+                                  label_to_save or "unknown", str(reason or ""), base_dir)
+            stats["saved"] += 1
+            stats["days_with_news"] += 1
+
+            if on_event:
+                on_event({"type": "progress", "date": day, "provider": label_to_save,
+                          "saved_path": path, "content_ok": stats["content_ok"],
+                          "content_fail": stats["content_fail"],
+                          "days_with_news": stats["days_with_news"],
+                          "skipped_existing": stats["skipped_existing"],
+                          "content_error_types": dict(stats.get("content_error_types", {}))})
+
+        except Exception as e:
+            retry_meta[day] = {
+                "date": day,
+                "reason": f"exception:{type(e).__name__}",
+                "attempt": attempt + 1,
+                "retryable": False,
+                "scheduled": False,
+            }
+            if on_event:
+                try:
+                    on_event({"type": "error", "date": day, "error": f"{type(e).__name__}: {e}"})
+                except Exception:
+                    pass
+            continue
+
+    stats["retry_queue"] = list(retry_meta.values())
+    return stats
