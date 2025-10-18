@@ -2,16 +2,17 @@
 import json
 import os
 from functools import lru_cache
+from typing import Any, Dict, List
 
 from .logger import get_logger
 
 log = get_logger()
 
 
-def _fallback_payload():
+def _fallback_payload(reason: str = ""):
     """Return the safe default payload when the API is unavailable."""
 
-    return {
+    payload = {
         "mood_score": 0.5,
         "narrative_bias": 0.0,
         "novelty": 0.1,
@@ -23,6 +24,9 @@ def _fallback_payload():
         "horizon_days": 5,
         "expected_return_bps": 0,
     }
+    if reason:
+        payload["__warning__"] = reason
+    return payload
 
 
 @lru_cache(maxsize=1)
@@ -35,7 +39,7 @@ def _build_client(api_key: str):
 
 
 def _is_gpt5(model_name: str) -> bool:
-    """Detect whether the requested model belongs to the GPT‑5 family."""
+    """Detect whether the requested model belongs to the GPT-5 family."""
 
     if not model_name:
         return False
@@ -43,29 +47,62 @@ def _is_gpt5(model_name: str) -> bool:
     return name.startswith("gpt-5") or name.startswith("o5-")
 
 
+def _to_responses_input(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert chat-style messages into Responses API format."""
+
+    converted: List[Dict[str, Any]] = []
+    for msg in messages or []:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if content is None:
+            content = ""
+        converted.append(
+            {
+                "role": role,
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": str(content),
+                    }
+                ],
+            }
+        )
+    return converted
+
+
 def chat_json(messages, model="gpt-4.1-mini", timeout=15, max_tokens=200):
     """Call the OpenAI API expecting a JSON object response (GPT‑4/5 compatible)."""
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        log.warning("OPENAI_API_KEY not set; using fallback response.")
-        return _fallback_payload()
+        try:  # attempt lazy load from .env for non-Streamlit callers
+            from dotenv import load_dotenv  # type: ignore
+
+            load_dotenv(override=False)
+            api_key = os.environ.get("OPENAI_API_KEY")
+        except Exception:  # pragma: no cover - optional dependency
+            api_key = None
+    if not api_key:
+        reason = "OPENAI_API_KEY not set; using fallback response."
+        log.warning(reason)
+        return _fallback_payload(reason)
 
     try:
         client = _build_client(api_key)
     except Exception as exc:  # pragma: no cover - defensive guard
-        log.warning(f"Failed to initialise OpenAI client: {exc}")
-        return _fallback_payload()
+        reason = f"Failed to initialise OpenAI client: {exc}"
+        log.warning(reason)
+        return _fallback_payload(reason)
 
     try:
         if _is_gpt5(model):
-            # GPT‑5 models require the Responses API.
+            # GPT-5 models require the Responses API and tend to emit long reasoning traces.
+            max_out = max(int(max_tokens or 0), 2048)
             resp = client.responses.create(
                 model=model,
-                input=messages,
-                response_format={"type": "json_object"},
-                temperature=0,
-                max_output_tokens=max_tokens,
+                input=_to_responses_input(messages),
+                text={"format": {"type": "json_object"}},
+                max_output_tokens=max_out,
                 timeout=timeout,
             )
             content = getattr(resp, "output_text", None)
@@ -98,5 +135,6 @@ def chat_json(messages, model="gpt-4.1-mini", timeout=15, max_tokens=200):
         return json.loads(content)
 
     except Exception as exc:
-        log.warning(f"OpenAI chat_json failed: {exc}")
-        return _fallback_payload()
+        reason = f"OpenAI chat_json failed: {exc}"
+        log.warning(reason)
+        return _fallback_payload(reason)

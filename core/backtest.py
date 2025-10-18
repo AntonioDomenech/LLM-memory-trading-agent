@@ -277,6 +277,18 @@ def run_backtest(
         if risk_cfg is not None:
             risk_snapshot = {key: value for key, value in vars(risk_cfg).items()}
         risk_snapshot["allow_short"] = bool(allow_short)
+        min_fraction_share = 0.0
+        if equity > 0.0 and price > 0.0 and min_trade_shares > 0.0:
+            min_fraction_share = (min_trade_shares * price) / equity
+        min_fraction_notional = 0.0
+        if equity > 0.0 and min_trade_value > 0.0:
+            min_fraction_notional = min_trade_value / equity
+        min_trade_fraction = max(min_fraction_share, min_fraction_notional)
+        if min_trade_fraction > 1.0:
+            min_trade_fraction = 1.0
+        current_exposure = 0.0
+        if equity > 0.0 and price > 0.0:
+            current_exposure = _clamp((position * price) / equity, -1.0 if allow_short else 0.0, 1.0)
         portfolio_state = {
             "cash": float(cash),
             "position": _round_quantity(position),
@@ -286,6 +298,9 @@ def run_backtest(
             "commission_per_trade": float(c_per_trade),
             "commission_per_share": float(c_per_share),
             "risk": risk_snapshot,
+            "min_trade_fraction": float(min_trade_fraction),
+            "price": float(price),
+            "current_exposure": float(current_exposure),
         }
 
         ctx = prepare_daily_context(
@@ -303,6 +318,11 @@ def run_backtest(
                 model=cfg.decision_model,
                 max_tokens=120,
             )
+            factor_warning = None
+            if isinstance(factor_raw, dict):
+                factor_warning = factor_raw.pop("__warning__", None)
+            if factor_warning:
+                emit({"type": "warn", "message": factor_warning})
             factor = _coerce_factor_numbers(factor_raw)
             summary = (
                 f"[{d_iso}] "
@@ -322,6 +342,11 @@ def run_backtest(
         cap = ctx.capsule
 
         raw = chat_json(ctx.policy_prompt.as_messages(), model=cfg.decision_model, max_tokens=120)
+        decision_warning = None
+        if isinstance(raw, dict):
+            decision_warning = raw.pop("__warning__", None)
+        if decision_warning:
+            emit({"type": "warn", "message": decision_warning})
         action = str(raw.get("action","HOLD")).strip().upper()
 
         # --- Exposure normalization ---

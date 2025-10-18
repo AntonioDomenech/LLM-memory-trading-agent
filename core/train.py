@@ -102,6 +102,9 @@ def run_training(
         "commission_per_trade": float(getattr(risk_cfg, "commission_per_trade", 0.0) or 0.0),
         "commission_per_share": float(getattr(risk_cfg, "commission_per_share", 0.0) or 0.0),
         "risk": risk_snapshot,
+        "min_trade_fraction": 0.0,
+        "price": 0.0,
+        "current_exposure": 0.0,
     }
 
     stopped = False
@@ -137,7 +140,11 @@ def run_training(
         emit({"type":"capsule","date":d_iso,"capsule":cap})
 
         factor = chat_json(ctx.factor_prompt.as_messages(), model=cfg.decision_model, max_tokens=120)
-
+        factor_warning = None
+        if isinstance(factor, dict):
+            factor_warning = factor.pop("__warning__", None)
+        if factor_warning:
+            emit({"type": "warn", "message": factor_warning})
         factor = _coerce_factor_numbers(factor)
         emit({"type":"factor","date":d_iso,"factor":factor})
 
