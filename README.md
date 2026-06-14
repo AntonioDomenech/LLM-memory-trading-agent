@@ -37,8 +37,10 @@ Local secrets are saved to `data/local_config.json`, which is ignored by git.
 The frontend asks for OpenAI, SEC, FRED, Marketaux, Finnhub, and NewsAPI keys as
 needed. Only the OpenAI key is required for real model runs.
 
-See `docs/v2_benchmark_plan.md` for the information bundle, data-source plan,
-and benchmark rules.
+Start with `docs/benchmark_definition.md` for the official benchmark contract:
+training replay, memory, train/test/live phases, decision rules, and reporting.
+See `docs/v2_benchmark_plan.md` for the current implementation plan and
+data-source notes.
 
 ## Historical warehouse
 
