@@ -52,6 +52,11 @@ htmlcov/
 *.log
 logs/
 
+# Frontend dependencies/builds
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
 # Project data (optional: uncomment if you don't want runs in git)
 data/
 data/runs/
