@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -11,6 +13,7 @@ from .config_store import DATA_DIR
 from .schemas import BenchmarkConfig, SecretConfig
 
 LLM_CACHE = DATA_DIR / "cache" / "llm"
+MALFORMED_CACHE = LLM_CACHE / "malformed"
 
 
 def _base_url(secrets: SecretConfig) -> str:
@@ -77,9 +80,12 @@ def _extract_json(text: str) -> Dict[str, Any]:
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
-        parsed = json.loads(text[start : end + 1])
-        if isinstance(parsed, dict):
-            return parsed
+        try:
+            parsed = json.loads(text[start : end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception as exc:
+            raise ValueError(f"Model response contained malformed JSON: {exc}") from exc
     raise ValueError("Model response did not contain a JSON object")
 
 
@@ -88,11 +94,61 @@ def _cache_path(model: str, system: str, user: str) -> Path:
     return LLM_CACHE / f"{digest}.json"
 
 
+def _named_cache_path(namespace: str, key: str) -> Path:
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return LLM_CACHE / namespace / f"{digest}.json"
+
+
 def _post_json(url: str, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
-    resp = requests.post(url, headers=headers, json=payload, timeout=90)
-    if resp.status_code >= 400:
-        raise requests.HTTPError(resp.text, response=resp)
-    return resp.json()
+    last_error: requests.HTTPError | None = None
+    for attempt in range(8):
+        resp = requests.post(url, headers=headers, json=payload, timeout=90)
+        if resp.status_code < 400:
+            return resp.json()
+
+        error = requests.HTTPError(resp.text, response=resp)
+        last_error = error
+        retryable = resp.status_code == 429 or resp.status_code in {500, 502, 503, 504}
+        if not retryable or attempt >= 7:
+            raise error
+
+        retry_after = _retry_after_seconds(resp, default=min(60.0, 2.0 ** attempt))
+        time.sleep(retry_after)
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Request failed before a response was returned")
+
+
+def _retry_after_seconds(resp: requests.Response, *, default: float) -> float:
+    header = resp.headers.get("retry-after") or resp.headers.get("Retry-After")
+    if header:
+        try:
+            return max(0.5, min(120.0, float(header)))
+        except Exception:
+            pass
+    match = re.search(r"try again in ([0-9]+(?:\.[0-9]+)?)s", resp.text or "", re.IGNORECASE)
+    if match:
+        return max(0.5, min(120.0, float(match.group(1)) + 0.5))
+    return max(0.5, min(120.0, float(default)))
+
+
+def _write_malformed_response(namespace: str, key: str, text: str, response_data: Dict[str, Any], error: str) -> None:
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    path = MALFORMED_CACHE / namespace / f"{digest}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "error": error,
+                "raw_text": text,
+                "response": response_data,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _call_responses(config: BenchmarkConfig, secrets: SecretConfig, system: str, user: str) -> Dict[str, Any]:
@@ -101,6 +157,7 @@ def _call_responses(config: BenchmarkConfig, secrets: SecretConfig, system: str,
         "instructions": system,
         "input": user,
         "max_output_tokens": config.max_output_tokens,
+        "text": {"format": {"type": "json_object"}},
     }
     if config.temperature is not None:
         payload["temperature"] = config.temperature
@@ -115,86 +172,193 @@ def _call_responses(config: BenchmarkConfig, secrets: SecretConfig, system: str,
 
 
 def _call_chat_completions(config: BenchmarkConfig, secrets: SecretConfig, system: str, user: str) -> Dict[str, Any]:
-    payload = {
+    base_payload = {
         "model": config.model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         "response_format": {"type": "json_object"},
-        "max_tokens": config.max_output_tokens,
     }
     if config.temperature is not None:
-        payload["temperature"] = config.temperature
-    return _post_json(f"{_base_url(secrets)}/chat/completions", _auth_headers(secrets), payload)
+        base_payload["temperature"] = config.temperature
+
+    url = f"{_base_url(secrets)}/chat/completions"
+    for token_field in ("max_completion_tokens", "max_tokens"):
+        payload = dict(base_payload)
+        payload[token_field] = config.max_output_tokens
+        try:
+            return _post_json(url, _auth_headers(secrets), payload)
+        except requests.HTTPError as exc:
+            text = str(exc)
+            if "temperature" in text and "temperature" in payload:
+                payload.pop("temperature", None)
+                return _post_json(url, _auth_headers(secrets), payload)
+            if token_field == "max_completion_tokens" and "max_completion_tokens" in text:
+                continue
+            raise
+
+    raise RuntimeError("Chat Completions request failed before a response was returned")
 
 
-def call_decision_model(config: BenchmarkConfig, secrets: SecretConfig, system: str, user: str, dry_run: bool = False) -> Dict[str, Any]:
+def _with_output_tokens(config: BenchmarkConfig, max_output_tokens: int) -> BenchmarkConfig:
+    if max_output_tokens <= config.max_output_tokens:
+        return config
+    if hasattr(config, "model_copy"):
+        return config.model_copy(update={"max_output_tokens": max_output_tokens})
+    payload = config.dict()
+    payload["max_output_tokens"] = max_output_tokens
+    return BenchmarkConfig(**payload)
+
+
+def _response_hit_output_limit(response_data: Dict[str, Any]) -> bool:
+    incomplete = response_data.get("incomplete_details") or {}
+    if response_data.get("status") == "incomplete" and incomplete.get("reason") == "max_output_tokens":
+        return True
+    for choice in response_data.get("choices") or []:
+        if choice.get("finish_reason") == "length":
+            return True
+    return False
+
+
+def call_json_model(
+    config: BenchmarkConfig,
+    secrets: SecretConfig,
+    system: str,
+    user: str,
+    *,
+    dry_run: bool = False,
+    fallback: Optional[Dict[str, Any]] = None,
+    cache_namespace: str = "json",
+) -> Dict[str, Any]:
+    fallback = dict(fallback or {})
     if dry_run:
-        return {
-            "action": "HOLD",
-            "target_exposure": 0.0,
-            "confidence": 0.0,
-            "horizon_days": 1,
-            "expected_return_bps": 0,
-            "risk_plan": {
-                "max_loss_pct": None,
-                "stop_loss_price": None,
-                "take_profit_price": None,
-                "invalidation": "Dry run: no model call made.",
-            },
-            "reasoning_summary": "Dry run placeholder decision.",
-            "used_information": [],
-            "uncertainty": ["No model was called."],
-            "_raw_text": "",
-            "_api_status": "dry_run",
-        }
+        fallback.setdefault("_raw_text", "")
+        fallback["_api_status"] = "dry_run"
+        return fallback
 
     if not secrets.openai_api_key:
-        return {
-            "action": "HOLD",
-            "target_exposure": 0.0,
-            "confidence": 0.0,
-            "horizon_days": 1,
-            "expected_return_bps": 0,
-            "risk_plan": {
-                "max_loss_pct": None,
-                "stop_loss_price": None,
-                "take_profit_price": None,
-                "invalidation": "Missing OpenAI API key.",
-            },
-            "reasoning_summary": "No OpenAI API key configured.",
-            "used_information": [],
-            "uncertainty": ["Missing API key."],
-            "_raw_text": "",
-            "_api_status": "missing_key",
-        }
+        fallback.setdefault("_raw_text", "")
+        fallback.setdefault("uncertainty", [])
+        fallback["uncertainty"] = [*fallback.get("uncertainty", []), "Missing OpenAI API key."]
+        fallback["_api_status"] = "missing_key"
+        return fallback
 
     if config.use_cached_llm:
-        path = _cache_path(config.model, system, user)
+        path = _named_cache_path(cache_namespace, f"{config.model}\n{system}\n{user}")
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
 
-    api_errors: List[str] = []
-    response_data: Dict[str, Any]
-    try:
-        if config.endpoint == "chat_completions":
-            response_data = _call_chat_completions(config, secrets, system, user)
-        else:
-            response_data = _call_responses(config, secrets, system, user)
-    except Exception as exc:
-        api_errors.append(str(exc))
-        response_data = _call_chat_completions(config, secrets, system, user)
+    parse_errors: List[str] = []
+    request_key = f"{config.model}\n{system}\n{user}"
+    response_data = {}
+    text = ""
+    active_system = system
+    active_user = user
+    active_config = config
 
-    text = _extract_output_text(response_data)
-    decision = _extract_json(text)
-    decision["_raw_text"] = text
-    decision["_api_status"] = "ok"
-    if api_errors:
-        decision["_api_fallback_errors"] = api_errors
+    for attempt in range(3):
+        api_errors = []
+        try:
+            if active_config.endpoint == "chat_completions":
+                response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
+            else:
+                response_data = _call_responses(active_config, secrets, active_system, active_user)
+        except Exception as exc:
+            api_errors.append(str(exc))
+            response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
 
-    if config.use_cached_llm:
-        path = _cache_path(config.model, system, user)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(decision, indent=2, default=str), encoding="utf-8")
-    return decision
+        text = _extract_output_text(response_data)
+        try:
+            decision = _extract_json(text)
+            decision["_raw_text"] = text
+            decision["_api_status"] = "ok"
+            if attempt:
+                decision["_api_retry_count"] = attempt
+                decision["_api_retry_max_output_tokens"] = active_config.max_output_tokens
+            if api_errors:
+                decision["_api_fallback_errors"] = api_errors
+
+            if config.use_cached_llm:
+                path = _named_cache_path(cache_namespace, request_key)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(decision, indent=2, default=str), encoding="utf-8")
+            return decision
+        except Exception as exc:
+            error = str(exc)
+            parse_errors.append(error)
+            _write_malformed_response(cache_namespace, f"{request_key}\n{attempt}", text, response_data, error)
+            if _response_hit_output_limit(response_data):
+                next_limit = min(max(active_config.max_output_tokens * 2, active_config.max_output_tokens + 600), 3200)
+                active_config = _with_output_tokens(active_config, next_limit)
+            active_system = f"{system}\nReturn exactly one valid JSON object. Do not include markdown, prose, or trailing text."
+            active_user = json.dumps(
+                {
+                    "task": "Repair the previous response for the same benchmark request. Return only valid JSON.",
+                    "parser_error": error,
+                    "previous_response": text[:6000],
+                    "original_request": user,
+                },
+                sort_keys=True,
+                default=str,
+            )
+
+    raise ValueError(f"Model response JSON parsing failed after {len(parse_errors)} attempts: {'; '.join(parse_errors)}")
+
+
+def call_decision_model(config: BenchmarkConfig, secrets: SecretConfig, system: str, user: str, dry_run: bool = False) -> Dict[str, Any]:
+    fallback = {
+        "action": "HOLD",
+        "target_exposure": 0.0,
+        "confidence": 0.0,
+        "horizon_days": 1,
+        "expected_return_bps": 0,
+        "risk_plan": {
+            "max_loss_pct": None,
+            "stop_loss_price": None,
+            "take_profit_price": None,
+            "invalidation": "No model call made.",
+        },
+        "reasoning_summary": "Fallback placeholder decision.",
+        "used_information": [],
+        "uncertainty": [],
+    }
+    if dry_run:
+        fallback["risk_plan"]["invalidation"] = "Dry run: no model call made."
+        fallback["reasoning_summary"] = "Dry run placeholder decision."
+        fallback["uncertainty"] = ["No model was called."]
+    if not secrets.openai_api_key:
+        fallback["risk_plan"]["invalidation"] = "Missing OpenAI API key."
+        fallback["reasoning_summary"] = "No OpenAI API key configured."
+    return call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace="decision")
+
+
+def local_embedding(text: str, dimensions: int = 96) -> List[float]:
+    import math
+    import re
+
+    vector = [0.0] * dimensions
+    for token in re.findall(r"[a-zA-Z0-9_.$%-]+", (text or "").lower()):
+        digest = hashlib.sha1(token.encode("utf-8")).digest()
+        index = int.from_bytes(digest[:4], "big") % dimensions
+        sign = 1.0 if digest[4] % 2 == 0 else -1.0
+        vector[index] += sign
+    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+    return [round(value / norm, 8) for value in vector]
+
+
+def embed_text(text: str, secrets: SecretConfig, *, provider: str = "local") -> List[float]:
+    if provider != "openai" or not secrets.openai_api_key:
+        return local_embedding(text)
+    key = f"{secrets.openai_embedding_model}\n{text}"
+    path = _named_cache_path("embeddings", key)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    payload = {"model": secrets.openai_embedding_model, "input": text or ""}
+    data = _post_json(f"{_base_url(secrets)}/embeddings", _auth_headers(secrets), payload)
+    embedding = data.get("data", [{}])[0].get("embedding")
+    if not isinstance(embedding, list):
+        return local_embedding(text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(embedding), encoding="utf-8")
+    return embedding

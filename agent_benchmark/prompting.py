@@ -50,3 +50,81 @@ def build_decision_prompt(input_bundle: Dict[str, Any]) -> Tuple[str, str]:
         "input_bundle": input_bundle,
     }
     return SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
+
+
+STAGE1_SYSTEM_PROMPT = """You are the analyst stage of an AI market benchmark.
+
+Use only the compact point-in-time bundle. The memory items are deterministic
+historical cases, not model-written lessons. Score each supplied symbol. Keep
+every string short; evidence, memory, and uncertainty arrays should contain at
+most 1 terse item each. Use minified JSON and do not include zero-weight filler.
+
+Return only compact JSON:
+{
+  "analyses": [
+    {
+      "symbol": "AAPL",
+      "stance": "bullish | bearish | neutral | uncertain",
+      "confidence": 0.0,
+      "expected_return_bps": 0,
+      "horizon_days": 20,
+      "key_evidence": ["..."],
+      "memory_refs": ["..."],
+      "uncertainty": ["..."],
+      "proposed_target_weight": 0.0
+    }
+  ],
+  "market_regime_notes": "...",
+  "data_quality_notes": ["..."]
+}
+"""
+
+
+STAGE2_SYSTEM_PROMPT = """You are the portfolio manager stage of an AI market benchmark.
+
+You own the final investment decision. The simulator will only apply mechanical constraints:
+cash, fills, fees, slippage, shorting, and gross exposure.
+It will not add market expertise after you speak.
+
+Use only the compact portfolio bundle, deterministic historical memory, and
+Stage 1 outputs. Return final target weights. Weights may be negative only when
+shorting is enabled. Keep strings short, omit zero target weights, and do not
+repeat Stage 1 evidence. Prefer a sparse portfolio with 8 to 12 nonzero
+positions; fewer is valid, including all cash.
+
+Portfolio weight rule: sum(abs(target_weights.values())) must be <= max_gross_exposure.
+gross_exposure must equal that sum, and net_exposure must equal sum(target_weights.values()).
+If you exceed the limit, the simulator rejects the allocation as a model failure.
+
+Return only compact JSON:
+{
+  "target_weights": {"AAPL": 0.05},
+  "cash_target_weight": 0.35,
+  "gross_exposure": 0.65,
+  "net_exposure": 0.65,
+  "confidence": 0.0,
+  "portfolio_thesis": "...",
+  "major_risks": ["..."],
+  "uncertainty": ["..."],
+  "expected_return_bps": 0,
+  "horizon_days": 20
+}
+"""
+
+
+def build_stage1_prompt(input_bundle: Dict[str, Any], symbols: list[str]) -> Tuple[str, str]:
+    user_payload = {
+        "task": "Score these candidate stocks for the benchmark portfolio and return valid JSON only.",
+        "symbols_to_score": symbols,
+        "input_bundle": input_bundle,
+    }
+    return STAGE1_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
+
+
+def build_stage2_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[str, Any]]) -> Tuple[str, str]:
+    user_payload = {
+        "task": "Choose final portfolio target weights for the benchmark and return valid JSON only.",
+        "stage1_outputs": stage1_outputs,
+        "input_bundle": input_bundle,
+    }
+    return STAGE2_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)

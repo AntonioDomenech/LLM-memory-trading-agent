@@ -4,10 +4,10 @@
 
 This project is a benchmark for testing whether an AI model can act as the
 portfolio manager of a market simulation. The goal is not to encode human
-investment expertise into a deterministic strategy. The goal is to give each
-model rich point-in-time market information, let it build memory from history,
-and measure whether its own decisions make money, beat market baselines, or
-perform poorly.
+investment expertise into a deterministic trading strategy. The goal is to give
+each model rich point-in-time market information, deterministic historical
+memory, and then measure whether its own decisions make money, beat market
+baselines, or perform poorly.
 
 The core rule is:
 
@@ -66,22 +66,22 @@ Stored data includes:
 Full article text is not required for the first benchmark contract. News starts
 with metadata plus short extracts where available.
 
-### 2. Training replay
+### 2. Deterministic training memory
 
-Training replay is where a model builds experience from history. Dates are
-user-configurable. The default training period is:
+Training is where the system builds a historical case library from warehouse
+data. Dates are user-configurable. The default training period is:
 
 - `train_start`: `2000-01-01`
 - `train_end`: `2024-12-31`
 
-Training is model-specific. Each tested model replays history in chronological
-order, makes decisions using only information available at that date, receives
-delayed outcome feedback after the relevant horizon becomes known, and writes
-its own memories.
+Training memory is deterministic and shared across models. The system computes
+historical market cases directly from prices, index context, volatility,
+fundamentals, news density, and known later outcomes. The model does not write
+the memory and no paid LLM calls are made during this phase.
 
-This is the benchmark's definition of learning. It is not blind prompting over
-today's data. The model should enter the test phase with a memory built from
-historical market experience.
+This is the budget benchmark's definition of learning: the model enters the test
+phase with retrieved historical examples, but the expensive daily LLM replay is
+not required.
 
 ### 3. Test phase
 
@@ -94,10 +94,9 @@ user-configurable. The default test period is:
 During the test phase, the model can use:
 
 - Current point-in-time input data for the decision timestamp.
-- Memory items whose knowledge date is before or equal to the decision
-  timestamp.
-- Delayed feedback from its own prior test decisions after the outcome horizon
-  has elapsed.
+- Deterministic memory items generated from the training period.
+- Historical outcomes whose outcome date is known before or equal to the memory
+  cutoff.
 
 The model must not receive future prices, future news, future filings, future
 macro releases, or future outcome labels before they would have been known.
@@ -117,28 +116,23 @@ later run in live mode within a few minutes.
 
 ## Memory System
 
-The benchmark uses full portfolio memory, not only same-stock memory.
+The benchmark uses deterministic market-case memory, not only same-stock memory.
 
-Memory is model-specific for the official benchmark. Each tested model gets its
-own memory store, created by its own historical replay. A different model cannot
-inherit another model's lessons in the official intelligence benchmark.
+Memory is built without LLM calls. It is shared across models so model
+comparisons use the same historical evidence. Models still own the final
+investment decisions, but they do not author or edit the memory.
 
 Memory contains:
 
-- Historical cases: point-in-time market state, news, fundamentals, macro,
-  portfolio state, and retrieved context at the decision time.
-- Model decisions: action, target exposure or target weights, confidence,
-  horizon, risk plan, reasoning summary, uncertainty, and evidence references.
-- Executions: fill price, shares, cash change, slippage, fees, rejected orders,
-  and constraint events.
-- Outcomes: forward returns and portfolio impact after `1d`, `5d`, `20d`, and
-  `60d` by default.
-- Lessons: model-written reflections after outcomes are known, describing what
-  worked, what failed, what signals mattered, and what should be remembered.
+- Historical cases: point-in-time market state, news density, fundamentals,
+  macro/index context, volatility, and data-quality state.
+- Deterministic similarity features such as trailing returns, volatility, index
+  regime, and VIX context.
+- Known later stock outcomes after `1d`, `5d`, `20d`, and `60d` when those
+  outcomes are available inside the training cutoff.
 
 Every memory item must have at least:
 
-- `model`
 - `mode`
 - `symbol` or `portfolio_scope`
 - `decision_timestamp`
@@ -150,15 +144,15 @@ Every memory item must have at least:
 - `outcome_available_at`
 
 Retrieval must be point-in-time. A decision at time `T` can only retrieve memory
-where `knowledge_timestamp <= T`.
+where `knowledge_timestamp <= T`, and the official 2025 test uses only memory
+created from the 2000-2024 training period.
 
 The retrieval system should favor:
 
 - Similar portfolio states.
 - Similar market regimes.
 - Similar stock, sector, index, volatility, macro, valuation, and news patterns.
-- Prior decisions with known outcomes.
-- Recent lessons from the same model.
+- Prior market cases with known outcomes.
 - Cross-stock relationships when they are relevant to the portfolio decision.
 
 ## Two-stage LLM Decision Process
@@ -194,7 +188,7 @@ The model receives:
 - Current portfolio state.
 - Cash, exposure, and shorting constraints.
 - Market/index/macro context.
-- Important retrieved memories and lessons.
+- Important retrieved deterministic memories.
 - Data quality and freshness flags.
 
 Stage 2 returns the final portfolio allocation:
@@ -264,9 +258,11 @@ The benchmark configuration should include:
   "test_start": "2025-01-01",
   "test_end": "2025-12-31",
   "live_frequency": "hourly",
+  "initial_cash": 1000.0,
   "allow_short": true,
   "max_gross_exposure": 1.0,
-  "memory_mode": "model_specific_cases_and_lessons",
+  "memory_mode": "deterministic_market_cases",
+  "memory_retrieval": "deterministic_similarity",
   "decision_process": "two_stage_llm"
 }
 ```
@@ -322,8 +318,7 @@ records provider status, cost profile, and data coverage.
 - No future outcome labels in memory before the outcome horizon has elapsed.
 - No simulator-side investment intelligence.
 - No silent correction of bad model allocations.
-- Same cached input bundle for each model when comparing models on the same
-  decision timestamp, except for model-specific memory.
+- Same cached input bundle and deterministic memory for each model when
+  comparing models on the same decision timestamp.
 - All prompts, inputs, decisions, executions, memories, and outcomes must be
   logged for audit.
-

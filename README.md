@@ -38,7 +38,7 @@ The frontend asks for OpenAI, SEC, FRED, Marketaux, Finnhub, and NewsAPI keys as
 needed. Only the OpenAI key is required for real model runs.
 
 Start with `docs/benchmark_definition.md` for the official benchmark contract:
-training replay, memory, train/test/live phases, decision rules, and reporting.
+deterministic training memory, train/test/live phases, decision rules, and reporting.
 See `docs/v2_benchmark_plan.md` for the current implementation plan and
 data-source notes.
 

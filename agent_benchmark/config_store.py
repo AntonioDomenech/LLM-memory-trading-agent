@@ -18,7 +18,16 @@ def load_local_config() -> LocalConfig:
         return LocalConfig()
     try:
         raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        return LocalConfig(**raw)
+        config = LocalConfig(**raw)
+        if config.benchmark.memory_mode == "model_specific_cases_and_lessons":
+            config.benchmark.memory_mode = "deterministic_market_cases"
+        if config.benchmark.memory_retrieval in {"hybrid", "structured"}:
+            config.benchmark.memory_retrieval = "deterministic_similarity"
+        if config.benchmark.prompt_detail_level == "compact" and config.benchmark.max_output_tokens > 900:
+            config.benchmark.max_output_tokens = 900
+        if config.benchmark.prompt_detail_level == "compact" and config.benchmark.max_news_per_symbol > 2:
+            config.benchmark.max_news_per_symbol = 2
+        return config
     except Exception:
         return LocalConfig()
 
