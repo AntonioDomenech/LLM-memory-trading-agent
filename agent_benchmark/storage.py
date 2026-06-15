@@ -122,6 +122,17 @@ class BenchmarkStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS benchmark_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    report_type TEXT NOT NULL,
+                    report_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
 
     def save_run(self, run_id: str, config: Dict[str, Any], summary: Dict[str, Any]) -> None:
         with self._connect() as conn:
@@ -304,6 +315,45 @@ class BenchmarkStore:
                 """,
                 (run_id, utc_now(), phase, event_type, json.dumps(payload, default=str)),
             )
+
+    def save_benchmark_report(self, run_id: str, report_type: str, report: Dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO benchmark_reports (run_id, report_type, report_json, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (run_id, report_type, json.dumps(report, default=str), utc_now()),
+            )
+
+    def latest_benchmark_report(self, run_id: str, report_type: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT report_json, created_at
+                FROM benchmark_reports
+                WHERE run_id = ? AND report_type = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (run_id, report_type),
+            ).fetchone()
+        if not row:
+            return None
+        report = json.loads(row["report_json"] or "{}")
+        report.setdefault("created_at", row["created_at"])
+        return report
+
+    def mark_benchmark_run_diagnostic(self, run_id: str, reason: str) -> Optional[Dict[str, Any]]:
+        run = self.get_benchmark_run(run_id)
+        if not run:
+            return None
+        summary = dict(run.get("summary") or {})
+        summary["official_status"] = "diagnostic"
+        summary["diagnostic_reason"] = reason
+        self.update_benchmark_run(run_id, summary=summary)
+        self.append_benchmark_event(run_id, "diagnostic", "marked_diagnostic", {"reason": reason})
+        return self.get_benchmark_run(run_id)
 
     def save_benchmark_decision(
         self,

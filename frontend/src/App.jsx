@@ -65,9 +65,20 @@ const emptyConfig = {
     memory_retrieval: "deterministic_similarity",
     deterministic_memory_per_symbol: 1,
     deterministic_memory_max_items: 50,
+    memory_k_neighbors: 50,
+    memory_examples_per_symbol: 2,
     prompt_detail_level: "compact",
     embedding_provider: "local",
     decision_process: "two_stage_llm",
+    strict_preflight: true,
+    require_paid_micro_pilot: true,
+    max_nonzero_positions: 12,
+    max_daily_turnover: 0.2,
+    turnover_edge_multiplier: 3,
+    invalid_run_abort_count: 3,
+    invalid_run_abort_rate: 0.05,
+    macro_policy: "omit_if_missing",
+    news_policy: "real_titles_or_aggregate_events",
     data_sources: {
       news_sources: ["gdelt"],
       max_news_per_day: 8,
@@ -182,6 +193,46 @@ const help = {
     body: "Reuses identical model calls from local disk.",
     more: "Caching saves tokens and makes reruns faster, but disable it if you want a fresh model response every time.",
   },
+  preflight: {
+    title: "Preflight",
+    body: "Checks data, memory, macro, news, prompts, and estimated call count before a paid official run can start.",
+    more: "A failed preflight blocks the run so you do not spend tokens on known-bad inputs.",
+  },
+  microPilot: {
+    title: "Paid micro-pilot",
+    body: "Requires a clean low-cost 5-day paid run before launching an uncapped official benchmark.",
+    more: "This catches broken JSON, invalid allocations, and runaway turnover while the token bill is still tiny.",
+  },
+  maxPositions: {
+    title: "Max positions",
+    body: "Limits how many non-zero stock weights the model can hold at once.",
+    more: "This keeps the portfolio interpretable. The simulator rejects invalid outputs instead of scaling them.",
+  },
+  turnover: {
+    title: "Daily turnover limit",
+    body: "Maximum portfolio weight the model can change in one day without proving enough expected edge.",
+    more: "20% means moving from 10% Apple to 20% Apple counts as 10% turnover. High turnover must beat estimated trading cost by the configured multiplier.",
+  },
+  edgeMultiplier: {
+    title: "Cost edge multiplier",
+    body: "How much expected edge is required when a trade exceeds the daily turnover limit.",
+    more: "A value of 3 means the model must claim expected edge at least three times estimated slippage cost.",
+  },
+  memoryNeighbors: {
+    title: "Memory neighbors",
+    body: "How many similar historical cases are aggregated internally per symbol.",
+    more: "The prompt sees compact statistics and only a few examples, reducing noise while preserving historical evidence.",
+  },
+  macroPolicy: {
+    title: "Macro policy",
+    body: "Controls what happens when FRED macro data is unavailable.",
+    more: "Omit if missing prevents the model from citing rates, inflation, or GDP when those values are not actually available.",
+  },
+  newsPolicy: {
+    title: "News policy",
+    body: "Controls how GDELT news/event rows are sent to the model.",
+    more: "Synthetic event labels are aggregated as event features and never passed as fake article headlines.",
+  },
   dataSources: {
     title: "News sources",
     body: "Sources used to collect context. GDELT is the default no-cost historical backbone.",
@@ -244,6 +295,17 @@ const presetInfo = {
       stage1_chunk_size: 25,
       memory_mode: "deterministic_market_cases",
       memory_retrieval: "deterministic_similarity",
+      memory_k_neighbors: 50,
+      memory_examples_per_symbol: 2,
+      strict_preflight: true,
+      require_paid_micro_pilot: true,
+      max_nonzero_positions: 12,
+      max_daily_turnover: 0.2,
+      turnover_edge_multiplier: 3,
+      invalid_run_abort_count: 3,
+      invalid_run_abort_rate: 0.05,
+      macro_policy: "omit_if_missing",
+      news_policy: "real_titles_or_aggregate_events",
       prompt_detail_level: "compact",
     },
   },
@@ -268,6 +330,17 @@ const presetInfo = {
       stage1_chunk_size: 25,
       memory_mode: "deterministic_market_cases",
       memory_retrieval: "deterministic_similarity",
+      memory_k_neighbors: 50,
+      memory_examples_per_symbol: 2,
+      strict_preflight: true,
+      require_paid_micro_pilot: false,
+      max_nonzero_positions: 12,
+      max_daily_turnover: 0.2,
+      turnover_edge_multiplier: 3,
+      invalid_run_abort_count: 3,
+      invalid_run_abort_rate: 0.05,
+      macro_policy: "omit_if_missing",
+      news_policy: "real_titles_or_aggregate_events",
       prompt_detail_level: "compact",
     },
   },
@@ -294,6 +367,17 @@ const presetInfo = {
       memory_retrieval: "deterministic_similarity",
       deterministic_memory_per_symbol: 1,
       deterministic_memory_max_items: 50,
+      memory_k_neighbors: 50,
+      memory_examples_per_symbol: 2,
+      strict_preflight: true,
+      require_paid_micro_pilot: true,
+      max_nonzero_positions: 12,
+      max_daily_turnover: 0.2,
+      turnover_edge_multiplier: 3,
+      invalid_run_abort_count: 3,
+      invalid_run_abort_rate: 0.05,
+      macro_policy: "omit_if_missing",
+      news_policy: "real_titles_or_aggregate_events",
       prompt_detail_level: "compact",
     },
   },
@@ -320,6 +404,17 @@ const presetInfo = {
       memory_retrieval: "deterministic_similarity",
       deterministic_memory_per_symbol: 1,
       deterministic_memory_max_items: 50,
+      memory_k_neighbors: 50,
+      memory_examples_per_symbol: 2,
+      strict_preflight: true,
+      require_paid_micro_pilot: true,
+      max_nonzero_positions: 12,
+      max_daily_turnover: 0.2,
+      turnover_edge_multiplier: 3,
+      invalid_run_abort_count: 3,
+      invalid_run_abort_rate: 0.05,
+      macro_policy: "omit_if_missing",
+      news_policy: "real_titles_or_aggregate_events",
       prompt_detail_level: "compact",
     },
   },
@@ -542,6 +637,113 @@ function Metric({ label, value, helpKey, tone = "" }) {
   );
 }
 
+function PreflightPanel({ report, onRun, loading }) {
+  const checks = report?.checks || [];
+  const tone = report?.status === "pass" ? "ok" : report?.status === "warn" ? "warn" : report?.status === "fail" ? "bad" : "muted";
+  const label = report ? `Preflight ${report.status}` : "Preflight not run";
+  return (
+    <div className="section-band preflight-band">
+      <div className="section-title">
+        <div>
+          <h2>Preflight gate</h2>
+          <p className="subtle">Required before Budget Official or Full Official can spend tokens. It checks the inputs, not the model.</p>
+        </div>
+        <div className="button-row">
+          <StatusPill tone={tone === "bad" ? "warn" : tone} icon={tone === "ok" ? CheckCircle2 : AlertCircle} label={label} />
+          <IconButton icon={ShieldCheck} label="Run preflight" onClick={onRun} disabled={loading === "preflight"} />
+        </div>
+      </div>
+      {report?.estimate && (
+        <div className="metrics-row compact">
+          <Metric label="Test days" value={report.estimate.test_trading_days ?? "-"} />
+          <Metric label="Calls per day" value={report.estimate.decision_calls_per_day ?? "-"} />
+          <Metric label="Estimated calls" value={report.estimate.estimated_model_calls ?? "-"} />
+          <Metric label="Symbols" value={report.symbols ?? "-"} />
+        </div>
+      )}
+      <div className="check-grid">
+        {checks.length === 0 && <div className="empty-state compact-empty">Run preflight to see the official readiness checklist.</div>}
+        {checks.map((check) => (
+          <article key={check.id} className={`check-card ${check.status}`}>
+            <span>{check.status}</span>
+            <strong>{check.id?.replaceAll("_", " ")}</strong>
+            <p>{check.message}</p>
+            {check.missing_by_symbol && Object.keys(check.missing_by_symbol).length > 0 && <small>{Object.keys(check.missing_by_symbol).slice(0, 8).join(", ")}</small>}
+            {check.policy && <small>Policy: {check.policy}</small>}
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticsPanel({ report, onRefresh, loading }) {
+  const metrics = report?.metrics || {};
+  return (
+    <div className="section-band diagnostics-band">
+      <div className="section-title">
+        <div>
+          <h2>Run diagnostics</h2>
+          <p className="subtle">Explains performance using costs, turnover, exposure, invalid decisions, and worst dates.</p>
+        </div>
+        <IconButton icon={RefreshCw} label="Refresh diagnostics" onClick={onRefresh} disabled={loading === "diagnostics"} />
+      </div>
+      {!report || report.status === "empty" ? (
+        <div className="empty-state compact-empty">{report?.message || "Select a run to compute diagnostics."}</div>
+      ) : (
+        <>
+          {report.official_status === "diagnostic" && (
+            <div className="notice soft">
+              <AlertCircle size={16} /> This run is diagnostic, not an official score: {(report.diagnostic_reasons || []).join(", ") || "quality issue"}.
+            </div>
+          )}
+          <div className="metrics-row wrap">
+            <Metric label="Net return" value={formatPct(metrics.net_return)} />
+            <Metric label="Gross of cost" value={formatPct(metrics.gross_of_cost_return)} />
+            <Metric label="Slippage drag" value={formatPct(metrics.slippage_drag)} />
+            <Metric label="Total turnover" value={formatPct(metrics.total_turnover)} />
+            <Metric label="Avg gross exposure" value={formatPct(metrics.avg_gross_exposure)} />
+            <Metric label="Avg net exposure" value={formatPct(metrics.avg_net_exposure)} />
+            <Metric label="Invalid allocations" value={metrics.invalid_allocations ?? "-"} />
+            <Metric label="Legacy schema days" value={metrics.legacy_stage2_schema_days ?? "-"} />
+            <Metric label="Avg positions" value={metrics.avg_nonzero_positions?.toFixed?.(1) ?? "-"} />
+          </div>
+          <div className="diagnostic-grid">
+            <div>
+              <h3>Worst dates</h3>
+              <table>
+                <tbody>
+                  {(report.worst_days || []).slice(0, 6).map((row) => (
+                    <tr key={`${row.decision_date}-${row.fill_date}`}>
+                      <td>{formatDate(row.fill_date || row.decision_date)}</td>
+                      <td>{formatSignedPct(row.daily_return)}</td>
+                      <td>{formatPct(row.gross_exposure)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <h3>Worst symbols</h3>
+              <table>
+                <tbody>
+                  {(report.symbol_pnl_worst || []).slice(0, 6).map((row) => (
+                    <tr key={row.symbol}>
+                      <td>{row.symbol}</td>
+                      <td>{formatMoney(row.pnl)}</td>
+                      <td>{row.trades} trades</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [config, setConfig] = useState(emptyConfig);
   const [models, setModels] = useState([]);
@@ -552,6 +754,8 @@ function App() {
   const [memory, setMemory] = useState([]);
   const [warehouse, setWarehouse] = useState(null);
   const [live, setLive] = useState(null);
+  const [preflight, setPreflight] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
   const [view, setView] = useState("setup");
   const [setupStep, setSetupStep] = useState(0);
   const [loading, setLoading] = useState("");
@@ -584,6 +788,12 @@ function App() {
     refreshRun(activeRun.id, false);
   }, [view, activeRun?.id, activeRun?.decisions?.length, autoLoadedRunId]);
 
+  useEffect(() => {
+    if (view === "results" && activeRun?.id) {
+      loadDiagnostics(activeRun.id, false);
+    }
+  }, [view, activeRun?.id]);
+
   async function refreshAll() {
     setError("");
     try {
@@ -613,6 +823,7 @@ function App() {
     try {
       const run = await api(`/api/benchmark/runs/${runId}`);
       setActiveRun(run);
+      if (view === "results") await loadDiagnostics(runId, false);
       const history = await api("/api/benchmark/runs");
       setRuns(history.runs || []);
     } catch (err) {
@@ -701,15 +912,64 @@ function App() {
     }
   }
 
+  async function runPreflight(loud = true) {
+    if (loud) setLoading("preflight");
+    setError("");
+    try {
+      await saveConfig();
+      const data = await api("/api/benchmark/preflight", {
+        method: "POST",
+        body: JSON.stringify({ config: benchmark, dry_run: false }),
+      });
+      setPreflight(data);
+      return data;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      if (loud) setLoading("");
+    }
+  }
+
+  async function loadDiagnostics(runId = activeRun?.id, loud = true) {
+    if (!runId) return null;
+    if (loud) setLoading("diagnostics");
+    try {
+      const data = await api(`/api/benchmark/runs/${runId}/diagnostics`);
+      setDiagnostics(data);
+      return data;
+    } catch (err) {
+      if (loud) setError(err.message);
+      return null;
+    } finally {
+      if (loud) setLoading("");
+    }
+  }
+
   async function startRun(dryRun = false) {
     setLoading(dryRun ? "dry-run" : "run");
     setError("");
     try {
       await saveConfig();
+      const needsPreflight = !dryRun && benchmark.strict_preflight && ["budget_official", "full_official"].includes(benchmark.run_preset);
+      if (needsPreflight) {
+        const report = await api("/api/benchmark/preflight", {
+          method: "POST",
+          body: JSON.stringify({ config: benchmark, dry_run: false }),
+        });
+        setPreflight(report);
+        if (report.status === "fail") {
+          setView("run");
+          const labels = (report.blocking_issues || []).map((item) => item.id).slice(0, 4).join(", ");
+          setError(`Preflight failed: ${labels || "blocking checks"}. Fix these before spending tokens on an official run.`);
+          return;
+        }
+      }
       const data = await api("/api/benchmark/runs", {
         method: "POST",
         body: JSON.stringify({ config: benchmark, dry_run: dryRun }),
       });
+      if (data.preflight) setPreflight(data.preflight);
       setActiveRun(data);
       setView("run");
       await refreshAll();
@@ -833,6 +1093,7 @@ function App() {
           <div className="top-actions">
             <IconButton icon={Save} label="Save" onClick={saveConfig} disabled={loading === "save"} />
             <IconButton icon={Eye} label="Preview inputs" onClick={loadPreview} disabled={loading === "preview"} />
+            <IconButton icon={ShieldCheck} label="Preflight" onClick={() => runPreflight()} disabled={loading === "preflight"} />
             <IconButton icon={Play} label="Start dry pilot" onClick={() => startRun(true)} disabled={Boolean(loading)} />
             <IconButton icon={CirclePlay} label="Run model" onClick={() => startRun(false)} disabled={Boolean(loading) || !modelReady} variant="primary" />
           </div>
@@ -903,6 +1164,18 @@ function App() {
                       <ExplainedField label="Max gross exposure" helpKey="exposure">
                         <input type="number" step="0.05" value={benchmark.max_gross_exposure} onChange={(e) => updateBenchmark(["max_gross_exposure"], Number(e.target.value))} />
                       </ExplainedField>
+                      <ExplainedField label="Max positions" helpKey="maxPositions">
+                        <input type="number" min="1" max="50" value={benchmark.max_nonzero_positions} onChange={(e) => updateBenchmark(["max_nonzero_positions"], Number(e.target.value))} />
+                      </ExplainedField>
+                      <ExplainedField label="Daily turnover limit" helpKey="turnover">
+                        <input type="number" min="0" max="1" step="0.05" value={benchmark.max_daily_turnover} onChange={(e) => updateBenchmark(["max_daily_turnover"], Number(e.target.value))} />
+                      </ExplainedField>
+                      <ExplainedField label="Strict preflight" helpKey="preflight">
+                        <select value={benchmark.strict_preflight ? "yes" : "no"} onChange={(e) => updateBenchmark(["strict_preflight"], e.target.value === "yes")}>
+                          <option value="yes">Yes</option>
+                          <option value="no">No</option>
+                        </select>
+                      </ExplainedField>
                     </div>
                   </div>
                 )}
@@ -916,8 +1189,10 @@ function App() {
                       <Metric label="Test days" value={estimate.test_days ?? benchmark.max_test_days} />
                       <Metric label="Decision calls" value={estimate.estimated_decision_calls ?? "-"} />
                     </div>
+                    <PreflightPanel report={preflight} onRun={() => runPreflight()} loading={loading} />
                     <div className="button-row">
                       <IconButton icon={Eye} label="Preview first" onClick={loadPreview} disabled={loading === "preview"} />
+                      <IconButton icon={ShieldCheck} label="Preflight" onClick={() => runPreflight()} disabled={loading === "preflight"} />
                       <IconButton icon={Play} label="Dry run" onClick={() => startRun(true)} disabled={Boolean(loading)} />
                       <IconButton icon={CirclePlay} label="Run selected model" onClick={() => startRun(false)} disabled={Boolean(loading) || !modelReady} variant="primary" />
                     </div>
@@ -1018,6 +1293,15 @@ function App() {
                 <ExplainedField label="Max gross exposure" helpKey="exposure">
                   <input type="number" step="0.05" value={benchmark.max_gross_exposure} onChange={(e) => updateBenchmark(["max_gross_exposure"], Number(e.target.value))} />
                 </ExplainedField>
+                <ExplainedField label="Max positions" helpKey="maxPositions">
+                  <input type="number" min="1" max="50" value={benchmark.max_nonzero_positions} onChange={(e) => updateBenchmark(["max_nonzero_positions"], Number(e.target.value))} />
+                </ExplainedField>
+                <ExplainedField label="Daily turnover limit" helpKey="turnover">
+                  <input type="number" min="0" max="1" step="0.05" value={benchmark.max_daily_turnover} onChange={(e) => updateBenchmark(["max_daily_turnover"], Number(e.target.value))} />
+                </ExplainedField>
+                <ExplainedField label="Cost edge multiplier" helpKey="edgeMultiplier">
+                  <input type="number" min="1" step="0.5" value={benchmark.turnover_edge_multiplier} onChange={(e) => updateBenchmark(["turnover_edge_multiplier"], Number(e.target.value))} />
+                </ExplainedField>
                 <ExplainedField label="Slippage bps" helpKey="slippage">
                   <input type="number" value={benchmark.slippage_bps} onChange={(e) => updateBenchmark(["slippage_bps"], Number(e.target.value))} />
                 </ExplainedField>
@@ -1041,6 +1325,24 @@ function App() {
                 <ExplainedField label="Max memory items" helpKey="memory">
                   <input type="number" min="10" max="120" value={benchmark.deterministic_memory_max_items} onChange={(e) => updateBenchmark(["deterministic_memory_max_items"], Number(e.target.value))} />
                 </ExplainedField>
+                <ExplainedField label="Memory neighbors" helpKey="memoryNeighbors">
+                  <input type="number" min="5" max="200" value={benchmark.memory_k_neighbors} onChange={(e) => updateBenchmark(["memory_k_neighbors"], Number(e.target.value))} />
+                </ExplainedField>
+                <ExplainedField label="Examples per symbol" helpKey="memoryNeighbors">
+                  <input type="number" min="0" max="5" value={benchmark.memory_examples_per_symbol} onChange={(e) => updateBenchmark(["memory_examples_per_symbol"], Number(e.target.value))} />
+                </ExplainedField>
+                <ExplainedField label="Strict preflight" helpKey="preflight">
+                  <select value={benchmark.strict_preflight ? "yes" : "no"} onChange={(e) => updateBenchmark(["strict_preflight"], e.target.value === "yes")}>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </ExplainedField>
+                <ExplainedField label="Require micro-pilot" helpKey="microPilot">
+                  <select value={benchmark.require_paid_micro_pilot ? "yes" : "no"} onChange={(e) => updateBenchmark(["require_paid_micro_pilot"], e.target.value === "yes")}>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </ExplainedField>
               </div>
             </div>
             <div className="section-band">
@@ -1060,6 +1362,7 @@ function App() {
               </div>
               <div className="run-buttons">
                 <IconButton icon={Eye} label="Preview" onClick={loadPreview} disabled={loading === "preview"} />
+                <IconButton icon={ShieldCheck} label="Preflight" onClick={() => runPreflight()} disabled={loading === "preflight"} />
                 <IconButton icon={Play} label="Dry run" onClick={() => startRun(true)} disabled={Boolean(loading)} />
                 <IconButton icon={CirclePlay} label="Run model" onClick={() => startRun(false)} disabled={Boolean(loading) || !modelReady} variant="primary" />
                 <IconButton icon={Pause} label="Pause" onClick={() => runAction("pause")} disabled={!activeRun?.id || activeRun.status !== "running"} />
@@ -1074,6 +1377,7 @@ function App() {
               <Metric label="Model calls" value={activeRun?.progress?.model_calls ?? activeRun?.summary?.model_calls ?? "-"} />
               <Metric label="Current date" value={activeRun?.progress?.current_decision_date || "-"} />
             </div>
+            <PreflightPanel report={preflight} onRun={() => runPreflight()} loading={loading} />
             <div className="section-band">
               <div className="section-title"><h2>Recent runs</h2><IconButton icon={RefreshCw} label="Refresh" onClick={refreshAll} /></div>
               <div className="run-table">
@@ -1224,8 +1528,11 @@ function App() {
               <Metric label="Max drawdown" value={formatPct(metrics.max_drawdown)} />
               <Metric label="Sharpe-like" value={metrics.sharpe_like?.toFixed?.(2) ?? "-"} />
               <Metric label="Fees" value={formatMoney(metrics.fees)} />
-              <Metric label="Constraint events" value={metrics.event_count ?? "-"} />
+              <Metric label="Slippage drag" value={formatPct(metrics.slippage_drag)} />
+              <Metric label="Turnover" value={formatPct(metrics.total_turnover)} />
+              <Metric label="Invalid allocations" value={metrics.invalid_allocation_count ?? metrics.model_failures ?? "-"} />
             </div>
+            <DiagnosticsPanel report={diagnostics} onRefresh={() => loadDiagnostics(activeRun?.id)} loading={loading} />
             {buyHoldBenchmarks.length > 0 && (
               <div className="section-band comparison-band">
                 <div className="section-title">
@@ -1388,6 +1695,18 @@ function SourceControls({ benchmark, secrets, updateBenchmark, updateSecret }) {
         </ExplainedField>
         <ExplainedField label="News per symbol" helpKey="dataSources">
           <input type="number" value={benchmark.max_news_per_symbol} onChange={(e) => updateBenchmark(["max_news_per_symbol"], Number(e.target.value))} />
+        </ExplainedField>
+        <ExplainedField label="Macro policy" helpKey="macroPolicy">
+          <select value={benchmark.macro_policy} onChange={(e) => updateBenchmark(["macro_policy"], e.target.value)}>
+            <option value="omit_if_missing">Omit if missing</option>
+            <option value="include_status_rows">Include status rows</option>
+          </select>
+        </ExplainedField>
+        <ExplainedField label="News policy" helpKey="newsPolicy">
+          <select value={benchmark.news_policy} onChange={(e) => updateBenchmark(["news_policy"], e.target.value)}>
+            <option value="real_titles_or_aggregate_events">Real titles or aggregate events</option>
+            <option value="raw_titles">Raw titles</option>
+          </select>
         </ExplainedField>
       </div>
     </>

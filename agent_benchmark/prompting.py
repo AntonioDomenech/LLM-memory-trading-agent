@@ -90,18 +90,28 @@ Use only the compact portfolio bundle, deterministic historical memory, and
 Stage 1 outputs. Return final target weights. Weights may be negative only when
 shorting is enabled. Keep strings short, omit zero target weights, and do not
 repeat Stage 1 evidence. Prefer a sparse portfolio with 8 to 12 nonzero
-positions; fewer is valid, including all cash.
+positions; fewer is valid, including all cash. You must treat turnover and
+slippage as part of the decision. If you change positions, explain why the edge
+is worth the trading cost.
 
 Portfolio weight rule: sum(abs(target_weights.values())) must be <= max_gross_exposure.
-gross_exposure must equal that sum, and net_exposure must equal sum(target_weights.values()).
+gross_exposure must equal that sum, net_exposure must equal sum(target_weights.values()),
+and cash_weight must equal 1 - gross_exposure. Omitted symbols are target weight 0,
+including currently held symbols.
 If you exceed the limit, the simulator rejects the allocation as a model failure.
 
 Return only compact JSON:
 {
   "target_weights": {"AAPL": 0.05},
-  "cash_target_weight": 0.35,
+  "cash_weight": 0.35,
   "gross_exposure": 0.65,
   "net_exposure": 0.65,
+  "expected_holding_days": 20,
+  "estimated_turnover": 0.12,
+  "estimated_slippage_cost_bps": 0.6,
+  "rebalance_reason": "...",
+  "input_evidence_refs": ["stage1:AAPL", "memory:detagg:AAPL"],
+  "data_quality_warnings_used": ["..."],
   "confidence": 0.0,
   "portfolio_thesis": "...",
   "major_risks": ["..."],

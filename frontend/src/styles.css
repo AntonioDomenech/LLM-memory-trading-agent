@@ -576,6 +576,116 @@ button {
   color: #b2382f;
 }
 
+.preflight-band {
+  display: grid;
+  gap: 14px;
+}
+
+.flow .preflight-band {
+  margin: 14px 0;
+  box-shadow: none;
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.check-card {
+  min-height: 118px;
+  border: 1px solid #ded8cb;
+  border-radius: 8px;
+  background: #fffdf8;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 12px;
+}
+
+.check-card.pass {
+  border-color: rgba(19, 126, 112, 0.35);
+  background: #f0fbf7;
+}
+
+.check-card.warn {
+  border-color: rgba(183, 148, 45, 0.42);
+  background: #fffaf0;
+}
+
+.check-card.fail {
+  border-color: rgba(178, 56, 47, 0.42);
+  background: #fff5f2;
+}
+
+.check-card span {
+  color: #8a6b19;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.check-card strong {
+  color: #161a19;
+  font-size: 14px;
+  text-transform: capitalize;
+}
+
+.check-card p,
+.check-card small {
+  margin: 0;
+  color: #56615c;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.diagnostics-band {
+  display: grid;
+  gap: 14px;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.diagnostic-grid > div {
+  border: 1px solid #ded8cb;
+  border-radius: 8px;
+  background: #fffdf8;
+  overflow: hidden;
+}
+
+.diagnostic-grid h3 {
+  margin: 0;
+  padding: 12px;
+  border-bottom: 1px solid #ebe5d9;
+  font-size: 14px;
+}
+
+.diagnostic-grid table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.diagnostic-grid td {
+  border-bottom: 1px solid #f0eadf;
+  padding: 9px 12px;
+  color: #3e4944;
+  font-size: 12px;
+}
+
+.diagnostic-grid tr:last-child td {
+  border-bottom: 0;
+}
+
+.diagnostic-grid td:nth-child(2),
+.diagnostic-grid td:nth-child(3) {
+  text-align: right;
+  font-weight: 800;
+}
+
 .hero-run {
   display: grid;
   gap: 16px;
@@ -1021,7 +1131,8 @@ button {
   .memory-row,
   .market-status,
   .run-picker-control,
-  .memory-summary-grid {
+  .memory-summary-grid,
+  .diagnostic-grid {
     grid-template-columns: 1fr;
   }
 }

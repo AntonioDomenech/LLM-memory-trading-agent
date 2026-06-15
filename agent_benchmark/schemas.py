@@ -62,9 +62,20 @@ class BenchmarkConfig(BaseModel):
     memory_retrieval: Literal["deterministic_similarity", "hybrid", "structured"] = "deterministic_similarity"
     deterministic_memory_per_symbol: int = 1
     deterministic_memory_max_items: int = 50
+    memory_k_neighbors: int = 50
+    memory_examples_per_symbol: int = 2
     prompt_detail_level: Literal["compact", "full"] = "compact"
     embedding_provider: Literal["local", "openai"] = "local"
     decision_process: Literal["two_stage_llm"] = "two_stage_llm"
+    strict_preflight: bool = True
+    require_paid_micro_pilot: bool = True
+    max_nonzero_positions: int = 12
+    max_daily_turnover: float = 0.20
+    turnover_edge_multiplier: float = 3.0
+    invalid_run_abort_count: int = 3
+    invalid_run_abort_rate: float = 0.05
+    macro_policy: Literal["omit_if_missing", "include_status_rows"] = "omit_if_missing"
+    news_policy: Literal["real_titles_or_aggregate_events", "raw_titles"] = "real_titles_or_aggregate_events"
     data_sources: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
 

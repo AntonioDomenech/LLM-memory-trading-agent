@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .schemas import BenchmarkConfig, PortfolioBook
 
@@ -45,6 +45,59 @@ def initial_book(initial_cash: float) -> PortfolioBook:
 
 def mark_to_market(book: PortfolioBook, prices: Dict[str, float]) -> PortfolioBook:
     return _book_from_positions(book.cash, dict(book.positions), prices)
+
+
+def estimate_target_turnover(book: PortfolioBook, target_weights: Dict[str, Any], prices: Dict[str, float]) -> float:
+    current = mark_to_market(book, prices)
+    equity = max(float(current.equity), 1e-9)
+    current_weights = {
+        symbol: float(shares) * float(prices.get(symbol, 0.0) or 0.0) / equity
+        for symbol, shares in current.positions.items()
+        if symbol in prices and float(prices.get(symbol, 0.0) or 0.0) > 0
+    }
+    symbols = set(current_weights)
+    clean_targets: Dict[str, float] = {}
+    for symbol, value in (target_weights or {}).items():
+        try:
+            weight = float(value)
+        except Exception:
+            continue
+        symbol = str(symbol).upper().strip()
+        clean_targets[symbol] = weight
+        symbols.add(symbol)
+    return _round(sum(abs(clean_targets.get(symbol, 0.0) - current_weights.get(symbol, 0.0)) for symbol in symbols))
+
+
+def reject_target_weights(
+    book: PortfolioBook,
+    target_weights: Dict[str, Any],
+    prices: Dict[str, float],
+    validation_errors: List[Dict[str, Any]],
+) -> Tuple[PortfolioBook, Dict[str, Any]]:
+    current = mark_to_market(book, prices)
+    clean_weights: Dict[str, float] = {}
+    for symbol, raw_weight in (target_weights or {}).items():
+        try:
+            clean_weights[str(symbol).upper().strip()] = _round(float(raw_weight))
+        except Exception:
+            clean_weights[str(symbol).upper().strip()] = 0.0
+    event = {
+        "type": "allocation_validation_rejected",
+        "action": "no_trades_keep_previous_portfolio",
+        "validation_errors": validation_errors,
+    }
+    return current, {
+        "portfolio_before": current.model_dump() if hasattr(current, "model_dump") else current.dict(),
+        "portfolio_after": current.model_dump() if hasattr(current, "model_dump") else current.dict(),
+        "target_weights": clean_weights,
+        "executed_target_weights": {},
+        "trades": [],
+        "events": [event],
+        "fees": 0.0,
+        "slippage_cost": 0.0,
+        "model_failure": True,
+        "validation_errors": validation_errors,
+    }
 
 
 def execute_target_weights(

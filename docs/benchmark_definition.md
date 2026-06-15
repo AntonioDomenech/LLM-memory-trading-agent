@@ -194,7 +194,7 @@ The model receives:
 Stage 2 returns the final portfolio allocation:
 
 - `target_weights`: object mapping symbols to target portfolio weights.
-- `cash_target_weight`
+- `cash_weight`
 - `gross_exposure`
 - `net_exposure`
 - `confidence`

@@ -3,6 +3,7 @@ from agent_benchmark.benchmark_engine import BenchmarkEngine
 from agent_benchmark.llm_client import _post_json, _retry_after_seconds, call_json_model
 from agent_benchmark.portfolio import execute_target_weights, initial_book
 from agent_benchmark.prompting import build_stage1_prompt, build_stage2_prompt
+from agent_benchmark.quality import build_run_diagnostics, canonicalize_fundamentals
 from agent_benchmark.schemas import BenchmarkConfig, SecretConfig
 from agent_benchmark.storage import BenchmarkStore
 from agent_benchmark.jobs import BenchmarkJobManager, LiveScheduler
@@ -27,6 +28,14 @@ def test_config_defaults_follow_benchmark_contract():
     assert config.memory_retrieval == "deterministic_similarity"
     assert config.max_output_tokens == 900
     assert config.initial_cash == 1000.0
+    assert config.strict_preflight is True
+    assert config.require_paid_micro_pilot is True
+    assert config.max_nonzero_positions == 12
+    assert config.max_daily_turnover == 0.20
+    assert config.turnover_edge_multiplier == 3.0
+    assert config.memory_k_neighbors == 50
+    assert config.news_policy == "real_titles_or_aggregate_events"
+    assert config.macro_policy == "omit_if_missing"
 
 
 def test_portfolio_rejects_invalid_gross_exposure_without_improving_model_decision():
@@ -93,6 +102,8 @@ def test_stage_prompts_preserve_model_owned_decision_rule():
     assert "You own the final investment decision" in stage2_system
     assert "mechanical constraints" in stage2_system
     assert "sum(abs(target_weights.values()))" in stage2_system
+    assert "cash_weight" in stage2_system
+    assert "estimated_turnover" in stage2_system
     assert "rejects the allocation" in stage2_system
     assert "sparse portfolio" in stage2_system
 
@@ -119,15 +130,21 @@ def test_stage2_allocation_repair_uses_same_model_before_simulator_rejection(mon
         calls.append({"system": system, "user": user, "kwargs": kwargs})
         return {
             "target_weights": {"AAPL": 0.6, "MSFT": -0.4},
-            "cash_target_weight": 0.0,
+            "cash_weight": 0.0,
             "gross_exposure": 1.0,
             "net_exposure": 0.2,
             "confidence": 0.4,
             "portfolio_thesis": "Repaired by model.",
             "major_risks": [],
             "uncertainty": [],
-            "expected_return_bps": 0,
+            "expected_return_bps": 100,
             "horizon_days": 20,
+            "expected_holding_days": 20,
+            "estimated_turnover": 1.0,
+            "estimated_slippage_cost_bps": 5.0,
+            "rebalance_reason": "test repair",
+            "input_evidence_refs": ["test"],
+            "data_quality_warnings_used": [],
             "_api_status": "ok",
         }
 
@@ -135,16 +152,18 @@ def test_stage2_allocation_repair_uses_same_model_before_simulator_rejection(mon
     engine = BenchmarkEngine()
     try:
         repaired, repair_calls = engine._repair_stage2_allocation_if_needed(
-            BenchmarkConfig(model="test-model", max_gross_exposure=1.0),
+            BenchmarkConfig(model="test-model", max_gross_exposure=1.0, max_daily_turnover=1.0),
             SecretConfig(openai_api_key="sk-test"),
             {"portfolio_state": {}, "symbol_summary_table": [], "benchmark_rules": {"max_gross_exposure": 1.0}},
             {
                 "target_weights": {"AAPL": 1.0, "MSFT": -1.0},
-                "cash_target_weight": 0.0,
+                "cash_weight": -1.0,
                 "gross_exposure": 1.0,
                 "net_exposure": 0.0,
             },
             ["AAPL", "MSFT"],
+            book=initial_book(1000),
+            prices={"AAPL": 100.0, "MSFT": 100.0},
             dry_run=False,
             cache_namespace="test-repair",
         )
@@ -157,6 +176,129 @@ def test_stage2_allocation_repair_uses_same_model_before_simulator_rejection(mon
     assert repaired["target_weights"] == {"AAPL": 0.6, "MSFT": -0.4}
     assert repaired["_allocation_repair"]["attempted"] is True
     assert repaired["_allocation_repair"]["remaining_errors"] == []
+
+
+def test_stage2_allocation_contract_rejects_incoherent_math_and_costs():
+    engine = BenchmarkEngine()
+    try:
+        errors = engine._allocation_errors(
+            BenchmarkConfig(max_gross_exposure=1.0, max_daily_turnover=0.2, slippage_bps=10, turnover_edge_multiplier=3),
+            {
+                "target_weights": {"AAPL": 0.7, "MSFT": -0.2},
+                "cash_weight": 0.5,
+                "gross_exposure": 0.5,
+                "net_exposure": 0.0,
+                "expected_return_bps": 1,
+                "expected_holding_days": 5,
+                "estimated_turnover": 0.1,
+                "input_evidence_refs": [],
+                "data_quality_warnings_used": [],
+            },
+            ["AAPL", "MSFT"],
+            book=initial_book(1000),
+            prices={"AAPL": 100.0, "MSFT": 100.0},
+        )
+    finally:
+        engine.close()
+
+    error_types = {item["type"] for item in errors}
+    assert "gross_exposure_mismatch" in error_types
+    assert "net_exposure_mismatch" in error_types
+    assert "cash_weight_mismatch" in error_types
+    assert "estimated_turnover_mismatch" in error_types
+    assert "turnover_cost_hurdle_failed" in error_types
+
+
+def test_missing_macro_is_omitted_from_prompts(tmp_path):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    engine = BenchmarkEngine(warehouse)
+    try:
+        warehouse.conn.execute(
+            """
+            INSERT INTO macro_daily (date, series_id, label, observation_date, value, source, source_status, vintage_safe)
+            VALUES (DATE '2025-01-02', 'DGS10', '10Y Treasury', DATE '2025-01-02', NULL, 'fred', 'missing_key', true)
+            """
+        )
+
+        macro = engine._macro(BenchmarkConfig(macro_policy="omit_if_missing"), "2025-01-02")
+    finally:
+        engine.close()
+
+    assert macro == []
+
+
+def test_synthetic_gdelt_titles_are_aggregated_not_passed_as_headlines(tmp_path):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    engine = BenchmarkEngine(warehouse)
+    try:
+        warehouse.conn.execute(
+            """
+            INSERT INTO news_articles
+                (article_id, symbol, bucket_start, bucket_end, published_at, title, url, domain, language, source_country, source, query, raw_json)
+            VALUES
+                ('n1', 'AAPL', DATE '2025-01-02', DATE '2025-01-02', '2025-01-02T12:00:00Z',
+                 'GDELT event 010 nan', '', '', 'eng', 'US', 'gdelt_events', 'AAPL',
+                 '{"AvgTone": -1.5, "NumMentions": 8, "EventCode": "010"}')
+            """
+        )
+
+        news, quality = engine._news(["AAPL"], "2025-01-03", 5, BenchmarkConfig())
+    finally:
+        engine.close()
+
+    assert quality["status"] == "event_aggregate_only"
+    assert news["AAPL"][0]["type"] == "event_summary"
+    assert all("title" not in item or not str(item["title"]).startswith("GDELT event") for item in news["AAPL"])
+
+
+def test_stale_sec_facts_are_excluded_from_canonical_fundamentals():
+    canonical, quality = canonicalize_fundamentals(
+        [
+            {"concept": "Revenues", "value": 1000, "filed_date": "2020-01-01", "period_end": "2019-12-31"},
+            {"concept": "Revenues", "value": 1500, "filed_date": "2024-03-01", "period_end": "2023-12-31"},
+            {"concept": "OperatingIncomeLoss", "value": 300, "filed_date": "2024-03-01", "period_end": "2023-12-31"},
+        ],
+        "2025-01-02",
+    )
+
+    assert canonical["revenue_ttm"] == 1500
+    assert canonical["operating_margin"] == pytest.approx(0.2)
+    assert quality["stale_facts_excluded"] == 1
+    assert quality["status"] == "ok"
+
+
+def test_legacy_run_missing_stage2_contract_is_classified_diagnostic():
+    run = {
+        "decisions": [
+            {
+                "stage": "stage1",
+                "input": {"news_and_events": {"AAPL": [{"title": "GDELT event 010 nan"}]}},
+                "output": {},
+                "execution": {},
+            },
+            {
+                "stage": "stage2",
+                "decision_date": "2025-01-02",
+                "fill_date": "2025-01-03",
+                "input": {},
+                "output": {"target_weights": {"AAPL": 0.0}, "gross_exposure": 0.0, "net_exposure": 0.0},
+                "execution": {
+                    "portfolio_before": {"equity": 1000},
+                    "portfolio_after": {"equity": 1000, "gross_exposure": 0.0, "net_exposure": 0.0, "short_exposure": 0.0, "positions": {}},
+                    "target_weights": {"AAPL": 0.0},
+                    "trades": [],
+                    "model_failure": False,
+                },
+            },
+        ]
+    }
+
+    diagnostics = build_run_diagnostics(run, BenchmarkConfig(mode="single_stock", selected_symbols=["AAPL"], initial_cash=1000))
+
+    assert diagnostics["official_status"] == "diagnostic"
+    assert "legacy_stage2_schema" in diagnostics["diagnostic_reasons"]
+    assert "synthetic_news_titles_in_prompt" in diagnostics["diagnostic_reasons"]
+    assert diagnostics["metrics"]["legacy_stage2_schema_days"] == 1
 
 
 def test_responses_calls_request_json_mode(monkeypatch):

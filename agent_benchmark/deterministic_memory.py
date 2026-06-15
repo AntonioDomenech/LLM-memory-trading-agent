@@ -83,6 +83,8 @@ class DeterministicMarketMemory:
             return []
         limit_per_symbol = max(1, int(limit_per_symbol or config.deterministic_memory_per_symbol or 1))
         max_items = max(1, int(max_items or config.deterministic_memory_max_items or 50))
+        neighbor_count = max(3, int(getattr(config, "memory_k_neighbors", 50) or 50))
+        examples_per_symbol = max(0, int(getattr(config, "memory_examples_per_symbol", 2) or 2))
         knowledge_cutoff = min(_date(decision_date), _date(config.train_end))
         candidates = cases[cases["knowledge_timestamp"] <= knowledge_cutoff]
         if candidates.empty:
@@ -97,10 +99,15 @@ class DeterministicMarketMemory:
                 continue
             scored = group.copy()
             scored["_distance"] = scored.apply(lambda row: self._distance(row, snapshot, current_context), axis=1)
-            top = scored.sort_values(["_distance", "date"], ascending=[True, False]).head(limit_per_symbol)
-            for _, row in top.iterrows():
-                score = 1.0 / (1.0 + float(row["_distance"]))
-                selected.append((score, self._row_to_memory(row, score)))
+            top = scored.sort_values(["_distance", "date"], ascending=[True, False]).head(neighbor_count)
+            if top.empty:
+                continue
+            aggregate = self._aggregate_to_memory(symbol, top, examples_per_symbol)
+            selected.append((float(aggregate.get("retrieval_score") or 0.0), aggregate))
+            if limit_per_symbol > 1:
+                for _, row in top.head(limit_per_symbol - 1).iterrows():
+                    score = 1.0 / (1.0 + float(row["_distance"]))
+                    selected.append((score, self._row_to_memory(row, score)))
 
         selected.sort(key=lambda pair: pair[0], reverse=True)
         return [item for _, item in selected[:max_items]]
@@ -333,3 +340,86 @@ class DeterministicMarketMemory:
             "created_at": "",
             "retrieval_score": round(score, 6),
         }
+
+    def _aggregate_to_memory(self, symbol: str, rows: pd.DataFrame, examples_per_symbol: int) -> Dict[str, Any]:
+        best = rows.iloc[0]
+        best_score = 1.0 / (1.0 + float(best.get("_distance") or 0.0))
+        stats: Dict[str, Dict[str, float | int | None]] = {}
+        fragments = []
+        for horizon in ("1d", "5d", "20d", "60d"):
+            values = [
+                float(value)
+                for value in rows.get(f"outcome_{horizon}", pd.Series(dtype=float)).tolist()
+                if _finite(value)
+            ]
+            if not values:
+                continue
+            series = pd.Series(values)
+            hit_rate = float((series > 0).mean())
+            downside_rate = float((series < 0).mean())
+            mean_return = float(series.mean())
+            median_return = float(series.median())
+            stats[horizon] = {
+                "cases": int(len(series)),
+                "mean_return": mean_return,
+                "median_return": median_return,
+                "hit_rate": hit_rate,
+                "downside_rate": downside_rate,
+                "p10": float(series.quantile(0.10)),
+                "p90": float(series.quantile(0.90)),
+            }
+            fragments.append(
+                f"{horizon}: n={len(series)}, mean={_fmt_pct(mean_return)}, median={_fmt_pct(median_return)}, hit={hit_rate:.0%}, downside={downside_rate:.0%}"
+            )
+        example_rows = []
+        for _, row in rows.head(examples_per_symbol).iterrows():
+            score = 1.0 / (1.0 + float(row.get("_distance") or 0.0))
+            example_rows.append(
+                {
+                    "id": f"det:{row['symbol']}:{_date(row['date'])}",
+                    "date": _date(row["date"]),
+                    "score": round(score, 6),
+                    "outcomes": {
+                        horizon: _safe_float(row.get(f"outcome_{horizon}"))
+                        for horizon in ("1d", "5d", "20d", "60d")
+                        if _finite(row.get(f"outcome_{horizon}"))
+                    },
+                }
+            )
+        confidence = self._aggregate_confidence(stats.get("20d", {}), best_score)
+        content = (
+            f"{symbol} aggregate memory from {len(rows)} similar point-in-time cases. "
+            f"Retrieval confidence={confidence}; best_score={best_score:.3f}. "
+            + " | ".join(fragments)
+        )
+        return {
+            "id": f"detagg:{symbol}:{_date(best['date'])}",
+            "model": "deterministic",
+            "mode": "deterministic_market_cases",
+            "portfolio_scope": "historical_market",
+            "symbol": symbol,
+            "decision_timestamp": _date(best["date"]),
+            "knowledge_timestamp": best["knowledge_timestamp"],
+            "source_run_id": "warehouse",
+            "memory_type": "deterministic_market_aggregate",
+            "content": content,
+            "outcome_horizon": ",".join(stats.keys()),
+            "outcome_available_at": best["knowledge_timestamp"],
+            "metadata": {
+                "retrieval_score": round(best_score, 6),
+                "aggregate_stats": stats,
+                "examples": example_rows,
+                "confidence": confidence,
+                "neighbor_count": int(len(rows)),
+            },
+            "created_at": "",
+            "retrieval_score": round(best_score, 6),
+        }
+
+    def _aggregate_confidence(self, stats: Dict[str, Any], best_score: float) -> str:
+        cases = int(stats.get("cases") or 0)
+        if cases >= 30 and best_score >= 0.85:
+            return "moderate"
+        if cases >= 10 and best_score >= 0.75:
+            return "weak_to_moderate"
+        return "weak"

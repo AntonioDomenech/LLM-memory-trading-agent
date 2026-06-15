@@ -8,6 +8,7 @@ from .benchmark_engine import BenchmarkEngine
 from .information import build_information_bundle, information_manifest
 from .jobs import BenchmarkJobManager, LiveScheduler
 from .llm_client import list_openai_models
+from .quality import OFFICIAL_PRESETS, build_preflight_report, build_run_diagnostics
 from .runner import run_benchmark
 from .schemas import BenchmarkConfig, BenchmarkRunRequest, LiveSnapshotRequest, PreviewRequest, PreviewRequestV2, RunRequest, SaveConfigRequest
 from .serialization import json_safe
@@ -82,12 +83,41 @@ def benchmark_preview(payload: PreviewRequestV2):
         engine.close()
 
 
+@app.post("/api/benchmark/preflight")
+def benchmark_preflight(payload: BenchmarkRunRequest):
+    local = load_local_config()
+    config = payload.config or local.benchmark
+    wh = Warehouse()
+    try:
+        report = build_preflight_report(config, local.secrets, wh, store=job_manager.store)
+        return json_safe(report)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        wh.close()
+
+
 @app.post("/api/benchmark/runs")
 def start_benchmark_run(payload: BenchmarkRunRequest):
     local = load_local_config()
     config = payload.config or local.benchmark
+    preflight_report = None
+    if not payload.dry_run and config.strict_preflight and config.run_preset in OFFICIAL_PRESETS:
+        wh = Warehouse()
+        try:
+            preflight_report = build_preflight_report(config, local.secrets, wh, store=job_manager.store)
+        finally:
+            wh.close()
+        if preflight_report.get("status") == "fail":
+            issues = preflight_report.get("blocking_issues") or []
+            labels = ", ".join(str(item.get("id") or "check") for item in issues[:4])
+            raise HTTPException(status_code=400, detail=f"Preflight failed before paid official run: {labels}. Open Run control and run Preflight for details.")
     try:
-        return json_safe(job_manager.start(config, local.secrets, dry_run=payload.dry_run))
+        run = job_manager.start(config, local.secrets, dry_run=payload.dry_run)
+        if preflight_report and run.get("id"):
+            job_manager.store.save_benchmark_report(run["id"], "preflight", preflight_report)
+            run["preflight"] = preflight_report
+        return json_safe(run)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -121,6 +151,38 @@ def get_benchmark_run(run_id: str):
     if not run:
         raise HTTPException(status_code=404, detail="Benchmark run not found")
     return json_safe(_enrich_run_summary(run))
+
+
+@app.get("/api/benchmark/runs/{run_id}/diagnostics")
+def benchmark_run_diagnostics(run_id: str):
+    store = BenchmarkStore()
+    run = store.get_benchmark_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Benchmark run not found")
+    try:
+        config = BenchmarkConfig(**(run.get("config") or {}))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Run config cannot be parsed: {exc}") from exc
+    wh = Warehouse()
+    try:
+        report = build_run_diagnostics(run, config, wh)
+        stored_preflight = store.latest_benchmark_report(run_id, "preflight")
+        if stored_preflight:
+            report["preflight"] = stored_preflight
+        store.save_benchmark_report(run_id, "diagnostics", report)
+        return json_safe(report)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        wh.close()
+
+
+@app.post("/api/benchmark/runs/{run_id}/mark-diagnostic")
+def mark_benchmark_run_diagnostic(run_id: str, reason: str = "Marked diagnostic by user"):
+    run = BenchmarkStore().mark_benchmark_run_diagnostic(run_id, reason)
+    if not run:
+        raise HTTPException(status_code=404, detail="Benchmark run not found")
+    return json_safe(run)
 
 
 @app.post("/api/benchmark/runs/{run_id}/pause")

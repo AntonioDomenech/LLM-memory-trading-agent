@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Protocol
 
@@ -11,8 +12,9 @@ from .deterministic_memory import DeterministicMarketMemory
 from .llm_client import call_json_model
 from .memory import HybridMemory
 from .news import fetch_news_bundle
-from .portfolio import execute_target_weights, initial_book, mark_to_market
+from .portfolio import estimate_target_turnover, execute_target_weights, initial_book, mark_to_market, reject_target_weights
 from .prompting import build_stage1_prompt, build_stage2_prompt
+from .quality import canonicalize_fundamentals, is_synthetic_news_title
 from .schemas import BenchmarkConfig, PortfolioBook, SecretConfig, model_to_dict
 from .storage import BenchmarkStore
 from .warehouse.store import Warehouse
@@ -157,6 +159,7 @@ class BenchmarkEngine:
         ]
         total_days = sum(len(self._trading_pairs(start, end, limit)) for _, start, end, limit in phases)
         completed_days = 0
+        invalid_stage2_days = 0
 
         for phase, start, end, limit in phases:
             pairs = self._trading_pairs(start, end, limit)
@@ -198,21 +201,30 @@ class BenchmarkEngine:
                 system, user = build_stage2_prompt(manager_bundle, stage1_outputs)
                 stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols), cache_namespace="stage2")
                 model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
+                fill_prices = self._price_map(symbols, fill_date, field="open")
+                if not fill_prices:
+                    fill_prices = self._price_map(symbols, fill_date, field="close")
                 stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
                     config,
                     secrets,
                     manager_bundle,
                     stage2_output,
                     symbols,
+                    book=book,
+                    prices=fill_prices,
                     dry_run=dry_run,
                     cache_namespace="stage2-repair",
                 )
                 model_calls += repair_calls
-                fill_prices = self._price_map(symbols, fill_date, field="open")
-                if not fill_prices:
-                    fill_prices = self._price_map(symbols, fill_date, field="close")
                 target_weights = self._coerce_target_weights(stage2_output.get("target_weights") or {}, symbols)
-                book, execution = execute_target_weights(book, target_weights, fill_prices, config)
+                validation_errors = self._allocation_errors(config, stage2_output, symbols, book=book, prices=fill_prices)
+                if validation_errors and stage2_output.get("_api_status") not in {"dry_run", "missing_key"}:
+                    stage2_output["_allocation_validation_errors"] = validation_errors
+                    book, execution = reject_target_weights(book, target_weights, fill_prices, validation_errors)
+                else:
+                    book, execution = execute_target_weights(book, target_weights, fill_prices, config)
+                execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
+                execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
                 all_executions.append(execution)
                 decision_record = {
                     "phase": phase,
@@ -259,6 +271,36 @@ class BenchmarkEngine:
                     control.checkpoint(run_id, phase, progress)
                 else:
                     store.update_benchmark_run(run_id, status="running", phase=phase, progress=progress)
+
+                if execution.get("model_failure") and not dry_run and config.run_preset in {"budget_official", "full_official"}:
+                    invalid_stage2_days += 1
+                    invalid_rate = invalid_stage2_days / max(1, completed_days)
+                    should_abort = invalid_stage2_days >= config.invalid_run_abort_count or (completed_days >= 20 and invalid_rate > config.invalid_run_abort_rate)
+                    if should_abort:
+                        reason = {
+                            "invalid_stage2_days": invalid_stage2_days,
+                            "completed_days": completed_days,
+                            "invalid_rate": invalid_rate,
+                            "max_invalid_count": config.invalid_run_abort_count,
+                            "max_invalid_rate": config.invalid_run_abort_rate,
+                        }
+                        store.append_benchmark_event(run_id, phase, "run_aborted_invalid_allocations", reason)
+                        summary = self._summary(config, symbols, equity_curve, all_executions, model_calls, dry_run)
+                        summary["official_status"] = "diagnostic"
+                        summary["aborted_reason"] = "invalid_allocations"
+                        summary["abort_details"] = reason
+                        if memory_summary:
+                            summary["deterministic_memory"] = memory_summary.__dict__
+                        store.update_benchmark_run(
+                            run_id,
+                            status="failed",
+                            phase="failed",
+                            summary=summary,
+                            error="Aborted after repeated invalid Stage 2 allocations.",
+                            progress={"percent": self._percent(completed_days, total_days), "message": "Aborted after repeated invalid Stage 2 allocations.", "model_calls": model_calls},
+                            finished=True,
+                        )
+                        return {"summary": summary, "decisions": all_decisions}
 
         summary = self._summary(config, symbols, equity_curve, all_executions, model_calls, dry_run)
         if memory_summary:
@@ -346,12 +388,21 @@ class BenchmarkEngine:
             manager_bundle,
             stage2_output,
             symbols,
+            book=book,
+            prices=fill_prices,
             dry_run=dry_run,
             cache_namespace="live-stage2-repair",
         )
         model_calls += repair_calls
         target_weights = self._coerce_target_weights(stage2_output.get("target_weights") or {}, symbols)
-        next_book, execution = execute_target_weights(book, target_weights, fill_prices, config)
+        validation_errors = self._allocation_errors(config, stage2_output, symbols, book=book, prices=fill_prices)
+        if validation_errors and stage2_output.get("_api_status") not in {"dry_run", "missing_key"}:
+            stage2_output["_allocation_validation_errors"] = validation_errors
+            next_book, execution = reject_target_weights(book, target_weights, fill_prices, validation_errors)
+        else:
+            next_book, execution = execute_target_weights(book, target_weights, fill_prices, config)
+        execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
+        execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
         store.save_benchmark_decision(
             run_id=run_id,
             phase="live",
@@ -519,9 +570,9 @@ class BenchmarkEngine:
         ).fetchdf()
         return rows.to_dict(orient="records") if not rows.empty else []
 
-    def _news(self, symbols: List[str], decision_date: str, limit_per_symbol: int) -> Dict[str, List[Dict[str, Any]]]:
+    def _news(self, symbols: List[str], decision_date: str, limit_per_symbol: int, config: BenchmarkConfig) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
         if not symbols or limit_per_symbol <= 0:
-            return {}
+            return {}, {"status": "disabled", "total_rows": 0}
         placeholders = ", ".join(["?"] * len(symbols))
         df = self.warehouse.conn.execute(
             f"""
@@ -535,22 +586,56 @@ class BenchmarkEngine:
             [*symbols, decision_date, decision_date, limit_per_symbol],
         ).fetchdf()
         out: Dict[str, List[Dict[str, Any]]] = {}
+        quality = {
+            "status": "ok",
+            "total_rows": int(len(df)),
+            "real_headline_rows": 0,
+            "synthetic_or_nan_rows": 0,
+            "policy": config.news_policy,
+            "by_symbol": {},
+        }
         if df.empty:
-            return out
+            quality["status"] = "missing"
+            return out, quality
         for symbol, group in df.groupby("symbol"):
             items = []
+            event_codes = Counter()
+            domains = Counter()
+            tones = []
+            mentions = 0
+            synthetic_rows = 0
+            real_rows = 0
             for _, row in group.iterrows():
                 raw = {}
                 try:
                     raw = json.loads(row.get("raw_json") or "{}")
                 except Exception:
                     raw = {}
+                title = row.get("title") or ""
+                tone = _safe_float(raw.get("AvgTone"))
+                if tone is not None:
+                    tones.append(tone)
+                event_code = str(raw.get("EventCode") or "")
+                if event_code:
+                    event_codes[event_code] += 1
+                domain = row.get("domain") or ""
+                if domain:
+                    domains[domain] += 1
+                try:
+                    mentions += int(float(raw.get("NumMentions") or 0))
+                except Exception:
+                    pass
+                if is_synthetic_news_title(title):
+                    synthetic_rows += 1
+                    continue
+                real_rows += 1
                 items.append(
                     {
+                        "type": "article",
                         "published_at": str(row.get("published_at") or ""),
-                        "title": row.get("title") or "",
+                        "title": title,
                         "url": row.get("url") or "",
-                        "domain": row.get("domain") or "",
+                        "domain": domain,
                         "source_country": row.get("source_country") or "",
                         "source": row.get("source") or "",
                         "tone": raw.get("AvgTone"),
@@ -558,10 +643,30 @@ class BenchmarkEngine:
                         "event_code": raw.get("EventCode"),
                     }
                 )
+            if synthetic_rows:
+                items.append(
+                    {
+                        "type": "event_summary",
+                        "window_days": 5,
+                        "event_rows": synthetic_rows,
+                        "avg_tone": sum(tones) / len(tones) if tones else None,
+                        "total_mentions": mentions,
+                        "top_event_codes": [{"code": code, "count": count} for code, count in event_codes.most_common(5)],
+                        "top_domains": [{"domain": domain, "count": count} for domain, count in domains.most_common(5)],
+                        "note": "Synthetic GDELT event rows were aggregated and not passed as article headlines.",
+                    }
+                )
+            quality["real_headline_rows"] += real_rows
+            quality["synthetic_or_nan_rows"] += synthetic_rows
+            quality["by_symbol"][symbol] = {"real_headline_rows": real_rows, "synthetic_or_nan_rows": synthetic_rows, "items_sent": len(items)}
             out[symbol] = items
-        return out
+        total = max(1, quality["total_rows"])
+        quality["real_headline_rate"] = quality["real_headline_rows"] / total
+        if quality["real_headline_rows"] == 0 and quality["synthetic_or_nan_rows"] > 0:
+            quality["status"] = "event_aggregate_only"
+        return out, quality
 
-    def _fundamentals(self, symbols: List[str], decision_date: str) -> Dict[str, Any]:
+    def _fundamentals(self, symbols: List[str], decision_date: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
         placeholders = ", ".join(["?"] * len(symbols))
         df = self.warehouse.conn.execute(
             f"""
@@ -574,22 +679,16 @@ class BenchmarkEngine:
             [*symbols, decision_date],
         ).fetchdf()
         out: Dict[str, Any] = {}
+        quality: Dict[str, Any] = {}
         if df.empty:
-            return out
+            return out, quality
         for symbol, group in df.groupby("symbol"):
-            out[symbol] = {
-                str(row["concept"]): {
-                    "value": _safe_float(row["value"]),
-                    "unit": row["unit"],
-                    "period_end": self._date(row["period_end"]),
-                    "filed_date": self._date(row["filed_date"]),
-                    "form": row["form"],
-                }
-                for _, row in group.iterrows()
-            }
-        return out
+            canonical, symbol_quality = canonicalize_fundamentals(group.to_dict(orient="records"), decision_date)
+            out[symbol] = canonical
+            quality[symbol] = symbol_quality
+        return out, quality
 
-    def _macro(self, decision_date: str) -> List[Dict[str, Any]]:
+    def _macro(self, config: BenchmarkConfig, decision_date: str) -> List[Dict[str, Any]]:
         df = self.warehouse.conn.execute(
             """
             SELECT series_id, label, observation_date, value, source_status
@@ -600,6 +699,10 @@ class BenchmarkEngine:
             """,
             [decision_date],
         ).fetchdf()
+        if df.empty:
+            return []
+        if config.macro_policy == "omit_if_missing":
+            df = df[df["source_status"] == "ok"].copy()
         return df.to_dict(orient="records") if not df.empty else []
 
     def _data_quality(self, symbols: List[str], decision_date: str) -> Dict[str, Any]:
@@ -638,7 +741,10 @@ class BenchmarkEngine:
         book: PortfolioBook,
     ) -> Dict[str, Any]:
         market = self._market_snapshots(symbols, decision_date)
-        news = self._news(symbols, decision_date, config.max_news_per_symbol)
+        news, news_quality = self._news(symbols, decision_date, config.max_news_per_symbol, config)
+        fundamentals, fundamental_quality = self._fundamentals(symbols, decision_date)
+        macro = self._macro(config, decision_date)
+        data_quality = self._data_quality(symbols, decision_date)
         query = json.dumps({"phase": phase, "date": decision_date, "portfolio": book.model_dump(), "market": market}, default=str)[:6000]
         if config.memory_mode == "deterministic_market_cases":
             memories = self.deterministic_memory.retrieve(
@@ -663,16 +769,29 @@ class BenchmarkEngine:
             "portfolio_state": book.model_dump() if hasattr(book, "model_dump") else book.dict(),
             "market_snapshots": market,
             "index_context": self._context(decision_date),
-            "fundamentals": self._fundamentals(symbols, decision_date),
-            "macro_context": self._macro(decision_date),
+            "fundamentals": fundamentals,
+            "fundamental_quality": fundamental_quality,
+            "macro_context": macro,
             "news_and_events": news,
-            "data_quality": self._data_quality(symbols, decision_date),
+            "news_quality": news_quality,
+            "data_quality": data_quality,
+            "input_quality": {
+                "macro_available": bool(macro),
+                "macro_policy": config.macro_policy,
+                "news_quality": news_quality,
+                "fundamental_quality": fundamental_quality,
+                "warnings": self._input_quality_warnings(macro, news_quality, fundamental_quality),
+            },
             "memory": memories,
             "benchmark_rules": {
                 "model_owns_decision": True,
                 "simulator_role": "mechanics_only",
                 "allow_short": config.allow_short,
                 "max_gross_exposure": config.max_gross_exposure,
+                "max_nonzero_positions": config.max_nonzero_positions,
+                "max_daily_turnover": config.max_daily_turnover,
+                "turnover_edge_multiplier": config.turnover_edge_multiplier,
+                "slippage_bps": config.slippage_bps,
                 "fill_timing": config.fill_timing,
             },
         }
@@ -702,9 +821,12 @@ class BenchmarkEngine:
             "market_snapshots": by_symbol(bundle.get("market_snapshots")),
             "index_context": self._compact_context(bundle.get("index_context") or []),
             "fundamentals": by_symbol(bundle.get("fundamentals")),
+            "fundamental_quality": by_symbol(bundle.get("fundamental_quality")),
             "macro_context": bundle.get("macro_context") or [],
             "news_and_events": self._compact_news(by_symbol(bundle.get("news_and_events"))),
+            "news_quality": bundle.get("news_quality") or {},
             "data_quality": data_quality,
+            "input_quality": bundle.get("input_quality") or {},
             "memory": self._filter_memory(bundle.get("memory") or [], symbol_set, limit=max(8, len(symbols) * 2)),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
         }
@@ -741,6 +863,7 @@ class BenchmarkEngine:
             "symbol_summary_table": symbol_table,
             "index_context": self._compact_context(bundle.get("index_context") or []),
             "macro_context": bundle.get("macro_context") or [],
+            "input_quality": bundle.get("input_quality") or {},
             "data_quality": bundle.get("data_quality") or {},
             "memory": self._filter_memory(bundle.get("memory") or [], set(), limit=10),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
@@ -766,18 +889,45 @@ class BenchmarkEngine:
     def _compact_news(self, news: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
         compact: Dict[str, List[Dict[str, Any]]] = {}
         for symbol, items in (news or {}).items():
-            compact[symbol] = [
-                {
-                    "published_at": item.get("published_at"),
-                    "title": item.get("title"),
-                    "domain": item.get("domain"),
-                    "tone": item.get("tone"),
-                    "mentions": item.get("mentions"),
-                    "event_code": item.get("event_code"),
-                }
-                for item in (items or [])
-            ]
+            compact_items = []
+            for item in items or []:
+                if item.get("type") == "event_summary":
+                    compact_items.append(
+                        {
+                            "type": "event_summary",
+                            "window_days": item.get("window_days"),
+                            "event_rows": item.get("event_rows"),
+                            "avg_tone": item.get("avg_tone"),
+                            "total_mentions": item.get("total_mentions"),
+                            "top_event_codes": item.get("top_event_codes"),
+                            "note": item.get("note"),
+                        }
+                    )
+                    continue
+                compact_items.append(
+                    {
+                        "type": "article",
+                        "published_at": item.get("published_at"),
+                        "title": item.get("title"),
+                        "domain": item.get("domain"),
+                        "tone": item.get("tone"),
+                        "mentions": item.get("mentions"),
+                        "event_code": item.get("event_code"),
+                    }
+                )
+            compact[symbol] = compact_items
         return compact
+
+    def _input_quality_warnings(self, macro: List[Dict[str, Any]], news_quality: Dict[str, Any], fundamental_quality: Dict[str, Any]) -> List[str]:
+        warnings = []
+        if not macro:
+            warnings.append("macro_unavailable_or_omitted")
+        if news_quality.get("status") in {"missing", "event_aggregate_only"}:
+            warnings.append(f"news_{news_quality.get('status')}")
+        weak_fundamentals = [symbol for symbol, quality in (fundamental_quality or {}).items() if quality.get("status") != "ok"]
+        if weak_fundamentals:
+            warnings.append(f"weak_fundamentals:{len(weak_fundamentals)}")
+        return warnings
 
     def _filter_memory(self, memories: List[Dict[str, Any]], symbols: set[str], *, limit: int) -> List[Dict[str, Any]]:
         filtered = []
@@ -827,6 +977,15 @@ class BenchmarkEngine:
             )
         else:
             memories = memory.retrieve(decision_timestamp=decision_timestamp, query=query, limit=14)
+        live_news, live_news_quality = self._live_news(config, secrets, symbols, decision_date, dry_run=dry_run)
+        fundamentals, fundamental_quality = self._fundamentals(symbols, decision_date)
+        macro = self._macro(config, decision_date)
+        data_quality = {
+            "checked_symbols": len(symbols),
+            "missing_live_prices": [symbol for symbol in symbols if symbol not in market],
+            "source_status": source_status,
+            "status": "ok" if len(market) == len(symbols) else "partial",
+        }
         return {
             "schema_version": "benchmark-input-v2-live",
             "mode": config.mode,
@@ -839,14 +998,18 @@ class BenchmarkEngine:
             "portfolio_state": model_to_dict(book),
             "market_snapshots": market,
             "index_context": self._live_context(config, source_status),
-            "fundamentals": self._fundamentals(symbols, decision_date),
-            "macro_context": self._macro(decision_date),
-            "news_and_events": self._live_news(config, secrets, symbols, decision_date, dry_run=dry_run),
-            "data_quality": {
-                "checked_symbols": len(symbols),
-                "missing_live_prices": [symbol for symbol in symbols if symbol not in market],
-                "source_status": source_status,
-                "status": "ok" if len(market) == len(symbols) else "partial",
+            "fundamentals": fundamentals,
+            "fundamental_quality": fundamental_quality,
+            "macro_context": macro,
+            "news_and_events": live_news,
+            "news_quality": live_news_quality,
+            "data_quality": data_quality,
+            "input_quality": {
+                "macro_available": bool(macro),
+                "macro_policy": config.macro_policy,
+                "news_quality": live_news_quality,
+                "fundamental_quality": fundamental_quality,
+                "warnings": self._input_quality_warnings(macro, live_news_quality, fundamental_quality),
             },
             "memory": memories,
             "benchmark_rules": {
@@ -854,6 +1017,10 @@ class BenchmarkEngine:
                 "simulator_role": "mechanics_only",
                 "allow_short": config.allow_short,
                 "max_gross_exposure": config.max_gross_exposure,
+                "max_nonzero_positions": config.max_nonzero_positions,
+                "max_daily_turnover": config.max_daily_turnover,
+                "turnover_edge_multiplier": config.turnover_edge_multiplier,
+                "slippage_bps": config.slippage_bps,
                 "fill_timing": "live_latest_price",
             },
         }
@@ -955,9 +1122,17 @@ class BenchmarkEngine:
         source_status.extend([{"context_symbol": item.get("symbol"), **item} for item in status])
         return list(snapshots.values())
 
-    def _live_news(self, config: BenchmarkConfig, secrets: SecretConfig, symbols: List[str], decision_date: str, *, dry_run: bool) -> Dict[str, List[Dict[str, Any]]]:
+    def _live_news(self, config: BenchmarkConfig, secrets: SecretConfig, symbols: List[str], decision_date: str, *, dry_run: bool) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
+        quality: Dict[str, Any] = {
+            "status": "disabled" if dry_run or config.max_news_per_symbol <= 0 else "ok",
+            "total_rows": 0,
+            "real_headline_rows": 0,
+            "synthetic_or_nan_rows": 0,
+            "policy": config.news_policy,
+            "by_symbol": {},
+        }
         if dry_run or config.max_news_per_symbol <= 0:
-            return {}
+            return {}, quality
         meta = {item["symbol"]: item for item in self._symbol_metadata(symbols)}
         news: Dict[str, List[Dict[str, Any]]] = {}
         for symbol in symbols:
@@ -966,10 +1141,44 @@ class BenchmarkEngine:
             scoped.company_name = meta.get(symbol, {}).get("name") or symbol
             scoped.data_sources.max_news_per_day = config.max_news_per_symbol
             try:
-                news[symbol] = fetch_news_bundle(scoped, secrets, decision_date).get("items", [])
+                raw_items = fetch_news_bundle(scoped, secrets, decision_date).get("items", [])
             except Exception as exc:
-                news[symbol] = [{"source": "news", "title": "Live news fetch failed", "summary": str(exc), "url": "", "published_at": decision_date}]
-        return news
+                quality["by_symbol"][symbol] = {"status": "error", "message": str(exc), "real_headline_rows": 0, "synthetic_or_nan_rows": 0, "items_sent": 0}
+                news[symbol] = []
+                continue
+
+            items = []
+            synthetic_rows = 0
+            real_rows = 0
+            for item in raw_items or []:
+                quality["total_rows"] += 1
+                title = item.get("title") or item.get("headline") or ""
+                if is_synthetic_news_title(title):
+                    synthetic_rows += 1
+                    continue
+                real_rows += 1
+                items.append(
+                    {
+                        "type": "article",
+                        "published_at": item.get("published_at") or item.get("datetime") or decision_date,
+                        "title": title,
+                        "url": item.get("url") or "",
+                        "domain": item.get("domain") or item.get("source") or "",
+                        "source_country": item.get("source_country") or "",
+                        "source": item.get("source") or "live_news",
+                        "summary": item.get("summary") or item.get("description") or "",
+                    }
+                )
+            quality["real_headline_rows"] += real_rows
+            quality["synthetic_or_nan_rows"] += synthetic_rows
+            quality["by_symbol"][symbol] = {"real_headline_rows": real_rows, "synthetic_or_nan_rows": synthetic_rows, "items_sent": len(items)}
+            news[symbol] = items
+        if quality["total_rows"] == 0:
+            quality["status"] = "missing"
+        elif quality["real_headline_rows"] == 0 and quality["synthetic_or_nan_rows"] > 0:
+            quality["status"] = "event_aggregate_only"
+        quality["real_headline_rate"] = quality["real_headline_rows"] / max(1, quality["total_rows"])
+        return news, quality
 
     def _symbol_metadata(self, symbols: List[str]) -> List[Dict[str, Any]]:
         meta = {item.symbol: item for item in STOCKS}
@@ -998,6 +1207,7 @@ class BenchmarkEngine:
     def _stage2_fallback(self, symbols: List[str]) -> Dict[str, Any]:
         return {
             "target_weights": {symbol: 0.0 for symbol in symbols},
+            "cash_weight": 1.0,
             "cash_target_weight": 1.0,
             "gross_exposure": 0.0,
             "net_exposure": 0.0,
@@ -1007,6 +1217,12 @@ class BenchmarkEngine:
             "uncertainty": ["No model allocation was produced."],
             "expected_return_bps": 0,
             "horizon_days": 1,
+            "expected_holding_days": 1,
+            "estimated_turnover": 0.0,
+            "estimated_slippage_cost_bps": 0.0,
+            "rebalance_reason": "fallback_no_model_call",
+            "input_evidence_refs": [],
+            "data_quality_warnings_used": [],
         }
 
     def _repair_stage2_allocation_if_needed(
@@ -1017,12 +1233,15 @@ class BenchmarkEngine:
         stage2_output: Dict[str, Any],
         symbols: List[str],
         *,
+        book: PortfolioBook | None = None,
+        prices: Dict[str, float] | None = None,
         dry_run: bool,
         cache_namespace: str,
     ) -> tuple[Dict[str, Any], int]:
-        errors = self._allocation_errors(config, stage2_output, symbols)
-        if not errors or stage2_output.get("_api_status") in {"dry_run", "missing_key"}:
-            return stage2_output, 0
+        current = stage2_output
+        errors = self._allocation_errors(config, current, symbols, book=book, prices=prices)
+        if not errors or current.get("_api_status") in {"dry_run", "missing_key"}:
+            return current, 0
 
         repair_system = """You are the portfolio manager stage of an AI market benchmark.
 
@@ -1030,61 +1249,134 @@ Your previous Stage 2 allocation violated hard benchmark constraints. You still
 own the decision. Correct your own target weights; the simulator will not scale
 or improve them. Return only valid compact JSON with the same Stage 2 schema.
 """
-        repair_user = json.dumps(
-            {
-                "task": "Repair your previous portfolio allocation and return valid JSON only.",
-                "hard_rules": {
-                    "allow_short": config.allow_short,
-                    "max_gross_exposure": config.max_gross_exposure,
-                    "max_nonzero_positions": 12,
-                    "gross_exposure_formula": "sum(abs(target_weights.values()))",
-                    "net_exposure_formula": "sum(target_weights.values())",
-                    "zero_weight_policy": "omit zero weights",
-                    "safe_fallback": "all cash is valid if you cannot make a compliant allocation",
+        original_errors = errors
+        calls = 0
+        for attempt in range(1, 3):
+            repair_user = json.dumps(
+                {
+                    "task": "Repair your previous portfolio allocation and return valid JSON only.",
+                    "attempt": attempt,
+                    "max_attempts": 2,
+                    "hard_rules": {
+                        "allow_short": config.allow_short,
+                        "max_gross_exposure": config.max_gross_exposure,
+                        "max_nonzero_positions": config.max_nonzero_positions,
+                        "max_daily_turnover": config.max_daily_turnover,
+                        "turnover_edge_multiplier": config.turnover_edge_multiplier,
+                        "slippage_bps": config.slippage_bps,
+                        "gross_exposure_formula": "sum(abs(target_weights.values()))",
+                        "net_exposure_formula": "sum(target_weights.values())",
+                        "cash_weight_formula": "1 - gross_exposure",
+                        "zero_weight_policy": "omitted symbols, including currently held positions, are target weight 0",
+                        "safe_fallback": "all cash is valid if you cannot make a compliant allocation",
+                    },
+                    "validation_errors": errors,
+                    "previous_stage2_output": self._strip_api_metadata(current),
+                    "portfolio_state": manager_bundle.get("portfolio_state"),
+                    "symbol_summary_table": manager_bundle.get("symbol_summary_table"),
+                    "benchmark_rules": manager_bundle.get("benchmark_rules"),
                 },
-                "validation_errors": errors,
-                "previous_stage2_output": self._strip_api_metadata(stage2_output),
-                "portfolio_state": manager_bundle.get("portfolio_state"),
-                "symbol_summary_table": manager_bundle.get("symbol_summary_table"),
-                "benchmark_rules": manager_bundle.get("benchmark_rules"),
-            },
-            sort_keys=True,
-            default=str,
-        )
-        try:
-            repaired = call_json_model(
-                config,
-                secrets,
-                repair_system,
-                repair_user,
-                dry_run=dry_run,
-                fallback=stage2_output,
-                cache_namespace=cache_namespace,
+                sort_keys=True,
+                default=str,
             )
-        except Exception as exc:
-            stage2_output["_allocation_repair_error"] = str(exc)
-            stage2_output["_allocation_repair_errors"] = errors
-            return stage2_output, 0
+            try:
+                repaired = call_json_model(
+                    config,
+                    secrets,
+                    repair_system,
+                    repair_user,
+                    dry_run=dry_run,
+                    fallback=current,
+                    cache_namespace=f"{cache_namespace}-{attempt}",
+                )
+            except Exception as exc:
+                current["_allocation_repair_error"] = str(exc)
+                current["_allocation_repair_errors"] = errors
+                return current, calls
 
-        repaired_errors = self._allocation_errors(config, repaired, symbols)
-        repaired["_allocation_repair"] = {
-            "attempted": True,
-            "original_errors": errors,
-            "remaining_errors": repaired_errors,
-        }
-        calls = 0 if repaired.get("_api_status") in {"dry_run", "missing_key"} else 1
-        return repaired, calls
+            if repaired.get("_api_status") not in {"dry_run", "missing_key"}:
+                calls += 1
+            errors = self._allocation_errors(config, repaired, symbols, book=book, prices=prices)
+            repaired["_allocation_repair"] = {
+                "attempted": True,
+                "attempts": attempt,
+                "original_errors": original_errors,
+                "remaining_errors": errors,
+            }
+            current = repaired
+            if not errors:
+                return current, calls
+        return current, calls
 
-    def _allocation_errors(self, config: BenchmarkConfig, output: Dict[str, Any], symbols: List[str]) -> List[Dict[str, Any]]:
+    def _allocation_errors(
+        self,
+        config: BenchmarkConfig,
+        output: Dict[str, Any],
+        symbols: List[str],
+        *,
+        book: PortfolioBook | None = None,
+        prices: Dict[str, float] | None = None,
+    ) -> List[Dict[str, Any]]:
         weights = self._coerce_target_weights(output.get("target_weights") or {}, symbols)
         gross = sum(abs(value) for value in weights.values())
+        net = sum(weights.values())
+        expected_cash = 1.0 - gross
         errors: List[Dict[str, Any]] = []
+        nonzero = [symbol for symbol, value in weights.items() if abs(value) > 1e-9]
         if gross > config.max_gross_exposure + 1e-9:
             errors.append({"type": "gross_exposure_exceeded", "actual": round(gross, 8), "max": config.max_gross_exposure})
+        if len(nonzero) > config.max_nonzero_positions:
+            errors.append({"type": "too_many_nonzero_positions", "actual": len(nonzero), "max": config.max_nonzero_positions})
         if not config.allow_short:
             shorts = {symbol: value for symbol, value in weights.items() if value < 0}
             if shorts:
                 errors.append({"type": "shorts_not_allowed", "symbols": sorted(shorts)})
+        declared_gross = _safe_float(output.get("gross_exposure"))
+        declared_net = _safe_float(output.get("net_exposure"))
+        declared_cash = _safe_float(output.get("cash_weight", output.get("cash_target_weight")))
+        if declared_gross is None:
+            errors.append({"type": "missing_gross_exposure"})
+        elif abs(declared_gross - gross) > 1e-4:
+            errors.append({"type": "gross_exposure_mismatch", "declared": declared_gross, "actual": round(gross, 8)})
+        if declared_net is None:
+            errors.append({"type": "missing_net_exposure"})
+        elif abs(declared_net - net) > 1e-4:
+            errors.append({"type": "net_exposure_mismatch", "declared": declared_net, "actual": round(net, 8)})
+        if declared_cash is None:
+            errors.append({"type": "missing_cash_weight"})
+        elif abs(declared_cash - expected_cash) > 1e-4:
+            errors.append({"type": "cash_weight_mismatch", "declared": declared_cash, "actual": round(expected_cash, 8), "rule": "cash_weight must equal 1 - gross_exposure"})
+
+        holding_days = _safe_float(output.get("expected_holding_days", output.get("horizon_days")))
+        if holding_days is None or holding_days <= 0:
+            errors.append({"type": "missing_or_invalid_expected_holding_days"})
+        if "input_evidence_refs" not in output or not isinstance(output.get("input_evidence_refs"), list):
+            errors.append({"type": "missing_input_evidence_refs"})
+        if "data_quality_warnings_used" not in output or not isinstance(output.get("data_quality_warnings_used"), list):
+            errors.append({"type": "missing_data_quality_warnings_used"})
+
+        if book is not None and prices:
+            actual_turnover = estimate_target_turnover(book, weights, prices)
+            declared_turnover = _safe_float(output.get("estimated_turnover"))
+            if declared_turnover is None:
+                errors.append({"type": "missing_estimated_turnover", "actual": actual_turnover})
+            elif abs(declared_turnover - actual_turnover) > 0.05:
+                errors.append({"type": "estimated_turnover_mismatch", "declared": declared_turnover, "actual": actual_turnover})
+            if actual_turnover > config.max_daily_turnover + 1e-9:
+                estimated_cost_bps = actual_turnover * float(config.slippage_bps or 0.0)
+                expected_edge_bps = abs(float(_safe_float(output.get("expected_return_bps")) or 0.0))
+                required_edge_bps = estimated_cost_bps * float(config.turnover_edge_multiplier or 1.0)
+                if expected_edge_bps + 1e-9 < required_edge_bps:
+                    errors.append(
+                        {
+                            "type": "turnover_cost_hurdle_failed",
+                            "actual_turnover": actual_turnover,
+                            "max_daily_turnover": config.max_daily_turnover,
+                            "estimated_cost_bps": round(estimated_cost_bps, 8),
+                            "expected_edge_bps": round(expected_edge_bps, 8),
+                            "required_edge_bps": round(required_edge_bps, 8),
+                        }
+                    )
         return errors
 
     def _strip_api_metadata(self, output: Dict[str, Any]) -> Dict[str, Any]:
@@ -1151,6 +1443,27 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         model_failures = sum(1 for execution in executions if execution.get("model_failure"))
         fees = sum(float(execution.get("fees") or 0.0) for execution in executions)
         slippage = sum(float(execution.get("slippage_cost") or 0.0) for execution in executions)
+        repair_count = sum(int(execution.get("repair_count") or 0) for execution in executions)
+        turnover_values = []
+        long_pnl = 0.0
+        short_pnl = 0.0
+        for execution in executions:
+            before = execution.get("portfolio_before") or {}
+            equity_before = max(float(before.get("equity") or initial or 1.0), 1e-9)
+            traded_value = 0.0
+            for trade in execution.get("trades") or []:
+                delta = float(trade.get("signed_delta") or 0.0)
+                reference = float(trade.get("reference_price") or 0.0)
+                traded_value += abs(delta) * reference
+                if delta >= 0:
+                    long_pnl -= float(trade.get("shares") or 0.0) * float(trade.get("fill_price") or reference)
+                else:
+                    short_pnl += float(trade.get("shares") or 0.0) * float(trade.get("fill_price") or reference)
+            if traded_value:
+                turnover_values.append(traded_value / equity_before)
+        total_turnover = float(sum(turnover_values))
+        avg_daily_turnover = float(pd.Series(turnover_values).mean()) if turnover_values else 0.0
+        gross_of_cost_final = final + fees + slippage
         summary = {
             "mode": config.mode,
             "preset": config.run_preset,
@@ -1167,8 +1480,19 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 "sharpe_like": sharpe_like,
                 "event_count": event_count,
                 "model_failures": model_failures,
+                "invalid_allocation_count": model_failures,
+                "repair_count": repair_count,
                 "fees": fees,
                 "slippage_cost": slippage,
+                "gross_of_cost_final_equity": gross_of_cost_final,
+                "gross_of_cost_return": gross_of_cost_final / initial - 1.0 if initial else 0.0,
+                "net_of_cost_return": final / initial - 1.0 if initial else 0.0,
+                "slippage_drag": slippage / initial if initial else 0.0,
+                "fee_drag": fees / initial if initial else 0.0,
+                "total_turnover": total_turnover,
+                "avg_daily_turnover": avg_daily_turnover,
+                "long_trade_cashflow": long_pnl,
+                "short_trade_cashflow": short_pnl,
                 "alpha_spy": None,
                 "alpha_qqq": None,
                 "alpha_equal_weight_balanced_50": None,
