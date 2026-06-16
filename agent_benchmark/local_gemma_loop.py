@@ -23,7 +23,7 @@ from .local_provider import (
     validate_no_paid_api_mode,
 )
 from .monitoring import ResourceMonitor, summarize_call_metrics
-from .quality import build_run_diagnostics
+from .quality import build_preflight_report, build_run_diagnostics
 from .schemas import BenchmarkConfig, SecretConfig, model_to_dict
 from .storage import BenchmarkStore
 from .warehouse.store import Warehouse
@@ -184,10 +184,18 @@ def run_iteration(
     commit_before_run: bool = True,
 ) -> Dict[str, Any]:
     validate_no_paid_api_mode(config, secrets)
-    commit_hash = commit_current_state(repo_root, f"local gemma benchmark iteration {iteration}") if commit_before_run else current_git_hash(repo_root)
     run_id = f"local-gemma-aapl-{iteration}-{uuid.uuid4().hex[:8]}"
     store.create_benchmark_run(run_id, model_to_dict(config))
     run_dir = DATA_DIR / "local_gemma_runs" / run_id
+    preflight_report = _preflight(config, secrets, store)
+    store.save_benchmark_report(run_id, "preflight", preflight_report)
+    if preflight_report.get("status") == "fail":
+        issues = preflight_report.get("blocking_issues") or []
+        message = "Local Gemma preflight failed: " + "; ".join(str(item.get("message") or item.get("id")) for item in issues)
+        store.update_benchmark_run(run_id, status="failed", phase="preflight", error=message, progress={"message": message}, finished=True)
+        raise RuntimeError(message)
+
+    commit_hash = commit_current_state(repo_root, f"local gemma benchmark iteration {iteration}") if commit_before_run else current_git_hash(repo_root)
     monitor_path = run_dir / "monitoring.jsonl"
     monitor = ResourceMonitor(monitor_path, config) if config.monitoring_enabled else None
     control = LocalBenchmarkControl(store, monitor)
@@ -232,6 +240,7 @@ def run_iteration(
         "config": model_to_dict(config),
         "evaluation": evaluation,
         "diagnostics": diagnostics,
+        "preflight": preflight_report,
         "monitoring_log": str(monitor_path) if monitor else "",
     }
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -286,6 +295,14 @@ def current_git_hash(repo_root: Path) -> str:
 
 def run_backend_tests(repo_root: Path) -> None:
     _run_checked([sys.executable, "-m", "pytest", "tests"], cwd=repo_root, timeout=20 * 60)
+
+
+def _preflight(config: BenchmarkConfig, secrets: SecretConfig, store: BenchmarkStore) -> Dict[str, Any]:
+    warehouse = Warehouse()
+    try:
+        return build_preflight_report(config, secrets, warehouse, store=store)
+    finally:
+        warehouse.close()
 
 
 def _diagnostics(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, Any]:
