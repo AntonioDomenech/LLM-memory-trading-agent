@@ -27,8 +27,8 @@ class DataSourceConfig(BaseModel):
 
 
 class BenchmarkConfig(BaseModel):
-    mode: Literal["single_stock", "balanced_50_portfolio"] = "balanced_50_portfolio"
-    run_preset: Literal["balanced_50_mini", "single_stock_diagnostic", "budget_official", "full_official"] = "balanced_50_mini"
+    mode: Literal["single_stock", "balanced_50_portfolio"] = "single_stock"
+    run_preset: Literal["single_stock_diagnostic", "single_stock_official", "balanced_50_mini", "budget_official", "full_official"] = "single_stock_diagnostic"
     symbol: str = "AAPL"
     company_name: str = "Apple"
     selected_symbols: List[str] = Field(default_factory=list)
@@ -67,6 +67,10 @@ class BenchmarkConfig(BaseModel):
     prompt_detail_level: Literal["compact", "full"] = "compact"
     embedding_provider: Literal["local", "openai"] = "local"
     decision_process: Literal["two_stage_llm"] = "two_stage_llm"
+    opportunity_cost_policy: Literal["soft"] = "soft"
+    exposure_critic_enabled: bool = True
+    outcome_learning_mode: Literal["off", "diagnostic_lessons"] = "off"
+    turnover_prompt_buffer: float = 0.02
     strict_preflight: bool = True
     require_paid_micro_pilot: bool = True
     max_nonzero_positions: int = 12

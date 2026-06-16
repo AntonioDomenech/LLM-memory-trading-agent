@@ -14,7 +14,7 @@ from .llm_client import call_json_model
 from .memory import HybridMemory
 from .news import fetch_news_bundle
 from .portfolio import estimate_target_turnover, execute_target_weights, initial_book, mark_to_market, reject_target_weights
-from .prompting import build_stage1_prompt, build_stage2_prompt
+from .prompting import build_exposure_critic_prompt, build_stage1_prompt, build_stage2_prompt
 from .quality import canonicalize_fundamentals, is_synthetic_news_title
 from .schemas import BenchmarkConfig, PortfolioBook, SecretConfig, model_to_dict
 from .storage import BenchmarkStore
@@ -55,6 +55,12 @@ def _pct(value: float | None) -> float | None:
     return round(float(value), 8)
 
 
+def _bounded(value: float | None, scale: float) -> float:
+    if value is None or not scale:
+        return 0.0
+    return max(-1.0, min(1.0, float(value) / float(scale)))
+
+
 class BenchmarkEngine:
     horizons = {"1d": 1, "5d": 5, "20d": 20, "60d": 60}
     prompt_context_symbols = {"SPY", "QQQ", "IWM", "^VIX", "^TNX"}
@@ -71,7 +77,8 @@ class BenchmarkEngine:
         train_pairs = self._trading_pairs(config.train_start, config.train_end, config.max_train_days)
         test_pairs = self._trading_pairs(config.test_start, config.test_end, config.max_test_days)
         chunks_per_day = math.ceil(len(symbols) / max(1, config.stage1_chunk_size))
-        calls_per_day = chunks_per_day + 1
+        critic_calls_per_day = 1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0
+        calls_per_day = chunks_per_day + 1 + critic_calls_per_day
         deterministic = config.memory_mode == "deterministic_market_cases"
         lesson_upper_bound = 0 if deterministic else len(self.horizons)
         decision_days = len(test_pairs) if deterministic else len(train_pairs) + len(test_pairs)
@@ -82,6 +89,7 @@ class BenchmarkEngine:
             "deterministic_memory_days": len(train_pairs) if deterministic else 0,
             "stage1_chunks_per_day": chunks_per_day,
             "decision_calls_per_day": calls_per_day,
+            "exposure_critic_calls_per_day": critic_calls_per_day,
             "estimated_decision_calls": decision_days * calls_per_day,
             "estimated_lesson_calls_upper_bound": decision_days * lesson_upper_bound,
             "uncapped": config.max_train_days == 0 or config.max_test_days == 0,
@@ -105,7 +113,7 @@ class BenchmarkEngine:
         bundle = self._build_bundle(config, memory, "preview", phase, pair["decision_date"], pair["fill_date"], symbols, book)
         first_chunk = symbols[: max(1, config.stage1_chunk_size)]
         stage1_system, stage1_user = build_stage1_prompt(self._stage1_bundle(bundle, first_chunk), first_chunk)
-        stage2_system, stage2_user = build_stage2_prompt(self._stage2_bundle(bundle), [{"symbol": symbol, "stance": "preview"} for symbol in first_chunk])
+        stage2_system, stage2_user = build_stage2_prompt(self._stage2_bundle(bundle, config), [{"symbol": symbol, "stance": "preview"} for symbol in first_chunk])
         return {
             "estimate": self.estimate(config),
             "decision_pair": pair,
@@ -177,6 +185,7 @@ class BenchmarkEngine:
                 if close_prices:
                     book = mark_to_market(book, close_prices)
 
+                self._record_due_diagnostic_lessons(memory, config, run_id, all_decisions, decision_date)
                 bundle = self._build_bundle(config, memory, run_id, phase, decision_date, fill_date, symbols, book)
                 stage1_outputs = []
                 for chunk in _chunks(symbols, config.stage1_chunk_size):
@@ -198,13 +207,29 @@ class BenchmarkEngine:
                         execution_payload={},
                     )
 
-                manager_bundle = self._stage2_bundle(bundle)
+                manager_bundle = self._stage2_bundle(bundle, config)
+                critic_calls = self._maybe_run_exposure_critic(
+                    config,
+                    secrets,
+                    manager_bundle,
+                    stage1_outputs,
+                    run_id=run_id,
+                    phase=phase,
+                    decision_date=decision_date,
+                    fill_date=fill_date,
+                    symbols=symbols,
+                    store=store,
+                    dry_run=dry_run,
+                    cache_namespace="exposure-critic",
+                )
+                model_calls += critic_calls
                 system, user = build_stage2_prompt(manager_bundle, stage1_outputs)
-                stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols), cache_namespace="stage2")
+                stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="stage2")
                 model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
                 fill_prices = self._price_map(symbols, fill_date, field="open")
                 if not fill_prices:
                     fill_prices = self._price_map(symbols, fill_date, field="close")
+                stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=fill_prices)
                 stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
                     config,
                     secrets,
@@ -273,7 +298,7 @@ class BenchmarkEngine:
                 else:
                     store.update_benchmark_run(run_id, status="running", phase=phase, progress=progress)
 
-                if execution.get("model_failure") and not dry_run and config.run_preset in {"budget_official", "full_official"}:
+                if execution.get("model_failure") and not dry_run and config.run_preset in {"single_stock_official", "budget_official", "full_official"}:
                     invalid_stage2_days += 1
                     invalid_rate = invalid_stage2_days / max(1, completed_days)
                     should_abort = invalid_stage2_days >= config.invalid_run_abort_count or (completed_days >= 20 and invalid_rate > config.invalid_run_abort_rate)
@@ -381,10 +406,26 @@ class BenchmarkEngine:
             phase="live",
             progress={"percent": 65, "message": "Asking the portfolio manager pass"},
         )
-        manager_bundle = self._stage2_bundle(bundle)
+        manager_bundle = self._stage2_bundle(bundle, config)
+        critic_calls = self._maybe_run_exposure_critic(
+            config,
+            secrets,
+            manager_bundle,
+            stage1_outputs,
+            run_id=run_id,
+            phase="live",
+            decision_date=decision_timestamp,
+            fill_date=decision_timestamp,
+            symbols=symbols,
+            store=store,
+            dry_run=dry_run,
+            cache_namespace="live-exposure-critic",
+        )
+        model_calls += critic_calls
         system, user = build_stage2_prompt(manager_bundle, stage1_outputs)
-        stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols), cache_namespace="live-stage2")
+        stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="live-stage2")
         model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
+        stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=fill_prices)
         stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
             config,
             secrets,
@@ -562,17 +603,44 @@ class BenchmarkEngine:
         return snapshots
 
     def _context(self, decision_date: str) -> List[Dict[str, Any]]:
-        rows = self.warehouse.conn.execute(
+        df = self.warehouse.conn.execute(
             """
             SELECT date, symbol, close, return_1d, source
             FROM context_daily
             WHERE date <= CAST(? AS DATE) AND ohlcv_available = true
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) = 1
-            ORDER BY symbol
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) <= 65
+            ORDER BY symbol, date
             """,
             [decision_date],
         ).fetchdf()
-        return rows.to_dict(orient="records") if not rows.empty else []
+        if df.empty:
+            return []
+        context = []
+        for symbol, group in df.groupby("symbol"):
+            group = group.sort_values("date")
+            latest = group.iloc[-1]
+            closes = group["close"].astype(float)
+
+            def trailing(days: int) -> float | None:
+                if len(closes) <= days:
+                    return None
+                base = float(closes.iloc[-days - 1])
+                return float(closes.iloc[-1]) / base - 1.0 if base else None
+
+            context.append(
+                {
+                    "date": latest.get("date"),
+                    "symbol": symbol,
+                    "close": _safe_float(latest.get("close")),
+                    "return_1d": _safe_float(latest.get("return_1d")),
+                    "return_5d": _pct(trailing(5)),
+                    "return_20d": _pct(trailing(20)),
+                    "return_60d": _pct(trailing(60)),
+                    "volatility_20d": _safe_float(closes.pct_change().tail(20).std() * (252 ** 0.5)) if len(closes) > 20 else None,
+                    "source": latest.get("source", ""),
+                }
+            )
+        return context
 
     def _news(self, symbols: List[str], decision_date: str, limit_per_symbol: int, config: BenchmarkConfig) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
         if not symbols or limit_per_symbol <= 0:
@@ -759,9 +827,10 @@ class BenchmarkEngine:
                 limit_per_symbol=config.deterministic_memory_per_symbol,
                 max_items=config.deterministic_memory_max_items,
             )
+            memories.extend(self._diagnostic_lesson_memories(memory, config, decision_date, query, limit=6))
         else:
             memories = memory.retrieve(decision_timestamp=decision_date, query=query, limit=14)
-        return {
+        payload = {
             "schema_version": "benchmark-input-v2",
             "mode": config.mode,
             "run_id": run_id,
@@ -795,10 +864,16 @@ class BenchmarkEngine:
                 "max_nonzero_positions": config.max_nonzero_positions,
                 "max_daily_turnover": config.max_daily_turnover,
                 "turnover_edge_multiplier": config.turnover_edge_multiplier,
+                "turnover_prompt_buffer": config.turnover_prompt_buffer,
                 "slippage_bps": config.slippage_bps,
                 "fill_timing": config.fill_timing,
+                "opportunity_cost_policy": config.opportunity_cost_policy,
+                "exposure_critic_enabled": config.exposure_critic_enabled,
+                "outcome_learning_mode": config.outcome_learning_mode,
             },
         }
+        payload["decision_support"] = self._decision_support(payload)
+        return payload
 
     def _stage1_bundle(self, bundle: Dict[str, Any], symbols: List[str]) -> Dict[str, Any]:
         symbol_set = set(symbols)
@@ -831,19 +906,28 @@ class BenchmarkEngine:
             "news_quality": bundle.get("news_quality") or {},
             "data_quality": data_quality,
             "input_quality": bundle.get("input_quality") or {},
+            "decision_support": self._filter_decision_support(bundle.get("decision_support") or {}, symbol_set),
             "memory": self._filter_memory(bundle.get("memory") or [], symbol_set, limit=max(8, len(symbols) * 2)),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
         }
 
-    def _stage2_bundle(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
+    def _stage2_bundle(self, bundle: Dict[str, Any], config: BenchmarkConfig | None = None) -> Dict[str, Any]:
         market = bundle.get("market_snapshots") or {}
         news = bundle.get("news_and_events") or {}
         portfolio_state = bundle.get("portfolio_state") or {}
         current_position_weights = self._current_position_weights(portfolio_state, market)
+        decision_support = bundle.get("decision_support") or {}
+        support_by_symbol = {
+            item.get("symbol"): item
+            for item in decision_support.get("ranked_symbols", [])
+            if item.get("symbol")
+        }
         symbol_table = []
         for item in bundle.get("candidate_universe") or []:
             symbol = item.get("symbol")
             snap = market.get(symbol) or {}
+            support = support_by_symbol.get(symbol) or {}
+            memory_signal = support.get("memory_signal") or {}
             symbol_table.append(
                 {
                     "symbol": symbol,
@@ -853,11 +937,22 @@ class BenchmarkEngine:
                     "r60": snap.get("return_60d"),
                     "vol20": snap.get("volatility_20d"),
                     "current_weight": current_position_weights.get(symbol, 0.0),
+                    "signal_rank": support.get("rank"),
+                    "signal_score": support.get("score"),
+                    "stance_hint": support.get("stance_hint"),
+                    "memory_horizon": memory_signal.get("horizon"),
+                    "memory_base_rate_return": memory_signal.get("base_rate_return"),
+                    "memory_mean_return": memory_signal.get("mean_return"),
+                    "memory_hit_rate": memory_signal.get("hit_rate"),
+                    "memory_downside_rate": memory_signal.get("downside_rate"),
+                    "memory_confidence": memory_signal.get("confidence"),
+                    "memory_suggested_exposure_band": memory_signal.get("suggested_exposure_band"),
+                    "memory_cases": memory_signal.get("cases"),
                     "news_items": len(news.get(symbol) or []),
                     "data_as_of": snap.get("as_of_date"),
                 }
             )
-        return {
+        manager = {
             "schema_version": bundle.get("schema_version"),
             "mode": bundle.get("mode"),
             "run_id": bundle.get("run_id"),
@@ -874,10 +969,43 @@ class BenchmarkEngine:
             "macro_context": bundle.get("macro_context") or [],
             "input_quality": bundle.get("input_quality") or {},
             "data_quality": bundle.get("data_quality") or {},
+            "decision_support": self._compact_decision_support(decision_support),
             "memory": self._filter_memory(bundle.get("memory") or [], set(), limit=10),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
             "omitted_raw_sections": ["market_snapshots", "fundamentals", "news_and_events"],
         }
+        if bundle.get("mode") == "single_stock":
+            symbol = str((bundle.get("candidate_universe") or [{}])[0].get("symbol") or (config.symbol if config else "AAPL")).upper()
+            scoped_config = config or BenchmarkConfig(mode="single_stock", symbol=symbol)
+            valid_range = self._valid_target_exposure_range(scoped_config, current_position_weights, [symbol])
+            context_by_symbol = {item.get("symbol"): item for item in manager.get("index_context") or []}
+            manager.update(
+                {
+                    "target_exposure_symbol": symbol,
+                    "valid_target_exposure_range": valid_range,
+                    "single_stock_contract": {
+                        "model_returns": "target_exposure",
+                        "simulator_computes": ["target_weights", "cash_weight", "gross_exposure", "net_exposure", "estimated_turnover", "estimated_slippage_cost_bps"],
+                        "required_opportunity_cost_fields": [
+                            "cash_drag_justification",
+                            "why_not_buy_hold",
+                            "stage1_alignment",
+                            "stage1_veto_reason",
+                        ],
+                    },
+                    "single_stock_opportunity_cost": {
+                        "policy": scoped_config.opportunity_cost_policy,
+                        "stock_symbol": symbol,
+                        "current_exposure": valid_range.get("current_exposure"),
+                        "benchmark_context": {
+                            "SPY": context_by_symbol.get("SPY"),
+                            "QQQ": context_by_symbol.get("QQQ"),
+                        },
+                        "instruction": "Low exposure is valid, but explain why cash beats buy-and-hold participation when stock or benchmark context is favorable.",
+                    },
+                }
+            )
+        return manager
 
     def _current_position_weights(self, portfolio_state: Dict[str, Any], market: Dict[str, Any]) -> Dict[str, float]:
         positions = portfolio_state.get("positions") or {}
@@ -908,6 +1036,10 @@ class BenchmarkEngine:
                     "date": item.get("date"),
                     "close": item.get("close"),
                     "return_1d": item.get("return_1d"),
+                    "return_5d": item.get("return_5d"),
+                    "return_20d": item.get("return_20d"),
+                    "return_60d": item.get("return_60d"),
+                    "volatility_20d": item.get("volatility_20d"),
                 }
             )
         return compact
@@ -955,6 +1087,20 @@ class BenchmarkEngine:
             warnings.append(f"weak_fundamentals:{len(weak_fundamentals)}")
         return warnings
 
+    def _diagnostic_lesson_memories(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        decision_timestamp: str,
+        query: str,
+        *,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        if config.outcome_learning_mode != "diagnostic_lessons":
+            return []
+        lessons = memory.retrieve(decision_timestamp=decision_timestamp, query=query, limit=limit)
+        return [item for item in lessons if item.get("memory_type") == "diagnostic_lesson"][:limit]
+
     def _filter_memory(self, memories: List[Dict[str, Any]], symbols: set[str], *, limit: int) -> List[Dict[str, Any]]:
         filtered = []
         for item in memories:
@@ -975,6 +1121,208 @@ class BenchmarkEngine:
             if len(filtered) >= limit:
                 break
         return filtered
+
+    def _decision_support(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
+        """Build compact point-in-time features that help the model compare symbols."""
+        market = bundle.get("market_snapshots") or {}
+        memories = bundle.get("memory") or []
+        news = bundle.get("news_and_events") or {}
+        memory_by_symbol = self._memory_signal_by_symbol(memories)
+        news_by_symbol = self._news_signal_by_symbol(news)
+        rows = []
+        for item in bundle.get("candidate_universe") or []:
+            symbol = item.get("symbol")
+            if not symbol:
+                continue
+            snap = market.get(symbol) or {}
+            memory_signal = memory_by_symbol.get(symbol, {})
+            news_signal = news_by_symbol.get(symbol, {})
+            r5 = _safe_float(snap.get("return_5d"))
+            r20 = _safe_float(snap.get("return_20d"))
+            r60 = _safe_float(snap.get("return_60d"))
+            vol20 = _safe_float(snap.get("volatility_20d"))
+            trend_score = (
+                0.25 * _bounded(r5, 0.06)
+                + 0.45 * _bounded(r20, 0.12)
+                + 0.30 * _bounded(r60, 0.25)
+            )
+            memory_score = _safe_float(memory_signal.get("score")) or 0.0
+            news_score = _bounded(_safe_float(news_signal.get("avg_tone")), 5.0)
+            risk_penalty = max(0.0, _bounded((vol20 or 0.0) - 0.35, 0.35)) if vol20 is not None else 0.0
+            score = 0.42 * trend_score + 0.43 * memory_score + 0.10 * news_score - 0.10 * risk_penalty
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "sector": item.get("sector", ""),
+                    "score": round(float(score), 6),
+                    "trend_score": round(float(trend_score), 6),
+                    "memory_score": round(float(memory_score), 6),
+                    "news_score": round(float(news_score), 6),
+                    "risk_penalty": round(float(risk_penalty), 6),
+                    "stance_hint": self._stance_hint(score),
+                    "memory_signal": memory_signal,
+                    "news_signal": news_signal,
+                    "market_features": {
+                        "return_5d": r5,
+                        "return_20d": r20,
+                        "return_60d": r60,
+                        "volatility_20d": vol20,
+                    },
+                }
+            )
+
+        rows.sort(key=lambda item: (item.get("score") or 0.0), reverse=True)
+        for index, item in enumerate(rows, start=1):
+            item["rank"] = index
+        weak = list(reversed(rows[-10:])) if rows else []
+        return {
+            "method": "point_in_time_signal_blend",
+            "description": "Deterministic support features from current trend, retrieved historical memory, news tone, and volatility. These are evidence features, not simulator orders.",
+            "ranked_symbols": rows,
+            "top_long_candidates": [
+                {"symbol": item["symbol"], "rank": item["rank"], "score": item["score"], "stance_hint": item["stance_hint"]}
+                for item in rows[:10]
+            ],
+            "weak_or_hedge_candidates": [
+                {"symbol": item["symbol"], "rank": item["rank"], "score": item["score"], "stance_hint": item["stance_hint"]}
+                for item in weak[:10]
+            ],
+        }
+
+    def _memory_signal_by_symbol(self, memories: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        preferred_horizons = ("20d", "60d", "5d", "1d")
+        for item in memories:
+            symbol = item.get("symbol")
+            if not symbol or item.get("memory_type") != "deterministic_market_aggregate":
+                continue
+            metadata = item.get("metadata") or {}
+            stats = metadata.get("aggregate_stats") or {}
+            horizon = next((name for name in preferred_horizons if name in stats), "")
+            if not horizon:
+                continue
+            horizon_stats = stats.get(horizon) or {}
+            mean_return = _safe_float(horizon_stats.get("mean_return"))
+            hit_rate = _safe_float(horizon_stats.get("hit_rate"))
+            cases = int(horizon_stats.get("cases") or 0)
+            confidence = metadata.get("confidence") or "weak"
+            score = 0.65 * _bounded(mean_return, 0.08) + 0.35 * _bounded((hit_rate - 0.5) if hit_rate is not None else None, 0.25)
+            if cases < 10:
+                score *= 0.65
+            if horizon == "1d":
+                score *= 0.45
+            suggested = metadata.get("suggested_exposure") or {}
+            suggested_band = suggested.get("band")
+            if not suggested_band:
+                suggested_band = self._score_to_exposure_band(score)
+            out[str(symbol)] = {
+                "horizon": horizon,
+                "base_rate_return": _safe_float(suggested.get("base_rate_return")) if suggested else mean_return,
+                "mean_return": mean_return,
+                "median_return": _safe_float(horizon_stats.get("median_return")),
+                "hit_rate": hit_rate,
+                "downside_rate": _safe_float(horizon_stats.get("downside_rate")),
+                "cases": cases,
+                "confidence": confidence,
+                "retrieval_score": _safe_float(metadata.get("retrieval_score") or item.get("retrieval_score")),
+                "score": round(float(score), 6),
+                "suggested_exposure_score": _safe_float(suggested.get("score")) if suggested else round(float(score), 6),
+                "suggested_exposure_band": suggested_band,
+            }
+        return out
+
+    def _score_to_exposure_band(self, score: float) -> List[float]:
+        if score >= 0.45:
+            return [0.5, 0.85]
+        if score >= 0.18:
+            return [0.2, 0.5]
+        if score <= -0.45:
+            return [-0.85, -0.5]
+        if score <= -0.18:
+            return [-0.5, -0.2]
+        return [0.0, 0.2]
+
+    def _news_signal_by_symbol(self, news: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        for symbol, items in (news or {}).items():
+            tones = []
+            event_rows = 0
+            article_rows = 0
+            mentions = 0
+            for item in items or []:
+                tone = _safe_float(item.get("tone") if item.get("type") != "event_summary" else item.get("avg_tone"))
+                if tone is not None:
+                    tones.append(tone)
+                if item.get("type") == "event_summary":
+                    event_rows += int(item.get("event_rows") or 0)
+                    mentions += int(item.get("total_mentions") or 0)
+                else:
+                    article_rows += 1
+                    try:
+                        mentions += int(float(item.get("mentions") or 0))
+                    except Exception:
+                        pass
+            out[str(symbol)] = {
+                "avg_tone": sum(tones) / len(tones) if tones else None,
+                "tone_observations": len(tones),
+                "event_rows": event_rows,
+                "article_rows": article_rows,
+                "mentions": mentions,
+            }
+        return out
+
+    def _stance_hint(self, score: float) -> str:
+        if score >= 0.35:
+            return "favorable"
+        if score <= -0.35:
+            return "unfavorable"
+        if score >= 0.12:
+            return "slightly_favorable"
+        if score <= -0.12:
+            return "slightly_unfavorable"
+        return "neutral"
+
+    def _filter_decision_support(self, support: Dict[str, Any], symbols: set[str]) -> Dict[str, Any]:
+        ranked = [item for item in support.get("ranked_symbols", []) if item.get("symbol") in symbols]
+        return {
+            "method": support.get("method"),
+            "description": support.get("description"),
+            "ranked_symbols": ranked,
+            "top_long_candidates": [item for item in support.get("top_long_candidates", []) if item.get("symbol") in symbols],
+            "weak_or_hedge_candidates": [item for item in support.get("weak_or_hedge_candidates", []) if item.get("symbol") in symbols],
+        }
+
+    def _compact_decision_support(self, support: Dict[str, Any], *, limit: int = 20) -> Dict[str, Any]:
+        ranked = []
+        for item in support.get("ranked_symbols", [])[:limit]:
+            memory_signal = item.get("memory_signal") or {}
+            ranked.append(
+                {
+                    "symbol": item.get("symbol"),
+                    "rank": item.get("rank"),
+                    "score": item.get("score"),
+                    "trend_score": item.get("trend_score"),
+                    "memory_score": item.get("memory_score"),
+                    "news_score": item.get("news_score"),
+                    "risk_penalty": item.get("risk_penalty"),
+                    "stance_hint": item.get("stance_hint"),
+                    "memory_horizon": memory_signal.get("horizon"),
+                    "memory_base_rate_return": memory_signal.get("base_rate_return"),
+                    "memory_mean_return": memory_signal.get("mean_return"),
+                    "memory_hit_rate": memory_signal.get("hit_rate"),
+                    "memory_downside_rate": memory_signal.get("downside_rate"),
+                    "memory_confidence": memory_signal.get("confidence"),
+                    "memory_suggested_exposure_band": memory_signal.get("suggested_exposure_band"),
+                    "memory_cases": memory_signal.get("cases"),
+                }
+            )
+        return {
+            "method": support.get("method"),
+            "description": support.get("description"),
+            "ranked_symbols": ranked,
+            "top_long_candidates": support.get("top_long_candidates", [])[:10],
+            "weak_or_hedge_candidates": support.get("weak_or_hedge_candidates", [])[:10],
+        }
 
     def _build_live_bundle(
         self,
@@ -1001,6 +1349,7 @@ class BenchmarkEngine:
                 limit_per_symbol=config.deterministic_memory_per_symbol,
                 max_items=config.deterministic_memory_max_items,
             )
+            memories.extend(self._diagnostic_lesson_memories(memory, config, decision_timestamp, query, limit=6))
         else:
             memories = memory.retrieve(decision_timestamp=decision_timestamp, query=query, limit=14)
         live_news, live_news_quality = self._live_news(config, secrets, symbols, decision_date, dry_run=dry_run)
@@ -1012,7 +1361,7 @@ class BenchmarkEngine:
             "source_status": source_status,
             "status": "ok" if len(market) == len(symbols) else "partial",
         }
-        return {
+        payload = {
             "schema_version": "benchmark-input-v2-live",
             "mode": config.mode,
             "run_id": run_id,
@@ -1046,10 +1395,16 @@ class BenchmarkEngine:
                 "max_nonzero_positions": config.max_nonzero_positions,
                 "max_daily_turnover": config.max_daily_turnover,
                 "turnover_edge_multiplier": config.turnover_edge_multiplier,
+                "turnover_prompt_buffer": config.turnover_prompt_buffer,
                 "slippage_bps": config.slippage_bps,
                 "fill_timing": "live_latest_price",
+                "opportunity_cost_policy": config.opportunity_cost_policy,
+                "exposure_critic_enabled": config.exposure_critic_enabled,
+                "outcome_learning_mode": config.outcome_learning_mode,
             },
         }
+        payload["decision_support"] = self._decision_support(payload)
+        return payload
 
     def _live_market_snapshots(self, symbols: List[str]) -> tuple[Dict[str, Any], Dict[str, float], List[Dict[str, Any]]]:
         snapshots: Dict[str, Any] = {}
@@ -1210,6 +1565,199 @@ class BenchmarkEngine:
         meta = {item.symbol: item for item in STOCKS}
         return [{"symbol": symbol, "name": meta.get(symbol).name if symbol in meta else symbol, "sector": meta.get(symbol).sector if symbol in meta else ""} for symbol in symbols]
 
+    def _valid_target_exposure_range(
+        self,
+        config: BenchmarkConfig,
+        current_position_weights: Dict[str, float],
+        symbols: List[str],
+    ) -> Dict[str, Any]:
+        symbol = symbols[0] if symbols else config.symbol.upper()
+        current = float(current_position_weights.get(symbol, 0.0) or 0.0)
+        turnover_limit = max(0.0, float(config.max_daily_turnover or 0.0))
+        buffer = max(0.0, float(config.turnover_prompt_buffer or 0.0))
+        allowed_change = max(0.0, turnover_limit - buffer) if turnover_limit else float(config.max_gross_exposure)
+        lower_bound = -float(config.max_gross_exposure) if config.allow_short else 0.0
+        upper_bound = float(config.max_gross_exposure)
+        minimum = max(lower_bound, current - allowed_change)
+        maximum = min(upper_bound, current + allowed_change)
+        if minimum > maximum:
+            minimum = maximum = max(lower_bound, min(upper_bound, current))
+        return {
+            "symbol": symbol,
+            "current_exposure": round(current, 8),
+            "min": round(minimum, 8),
+            "max": round(maximum, 8),
+            "max_daily_turnover": turnover_limit,
+            "turnover_prompt_buffer": buffer,
+            "rule": "Choose target_exposure inside [min, max] to avoid prompt-time turnover overflow.",
+        }
+
+    def _single_stock_exposure(self, output: Dict[str, Any], symbols: List[str], manager_bundle: Dict[str, Any] | None = None) -> float:
+        symbol = symbols[0] if symbols else ""
+        raw = _safe_float(output.get("target_exposure"))
+        if raw is not None:
+            return float(raw)
+        weights = output.get("target_weights") or {}
+        if symbol and symbol in weights:
+            weight = _safe_float(weights.get(symbol))
+            if weight is not None:
+                return float(weight)
+        current = ((manager_bundle or {}).get("current_position_weights") or {}).get(symbol)
+        return float(_safe_float(current) or 0.0)
+
+    def _normalize_stage2_output(
+        self,
+        config: BenchmarkConfig,
+        output: Dict[str, Any],
+        symbols: List[str],
+        manager_bundle: Dict[str, Any] | None = None,
+        *,
+        book: PortfolioBook | None = None,
+        prices: Dict[str, float] | None = None,
+    ) -> Dict[str, Any]:
+        if config.mode != "single_stock":
+            return output
+        normalized = dict(output or {})
+        symbol = symbols[0] if symbols else config.symbol.upper()
+        exposure = self._single_stock_exposure(normalized, [symbol], manager_bundle)
+        target_weights = {symbol: exposure} if abs(exposure) > 1e-9 else {}
+        gross = abs(exposure)
+        normalized["target_exposure"] = round(float(exposure), 8)
+        normalized["target_weights"] = {key: round(float(value), 8) for key, value in target_weights.items()}
+        normalized["gross_exposure"] = round(gross, 8)
+        normalized["net_exposure"] = round(float(exposure), 8)
+        normalized["cash_weight"] = round(1.0 - gross, 8)
+        normalized["cash_target_weight"] = normalized["cash_weight"]
+        if "expected_holding_days" not in normalized and normalized.get("horizon_days") is not None:
+            normalized["expected_holding_days"] = normalized.get("horizon_days")
+        if book is not None and prices:
+            turnover = estimate_target_turnover(book, target_weights, prices)
+        else:
+            current = (((manager_bundle or {}).get("current_position_weights") or {}).get(symbol)) or 0.0
+            turnover = abs(float(exposure) - float(_safe_float(current) or 0.0))
+        normalized["estimated_turnover"] = round(float(turnover), 8)
+        normalized["estimated_slippage_cost_bps"] = round(float(turnover) * float(config.slippage_bps or 0.0), 8)
+        return normalized
+
+    def _exposure_critic_fallback(self, manager_bundle: Dict[str, Any], stage1_outputs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        valid_range = manager_bundle.get("valid_target_exposure_range") or {}
+        symbol = valid_range.get("symbol") or "symbol"
+        analysis = next(
+            (
+                item
+                for output in stage1_outputs
+                for item in (output.get("analyses") or [])
+                if item.get("symbol") == symbol
+            ),
+            {},
+        )
+        stance = analysis.get("stance") or "unknown"
+        return {
+            "bull_exposure_case": f"Stage 1 stance is {stance}; participate only if evidence remains favorable.",
+            "defensive_case": "Respect weak data, drawdown risk, and the prompt-time turnover range.",
+            "cash_drag_risk": "Cash can underperform if the stock and benchmarks continue higher.",
+            "recommended_exposure_band": [valid_range.get("min", 0.0), valid_range.get("max", 0.0)],
+            "key_disagreement": "Fallback critic: no model critique was produced.",
+        }
+
+    def _maybe_run_exposure_critic(
+        self,
+        config: BenchmarkConfig,
+        secrets: SecretConfig,
+        manager_bundle: Dict[str, Any],
+        stage1_outputs: List[Dict[str, Any]],
+        *,
+        run_id: str,
+        phase: str,
+        decision_date: str,
+        fill_date: str,
+        symbols: List[str],
+        store: BenchmarkStore,
+        dry_run: bool,
+        cache_namespace: str,
+    ) -> int:
+        if config.mode != "single_stock" or not config.exposure_critic_enabled:
+            return 0
+        system, user = build_exposure_critic_prompt(manager_bundle, stage1_outputs)
+        fallback = self._exposure_critic_fallback(manager_bundle, stage1_outputs)
+        input_payload = dict(manager_bundle)
+        output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace=cache_namespace)
+        manager_bundle["exposure_critic"] = output
+        store.save_benchmark_decision(
+            run_id=run_id,
+            phase=phase,
+            decision_date=decision_date,
+            fill_date=fill_date,
+            stage="exposure_critic",
+            symbol=symbols[0] if symbols else config.symbol.upper(),
+            input_payload=input_payload,
+            output_payload=output,
+            execution_payload={},
+        )
+        return 0 if output.get("_api_status") in {"dry_run", "missing_key"} else 1
+
+    def _record_due_diagnostic_lessons(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        run_id: str,
+        decisions: List[Dict[str, Any]],
+        decision_date: str,
+    ) -> None:
+        if config.outcome_learning_mode != "diagnostic_lessons" or config.mode != "single_stock":
+            return
+        symbol = self._symbols(config)[0]
+        for record in decisions:
+            if record.get("diagnostic_lesson_recorded"):
+                continue
+            stage2 = record.get("stage2_output") or {}
+            horizon = int(_safe_float(stage2.get("expected_holding_days", stage2.get("horizon_days"))) or 1)
+            horizon = max(1, horizon)
+            outcome_date = self._nth_trading_date_after(str(record.get("fill_date")), horizon)
+            if not outcome_date or outcome_date > decision_date:
+                continue
+            start_prices = self._price_map([symbol], str(record.get("fill_date")), field="open") or self._price_map([symbol], str(record.get("fill_date")), field="close")
+            end_prices = self._price_map([symbol], outcome_date, field="close")
+            start = _safe_float(start_prices.get(symbol) if start_prices else None)
+            end = _safe_float(end_prices.get(symbol) if end_prices else None)
+            if start is None or end is None or start <= 0:
+                continue
+            realized_return = end / start - 1.0
+            exposure = self._single_stock_exposure(stage2, [symbol])
+            if realized_return > 0 and exposure < 0.25:
+                lesson = "cash_drag"
+            elif realized_return > 0 and exposure > 0:
+                lesson = "participation_helped"
+            elif realized_return < 0 and exposure > 0:
+                lesson = "exposure_hurt"
+            elif realized_return < 0 and exposure <= 0:
+                lesson = "defense_helped"
+            else:
+                lesson = "flat_outcome"
+            content = (
+                f"{symbol} diagnostic lesson from {record.get('decision_date')} known on {outcome_date}: "
+                f"target_exposure={exposure:.2f}, horizon={horizon}d, realized_return={realized_return:+.2%}, lesson={lesson}."
+            )
+            memory.add(
+                portfolio_scope=config.mode,
+                symbol=symbol,
+                decision_timestamp=str(record.get("decision_date")),
+                knowledge_timestamp=outcome_date,
+                source_run_id=run_id,
+                memory_type="diagnostic_lesson",
+                content=content,
+                outcome_horizon=f"{horizon}d",
+                outcome_available_at=outcome_date,
+                metadata={
+                    "target_exposure": exposure,
+                    "realized_return": realized_return,
+                    "lesson": lesson,
+                    "fill_date": record.get("fill_date"),
+                    "outcome_date": outcome_date,
+                },
+            )
+            record["diagnostic_lesson_recorded"] = True
+
     def _stage1_fallback(self, symbols: List[str]) -> Dict[str, Any]:
         return {
             "analyses": [
@@ -1230,15 +1778,55 @@ class BenchmarkEngine:
             "data_quality_notes": [],
         }
 
-    def _stage2_fallback(self, symbols: List[str]) -> Dict[str, Any]:
+    def _stage2_fallback(self, symbols: List[str], manager_bundle: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        allowed = set(symbols)
+        current_weights: Dict[str, float] = {}
+        for symbol, raw_weight in ((manager_bundle or {}).get("current_position_weights") or {}).items():
+            symbol = str(symbol).upper()
+            if symbol not in allowed:
+                continue
+            weight = _safe_float(raw_weight)
+            if weight is not None and abs(weight) > 1e-9:
+                current_weights[symbol] = float(weight)
+        gross = sum(abs(value) for value in current_weights.values())
+        net = sum(current_weights.values())
+        if (manager_bundle or {}).get("mode") == "single_stock":
+            symbol = symbols[0] if symbols else str((manager_bundle or {}).get("target_exposure_symbol") or "AAPL").upper()
+            exposure = float(current_weights.get(symbol, 0.0))
+            gross = abs(exposure)
+            target_weights = {symbol: exposure} if abs(exposure) > 1e-9 else {}
+            return {
+                "target_exposure": round(exposure, 8),
+                "target_weights": {key: round(value, 8) for key, value in target_weights.items()},
+                "cash_weight": round(1.0 - gross, 8),
+                "cash_target_weight": round(1.0 - gross, 8),
+                "gross_exposure": round(gross, 8),
+                "net_exposure": round(exposure, 8),
+                "confidence": 0.0,
+                "portfolio_thesis": "Fallback/no model call; keep current single-stock exposure.",
+                "major_risks": [],
+                "uncertainty": ["No model allocation was produced."],
+                "expected_return_bps": 0,
+                "horizon_days": 1,
+                "expected_holding_days": 1,
+                "estimated_turnover": 0.0,
+                "estimated_slippage_cost_bps": 0.0,
+                "rebalance_reason": "fallback_no_model_call_keep_current",
+                "input_evidence_refs": [],
+                "data_quality_warnings_used": [],
+                "cash_drag_justification": "Fallback/no model call; no new cash decision.",
+                "why_not_buy_hold": "Fallback/no model call; kept existing exposure instead of changing toward buy-and-hold.",
+                "stage1_alignment": "partial",
+                "stage1_veto_reason": "Fallback/no model call.",
+            }
         return {
-            "target_weights": {symbol: 0.0 for symbol in symbols},
-            "cash_weight": 1.0,
-            "cash_target_weight": 1.0,
-            "gross_exposure": 0.0,
-            "net_exposure": 0.0,
+            "target_weights": current_weights,
+            "cash_weight": round(1.0 - gross, 8),
+            "cash_target_weight": round(1.0 - gross, 8),
+            "gross_exposure": round(gross, 8),
+            "net_exposure": round(net, 8),
             "confidence": 0.0,
-            "portfolio_thesis": "Fallback/no model call.",
+            "portfolio_thesis": "Fallback/no model call; keep current portfolio weights.",
             "major_risks": [],
             "uncertainty": ["No model allocation was produced."],
             "expected_return_bps": 0,
@@ -1246,7 +1834,7 @@ class BenchmarkEngine:
             "expected_holding_days": 1,
             "estimated_turnover": 0.0,
             "estimated_slippage_cost_bps": 0.0,
-            "rebalance_reason": "fallback_no_model_call",
+            "rebalance_reason": "fallback_no_model_call_keep_current",
             "input_evidence_refs": [],
             "data_quality_warnings_used": [],
         }
@@ -1269,7 +1857,16 @@ class BenchmarkEngine:
         if not errors or current.get("_api_status") in {"dry_run", "missing_key"}:
             return current, 0
 
-        repair_system = """You are the portfolio manager stage of an AI market benchmark.
+        if config.mode == "single_stock":
+            repair_system = """You are the portfolio manager stage of a single-stock AI market benchmark.
+
+Your previous Stage 2 target_exposure violated hard benchmark constraints.
+Correct your own target_exposure and required explanation fields. The simulator
+will convert target_exposure into weights and compute portfolio arithmetic.
+Return only valid compact JSON with the same single-stock Stage 2 schema.
+"""
+        else:
+            repair_system = """You are the portfolio manager stage of an AI market benchmark.
 
 Your previous Stage 2 allocation violated hard benchmark constraints. You still
 own the decision. Correct your own target weights; the simulator will not scale
@@ -1283,7 +1880,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         for attempt in range(1, 3):
             repair_user = json.dumps(
                 {
-                    "task": "Repair your previous portfolio allocation and return valid JSON only.",
+                    "task": "Repair your previous single-stock target_exposure and return valid JSON only." if config.mode == "single_stock" else "Repair your previous portfolio allocation and return valid JSON only.",
                     "attempt": attempt,
                     "max_attempts": 2,
                     "hard_rules": {
@@ -1291,8 +1888,11 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                         "max_gross_exposure": config.max_gross_exposure,
                         "max_nonzero_positions": config.max_nonzero_positions,
                         "max_daily_turnover": config.max_daily_turnover,
+                        "turnover_prompt_buffer": config.turnover_prompt_buffer,
                         "turnover_edge_multiplier": config.turnover_edge_multiplier,
                         "slippage_bps": config.slippage_bps,
+                        "valid_target_exposure_range": manager_bundle.get("valid_target_exposure_range"),
+                        "single_stock_contract": manager_bundle.get("single_stock_contract"),
                         "gross_exposure_formula": "sum(abs(target_weights.values()))",
                         "net_exposure_formula": "sum(target_weights.values())",
                         "cash_weight_formula": "1 - gross_exposure",
@@ -1325,6 +1925,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 current["_allocation_repair_errors"] = errors
                 return current, calls
 
+            repaired = self._normalize_stage2_output(config, repaired, symbols, manager_bundle, book=book, prices=prices)
             if repaired.get("_api_status") not in {"dry_run", "missing_key"}:
                 calls += 1
                 attempt_usages.append(
@@ -1365,11 +1966,27 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         book: PortfolioBook | None = None,
         prices: Dict[str, float] | None = None,
     ) -> List[Dict[str, Any]]:
+        if config.mode == "single_stock":
+            output = self._normalize_stage2_output(config, output, symbols, book=book, prices=prices)
         weights = self._coerce_target_weights(output.get("target_weights") or {}, symbols)
         gross = sum(abs(value) for value in weights.values())
         net = sum(weights.values())
         expected_cash = 1.0 - gross
         errors: List[Dict[str, Any]] = []
+        if config.mode == "single_stock":
+            if _safe_float(output.get("target_exposure")) is None:
+                errors.append({"type": "missing_or_invalid_target_exposure"})
+            for field in ("cash_drag_justification", "why_not_buy_hold"):
+                if not isinstance(output.get(field), str) or not output.get(field, "").strip():
+                    errors.append({"type": f"missing_{field}"})
+            alignment = output.get("stage1_alignment")
+            if alignment not in {"follow", "partial", "veto"}:
+                errors.append({"type": "missing_or_invalid_stage1_alignment", "allowed": ["follow", "partial", "veto"]})
+            veto_reason = output.get("stage1_veto_reason")
+            if not isinstance(veto_reason, str):
+                errors.append({"type": "missing_stage1_veto_reason"})
+            elif alignment == "veto" and not veto_reason.strip():
+                errors.append({"type": "empty_stage1_veto_reason_for_veto"})
         nonzero = [symbol for symbol, value in weights.items() if abs(value) > 1e-9]
         if gross > config.max_gross_exposure + 1e-9:
             errors.append({"type": "gross_exposure_exceeded", "actual": round(gross, 8), "max": config.max_gross_exposure})
@@ -1382,18 +1999,19 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         declared_gross = _safe_float(output.get("gross_exposure"))
         declared_net = _safe_float(output.get("net_exposure"))
         declared_cash = _safe_float(output.get("cash_weight", output.get("cash_target_weight")))
-        if declared_gross is None:
-            errors.append({"type": "missing_gross_exposure"})
-        elif abs(declared_gross - gross) > 1e-4:
-            errors.append({"type": "gross_exposure_mismatch", "declared": declared_gross, "actual": round(gross, 8)})
-        if declared_net is None:
-            errors.append({"type": "missing_net_exposure"})
-        elif abs(declared_net - net) > 1e-4:
-            errors.append({"type": "net_exposure_mismatch", "declared": declared_net, "actual": round(net, 8)})
-        if declared_cash is None:
-            errors.append({"type": "missing_cash_weight"})
-        elif abs(declared_cash - expected_cash) > 1e-4:
-            errors.append({"type": "cash_weight_mismatch", "declared": declared_cash, "actual": round(expected_cash, 8), "rule": "cash_weight must equal 1 - gross_exposure"})
+        if config.mode != "single_stock":
+            if declared_gross is None:
+                errors.append({"type": "missing_gross_exposure"})
+            elif abs(declared_gross - gross) > 1e-4:
+                errors.append({"type": "gross_exposure_mismatch", "declared": declared_gross, "actual": round(gross, 8)})
+            if declared_net is None:
+                errors.append({"type": "missing_net_exposure"})
+            elif abs(declared_net - net) > 1e-4:
+                errors.append({"type": "net_exposure_mismatch", "declared": declared_net, "actual": round(net, 8)})
+            if declared_cash is None:
+                errors.append({"type": "missing_cash_weight"})
+            elif abs(declared_cash - expected_cash) > 1e-4:
+                errors.append({"type": "cash_weight_mismatch", "declared": declared_cash, "actual": round(expected_cash, 8), "rule": "cash_weight must equal 1 - gross_exposure"})
 
         holding_days = _safe_float(output.get("expected_holding_days", output.get("horizon_days")))
         if holding_days is None or holding_days <= 0:
@@ -1408,9 +2026,18 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             declared_turnover = _safe_float(output.get("estimated_turnover"))
             if declared_turnover is None:
                 errors.append({"type": "missing_estimated_turnover", "actual": actual_turnover})
-            elif abs(declared_turnover - actual_turnover) > 0.05:
+            elif config.mode != "single_stock" and abs(declared_turnover - actual_turnover) > 0.05:
                 errors.append({"type": "estimated_turnover_mismatch", "declared": declared_turnover, "actual": actual_turnover})
-            if actual_turnover > config.max_daily_turnover + 1e-9:
+            turnover_limit = _safe_float(config.max_daily_turnover)
+            if turnover_limit is not None and turnover_limit > 0 and actual_turnover > turnover_limit + 1e-9:
+                errors.append(
+                    {
+                        "type": "max_daily_turnover_exceeded",
+                        "actual_turnover": actual_turnover,
+                        "max_daily_turnover": turnover_limit,
+                        "rule": "estimated_turnover and actual target turnover must stay within the daily trading budget",
+                    }
+                )
                 estimated_cost_bps = actual_turnover * float(config.slippage_bps or 0.0)
                 expected_edge_bps = abs(float(_safe_float(output.get("expected_return_bps")) or 0.0))
                 required_edge_bps = estimated_cost_bps * float(config.turnover_edge_multiplier or 1.0)
@@ -1419,7 +2046,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                         {
                             "type": "turnover_cost_hurdle_failed",
                             "actual_turnover": actual_turnover,
-                            "max_daily_turnover": config.max_daily_turnover,
+                            "max_daily_turnover": turnover_limit,
                             "estimated_cost_bps": round(estimated_cost_bps, 8),
                             "expected_edge_bps": round(expected_edge_bps, 8),
                             "required_edge_bps": round(required_edge_bps, 8),

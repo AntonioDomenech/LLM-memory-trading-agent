@@ -13,7 +13,7 @@ from .warehouse.store import Warehouse
 from .warehouse.universe import STOCK_SYMBOLS
 
 
-OFFICIAL_PRESETS = {"budget_official", "full_official"}
+OFFICIAL_PRESETS = {"single_stock_official", "budget_official", "full_official"}
 CORE_CONTEXT_SYMBOLS = {"SPY", "QQQ"}
 STALE_FACT_DAYS = 730
 
@@ -134,9 +134,10 @@ def build_preflight_report(
     stage1_chunks = math.ceil(len(symbols) / max(1, int(config.stage1_chunk_size or 1)))
     report["estimate"] = {
         "test_trading_days": test_days,
-        "decision_calls_per_day": stage1_chunks + 1,
-        "estimated_model_calls": test_days * (stage1_chunks + 1),
+        "decision_calls_per_day": stage1_chunks + 1 + (1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0),
+        "estimated_model_calls": test_days * (stage1_chunks + 1 + (1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0)),
         "stage1_chunks_per_day": stage1_chunks,
+        "exposure_critic_calls_per_day": 1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0,
     }
 
     _price_coverage_check(report, warehouse, symbols, trading_dates)
@@ -450,22 +451,49 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
     if not decisions:
         return {"status": "empty", "message": "No Stage 2 decisions are available."}
 
+    symbols = symbols_for_config(config)
+    primary_symbol = symbols[0] if symbols else config.symbol.upper()
+    stage1_by_date: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for item in all_decisions:
+        if item.get("stage") != "stage1":
+            continue
+        for analysis in (item.get("output") or {}).get("analyses") or []:
+            stage1_by_date[str(item.get("decision_date"))].append(analysis)
+
     rows = []
     legacy_stage2_schema_days = 0
     previous_equity = None
     symbol_cashflows: Dict[str, float] = defaultdict(float)
     symbol_traded: Dict[str, float] = defaultdict(float)
     trade_counts: Counter[str] = Counter()
+    stage1_alignment_counts: Counter[str] = Counter()
+    bullish_but_underexposed_days = 0
     for item in decisions:
         execution = item.get("execution") or {}
         output = item.get("output") or {}
         missing_contract_fields = _missing_stage2_contract_fields(output)
+        if config.mode == "single_stock":
+            for field in ("target_exposure", "cash_drag_justification", "why_not_buy_hold", "stage1_alignment", "stage1_veto_reason"):
+                if field not in output and field not in missing_contract_fields:
+                    missing_contract_fields.append(field)
+            alignment = output.get("stage1_alignment")
+            if alignment:
+                stage1_alignment_counts[str(alignment)] += 1
         if missing_contract_fields:
             legacy_stage2_schema_days += 1
         before = execution.get("portfolio_before") or {}
         after = execution.get("portfolio_after") or {}
         equity = float(after.get("equity") or 0.0)
         weights = execution.get("target_weights") or (item.get("output") or {}).get("target_weights") or {}
+        target_exposure = _safe_float(output.get("target_exposure"))
+        if target_exposure is None and config.mode == "single_stock":
+            target_exposure = _safe_float(weights.get(primary_symbol))
+        if target_exposure is None:
+            target_exposure = _safe_float(after.get("net_exposure")) or 0.0
+        stage1_rows = stage1_by_date.get(str(item.get("decision_date")), [])
+        primary_stage1 = next((row for row in stage1_rows if row.get("symbol") == primary_symbol), {})
+        if config.mode == "single_stock" and primary_stage1.get("stance") == "bullish" and abs(float(target_exposure or 0.0)) < 0.25:
+            bullish_but_underexposed_days += 1
         turnover_value = 0.0
         for trade in execution.get("trades") or []:
             symbol = str(trade.get("symbol"))
@@ -492,6 +520,9 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
                 "turnover": turnover_value / equity_before,
                 "slippage_cost": float(execution.get("slippage_cost") or 0.0),
                 "model_failure": bool(execution.get("model_failure")),
+                "target_exposure": float(target_exposure or 0.0),
+                "stage1_stance": primary_stage1.get("stance"),
+                "stage1_alignment": output.get("stage1_alignment"),
                 "target_gross": sum(abs(float(value)) for value in weights.values()),
                 "nonzero_positions": sum(abs(float(value)) > 1e-9 for value in weights.values()),
                 "missing_contract_fields": missing_contract_fields,
@@ -505,6 +536,47 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
     final_equity = float(df.iloc[-1]["equity"])
     gross_of_cost_final = final_equity + slippage
     worst_days = df.sort_values("daily_return", na_position="last").head(10).to_dict(orient="records")
+    max_participation_exposure = max(float(config.max_gross_exposure or 1.0), 1e-9)
+    avg_target_exposure = float(df["target_exposure"].mean()) if "target_exposure" in df else 0.0
+    if config.mode == "single_stock":
+        participation_ratio = float(df["target_exposure"].clip(lower=0.0).mean() / max_participation_exposure)
+    else:
+        participation_ratio = float(df["gross_exposure"].mean() / max_participation_exposure)
+    cash_drag_proxy = None
+    missed_upside_days = None
+    if warehouse is not None and config.mode == "single_stock" and len(df) > 1:
+        missed_upside_days = 0
+        cash_drag_proxy = 0.0
+        ordered = df.sort_values("fill_date").reset_index(drop=True)
+        for index in range(0, len(ordered) - 1):
+            start_date = str(ordered.iloc[index]["fill_date"])
+            end_date = str(ordered.iloc[index + 1]["fill_date"])
+            try:
+                prices = warehouse.conn.execute(
+                    """
+                    SELECT CAST(date AS VARCHAR) AS date, COALESCE(adj_close, close) AS price
+                    FROM asset_daily
+                    WHERE symbol = ?
+                      AND date IN (CAST(? AS DATE), CAST(? AS DATE))
+                      AND ohlcv_available = true
+                    """,
+                    [primary_symbol, start_date, end_date],
+                ).fetchdf()
+            except Exception:
+                continue
+            if prices.empty or len(prices) < 2:
+                continue
+            by_date = {str(row["date"])[:10]: _safe_float(row["price"]) for _, row in prices.iterrows()}
+            start_price = by_date.get(start_date)
+            end_price = by_date.get(end_date)
+            if start_price is None or end_price is None or start_price <= 0:
+                continue
+            stock_return = end_price / start_price - 1.0
+            exposure = float(ordered.iloc[index]["target_exposure"] or 0.0)
+            if stock_return > 0:
+                if exposure < 0.25:
+                    missed_upside_days += 1
+                cash_drag_proxy += stock_return * max(0.0, 1.0 - exposure)
     monthly = []
     if not df.empty:
         df["month"] = df["fill_date"].astype(str).str[:7]
@@ -572,6 +644,14 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
             "avg_gross_exposure": float(df["gross_exposure"].mean()),
             "avg_net_exposure": float(df["net_exposure"].mean()),
             "avg_short_exposure": float(df["short_exposure"].mean()),
+            "avg_target_exposure": avg_target_exposure,
+            "participation_ratio": participation_ratio,
+            "cash_drag_proxy": cash_drag_proxy,
+            "missed_upside_days": missed_upside_days,
+            "bullish_but_underexposed_days": bullish_but_underexposed_days,
+            "stage1_follow_rate": float(stage1_alignment_counts.get("follow", 0) / max(1, sum(stage1_alignment_counts.values()))),
+            "stage1_partial_rate": float(stage1_alignment_counts.get("partial", 0) / max(1, sum(stage1_alignment_counts.values()))),
+            "stage1_veto_rate": float(stage1_alignment_counts.get("veto", 0) / max(1, sum(stage1_alignment_counts.values()))),
             "invalid_allocations": invalid_allocations,
             "legacy_stage2_schema_days": legacy_stage2_schema_days,
             "synthetic_news_prompt_records": synthetic_news_prompt_records,

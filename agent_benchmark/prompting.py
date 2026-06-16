@@ -57,7 +57,8 @@ STAGE1_SYSTEM_PROMPT = """You are the analyst stage of an AI market benchmark.
 Use only the compact point-in-time bundle. The memory items are deterministic
 historical cases, not model-written lessons. Score each supplied symbol. Keep
 every string short; evidence, memory, and uncertainty arrays should contain at
-most 1 terse item each. Use minified JSON and do not include zero-weight filler.
+most 1 terse item each. Use decision_support as point-in-time evidence, not as
+an automatic order. Use minified JSON and do not include zero-weight filler.
 
 Return only compact JSON:
 {
@@ -92,7 +93,15 @@ shorting is enabled. Keep strings short, omit zero target weights, and do not
 repeat Stage 1 evidence. Prefer a sparse portfolio with 8 to 12 nonzero
 positions; fewer is valid, including all cash. You must treat turnover and
 slippage as part of the decision. If you change positions, explain why the edge
-is worth the trading cost.
+is worth the trading cost. Use decision_support ranks and memory stats as
+point-in-time evidence, but you own the final allocation.
+
+Hard constraints: nonzero positions must be <= max_nonzero_positions and
+estimated_turnover must be <= max_daily_turnover. Do not force shorts. In a
+positive SPY/QQQ regime, prefer net-long exposure unless the supplied evidence
+strongly supports hedges. When opening or reshaping positions, leave a small
+gross-exposure buffer for slippage/cash effects instead of targeting the exact
+maximum.
 
 Use input_bundle.current_position_weights as the current portfolio target. If
 you want no trade, copy those weights into target_weights and set
@@ -128,6 +137,61 @@ Return only compact JSON:
 """
 
 
+EXPOSURE_CRITIC_SYSTEM_PROMPT = """You are the exposure critic for a single-stock AI market benchmark.
+
+Use only the supplied point-in-time bundle and Stage 1 output. Your job is to
+pressure-test underexposure before the portfolio manager decides. Compare the
+case for participating in the stock against the case for staying defensive.
+Do not produce a trade. Return only compact JSON:
+{
+  "bull_exposure_case": "...",
+  "defensive_case": "...",
+  "cash_drag_risk": "...",
+  "recommended_exposure_band": [0.0, 0.3],
+  "key_disagreement": "..."
+}
+"""
+
+
+SINGLE_STOCK_STAGE2_SYSTEM_PROMPT = """You are the portfolio manager stage of a single-stock AI market benchmark.
+
+You own the final target exposure for exactly one stock. The simulator will
+convert your target_exposure into the stock target weight and will compute
+cash_weight, gross_exposure, net_exposure, turnover, and slippage. Do not do
+portfolio arithmetic yourself. Use only the compact point-in-time bundle,
+deterministic historical memory, Stage 1 output, and exposure critic output.
+
+target_exposure meaning:
+- 1.0 = 100% long the stock
+- 0.0 = all cash
+- -1.0 = 100% short the stock when shorting is enabled
+
+Respect input_bundle.valid_target_exposure_range. If you choose low exposure
+while Stage 1, memory, stock/SPY/QQQ context, or the exposure critic is favorable,
+you must explain the opportunity cost of cash. Low exposure is valid only as
+your own explicit benchmark decision, not as a default cautious posture.
+
+Return only compact JSON:
+{
+  "target_exposure": 0.25,
+  "expected_holding_days": 20,
+  "rebalance_reason": "...",
+  "input_evidence_refs": ["stage1:AAPL", "memory:detagg:AAPL"],
+  "data_quality_warnings_used": ["..."],
+  "confidence": 0.0,
+  "portfolio_thesis": "...",
+  "major_risks": ["..."],
+  "uncertainty": ["..."],
+  "expected_return_bps": 0,
+  "horizon_days": 20,
+  "cash_drag_justification": "...",
+  "why_not_buy_hold": "...",
+  "stage1_alignment": "follow | partial | veto",
+  "stage1_veto_reason": "..."
+}
+"""
+
+
 def build_stage1_prompt(input_bundle: Dict[str, Any], symbols: list[str]) -> Tuple[str, str]:
     user_payload = {
         "task": "Score these candidate stocks for the benchmark portfolio and return valid JSON only.",
@@ -137,7 +201,24 @@ def build_stage1_prompt(input_bundle: Dict[str, Any], symbols: list[str]) -> Tup
     return STAGE1_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
 
 
+def build_exposure_critic_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[str, Any]]) -> Tuple[str, str]:
+    user_payload = {
+        "task": "Critique single-stock exposure and return valid JSON only.",
+        "stage1_outputs": stage1_outputs,
+        "input_bundle": input_bundle,
+    }
+    return EXPOSURE_CRITIC_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
+
+
 def build_stage2_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[str, Any]]) -> Tuple[str, str]:
+    if input_bundle.get("mode") == "single_stock":
+        user_payload = {
+            "task": "Choose final single-stock target_exposure for the benchmark and return valid JSON only.",
+            "stage1_outputs": stage1_outputs,
+            "input_bundle": input_bundle,
+        }
+        return SINGLE_STOCK_STAGE2_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
+
     user_payload = {
         "task": "Choose final portfolio target weights for the benchmark and return valid JSON only.",
         "stage1_outputs": stage1_outputs,

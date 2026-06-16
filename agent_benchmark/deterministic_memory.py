@@ -43,6 +43,12 @@ def _finite(value: Any) -> bool:
         return False
 
 
+def _bounded(value: float | None, scale: float) -> float:
+    if value is None or not scale:
+        return 0.0
+    return max(-1.0, min(1.0, float(value) / float(scale)))
+
+
 @dataclass
 class MemorySummary:
     cases: int
@@ -387,11 +393,20 @@ class DeterministicMarketMemory:
                 }
             )
         confidence = self._aggregate_confidence(stats.get("20d", {}), best_score)
+        suggested_exposure = self._suggested_exposure(stats, confidence)
         content = (
             f"{symbol} aggregate memory from {len(rows)} similar point-in-time cases. "
             f"Retrieval confidence={confidence}; best_score={best_score:.3f}. "
             + " | ".join(fragments)
         )
+        if suggested_exposure:
+            band = suggested_exposure["band"]
+            content += (
+                f" Suggested exposure evidence: {suggested_exposure['horizon']} "
+                f"score={suggested_exposure['score']:+.2f}, band=[{band[0]:+.2f}, {band[1]:+.2f}], "
+                f"base_rate={_fmt_pct(suggested_exposure['base_rate_return'])}, "
+                f"hit={suggested_exposure['hit_rate']:.0%}, downside={suggested_exposure['downside_rate']:.0%}."
+            )
         return {
             "id": f"detagg:{symbol}:{_date(best['date'])}",
             "model": "deterministic",
@@ -410,11 +425,50 @@ class DeterministicMarketMemory:
                 "aggregate_stats": stats,
                 "examples": example_rows,
                 "confidence": confidence,
+                "suggested_exposure": suggested_exposure,
                 "neighbor_count": int(len(rows)),
             },
             "created_at": "",
             "retrieval_score": round(best_score, 6),
         }
+
+    def _suggested_exposure(self, stats: Dict[str, Dict[str, Any]], confidence: str) -> Dict[str, Any]:
+        horizon = next((name for name in ("20d", "60d", "5d", "1d") if name in stats), "")
+        if not horizon:
+            return {}
+        horizon_stats = stats.get(horizon) or {}
+        mean_return = _safe_float(horizon_stats.get("mean_return"))
+        hit_rate = _safe_float(horizon_stats.get("hit_rate"))
+        downside_rate = _safe_float(horizon_stats.get("downside_rate"))
+        cases = int(horizon_stats.get("cases") or 0)
+        score = 0.65 * _bounded(mean_return, 0.08) + 0.35 * _bounded((hit_rate - 0.5) if hit_rate is not None else None, 0.25)
+        if confidence == "weak":
+            score *= 0.75
+        if cases < 10:
+            score *= 0.65
+        if horizon == "1d":
+            score *= 0.45
+        return {
+            "horizon": horizon,
+            "score": round(float(score), 6),
+            "band": self._score_to_exposure_band(score),
+            "base_rate_return": mean_return,
+            "hit_rate": hit_rate,
+            "downside_rate": downside_rate,
+            "confidence": confidence,
+            "cases": cases,
+        }
+
+    def _score_to_exposure_band(self, score: float) -> List[float]:
+        if score >= 0.45:
+            return [0.5, 0.85]
+        if score >= 0.18:
+            return [0.2, 0.5]
+        if score <= -0.45:
+            return [-0.85, -0.5]
+        if score <= -0.18:
+            return [-0.5, -0.2]
+        return [0.0, 0.2]
 
     def _aggregate_confidence(self, stats: Dict[str, Any], best_score: float) -> str:
         cases = int(stats.get("cases") or 0)

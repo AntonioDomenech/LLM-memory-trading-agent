@@ -30,8 +30,8 @@ const API_BASE = "http://127.0.0.1:8000";
 
 const emptyConfig = {
   benchmark: {
-    mode: "balanced_50_portfolio",
-    run_preset: "balanced_50_mini",
+    mode: "single_stock",
+    run_preset: "single_stock_diagnostic",
     symbol: "AAPL",
     company_name: "Apple",
     selected_symbols: [],
@@ -70,6 +70,10 @@ const emptyConfig = {
     prompt_detail_level: "compact",
     embedding_provider: "local",
     decision_process: "two_stage_llm",
+    opportunity_cost_policy: "soft",
+    exposure_critic_enabled: true,
+    outcome_learning_mode: "off",
+    turnover_prompt_buffer: 0.02,
     strict_preflight: true,
     require_paid_micro_pilot: true,
     max_nonzero_positions: 12,
@@ -115,13 +119,13 @@ const help = {
   },
   preset: {
     title: "Run preset",
-    body: "Presets change scope and cost. Mini proves mechanics. Budget Official is the recommended affordable benchmark.",
-    more: "Budget Official builds deterministic memory from 2000-2024 and only calls the model for 2025 decisions.",
+    body: "Presets change scope and cost. Single-stock diagnostic is the default debugging path.",
+    more: "Single-stock official builds deterministic memory from 2000-2024 and calls the model for one stock across 2025.",
   },
   mode: {
     title: "Benchmark mode",
-    body: "Single-stock is easier to debug. Balanced 50 is the official portfolio benchmark.",
-    more: "Balanced 50 asks the model to compare stocks and allocate one portfolio instead of judging one stock alone.",
+    body: "Single-stock is the primary benchmark path. Balanced 50 remains available as an advanced legacy portfolio mode.",
+    more: "Single-stock asks for target exposure and lets the engine handle arithmetic; Balanced 50 asks for full portfolio weights.",
   },
   trainDates: {
     title: "Training replay dates",
@@ -213,10 +217,25 @@ const help = {
     body: "Maximum portfolio weight the model can change in one day without proving enough expected edge.",
     more: "20% means moving from 10% Apple to 20% Apple counts as 10% turnover. High turnover must beat estimated trading cost by the configured multiplier.",
   },
+  turnoverBuffer: {
+    title: "Turnover prompt buffer",
+    body: "Shrinks the prompt-time valid exposure range so the model has room for rounding and slippage effects.",
+    more: "With 20% max turnover and a 2% buffer, the prompt asks the model to move at most 18 percentage points from current exposure.",
+  },
   edgeMultiplier: {
     title: "Cost edge multiplier",
     body: "How much expected edge is required when a trade exceeds the daily turnover limit.",
     more: "A value of 3 means the model must claim expected edge at least three times estimated slippage cost.",
+  },
+  exposureCritic: {
+    title: "Exposure critic",
+    body: "Adds a compact single-stock critique before Stage 2 so cash drag is challenged explicitly.",
+    more: "The critic does not trade. Stage 2 can follow, partially follow, or veto it with a written reason.",
+  },
+  outcomeLearning: {
+    title: "Outcome lessons",
+    body: "Opt-in diagnostic memory written after outcomes are knowable.",
+    more: "Keep this off for official deterministic comparisons. Diagnostic lessons are point-in-time safe but model/run-specific.",
   },
   memoryNeighbors: {
     title: "Memory neighbors",
@@ -274,10 +293,90 @@ const sourceHelp = {
 };
 
 const presetInfo = {
+  single_stock_diagnostic: {
+    title: "Single-stock Diagnostic",
+    subtitle: "Default debugging run",
+    body: "Runs AAPL first so exposure, cash drag, memory, and decisions are easy to inspect.",
+    patch: {
+      mode: "single_stock",
+      run_preset: "single_stock_diagnostic",
+      symbol: "AAPL",
+      company_name: "Apple",
+      train_start: "2024-12-02",
+      train_end: "2024-12-09",
+      test_start: "2025-01-02",
+      test_end: "2025-01-08",
+      max_train_days: 5,
+      max_test_days: 5,
+      initial_cash: 1000,
+      allow_short: true,
+      max_gross_exposure: 1,
+      max_output_tokens: 900,
+      max_news_per_symbol: 2,
+      stage1_chunk_size: 25,
+      memory_mode: "deterministic_market_cases",
+      memory_retrieval: "deterministic_similarity",
+      memory_k_neighbors: 50,
+      memory_examples_per_symbol: 2,
+      strict_preflight: true,
+      require_paid_micro_pilot: false,
+      max_nonzero_positions: 1,
+      max_daily_turnover: 0.2,
+      turnover_prompt_buffer: 0.02,
+      turnover_edge_multiplier: 3,
+      opportunity_cost_policy: "soft",
+      exposure_critic_enabled: true,
+      outcome_learning_mode: "off",
+      invalid_run_abort_count: 3,
+      invalid_run_abort_rate: 0.05,
+      macro_policy: "omit_if_missing",
+      news_policy: "real_titles_or_aggregate_events",
+      prompt_detail_level: "compact",
+    },
+  },
+  single_stock_official: {
+    title: "Single-stock Official",
+    subtitle: "Primary full test",
+    body: "Uses 2000-2024 deterministic memory, then tests AAPL across the full 2025 year.",
+    patch: {
+      mode: "single_stock",
+      run_preset: "single_stock_official",
+      symbol: "AAPL",
+      company_name: "Apple",
+      train_start: "2000-01-01",
+      train_end: "2024-12-31",
+      test_start: "2025-01-01",
+      test_end: "2025-12-31",
+      max_train_days: 0,
+      max_test_days: 0,
+      initial_cash: 1000,
+      max_output_tokens: 900,
+      max_news_per_symbol: 2,
+      stage1_chunk_size: 25,
+      memory_mode: "deterministic_market_cases",
+      memory_retrieval: "deterministic_similarity",
+      memory_k_neighbors: 50,
+      memory_examples_per_symbol: 2,
+      strict_preflight: true,
+      require_paid_micro_pilot: true,
+      max_nonzero_positions: 1,
+      max_daily_turnover: 0.2,
+      turnover_prompt_buffer: 0.02,
+      turnover_edge_multiplier: 3,
+      opportunity_cost_policy: "soft",
+      exposure_critic_enabled: true,
+      outcome_learning_mode: "off",
+      invalid_run_abort_count: 3,
+      invalid_run_abort_rate: 0.05,
+      macro_policy: "omit_if_missing",
+      news_policy: "real_titles_or_aggregate_events",
+      prompt_detail_level: "compact",
+    },
+  },
   balanced_50_mini: {
     title: "Balanced 50 Mini Pilot",
-    subtitle: "Default first run",
-    body: "A tiny official-mode run that proves the two-stage portfolio, memory, and result screens work.",
+    subtitle: "Legacy portfolio pilot",
+    body: "A tiny balanced-portfolio run that proves the older two-stage allocation path still works.",
     patch: {
       mode: "balanced_50_portfolio",
       run_preset: "balanced_50_mini",
@@ -301,42 +400,11 @@ const presetInfo = {
       require_paid_micro_pilot: true,
       max_nonzero_positions: 12,
       max_daily_turnover: 0.2,
+      turnover_prompt_buffer: 0.02,
       turnover_edge_multiplier: 3,
-      invalid_run_abort_count: 3,
-      invalid_run_abort_rate: 0.05,
-      macro_policy: "omit_if_missing",
-      news_policy: "real_titles_or_aggregate_events",
-      prompt_detail_level: "compact",
-    },
-  },
-  single_stock_diagnostic: {
-    title: "Single-stock Diagnostic",
-    subtitle: "Cheapest debugging mode",
-    body: "Runs one stock so prompts, data quality, memory, and decisions are easier to inspect.",
-    patch: {
-      mode: "single_stock",
-      run_preset: "single_stock_diagnostic",
-      symbol: "AAPL",
-      company_name: "Apple",
-      train_start: "2024-12-02",
-      train_end: "2024-12-09",
-      test_start: "2025-01-02",
-      test_end: "2025-01-08",
-      max_train_days: 5,
-      max_test_days: 5,
-      initial_cash: 1000,
-      max_output_tokens: 900,
-      max_news_per_symbol: 2,
-      stage1_chunk_size: 25,
-      memory_mode: "deterministic_market_cases",
-      memory_retrieval: "deterministic_similarity",
-      memory_k_neighbors: 50,
-      memory_examples_per_symbol: 2,
-      strict_preflight: true,
-      require_paid_micro_pilot: false,
-      max_nonzero_positions: 12,
-      max_daily_turnover: 0.2,
-      turnover_edge_multiplier: 3,
+      opportunity_cost_policy: "soft",
+      exposure_critic_enabled: false,
+      outcome_learning_mode: "off",
       invalid_run_abort_count: 3,
       invalid_run_abort_rate: 0.05,
       macro_policy: "omit_if_missing",
@@ -345,9 +413,9 @@ const presetInfo = {
     },
   },
   budget_official: {
-    title: "Budget Official",
-    subtitle: "Recommended full test",
-    body: "Uses all 2000-2024 history as deterministic memory, then calls the model only for 2025 decisions.",
+    title: "Balanced 50 Budget Official",
+    subtitle: "Legacy advanced",
+    body: "Uses all 2000-2024 history as deterministic memory for the older balanced-portfolio benchmark.",
     patch: {
       mode: "balanced_50_portfolio",
       run_preset: "budget_official",
@@ -373,7 +441,11 @@ const presetInfo = {
       require_paid_micro_pilot: true,
       max_nonzero_positions: 12,
       max_daily_turnover: 0.2,
+      turnover_prompt_buffer: 0.02,
       turnover_edge_multiplier: 3,
+      opportunity_cost_policy: "soft",
+      exposure_critic_enabled: false,
+      outcome_learning_mode: "off",
       invalid_run_abort_count: 3,
       invalid_run_abort_rate: 0.05,
       macro_policy: "omit_if_missing",
@@ -382,9 +454,9 @@ const presetInfo = {
     },
   },
   full_official: {
-    title: "Full Official Benchmark",
-    subtitle: "Same dates, compact memory",
-    body: "Uses the official 2000-2024 train and 2025 test split with deterministic memory and compact prompts.",
+    title: "Balanced 50 Full Official",
+    subtitle: "Legacy full test",
+    body: "Runs the balanced-portfolio official split with deterministic memory and compact prompts.",
     patch: {
       mode: "balanced_50_portfolio",
       run_preset: "full_official",
@@ -410,7 +482,11 @@ const presetInfo = {
       require_paid_micro_pilot: true,
       max_nonzero_positions: 12,
       max_daily_turnover: 0.2,
+      turnover_prompt_buffer: 0.02,
       turnover_edge_multiplier: 3,
+      opportunity_cost_policy: "soft",
+      exposure_critic_enabled: false,
+      outcome_learning_mode: "off",
       invalid_run_abort_count: 3,
       invalid_run_abort_rate: 0.05,
       macro_policy: "omit_if_missing",
@@ -712,7 +788,7 @@ function PreflightPanel({ report, onRun, loading }) {
       <div className="section-title">
         <div>
           <h2>Preflight gate</h2>
-          <p className="subtle">Required before Budget Official or Full Official can spend tokens. It checks the inputs, not the model.</p>
+          <p className="subtle">Required before official runs can spend tokens. It checks the inputs, not the model.</p>
         </div>
         <div className="button-row">
           <StatusPill tone={tone === "bad" ? "warn" : tone} icon={tone === "ok" ? CheckCircle2 : AlertCircle} label={label} />
@@ -770,6 +846,14 @@ function DiagnosticsPanel({ report, onRefresh, loading }) {
             <Metric label="Total turnover" value={formatPct(metrics.total_turnover)} />
             <Metric label="Avg gross exposure" value={formatPct(metrics.avg_gross_exposure)} />
             <Metric label="Avg net exposure" value={formatPct(metrics.avg_net_exposure)} />
+            <Metric label="Avg target exposure" value={formatPct(metrics.avg_target_exposure)} />
+            <Metric label="Participation" value={formatPct(metrics.participation_ratio)} />
+            <Metric label="Cash drag proxy" value={formatPct(metrics.cash_drag_proxy)} />
+            <Metric label="Missed upside days" value={metrics.missed_upside_days ?? "-"} />
+            <Metric label="Bullish underexposed" value={metrics.bullish_but_underexposed_days ?? "-"} />
+            <Metric label="Stage 1 follow" value={formatPct(metrics.stage1_follow_rate)} />
+            <Metric label="Stage 1 partial" value={formatPct(metrics.stage1_partial_rate)} />
+            <Metric label="Stage 1 veto" value={formatPct(metrics.stage1_veto_rate)} />
             <Metric label="Invalid allocations" value={metrics.invalid_allocations ?? "-"} />
             <Metric label="Legacy schema days" value={metrics.legacy_stage2_schema_days ?? "-"} />
             <Metric label="Avg positions" value={metrics.avg_nonzero_positions?.toFixed?.(1) ?? "-"} />
@@ -830,7 +914,7 @@ function App() {
 
   const benchmark = config.benchmark;
   const secrets = config.secrets;
-  const selectedPreset = presetInfo[benchmark.run_preset] || presetInfo.balanced_50_mini;
+  const selectedPreset = presetInfo[benchmark.run_preset] || presetInfo.single_stock_diagnostic;
 
   useEffect(() => {
     refreshAll();
@@ -1017,7 +1101,7 @@ function App() {
     setError("");
     try {
       await saveConfig();
-      const needsPreflight = !dryRun && benchmark.strict_preflight && ["budget_official", "full_official"].includes(benchmark.run_preset);
+      const needsPreflight = !dryRun && benchmark.strict_preflight && ["single_stock_official", "budget_official", "full_official"].includes(benchmark.run_preset);
       if (needsPreflight) {
         const report = await api("/api/benchmark/preflight", {
           method: "POST",
@@ -1237,6 +1321,15 @@ function App() {
                       <ExplainedField label="Daily turnover limit" helpKey="turnover">
                         <input type="number" min="0" max="1" step="0.05" value={benchmark.max_daily_turnover} onChange={(e) => updateBenchmark(["max_daily_turnover"], Number(e.target.value))} />
                       </ExplainedField>
+                      <ExplainedField label="Turnover buffer" helpKey="turnoverBuffer">
+                        <input type="number" min="0" max="0.5" step="0.01" value={benchmark.turnover_prompt_buffer} onChange={(e) => updateBenchmark(["turnover_prompt_buffer"], Number(e.target.value))} />
+                      </ExplainedField>
+                      <ExplainedField label="Exposure critic" helpKey="exposureCritic">
+                        <select value={benchmark.exposure_critic_enabled ? "yes" : "no"} onChange={(e) => updateBenchmark(["exposure_critic_enabled"], e.target.value === "yes")}>
+                          <option value="yes">Yes</option>
+                          <option value="no">No</option>
+                        </select>
+                      </ExplainedField>
                       <ExplainedField label="Strict preflight" helpKey="preflight">
                         <select value={benchmark.strict_preflight ? "yes" : "no"} onChange={(e) => updateBenchmark(["strict_preflight"], e.target.value === "yes")}>
                           <option value="yes">Yes</option>
@@ -1318,8 +1411,8 @@ function App() {
               <div className="form-grid">
                 <ExplainedField label="Mode" helpKey="mode">
                   <select value={benchmark.mode} onChange={(e) => updateBenchmark(["mode"], e.target.value)}>
-                    <option value="balanced_50_portfolio">Balanced 50 portfolio</option>
                     <option value="single_stock">Single-stock diagnostic</option>
+                    <option value="balanced_50_portfolio">Balanced 50 portfolio</option>
                   </select>
                 </ExplainedField>
                 <ExplainedField label="Single-stock symbol" helpKey="mode">
@@ -1366,8 +1459,17 @@ function App() {
                 <ExplainedField label="Daily turnover limit" helpKey="turnover">
                   <input type="number" min="0" max="1" step="0.05" value={benchmark.max_daily_turnover} onChange={(e) => updateBenchmark(["max_daily_turnover"], Number(e.target.value))} />
                 </ExplainedField>
+                <ExplainedField label="Turnover buffer" helpKey="turnoverBuffer">
+                  <input type="number" min="0" max="0.5" step="0.01" value={benchmark.turnover_prompt_buffer} onChange={(e) => updateBenchmark(["turnover_prompt_buffer"], Number(e.target.value))} />
+                </ExplainedField>
                 <ExplainedField label="Cost edge multiplier" helpKey="edgeMultiplier">
                   <input type="number" min="1" step="0.5" value={benchmark.turnover_edge_multiplier} onChange={(e) => updateBenchmark(["turnover_edge_multiplier"], Number(e.target.value))} />
+                </ExplainedField>
+                <ExplainedField label="Exposure critic" helpKey="exposureCritic">
+                  <select value={benchmark.exposure_critic_enabled ? "yes" : "no"} onChange={(e) => updateBenchmark(["exposure_critic_enabled"], e.target.value === "yes")}>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
                 </ExplainedField>
                 <ExplainedField label="Slippage bps" helpKey="slippage">
                   <input type="number" value={benchmark.slippage_bps} onChange={(e) => updateBenchmark(["slippage_bps"], Number(e.target.value))} />
@@ -1397,6 +1499,12 @@ function App() {
                 </ExplainedField>
                 <ExplainedField label="Examples per symbol" helpKey="memoryNeighbors">
                   <input type="number" min="0" max="5" value={benchmark.memory_examples_per_symbol} onChange={(e) => updateBenchmark(["memory_examples_per_symbol"], Number(e.target.value))} />
+                </ExplainedField>
+                <ExplainedField label="Outcome lessons" helpKey="outcomeLearning">
+                  <select value={benchmark.outcome_learning_mode} onChange={(e) => updateBenchmark(["outcome_learning_mode"], e.target.value)}>
+                    <option value="off">Off</option>
+                    <option value="diagnostic_lessons">Diagnostic lessons</option>
+                  </select>
                 </ExplainedField>
                 <ExplainedField label="Strict preflight" helpKey="preflight">
                   <select value={benchmark.strict_preflight ? "yes" : "no"} onChange={(e) => updateBenchmark(["strict_preflight"], e.target.value === "yes")}>
