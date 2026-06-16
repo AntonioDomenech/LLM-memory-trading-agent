@@ -52,6 +52,13 @@ def list_openai_models(secrets: SecretConfig) -> Dict[str, Any]:
 def _extract_output_text(data: Dict[str, Any]) -> str:
     if data.get("output_text"):
         return data["output_text"]
+    message = data.get("message") or {}
+    if isinstance(message, dict):
+        content = message.get("content") or ""
+        if content:
+            return content
+        if message.get("reasoning") or message.get("thinking"):
+            return message.get("reasoning") or message.get("thinking") or ""
     chunks: List[str] = []
     for item in data.get("output", []) or []:
         for content in item.get("content", []) or []:
@@ -62,7 +69,10 @@ def _extract_output_text(data: Dict[str, Any]) -> str:
     choices = data.get("choices") or []
     if choices:
         message = choices[0].get("message") or {}
-        return message.get("content") or ""
+        content = message.get("content") or ""
+        if content:
+            return content
+        return message.get("reasoning") or message.get("thinking") or ""
     return json.dumps(data)
 
 
@@ -183,6 +193,8 @@ def _call_chat_completions(config: BenchmarkConfig, secrets: SecretConfig, syste
     }
     if config.temperature is not None:
         base_payload["temperature"] = config.temperature
+    if is_local_model_run(config, secrets):
+        base_payload["think"] = False
 
     url = f"{_base_url(secrets, config)}/chat/completions"
     for token_field in ("max_completion_tokens", "max_tokens"):
@@ -202,6 +214,161 @@ def _call_chat_completions(config: BenchmarkConfig, secrets: SecretConfig, syste
     raise RuntimeError("Chat Completions request failed before a response was returned")
 
 
+def _ollama_native_base_url(config: BenchmarkConfig, secrets: SecretConfig) -> str:
+    base = _base_url(secrets, config)
+    if base.endswith("/v1"):
+        return base[:-3]
+    return base
+
+
+def _call_ollama_native_chat(config: BenchmarkConfig, secrets: SecretConfig, system: str, user: str, *, cache_namespace: str) -> Dict[str, Any]:
+    options: Dict[str, Any] = {"num_predict": config.max_output_tokens}
+    if config.temperature is not None:
+        options["temperature"] = config.temperature
+    payload = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        "think": False,
+        "format": _ollama_schema_for_namespace(config, cache_namespace),
+        "options": options,
+    }
+    data = _post_json(f"{_ollama_native_base_url(config, secrets)}/api/chat", _auth_headers(secrets, config), payload)
+    prompt_tokens = _int(data.get("prompt_eval_count"))
+    output_tokens = _int(data.get("eval_count"))
+    if prompt_tokens or output_tokens:
+        data["usage"] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": prompt_tokens + output_tokens,
+        }
+    return data
+
+
+def _ollama_schema_for_namespace(config: BenchmarkConfig, namespace: str) -> Dict[str, Any] | str:
+    namespace = namespace or ""
+    if namespace.startswith("stage1"):
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "analyses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "symbol": {"type": "string"},
+                            "stance": {"type": "string", "enum": ["bullish", "bearish", "neutral", "uncertain"]},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "expected_return_bps": {"type": "number"},
+                            "horizon_days": {"type": "integer", "minimum": 1},
+                            "key_evidence": {"type": "array", "items": {"type": "string"}},
+                            "memory_refs": {"type": "array", "items": {"type": "string"}},
+                            "uncertainty": {"type": "array", "items": {"type": "string"}},
+                            "proposed_target_weight": {"type": "number", "minimum": -1, "maximum": 1},
+                        },
+                        "required": ["symbol", "stance", "confidence", "expected_return_bps", "horizon_days", "key_evidence", "memory_refs", "uncertainty", "proposed_target_weight"],
+                    },
+                },
+                "market_regime_notes": {"type": "string"},
+                "data_quality_notes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["analyses", "market_regime_notes", "data_quality_notes"],
+        }
+    if namespace.startswith("exposure-critic"):
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "bull_exposure_case": {"type": "string"},
+                "defensive_case": {"type": "string"},
+                "cash_drag_risk": {"type": "string"},
+                "recommended_exposure_band": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                "key_disagreement": {"type": "string"},
+            },
+            "required": ["bull_exposure_case", "defensive_case", "cash_drag_risk", "recommended_exposure_band", "key_disagreement"],
+        }
+    if namespace.startswith("reflection-lesson"):
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "summary_lesson": {"type": "string"},
+                "lesson_tags": {"type": "array", "items": {"type": "string"}},
+                "use_in_future_if": {"type": "string"},
+                "avoid_if": {"type": "string"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": ["summary_lesson", "lesson_tags", "use_in_future_if", "avoid_if", "confidence"],
+        }
+    if namespace.startswith("stage2") and config.mode == "single_stock":
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "target_exposure": {"type": "number", "minimum": -float(config.max_gross_exposure or 1.0) if config.allow_short else 0.0, "maximum": float(config.max_gross_exposure or 1.0)},
+                "expected_holding_days": {"type": "integer", "minimum": 1, "maximum": 60},
+                "rebalance_reason": {"type": "string"},
+                "input_evidence_refs": {"type": "array", "items": {"type": "string"}},
+                "data_quality_warnings_used": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "portfolio_thesis": {"type": "string"},
+                "major_risks": {"type": "array", "items": {"type": "string"}},
+                "uncertainty": {"type": "array", "items": {"type": "string"}},
+                "expected_return_bps": {"type": "number"},
+                "horizon_days": {"type": "integer", "minimum": 1, "maximum": 60},
+                "cash_drag_justification": {"type": "string"},
+                "why_not_buy_hold": {"type": "string"},
+                "stage1_alignment": {"type": "string", "enum": ["follow", "partial", "veto"]},
+                "stage1_veto_reason": {"type": "string"},
+            },
+            "required": [
+                "target_exposure",
+                "expected_holding_days",
+                "rebalance_reason",
+                "input_evidence_refs",
+                "data_quality_warnings_used",
+                "confidence",
+                "portfolio_thesis",
+                "major_risks",
+                "uncertainty",
+                "expected_return_bps",
+                "horizon_days",
+                "cash_drag_justification",
+                "why_not_buy_hold",
+                "stage1_alignment",
+                "stage1_veto_reason",
+            ],
+        }
+    if namespace.startswith("stage2"):
+        return {
+            "type": "object",
+            "properties": {
+                "target_weights": {"type": "object"},
+                "cash_weight": {"type": "number"},
+                "gross_exposure": {"type": "number"},
+                "net_exposure": {"type": "number"},
+                "expected_holding_days": {"type": "integer", "minimum": 1},
+                "estimated_turnover": {"type": "number"},
+                "estimated_slippage_cost_bps": {"type": "number"},
+                "rebalance_reason": {"type": "string"},
+                "input_evidence_refs": {"type": "array", "items": {"type": "string"}},
+                "data_quality_warnings_used": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "number"},
+                "portfolio_thesis": {"type": "string"},
+                "major_risks": {"type": "array", "items": {"type": "string"}},
+                "uncertainty": {"type": "array", "items": {"type": "string"}},
+                "expected_return_bps": {"type": "number"},
+                "horizon_days": {"type": "integer", "minimum": 1},
+            },
+            "required": ["target_weights", "cash_weight", "gross_exposure", "net_exposure", "expected_holding_days", "estimated_turnover", "estimated_slippage_cost_bps", "rebalance_reason", "input_evidence_refs", "data_quality_warnings_used", "confidence", "portfolio_thesis", "major_risks", "uncertainty", "expected_return_bps", "horizon_days"],
+        }
+    return "json"
+
+
 def _with_output_tokens(config: BenchmarkConfig, max_output_tokens: int) -> BenchmarkConfig:
     if max_output_tokens <= config.max_output_tokens:
         return config
@@ -213,6 +380,8 @@ def _with_output_tokens(config: BenchmarkConfig, max_output_tokens: int) -> Benc
 
 
 def _response_hit_output_limit(response_data: Dict[str, Any]) -> bool:
+    if response_data.get("done_reason") == "length":
+        return True
     incomplete = response_data.get("incomplete_details") or {}
     if response_data.get("status") == "incomplete" and incomplete.get("reason") == "max_output_tokens":
         return True
@@ -267,13 +436,18 @@ def call_json_model(
         api_errors = []
         started_at = time.time()
         try:
-            if active_config.endpoint == "chat_completions":
+            if local_run and active_config.model_provider == "ollama_local":
+                response_data = _call_ollama_native_chat(active_config, secrets, active_system, active_user, cache_namespace=cache_namespace)
+            elif active_config.endpoint == "chat_completions":
                 response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
             else:
                 response_data = _call_responses(active_config, secrets, active_system, active_user)
         except Exception as exc:
             api_errors.append(str(exc))
-            response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
+            if local_run and active_config.model_provider == "ollama_local":
+                response_data = _call_ollama_native_chat(active_config, secrets, active_system, active_user, cache_namespace=cache_namespace)
+            else:
+                response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
         latency_seconds = max(0.0, time.time() - started_at)
 
         text = _extract_output_text(response_data)
@@ -379,3 +553,12 @@ def embed_text(text: str, secrets: SecretConfig, *, provider: str = "local") -> 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(embedding), encoding="utf-8")
     return embedding
+
+
+def _int(value: Any) -> int:
+    try:
+        if value is None:
+            return 0
+        return int(value)
+    except Exception:
+        return 0

@@ -196,6 +196,17 @@ def run_iteration(
         if monitor:
             monitor.start()
         engine.run(run_id=run_id, config=config, secrets=secrets, store=store, control=control, dry_run=False)
+    except Exception as exc:
+        store.append_benchmark_event(run_id, "error", "run_failed", {"error": str(exc)})
+        store.update_benchmark_run(
+            run_id,
+            status="failed",
+            phase="failed",
+            error=str(exc),
+            progress={"message": str(exc), "monitor_abort_reason": monitor.abort_reason if monitor else ""},
+            finished=True,
+        )
+        raise
     finally:
         if monitor:
             monitor.stop()

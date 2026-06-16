@@ -67,8 +67,10 @@ def test_local_json_call_uses_dummy_key_without_real_openai_key(monkeypatch):
     result = call_json_model(config, secrets, "Return JSON.", '{"task":"test"}')
 
     assert result["ok"] is True
-    assert calls[0]["url"] == "http://127.0.0.1:11434/v1/chat/completions"
+    assert calls[0]["url"] == "http://127.0.0.1:11434/api/chat"
     assert calls[0]["headers"]["Authorization"] == f"Bearer {LOCAL_DUMMY_API_KEY}"
+    assert calls[0]["payload"]["think"] is False
+    assert calls[0]["payload"]["stream"] is False
     assert result["_api_provider"] == "ollama_local"
 
 
@@ -334,7 +336,18 @@ def _start_fake_chat_server():
                 }
             else:
                 content = {"ok": True}
-            self._send({"choices": [{"message": {"content": json.dumps(content)}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+            if self.path == "/api/chat":
+                self._send(
+                    {
+                        "model": "gemma4:12b",
+                        "message": {"role": "assistant", "content": json.dumps(content)},
+                        "done": True,
+                        "prompt_eval_count": 10,
+                        "eval_count": 5,
+                    }
+                )
+            else:
+                self._send({"choices": [{"message": {"content": json.dumps(content)}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 
         def log_message(self, format, *args):
             return
