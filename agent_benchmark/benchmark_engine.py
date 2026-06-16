@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Protocol
 
 import pandas as pd
 
+from .api_usage import estimate_run_api_usage
 from .deterministic_memory import DeterministicMarketMemory
 from .llm_client import call_json_model
 from .memory import HybridMemory
@@ -286,6 +287,7 @@ class BenchmarkEngine:
                         }
                         store.append_benchmark_event(run_id, phase, "run_aborted_invalid_allocations", reason)
                         summary = self._summary(config, symbols, equity_curve, all_executions, model_calls, dry_run)
+                        summary = self._attach_api_usage(summary, store, run_id, config)
                         summary["official_status"] = "diagnostic"
                         summary["aborted_reason"] = "invalid_allocations"
                         summary["abort_details"] = reason
@@ -303,6 +305,7 @@ class BenchmarkEngine:
                         return {"summary": summary, "decisions": all_decisions}
 
         summary = self._summary(config, symbols, equity_curve, all_executions, model_calls, dry_run)
+        summary = self._attach_api_usage(summary, store, run_id, config)
         if memory_summary:
             summary["deterministic_memory"] = memory_summary.__dict__
         store.update_benchmark_run(run_id, status="completed", phase="completed", summary=summary, progress={"percent": 100, "message": "Completed", "model_calls": model_calls}, finished=True)
@@ -441,6 +444,7 @@ class BenchmarkEngine:
             model_calls,
             dry_run,
         )
+        summary = self._attach_api_usage(summary, store, run_id, config)
         summary["live"] = {
             "decision_timestamp": decision_timestamp,
             "source_status": source_status,
@@ -834,6 +838,8 @@ class BenchmarkEngine:
     def _stage2_bundle(self, bundle: Dict[str, Any]) -> Dict[str, Any]:
         market = bundle.get("market_snapshots") or {}
         news = bundle.get("news_and_events") or {}
+        portfolio_state = bundle.get("portfolio_state") or {}
+        current_position_weights = self._current_position_weights(portfolio_state, market)
         symbol_table = []
         for item in bundle.get("candidate_universe") or []:
             symbol = item.get("symbol")
@@ -846,6 +852,7 @@ class BenchmarkEngine:
                     "r20": snap.get("return_20d"),
                     "r60": snap.get("return_60d"),
                     "vol20": snap.get("volatility_20d"),
+                    "current_weight": current_position_weights.get(symbol, 0.0),
                     "news_items": len(news.get(symbol) or []),
                     "data_as_of": snap.get("as_of_date"),
                 }
@@ -859,7 +866,9 @@ class BenchmarkEngine:
             "fill_date": bundle.get("fill_date"),
             "information_cutoff": bundle.get("information_cutoff"),
             "candidate_universe": bundle.get("candidate_universe") or [],
-            "portfolio_state": bundle.get("portfolio_state"),
+            "portfolio_state": portfolio_state,
+            "current_position_weights": current_position_weights,
+            "no_trade_target_weights": current_position_weights,
             "symbol_summary_table": symbol_table,
             "index_context": self._compact_context(bundle.get("index_context") or []),
             "macro_context": bundle.get("macro_context") or [],
@@ -869,6 +878,23 @@ class BenchmarkEngine:
             "benchmark_rules": bundle.get("benchmark_rules") or {},
             "omitted_raw_sections": ["market_snapshots", "fundamentals", "news_and_events"],
         }
+
+    def _current_position_weights(self, portfolio_state: Dict[str, Any], market: Dict[str, Any]) -> Dict[str, float]:
+        positions = portfolio_state.get("positions") or {}
+        equity = _safe_float(portfolio_state.get("equity")) or 0.0
+        if equity <= 0:
+            return {}
+        weights: Dict[str, float] = {}
+        for symbol, shares in positions.items():
+            snap = market.get(symbol) or {}
+            price = _safe_float(snap.get("close") or snap.get("open") or snap.get("adj_close"))
+            share_count = _safe_float(shares)
+            if price is None or share_count is None:
+                continue
+            weight = share_count * price / equity
+            if abs(weight) > 1e-9:
+                weights[str(symbol).upper()] = round(float(weight), 8)
+        return weights
 
     def _compact_context(self, context: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         compact = []
@@ -1250,6 +1276,9 @@ own the decision. Correct your own target weights; the simulator will not scale
 or improve them. Return only valid compact JSON with the same Stage 2 schema.
 """
         original_errors = errors
+        original_usage = current.get("_api_usage")
+        original_cache_hit = bool(current.get("_api_cache_hit"))
+        attempt_usages = []
         calls = 0
         for attempt in range(1, 3):
             repair_user = json.dumps(
@@ -1268,11 +1297,13 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                         "net_exposure_formula": "sum(target_weights.values())",
                         "cash_weight_formula": "1 - gross_exposure",
                         "zero_weight_policy": "omitted symbols, including currently held positions, are target weight 0",
-                        "safe_fallback": "all cash is valid if you cannot make a compliant allocation",
+                        "current_position_weights": manager_bundle.get("current_position_weights") or {},
+                        "safe_fallback": "to make no trade, copy current_position_weights into target_weights; all cash is a sell-to-zero order and may violate turnover/cost rules",
                     },
                     "validation_errors": errors,
                     "previous_stage2_output": self._strip_api_metadata(current),
                     "portfolio_state": manager_bundle.get("portfolio_state"),
+                    "current_position_weights": manager_bundle.get("current_position_weights") or {},
                     "symbol_summary_table": manager_bundle.get("symbol_summary_table"),
                     "benchmark_rules": manager_bundle.get("benchmark_rules"),
                 },
@@ -1296,17 +1327,34 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
 
             if repaired.get("_api_status") not in {"dry_run", "missing_key"}:
                 calls += 1
+                attempt_usages.append(
+                    {
+                        "attempt": attempt,
+                        "usage": repaired.get("_api_usage") or {},
+                        "cache_hit": bool(repaired.get("_api_cache_hit")),
+                    }
+                )
             errors = self._allocation_errors(config, repaired, symbols, book=book, prices=prices)
             repaired["_allocation_repair"] = {
                 "attempted": True,
                 "attempts": attempt,
                 "original_errors": original_errors,
                 "remaining_errors": errors,
+                "original_api_usage": original_usage or {},
+                "original_cache_hit": original_cache_hit,
+                "attempt_api_usages": attempt_usages,
             }
             current = repaired
             if not errors:
                 return current, calls
         return current, calls
+
+    def _attach_api_usage(self, summary: Dict[str, Any], store: BenchmarkStore, run_id: str, config: BenchmarkConfig) -> Dict[str, Any]:
+        run = store.get_benchmark_run(run_id)
+        if not run:
+            return summary
+        summary["api_usage_estimate"] = estimate_run_api_usage(run, config, summary_override=summary)
+        return summary
 
     def _allocation_errors(
         self,

@@ -493,6 +493,40 @@ button {
   font-size: 22px;
 }
 
+.metric.highlight {
+  border-color: rgba(19, 126, 112, 0.42);
+  background: #edf8f4;
+}
+
+.api-cost-band {
+  display: grid;
+  gap: 14px;
+}
+
+.usage-explainer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  color: #56615c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.usage-explainer a {
+  color: #137e70;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.usage-explainer a:hover {
+  text-decoration: underline;
+}
+
+.compact-notice {
+  margin: 0;
+}
+
 .comparison-band .section-title {
   align-items: flex-start;
 }

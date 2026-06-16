@@ -497,6 +497,25 @@ function formatMoney(value) {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
+function formatUsd(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  const number = Number(value);
+  return number.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: number < 10 ? 2 : 0,
+    maximumFractionDigits: number < 10 ? 4 : 2,
+  });
+}
+
+function formatTokens(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  const number = Number(value);
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(2)}M`;
+  if (number >= 1_000) return `${(number / 1_000).toFixed(1)}k`;
+  return number.toLocaleString();
+}
+
 function formatPct(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
   return `${(Number(value) * 100).toFixed(2)}%`;
@@ -633,6 +652,53 @@ function Metric({ label, value, helpKey, tone = "" }) {
         {helpKey && <InfoPopover item={help[helpKey]} />}
       </span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ApiUsagePanel({ usage }) {
+  if (!usage || usage.status === "unavailable") return null;
+  const price = usage.pricing;
+  return (
+    <div className="section-band api-cost-band">
+      <div className="section-title">
+        <div>
+          <h2>API usage and cost</h2>
+          <p className="subtle">Real API spending for this benchmark run. This is separate from simulated trading costs.</p>
+        </div>
+        <StatusPill
+          tone={usage.is_estimate ? "warn" : "ok"}
+          icon={usage.is_estimate ? AlertCircle : CheckCircle2}
+          label={usage.is_estimate ? "Estimated tokens" : "Exact provider usage"}
+        />
+      </div>
+      <div className="metrics-row wrap">
+        <Metric label="API cost" value={usage.price_available ? formatUsd(usage.estimated_cost_usd) : "Price unknown"} tone="highlight" />
+        <Metric label="Input tokens" value={formatTokens(usage.input_tokens)} />
+        <Metric label="Output tokens" value={formatTokens(usage.output_tokens)} />
+        <Metric label="Billable calls" value={usage.billable_model_calls ?? usage.logical_model_calls ?? "-"} />
+        <Metric label="Repair calls" value={usage.repair_calls ?? 0} />
+        <Metric label="Local cache hits" value={usage.local_cache_hits ?? 0} />
+      </div>
+      <div className="usage-explainer">
+        <span>{usage.estimator}</span>
+        {price ? (
+          <span>
+            Price table: {price.label} at ${price.input}/M input, ${price.cached_input}/M cached input, ${price.output}/M output.
+          </span>
+        ) : (
+          <span>No local price table entry exists for {usage.model || "this model"}.</span>
+        )}
+        {usage.pricing_source_url && (
+          <a href={usage.pricing_source_url} target="_blank" rel="noreferrer">OpenAI pricing</a>
+        )}
+      </div>
+      {(usage.notes || []).length > 0 && (
+        <div className="notice soft compact-notice">
+          <Info size={16} />
+          <span>{usage.notes.join(" ")}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1022,6 +1088,7 @@ function App() {
 
   const estimate = preview?.estimate || activeRun?.progress || {};
   const metrics = activeRun?.summary?.metrics || {};
+  const apiUsage = activeRun?.summary?.api_usage_estimate || diagnostics?.api_usage_estimate || null;
   const equityCurve = activeRun?.summary?.equity_curve || [];
   const buyHold = activeRun?.summary?.buy_hold_comparison || null;
   const buyHoldBenchmarks = buyHold?.benchmarks || [];
@@ -1532,6 +1599,7 @@ function App() {
               <Metric label="Turnover" value={formatPct(metrics.total_turnover)} />
               <Metric label="Invalid allocations" value={metrics.invalid_allocation_count ?? metrics.model_failures ?? "-"} />
             </div>
+            <ApiUsagePanel usage={apiUsage} />
             <DiagnosticsPanel report={diagnostics} onRefresh={() => loadDiagnostics(activeRun?.id)} loading={loading} />
             {buyHoldBenchmarks.length > 0 && (
               <div className="section-band comparison-band">

@@ -1,4 +1,5 @@
 from agent_benchmark.memory import HybridMemory
+from agent_benchmark.api_usage import estimate_run_api_usage
 from agent_benchmark.benchmark_engine import BenchmarkEngine
 from agent_benchmark.llm_client import _post_json, _retry_after_seconds, call_json_model
 from agent_benchmark.portfolio import execute_target_weights, initial_book
@@ -104,6 +105,8 @@ def test_stage_prompts_preserve_model_owned_decision_rule():
     assert "sum(abs(target_weights.values()))" in stage2_system
     assert "cash_weight" in stage2_system
     assert "estimated_turnover" in stage2_system
+    assert "current_position_weights" in stage2_system
+    assert "copy those weights" in stage2_system
     assert "rejects the allocation" in stage2_system
     assert "sparse portfolio" in stage2_system
 
@@ -321,6 +324,36 @@ def test_responses_calls_request_json_mode(monkeypatch):
     assert calls[0]["text"]["format"]["type"] == "json_object"
 
 
+def test_model_usage_metadata_is_saved_from_provider_response(monkeypatch):
+    def fake_post_json(url, headers, payload):
+        return {
+            "output_text": '{"ok": true}',
+            "usage": {
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "total_tokens": 150,
+                "input_tokens_details": {"cached_tokens": 20},
+            },
+        }
+
+    monkeypatch.setattr("agent_benchmark.llm_client._post_json", fake_post_json)
+
+    result = call_json_model(
+        BenchmarkConfig(model="gpt-5.4-mini-2026-03-17", use_cached_llm=False),
+        SecretConfig(openai_api_key="sk-test"),
+        "Return JSON.",
+        '{"task": "test"}',
+    )
+
+    assert result["_api_usage"] == {
+        "input_tokens": 120,
+        "cached_input_tokens": 20,
+        "output_tokens": 30,
+        "total_tokens": 150,
+    }
+    assert result["_api_usage_source"] == "provider_usage"
+
+
 def test_chat_completions_use_new_token_limit_field(monkeypatch):
     calls = []
 
@@ -446,8 +479,8 @@ def test_compact_stage_bundles_remove_unrelated_symbol_bulk():
             "decision_date": "2025-01-02",
             "fill_date": "2025-01-03",
             "candidate_universe": [{"symbol": "AAPL"}, {"symbol": "MSFT"}],
-            "portfolio_state": {"cash": 1000, "positions": {}, "equity": 1000},
-            "market_snapshots": {"AAPL": {"return_20d": 0.1}, "MSFT": {"return_20d": -0.1}},
+            "portfolio_state": {"cash": 800, "positions": {"AAPL": 2}, "equity": 1000},
+            "market_snapshots": {"AAPL": {"close": 100, "return_20d": 0.1}, "MSFT": {"close": 50, "return_20d": -0.1}},
             "fundamentals": {"AAPL": {"Revenue": 1}, "MSFT": {"Revenue": 2}},
             "news_and_events": {"AAPL": [{"title": "a"}], "MSFT": [{"title": "m"}]},
             "data_quality": {"checked_symbols": 2, "missing_ohlcv": ["MSFT"], "not_listed": []},
@@ -464,6 +497,8 @@ def test_compact_stage_bundles_remove_unrelated_symbol_bulk():
         assert "market_snapshots" not in stage2
         assert "fundamentals" not in stage2
         assert "news_and_events" not in stage2
+        assert stage2["current_position_weights"]["AAPL"] == pytest.approx(0.2)
+        assert stage2["symbol_summary_table"][0]["current_weight"] == pytest.approx(0.2)
     finally:
         engine.close()
 
@@ -544,3 +579,86 @@ def test_summary_includes_buy_hold_market_comparison(tmp_path):
     assert by_id["selected_equal_weight"]["total_return"] == pytest.approx(0.1)
     assert by_id["spy"]["excess_return"] == pytest.approx(-0.05)
     assert summary["metrics"]["alpha_spy"] == pytest.approx(-0.05)
+
+
+def test_api_usage_estimate_prefers_exact_provider_usage():
+    config = BenchmarkConfig(model="gpt-5.4-mini-2026-03-17", initial_cash=1000)
+    run = {
+        "id": "usage-run",
+        "model": config.model,
+        "config": config.model_dump() if hasattr(config, "model_dump") else config.dict(),
+        "summary": {"model": config.model, "model_calls": 2},
+        "progress": {"model_calls": 2},
+        "decisions": [
+            {
+                "stage": "stage1",
+                "decision_date": "2025-01-02",
+                "symbol": "AAPL",
+                "input": {"data_quality": {}},
+                "output": {
+                    "_api_status": "ok",
+                    "_api_usage": {"input_tokens": 100, "cached_input_tokens": 10, "output_tokens": 20, "total_tokens": 120},
+                    "analyses": [],
+                },
+                "execution": {},
+            },
+            {
+                "stage": "stage2",
+                "decision_date": "2025-01-02",
+                "symbol": "PORTFOLIO",
+                "input": {"portfolio_state": {}},
+                "output": {
+                    "_api_status": "ok",
+                    "_api_usage": {"input_tokens": 200, "cached_input_tokens": 0, "output_tokens": 40, "total_tokens": 240},
+                    "target_weights": {},
+                },
+                "execution": {},
+            },
+        ],
+    }
+
+    usage = estimate_run_api_usage(run, config)
+
+    assert usage["is_estimate"] is False
+    assert usage["input_tokens"] == 300
+    assert usage["cached_input_tokens"] == 10
+    assert usage["output_tokens"] == 60
+    assert usage["estimated_cost_usd"] == pytest.approx(round((290 * 0.75 + 10 * 0.075 + 60 * 4.5) / 1_000_000, 6))
+
+
+def test_api_usage_estimate_can_reconstruct_old_runs_without_usage():
+    config = BenchmarkConfig(model="gpt-5.4-mini-2026-03-17", initial_cash=1000)
+    run = {
+        "id": "old-run",
+        "model": config.model,
+        "config": config.model_dump() if hasattr(config, "model_dump") else config.dict(),
+        "summary": {"model": config.model, "model_calls": 3},
+        "progress": {"model_calls": 3},
+        "decisions": [
+            {
+                "stage": "stage1",
+                "decision_date": "2025-01-02",
+                "symbol": "AAPL",
+                "input": {"market_snapshots": {"AAPL": {"close": 100}}},
+                "output": {"_api_status": "ok", "_raw_text": '{"analyses":[]}', "analyses": []},
+                "execution": {},
+            },
+            {
+                "stage": "stage2",
+                "decision_date": "2025-01-02",
+                "symbol": "PORTFOLIO",
+                "input": {"portfolio_state": {}, "current_position_weights": {"AAPL": 0.0}},
+                "output": {"_api_status": "ok", "_raw_text": '{"target_weights":{}}', "target_weights": {}},
+                "execution": {"repair_count": 1},
+            },
+        ],
+    }
+
+    usage = estimate_run_api_usage(run, config)
+
+    assert usage["is_estimate"] is True
+    assert usage["stage1_calls"] == 1
+    assert usage["stage2_calls"] == 1
+    assert usage["repair_calls"] == 1
+    assert usage["billable_model_calls"] == 3
+    assert usage["estimated_cost_usd"] > 0

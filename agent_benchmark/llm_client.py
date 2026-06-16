@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from .api_usage import attach_response_usage_metadata
 from .config_store import DATA_DIR
 from .schemas import BenchmarkConfig, SecretConfig
 
@@ -247,7 +248,10 @@ def call_json_model(
     if config.use_cached_llm:
         path = _named_cache_path(cache_namespace, f"{config.model}\n{system}\n{user}")
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            cached = json.loads(path.read_text(encoding="utf-8"))
+            cached["_api_cache_hit"] = True
+            cached.setdefault("_api_status", "ok")
+            return cached
 
     parse_errors: List[str] = []
     request_key = f"{config.model}\n{system}\n{user}"
@@ -273,6 +277,7 @@ def call_json_model(
             decision = _extract_json(text)
             decision["_raw_text"] = text
             decision["_api_status"] = "ok"
+            attach_response_usage_metadata(decision, response_data)
             if attempt:
                 decision["_api_retry_count"] = attempt
                 decision["_api_retry_max_output_tokens"] = active_config.max_output_tokens

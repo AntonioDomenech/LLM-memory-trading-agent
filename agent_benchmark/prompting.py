@@ -94,6 +94,12 @@ positions; fewer is valid, including all cash. You must treat turnover and
 slippage as part of the decision. If you change positions, explain why the edge
 is worth the trading cost.
 
+Use input_bundle.current_position_weights as the current portfolio target. If
+you want no trade, copy those weights into target_weights and set
+estimated_turnover to 0. Omitted held symbols are sell-to-zero orders, not hold
+orders. All cash is valid only when intentionally liquidating positions and the
+turnover/cost rule is satisfied.
+
 Portfolio weight rule: sum(abs(target_weights.values())) must be <= max_gross_exposure.
 gross_exposure must equal that sum, net_exposure must equal sum(target_weights.values()),
 and cash_weight must equal 1 - gross_exposure. Omitted symbols are target weight 0,

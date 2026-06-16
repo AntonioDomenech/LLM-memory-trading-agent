@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api_usage import estimate_run_api_usage
 from .config_store import load_local_config, public_config, save_local_config
 from .benchmark_engine import BenchmarkEngine
 from .information import build_information_bundle, information_manifest
@@ -140,6 +141,7 @@ def _enrich_run_summary(run: dict) -> dict:
     try:
         symbols = engine._symbols(benchmark_config)
         run["summary"] = engine.enrich_summary_with_buy_hold(benchmark_config, symbols, summary)
+        run["summary"]["api_usage_estimate"] = estimate_run_api_usage(run, benchmark_config, summary_override=run["summary"])
         return run
     finally:
         engine.close()
@@ -166,6 +168,7 @@ def benchmark_run_diagnostics(run_id: str):
     wh = Warehouse()
     try:
         report = build_run_diagnostics(run, config, wh)
+        report["api_usage_estimate"] = estimate_run_api_usage(run, config, summary_override=run.get("summary") or {})
         stored_preflight = store.latest_benchmark_report(run_id, "preflight")
         if stored_preflight:
             report["preflight"] = stored_preflight
