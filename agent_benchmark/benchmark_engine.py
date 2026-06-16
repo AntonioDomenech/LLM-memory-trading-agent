@@ -211,11 +211,12 @@ class BenchmarkEngine:
                     )
 
                 manager_bundle = self._stage2_bundle(bundle, config)
+                prompt_stage1_outputs = [self._strip_api_metadata(output) for output in stage1_outputs]
                 critic_calls = self._maybe_run_exposure_critic(
                     config,
                     secrets,
                     manager_bundle,
-                    stage1_outputs,
+                    prompt_stage1_outputs,
                     run_id=run_id,
                     phase=phase,
                     decision_date=decision_date,
@@ -226,7 +227,7 @@ class BenchmarkEngine:
                     cache_namespace="exposure-critic",
                 )
                 model_calls += critic_calls
-                system, user = build_stage2_prompt(manager_bundle, stage1_outputs)
+                system, user = build_stage2_prompt(manager_bundle, prompt_stage1_outputs)
                 stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="stage2")
                 model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
                 fill_prices = self._price_map(symbols, fill_date, field="open")
@@ -411,11 +412,12 @@ class BenchmarkEngine:
             progress={"percent": 65, "message": "Asking the portfolio manager pass"},
         )
         manager_bundle = self._stage2_bundle(bundle, config)
+        prompt_stage1_outputs = [self._strip_api_metadata(output) for output in stage1_outputs]
         critic_calls = self._maybe_run_exposure_critic(
             config,
             secrets,
             manager_bundle,
-            stage1_outputs,
+            prompt_stage1_outputs,
             run_id=run_id,
             phase="live",
             decision_date=decision_timestamp,
@@ -426,7 +428,7 @@ class BenchmarkEngine:
             cache_namespace="live-exposure-critic",
         )
         model_calls += critic_calls
-        system, user = build_stage2_prompt(manager_bundle, stage1_outputs)
+        system, user = build_stage2_prompt(manager_bundle, prompt_stage1_outputs)
         stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="live-stage2")
         model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
         stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=fill_prices)
@@ -833,7 +835,8 @@ class BenchmarkEngine:
             )
             memories.extend(self._diagnostic_lesson_memories(memory, config, decision_date, query, limit=6))
         else:
-            memories = memory.retrieve(decision_timestamp=decision_date, query=query, limit=14)
+            lesson_limit = max(1, min(14, int(config.memory_examples_per_symbol or 2) * max(1, len(symbols))))
+            memories = memory.retrieve(decision_timestamp=decision_date, query=query, limit=lesson_limit)
         payload = {
             "schema_version": "benchmark-input-v2",
             "mode": config.mode,
@@ -911,7 +914,7 @@ class BenchmarkEngine:
             "data_quality": data_quality,
             "input_quality": bundle.get("input_quality") or {},
             "decision_support": self._filter_decision_support(bundle.get("decision_support") or {}, symbol_set),
-            "memory": self._filter_memory(bundle.get("memory") or [], symbol_set, limit=max(8, len(symbols) * 2)),
+            "memory": self._filter_memory(bundle.get("memory") or [], symbol_set, limit=max(2, len(symbols) * 2)),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
         }
 
@@ -974,7 +977,7 @@ class BenchmarkEngine:
             "input_quality": bundle.get("input_quality") or {},
             "data_quality": bundle.get("data_quality") or {},
             "decision_support": self._compact_decision_support(decision_support),
-            "memory": self._filter_memory(bundle.get("memory") or [], set(), limit=10),
+            "memory": self._filter_memory(bundle.get("memory") or [], set(), limit=4),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
             "omitted_raw_sections": ["market_snapshots", "fundamentals", "news_and_events"],
         }
@@ -1111,6 +1114,9 @@ class BenchmarkEngine:
             symbol = item.get("symbol") or ""
             if symbols and symbol and symbol not in symbols:
                 continue
+            content = str(item.get("content") or "")
+            if len(content) > 260:
+                content = content[:257].rstrip() + "..."
             filtered.append(
                 {
                     "id": item.get("id"),
@@ -1118,7 +1124,7 @@ class BenchmarkEngine:
                     "symbol": symbol,
                     "decision_timestamp": item.get("decision_timestamp"),
                     "knowledge_timestamp": item.get("knowledge_timestamp"),
-                    "content": item.get("content"),
+                    "content": content,
                     "retrieval_score": item.get("retrieval_score"),
                 }
             )
@@ -1686,7 +1692,7 @@ class BenchmarkEngine:
         fallback = self._exposure_critic_fallback(manager_bundle, stage1_outputs)
         input_payload = dict(manager_bundle)
         output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace=cache_namespace)
-        manager_bundle["exposure_critic"] = output
+        manager_bundle["exposure_critic"] = self._strip_api_metadata(output)
         store.save_benchmark_decision(
             run_id=run_id,
             phase=phase,

@@ -485,17 +485,24 @@ def call_json_model(
             if _response_hit_output_limit(response_data):
                 next_limit = min(max(active_config.max_output_tokens * 2, active_config.max_output_tokens + 600), 3200)
                 active_config = _with_output_tokens(active_config, next_limit)
-            active_system = f"{system}\nReturn exactly one valid JSON object. Do not include markdown, prose, or trailing text."
-            active_user = json.dumps(
-                {
-                    "task": "Repair the previous response for the same benchmark request. Return only valid JSON.",
-                    "parser_error": error,
-                    "previous_response": text[:6000],
-                    "original_request": user,
-                },
-                sort_keys=True,
-                default=str,
-            )
+                active_system = (
+                    f"{system}\n"
+                    "Return exactly one compact valid JSON object. Use very short strings, "
+                    "arrays with at most one item, and no markdown or trailing text."
+                )
+                active_user = user
+            else:
+                active_system = f"{system}\nReturn exactly one valid JSON object. Do not include markdown, prose, or trailing text."
+                active_user = json.dumps(
+                    {
+                        "task": "Repair the previous response for the same benchmark request. Return only valid JSON.",
+                        "parser_error": error,
+                        "previous_response": text[:2000],
+                        "original_request": user,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
 
     raise ValueError(f"Model response JSON parsing failed after {len(parse_errors)} attempts: {'; '.join(parse_errors)}")
 
