@@ -112,7 +112,7 @@ def start_benchmark_run(payload: BenchmarkRunRequest):
         if preflight_report.get("status") == "fail":
             issues = preflight_report.get("blocking_issues") or []
             labels = ", ".join(str(item.get("id") or "check") for item in issues[:4])
-            raise HTTPException(status_code=400, detail=f"Preflight failed before paid official run: {labels}. Open Run control and run Preflight for details.")
+            raise HTTPException(status_code=400, detail=f"Preflight failed before official run: {labels}. Open Run control and run Preflight for details.")
     try:
         run = job_manager.start(config, local.secrets, dry_run=payload.dry_run)
         if preflight_report and run.get("id"):

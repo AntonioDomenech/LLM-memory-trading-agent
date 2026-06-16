@@ -11,10 +11,11 @@ import pandas as pd
 from .api_usage import estimate_run_api_usage
 from .deterministic_memory import DeterministicMarketMemory
 from .llm_client import call_json_model
+from .local_provider import validate_no_paid_api_mode
 from .memory import HybridMemory
 from .news import fetch_news_bundle
 from .portfolio import estimate_target_turnover, execute_target_weights, initial_book, mark_to_market, reject_target_weights
-from .prompting import build_exposure_critic_prompt, build_stage1_prompt, build_stage2_prompt
+from .prompting import build_exposure_critic_prompt, build_reflection_lesson_prompt, build_stage1_prompt, build_stage2_prompt
 from .quality import canonicalize_fundamentals, is_synthetic_news_title
 from .schemas import BenchmarkConfig, PortfolioBook, SecretConfig, model_to_dict
 from .storage import BenchmarkStore
@@ -97,6 +98,7 @@ class BenchmarkEngine:
         }
 
     def preview(self, config: BenchmarkConfig, secrets: SecretConfig, *, phase: str = "test", decision_date: str | None = None) -> Dict[str, Any]:
+        validate_no_paid_api_mode(config, secrets)
         symbols = self._symbols(config)
         pairs = self._trading_pairs(
             config.train_start if phase == "train" else config.test_start,
@@ -132,6 +134,7 @@ class BenchmarkEngine:
         control: RunControl | None = None,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
+        validate_no_paid_api_mode(config, secrets)
         symbols = self._symbols(config)
         memory = HybridMemory(store, config, secrets)
         book = initial_book(config.initial_cash)
@@ -185,7 +188,7 @@ class BenchmarkEngine:
                 if close_prices:
                     book = mark_to_market(book, close_prices)
 
-                self._record_due_diagnostic_lessons(memory, config, run_id, all_decisions, decision_date)
+                model_calls += self._record_due_learning_lessons(memory, config, secrets, run_id, all_decisions, decision_date, dry_run=dry_run)
                 bundle = self._build_bundle(config, memory, run_id, phase, decision_date, fill_date, symbols, book)
                 stage1_outputs = []
                 for chunk in _chunks(symbols, config.stage1_chunk_size):
@@ -298,7 +301,7 @@ class BenchmarkEngine:
                 else:
                     store.update_benchmark_run(run_id, status="running", phase=phase, progress=progress)
 
-                if execution.get("model_failure") and not dry_run and config.run_preset in {"single_stock_official", "budget_official", "full_official"}:
+                if execution.get("model_failure") and not dry_run and config.run_preset in {"single_stock_official", "budget_official", "full_official", "local_gemma_aapl_full"}:
                     invalid_stage2_days += 1
                     invalid_rate = invalid_stage2_days / max(1, completed_days)
                     should_abort = invalid_stage2_days >= config.invalid_run_abort_count or (completed_days >= 20 and invalid_rate > config.invalid_run_abort_rate)
@@ -347,6 +350,7 @@ class BenchmarkEngine:
         dry_run: bool = False,
         timestamp: datetime | None = None,
     ) -> Dict[str, Any]:
+        validate_no_paid_api_mode(config, secrets)
         symbols = self._symbols(config)
         now = timestamp or datetime.now()
         decision_timestamp = now.astimezone().isoformat(timespec="seconds")
@@ -1703,9 +1707,9 @@ class BenchmarkEngine:
         run_id: str,
         decisions: List[Dict[str, Any]],
         decision_date: str,
-    ) -> None:
+    ) -> int:
         if config.outcome_learning_mode != "diagnostic_lessons" or config.mode != "single_stock":
-            return
+            return 0
         symbol = self._symbols(config)[0]
         for record in decisions:
             if record.get("diagnostic_lesson_recorded"):
@@ -1757,6 +1761,145 @@ class BenchmarkEngine:
                 },
             )
             record["diagnostic_lesson_recorded"] = True
+        return 0
+
+    def _record_due_learning_lessons(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        secrets: SecretConfig,
+        run_id: str,
+        decisions: List[Dict[str, Any]],
+        decision_date: str,
+        *,
+        dry_run: bool,
+    ) -> int:
+        calls = self._record_due_diagnostic_lessons(memory, config, run_id, decisions, decision_date)
+        calls += self._record_due_llm_reflection_lessons(memory, config, secrets, run_id, decisions, decision_date, dry_run=dry_run)
+        return calls
+
+    def _record_due_llm_reflection_lessons(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        secrets: SecretConfig,
+        run_id: str,
+        decisions: List[Dict[str, Any]],
+        decision_date: str,
+        *,
+        dry_run: bool,
+    ) -> int:
+        if config.outcome_learning_mode != "llm_reflection_lessons" or config.mode != "single_stock":
+            return 0
+        symbol = self._symbols(config)[0]
+        calls = 0
+        for record in decisions:
+            if record.get("llm_reflection_lesson_recorded") or record.get("phase") != "training":
+                continue
+            stage2 = record.get("stage2_output") or {}
+            horizon = int(_safe_float(stage2.get("expected_holding_days", stage2.get("horizon_days"))) or 1)
+            horizon = max(1, min(60, horizon))
+            outcome_date = self._nth_trading_date_after(str(record.get("fill_date")), horizon)
+            if not outcome_date or outcome_date > decision_date:
+                continue
+            start_prices = self._price_map([symbol], str(record.get("fill_date")), field="open") or self._price_map([symbol], str(record.get("fill_date")), field="close")
+            end_prices = self._price_map([symbol], outcome_date, field="close")
+            start = _safe_float(start_prices.get(symbol) if start_prices else None)
+            end = _safe_float(end_prices.get(symbol) if end_prices else None)
+            if start is None or end is None or start <= 0:
+                continue
+            realized_return = end / start - 1.0
+            exposure = self._single_stock_exposure(stage2, [symbol])
+            fallback = self._reflection_lesson_fallback(symbol, record, horizon, outcome_date, realized_return, exposure)
+            system, user = build_reflection_lesson_prompt(
+                {
+                    "symbol": symbol,
+                    "decision_date": record.get("decision_date"),
+                    "fill_date": record.get("fill_date"),
+                    "knowledge_timestamp": outcome_date,
+                    "outcome_available_at": outcome_date,
+                    "horizon_days": horizon,
+                    "target_exposure": exposure,
+                    "realized_return": realized_return,
+                    "stage1_outputs": record.get("stage1_outputs") or [],
+                    "stage2_output": self._strip_api_metadata(stage2),
+                    "execution": record.get("execution") or {},
+                }
+            )
+            output = call_json_model(
+                config,
+                secrets,
+                system,
+                user,
+                dry_run=dry_run,
+                fallback=fallback,
+                cache_namespace="reflection-lesson",
+            )
+            if output.get("_api_status") not in {"dry_run", "missing_key"}:
+                calls += 1
+            lesson = str(output.get("summary_lesson") or output.get("lesson") or fallback["summary_lesson"]).strip()
+            content = (
+                f"{symbol} LLM reflection from {record.get('decision_date')} known on {outcome_date}: "
+                f"{lesson[:900]}"
+            )
+            memory.add(
+                portfolio_scope=config.mode,
+                symbol=symbol,
+                decision_timestamp=str(record.get("decision_date")),
+                knowledge_timestamp=outcome_date,
+                source_run_id=run_id,
+                memory_type="llm_reflection_lesson",
+                content=content,
+                outcome_horizon=f"{horizon}d",
+                outcome_available_at=outcome_date,
+                metadata={
+                    "target_exposure": exposure,
+                    "realized_return": realized_return,
+                    "outcome_date": outcome_date,
+                    "lesson_tags": output.get("lesson_tags") or [],
+                    "use_in_future_if": output.get("use_in_future_if", ""),
+                    "avoid_if": output.get("avoid_if", ""),
+                    "confidence": _safe_float(output.get("confidence")),
+                    "api_status": output.get("_api_status"),
+                },
+            )
+            record["llm_reflection_lesson_recorded"] = True
+        return calls
+
+    def _reflection_lesson_fallback(
+        self,
+        symbol: str,
+        record: Dict[str, Any],
+        horizon: int,
+        outcome_date: str,
+        realized_return: float,
+        exposure: float,
+    ) -> Dict[str, Any]:
+        if realized_return > 0 and exposure < 0.25:
+            tag = "cash_drag"
+            lesson = "Low exposure missed a positive realized move; require stronger evidence before staying mostly in cash."
+        elif realized_return > 0 and exposure > 0:
+            tag = "participation_helped"
+            lesson = "Positive exposure participated in a positive realized move; similar trend evidence can justify long exposure."
+        elif realized_return < 0 and exposure > 0:
+            tag = "exposure_hurt"
+            lesson = "Long exposure lost money over the realized horizon; similar weak evidence should reduce sizing."
+        elif realized_return < 0 and exposure <= 0:
+            tag = "defense_helped"
+            lesson = "Defensive exposure avoided a negative realized move; weak setups can justify cash."
+        else:
+            tag = "flat_outcome"
+            lesson = "The realized move was flat; avoid over-reading this setup."
+        return {
+            "summary_lesson": lesson,
+            "lesson_tags": [tag],
+            "use_in_future_if": f"Similar {symbol} setup appears after {outcome_date}.",
+            "avoid_if": "Input evidence differs materially.",
+            "confidence": 0.5,
+            "source_decision_date": record.get("decision_date"),
+            "outcome_horizon": f"{horizon}d",
+            "realized_return": realized_return,
+        }
 
     def _stage1_fallback(self, symbols: List[str]) -> Dict[str, Any]:
         return {
@@ -2144,6 +2287,9 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             "preset": config.run_preset,
             "symbol_count": len(symbols),
             "model": config.model or "unselected-model",
+            "model_provider": config.model_provider,
+            "no_paid_api_mode": config.no_paid_api_mode,
+            "local_model_base_url": config.local_model_base_url,
             "dry_run": dry_run,
             "days": len(equity_curve),
             "model_calls": model_calls,

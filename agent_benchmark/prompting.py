@@ -54,11 +54,13 @@ def build_decision_prompt(input_bundle: Dict[str, Any]) -> Tuple[str, str]:
 
 STAGE1_SYSTEM_PROMPT = """You are the analyst stage of an AI market benchmark.
 
-Use only the compact point-in-time bundle. The memory items are deterministic
-historical cases, not model-written lessons. Score each supplied symbol. Keep
-every string short; evidence, memory, and uncertainty arrays should contain at
-most 1 terse item each. Use decision_support as point-in-time evidence, not as
-an automatic order. Use minified JSON and do not include zero-weight filler.
+Use only the compact point-in-time bundle. Memory items may be deterministic
+historical cases or model-written lessons, and every memory item is eligible
+only if its knowledge_timestamp is on or before the decision date. Score each
+supplied symbol. Keep every string short; evidence, memory, and uncertainty
+arrays should contain at most 1 terse item each. Use decision_support as
+point-in-time evidence, not as an automatic order. Use minified JSON and do not
+include zero-weight filler.
 
 Return only compact JSON:
 {
@@ -87,8 +89,8 @@ You own the final investment decision. The simulator will only apply mechanical 
 cash, fills, fees, slippage, shorting, and gross exposure.
 It will not add market expertise after you speak.
 
-Use only the compact portfolio bundle, deterministic historical memory, and
-Stage 1 outputs. Return final target weights. Weights may be negative only when
+Use only the compact portfolio bundle, point-in-time memory, and Stage 1
+outputs. Return final target weights. Weights may be negative only when
 shorting is enabled. Keep strings short, omit zero target weights, and do not
 repeat Stage 1 evidence. Prefer a sparse portfolio with 8 to 12 nonzero
 positions; fewer is valid, including all cash. You must treat turnover and
@@ -159,7 +161,7 @@ You own the final target exposure for exactly one stock. The simulator will
 convert your target_exposure into the stock target weight and will compute
 cash_weight, gross_exposure, net_exposure, turnover, and slippage. Do not do
 portfolio arithmetic yourself. Use only the compact point-in-time bundle,
-deterministic historical memory, Stage 1 output, and exposure critic output.
+point-in-time memory, Stage 1 output, and exposure critic output.
 
 target_exposure meaning:
 - 1.0 = 100% long the stock
@@ -225,3 +227,30 @@ def build_stage2_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[
         "input_bundle": input_bundle,
     }
     return STAGE2_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
+
+
+REFLECTION_LESSON_SYSTEM_PROMPT = """You write compact point-in-time trading memory for a local benchmark.
+
+Use only the supplied decision, execution, and realized outcome. Do not mention
+future dates beyond the outcome_available_at field. Produce lessons that can be
+retrieved by a future decision after knowledge_timestamp. Keep text short and
+specific to what the manager could learn about sizing, cash drag, trend,
+drawdown, or evidence quality.
+
+Return only compact JSON:
+{
+  "summary_lesson": "...",
+  "lesson_tags": ["cash_drag"],
+  "use_in_future_if": "...",
+  "avoid_if": "...",
+  "confidence": 0.0
+}
+"""
+
+
+def build_reflection_lesson_prompt(input_bundle: Dict[str, Any]) -> Tuple[str, str]:
+    user_payload = {
+        "task": "Convert this known outcome into one compact benchmark memory lesson and return valid JSON only.",
+        "input_bundle": input_bundle,
+    }
+    return REFLECTION_LESSON_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)

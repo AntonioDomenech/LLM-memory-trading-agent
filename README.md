@@ -42,6 +42,15 @@ deterministic training memory, train/test/live phases, decision rules, and repor
 See `docs/v2_benchmark_plan.md` for the current implementation plan and
 data-source notes.
 
+Run the local-only Ollama Gemma AAPL loop:
+
+```bash
+python -m agent_benchmark.local_gemma_loop --max-iterations 3
+```
+
+This preset uses `gemma4:12b` at `http://127.0.0.1:11434/v1`, rejects
+non-loopback model URLs in no-paid mode, and reports API cost as `$0.00`.
+
 ## Historical warehouse
 
 The 2000-2025 local warehouse uses DuckDB plus Parquet files under

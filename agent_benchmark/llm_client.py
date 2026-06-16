@@ -11,21 +11,21 @@ import requests
 
 from .api_usage import attach_response_usage_metadata
 from .config_store import DATA_DIR
+from .local_provider import is_local_model_run, local_auth_headers, model_base_url, validate_no_paid_api_mode
 from .schemas import BenchmarkConfig, SecretConfig
 
 LLM_CACHE = DATA_DIR / "cache" / "llm"
 MALFORMED_CACHE = LLM_CACHE / "malformed"
 
 
-def _base_url(secrets: SecretConfig) -> str:
+def _base_url(secrets: SecretConfig, config: BenchmarkConfig | None = None) -> str:
+    if config is not None:
+        return model_base_url(config, secrets)
     return (secrets.openai_base_url or "https://api.openai.com/v1").rstrip("/")
 
 
-def _auth_headers(secrets: SecretConfig) -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {secrets.openai_api_key}",
-        "Content-Type": "application/json",
-    }
+def _auth_headers(secrets: SecretConfig, config: BenchmarkConfig | None = None) -> Dict[str, str]:
+    return local_auth_headers(config, secrets)
 
 
 def list_openai_models(secrets: SecretConfig) -> Dict[str, Any]:
@@ -163,12 +163,12 @@ def _call_responses(config: BenchmarkConfig, secrets: SecretConfig, system: str,
     if config.temperature is not None:
         payload["temperature"] = config.temperature
     try:
-        return _post_json(f"{_base_url(secrets)}/responses", _auth_headers(secrets), payload)
+        return _post_json(f"{_base_url(secrets, config)}/responses", _auth_headers(secrets, config), payload)
     except requests.HTTPError as exc:
         text = str(exc)
         if "temperature" in text:
             payload.pop("temperature", None)
-            return _post_json(f"{_base_url(secrets)}/responses", _auth_headers(secrets), payload)
+            return _post_json(f"{_base_url(secrets, config)}/responses", _auth_headers(secrets, config), payload)
         raise
 
 
@@ -184,17 +184,17 @@ def _call_chat_completions(config: BenchmarkConfig, secrets: SecretConfig, syste
     if config.temperature is not None:
         base_payload["temperature"] = config.temperature
 
-    url = f"{_base_url(secrets)}/chat/completions"
+    url = f"{_base_url(secrets, config)}/chat/completions"
     for token_field in ("max_completion_tokens", "max_tokens"):
         payload = dict(base_payload)
         payload[token_field] = config.max_output_tokens
         try:
-            return _post_json(url, _auth_headers(secrets), payload)
+            return _post_json(url, _auth_headers(secrets, config), payload)
         except requests.HTTPError as exc:
             text = str(exc)
             if "temperature" in text and "temperature" in payload:
                 payload.pop("temperature", None)
-                return _post_json(url, _auth_headers(secrets), payload)
+                return _post_json(url, _auth_headers(secrets, config), payload)
             if token_field == "max_completion_tokens" and "max_completion_tokens" in text:
                 continue
             raise
@@ -233,12 +233,14 @@ def call_json_model(
     cache_namespace: str = "json",
 ) -> Dict[str, Any]:
     fallback = dict(fallback or {})
+    validate_no_paid_api_mode(config, secrets)
     if dry_run:
         fallback.setdefault("_raw_text", "")
         fallback["_api_status"] = "dry_run"
         return fallback
 
-    if not secrets.openai_api_key:
+    local_run = is_local_model_run(config, secrets)
+    if not secrets.openai_api_key and not local_run:
         fallback.setdefault("_raw_text", "")
         fallback.setdefault("uncertainty", [])
         fallback["uncertainty"] = [*fallback.get("uncertainty", []), "Missing OpenAI API key."]
@@ -263,6 +265,7 @@ def call_json_model(
 
     for attempt in range(3):
         api_errors = []
+        started_at = time.time()
         try:
             if active_config.endpoint == "chat_completions":
                 response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
@@ -271,6 +274,7 @@ def call_json_model(
         except Exception as exc:
             api_errors.append(str(exc))
             response_data = _call_chat_completions(active_config, secrets, active_system, active_user)
+        latency_seconds = max(0.0, time.time() - started_at)
 
         text = _extract_output_text(response_data)
         try:
@@ -278,6 +282,14 @@ def call_json_model(
             decision["_raw_text"] = text
             decision["_api_status"] = "ok"
             attach_response_usage_metadata(decision, response_data)
+            decision["_api_provider"] = "ollama_local" if local_run else "openai"
+            decision["_api_base_url"] = _base_url(secrets, config)
+            decision["_api_latency_seconds"] = round(latency_seconds, 6)
+            decision["_api_chars_per_second"] = round(len(text or "") / latency_seconds, 4) if latency_seconds else None
+            usage = decision.get("_api_usage") or {}
+            output_tokens = usage.get("output_tokens")
+            if output_tokens and latency_seconds:
+                decision["_api_output_tokens_per_second"] = round(float(output_tokens) / latency_seconds, 4)
             if attempt:
                 decision["_api_retry_count"] = attempt
                 decision["_api_retry_max_output_tokens"] = active_config.max_output_tokens

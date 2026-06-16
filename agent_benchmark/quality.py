@@ -8,12 +8,13 @@ from typing import Any, Dict, Iterable, List, Tuple
 import pandas as pd
 
 from .schemas import BenchmarkConfig, SecretConfig
+from .local_provider import validate_no_paid_api_mode
 from .storage import BenchmarkStore
 from .warehouse.store import Warehouse
 from .warehouse.universe import STOCK_SYMBOLS
 
 
-OFFICIAL_PRESETS = {"single_stock_official", "budget_official", "full_official"}
+OFFICIAL_PRESETS = {"single_stock_official", "budget_official", "full_official", "local_gemma_aapl_full"}
 CORE_CONTEXT_SYMBOLS = {"SPY", "QQQ"}
 STALE_FACT_DAYS = 730
 
@@ -129,6 +130,21 @@ def build_preflight_report(
         "blocking_issues": [],
         "warnings": [],
     }
+    try:
+        validate_no_paid_api_mode(config, secrets)
+        if config.no_paid_api_mode:
+            _add_check(
+                report,
+                {
+                    "id": "no_paid_api_mode",
+                    "status": "pass",
+                    "message": "Model endpoint, embeddings, and news sources satisfy local-only no-paid safeguards.",
+                    "model_provider": config.model_provider,
+                    "base_url": config.local_model_base_url or secrets.openai_base_url,
+                },
+            )
+    except Exception as exc:
+        _add_check(report, {"id": "no_paid_api_mode", "status": "fail", "message": str(exc)})
     trading_dates = _trading_dates(warehouse, config.test_start, config.test_end)
     test_days = len(trading_dates)
     stage1_chunks = math.ceil(len(symbols) / max(1, int(config.stage1_chunk_size or 1)))

@@ -5,6 +5,7 @@ import math
 from typing import Any, Dict, List
 
 from .prompting import build_stage1_prompt, build_stage2_prompt
+from .local_provider import is_local_model_run
 from .schemas import BenchmarkConfig
 
 
@@ -94,15 +95,21 @@ def estimate_run_api_usage(
     summary = summary_override or run.get("summary") or {}
     config = config or _config_from_run(run)
     model = (summary.get("model") or run.get("model") or getattr(config, "model", "") or "").strip()
-    pricing = pricing_for_model(model)
+    local_run = is_local_model_run(config)
+    pricing = _local_pricing(model) if local_run else pricing_for_model(model)
 
     if not decisions:
         return {
-            "status": "unavailable",
-            "message": "No saved decisions are available to estimate API usage.",
+            "status": "ok" if local_run else "unavailable",
+            "message": "Local-only run has no paid API usage." if local_run else "No saved decisions are available to estimate API usage.",
             "model": model,
             "pricing": pricing,
             "pricing_source_url": PRICING_SOURCE_URL,
+            "currency": "USD",
+            "estimated_cost_usd": 0.0 if local_run else None,
+            "estimated_cost_display": "$0.00" if local_run else None,
+            "billable_model_calls": 0 if local_run else None,
+            "local_only": local_run,
         }
 
     exact = _usage_from_provider_metadata(decisions)
@@ -132,15 +139,36 @@ def estimate_run_api_usage(
     usage["pricing"] = pricing
     usage["pricing_source_url"] = PRICING_SOURCE_URL
     usage["currency"] = "USD"
-    usage["estimated_cost_usd"] = _estimate_cost_usd(
-        usage["input_tokens"],
-        usage.get("cached_input_tokens", 0),
-        usage["output_tokens"],
-        pricing,
-    )
-    usage["price_available"] = pricing is not None
+    if local_run:
+        usage["estimated_cost_usd"] = 0.0
+        usage["estimated_cost_display"] = "$0.00"
+        usage["billable_model_calls"] = 0
+        usage["local_only"] = True
+        usage["price_available"] = True
+    else:
+        usage["estimated_cost_usd"] = _estimate_cost_usd(
+            usage["input_tokens"],
+            usage.get("cached_input_tokens", 0),
+            usage["output_tokens"],
+            pricing,
+        )
+        usage["estimated_cost_display"] = f"${usage['estimated_cost_usd']:.2f}" if usage["estimated_cost_usd"] is not None else None
+        usage["price_available"] = pricing is not None
     usage["notes"] = _usage_notes(usage)
     return usage
+
+
+def _local_pricing(model: str) -> Dict[str, Any]:
+    return {
+        "match": model or "local",
+        "label": "Local Ollama",
+        "input": 0.0,
+        "cached_input": 0.0,
+        "output": 0.0,
+        "currency": "USD",
+        "per_tokens": 1_000_000,
+        "source_url": "local://ollama",
+    }
 
 
 def _usage_from_provider_metadata(decisions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -267,6 +295,8 @@ def _usage_notes(usage: Dict[str, Any]) -> List[str]:
         notes.append("Token usage is estimated because exact provider usage was not saved for every call.")
     if not usage.get("price_available"):
         notes.append("No local price table entry exists for this model, so cost is unavailable.")
+    if usage.get("local_only"):
+        notes.append("Local Ollama no-paid mode: API cost is forced to $0.00 and billable calls are zero.")
     if usage.get("local_cache_hits"):
         notes.append("Local LLM cache hits are counted separately and are not treated as new billable API calls.")
     if usage.get("repair_calls"):

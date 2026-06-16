@@ -28,7 +28,14 @@ class DataSourceConfig(BaseModel):
 
 class BenchmarkConfig(BaseModel):
     mode: Literal["single_stock", "balanced_50_portfolio"] = "single_stock"
-    run_preset: Literal["single_stock_diagnostic", "single_stock_official", "balanced_50_mini", "budget_official", "full_official"] = "single_stock_diagnostic"
+    run_preset: Literal[
+        "single_stock_diagnostic",
+        "single_stock_official",
+        "balanced_50_mini",
+        "budget_official",
+        "full_official",
+        "local_gemma_aapl_full",
+    ] = "single_stock_diagnostic"
     symbol: str = "AAPL"
     company_name: str = "Apple"
     selected_symbols: List[str] = Field(default_factory=list)
@@ -44,7 +51,10 @@ class BenchmarkConfig(BaseModel):
     fill_timing: Literal["next_open"] = "next_open"
     live_frequency: Literal["hourly"] = "hourly"
     model: str = ""
+    model_provider: Literal["openai", "ollama_local"] = "openai"
     endpoint: str = "responses"
+    no_paid_api_mode: bool = False
+    local_model_base_url: str = ""
     initial_cash: float = 1000.0
     max_days: int = 20
     allow_short: bool = True
@@ -69,7 +79,7 @@ class BenchmarkConfig(BaseModel):
     decision_process: Literal["two_stage_llm"] = "two_stage_llm"
     opportunity_cost_policy: Literal["soft"] = "soft"
     exposure_critic_enabled: bool = True
-    outcome_learning_mode: Literal["off", "diagnostic_lessons"] = "off"
+    outcome_learning_mode: Literal["off", "diagnostic_lessons", "llm_reflection_lessons"] = "off"
     turnover_prompt_buffer: float = 0.02
     strict_preflight: bool = True
     require_paid_micro_pilot: bool = True
@@ -80,6 +90,11 @@ class BenchmarkConfig(BaseModel):
     invalid_run_abort_rate: float = 0.05
     macro_policy: Literal["omit_if_missing", "include_status_rows"] = "omit_if_missing"
     news_policy: Literal["real_titles_or_aggregate_events", "raw_titles"] = "real_titles_or_aggregate_events"
+    monitoring_enabled: bool = False
+    monitoring_interval_seconds: float = 5.0
+    monitoring_gpu_temp_abort_c: float = 86.0
+    monitoring_vram_abort_fraction: float = 0.98
+    monitoring_ram_abort_fraction: float = 0.95
     data_sources: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
 
