@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -62,22 +63,35 @@ class LocalBenchmarkControl:
 
 
 def ensure_ollama_model(model: str = LOCAL_OLLAMA_MODEL, *, pull: bool = True) -> Dict[str, Any]:
-    if shutil.which("ollama") is None:
-        raise RuntimeError("Ollama is not installed or not on PATH. Install Ollama, then rerun the local Gemma loop.")
-    tags = _ollama_tags()
+    ollama = ollama_executable()
+    tags = _ollama_tags(ollama)
     installed = {item.get("name") for item in tags.get("models", []) if item.get("name")}
     installed.update({item.get("model") for item in tags.get("models", []) if item.get("model")})
     if model in installed:
         return {"status": "present", "model": model, "installed_models": sorted(installed)}
     if not pull:
         raise RuntimeError(f"Ollama model {model!r} is not installed.")
-    _run_checked(["ollama", "pull", model], timeout=60 * 60)
-    tags = _ollama_tags()
+    _run_checked([ollama, "pull", model], timeout=60 * 60)
+    tags = _ollama_tags(ollama)
     installed = {item.get("name") for item in tags.get("models", []) if item.get("name")}
     installed.update({item.get("model") for item in tags.get("models", []) if item.get("model")})
     if model not in installed:
         raise RuntimeError(f"Pulled {model!r}, but Ollama does not list it as installed.")
     return {"status": "pulled", "model": model, "installed_models": sorted(installed)}
+
+
+def ollama_executable() -> str:
+    found = shutil.which("ollama")
+    if found:
+        return found
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+        Path(os.environ.get("ProgramFiles", "")) / "Ollama" / "ollama.exe",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    raise RuntimeError("Ollama is not installed or not on PATH. Install Ollama, then rerun the local Gemma loop.")
 
 
 def run_local_json_smoke(config: BenchmarkConfig, secrets: SecretConfig) -> Dict[str, Any]:
@@ -271,14 +285,14 @@ def _diagnostics(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, Any]
         warehouse.close()
 
 
-def _ollama_tags() -> Dict[str, Any]:
+def _ollama_tags(ollama: str) -> Dict[str, Any]:
     try:
         resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=10)
         if resp.status_code < 400:
             return resp.json()
     except Exception:
         pass
-    _run_checked(["ollama", "list"], timeout=20)
+    _run_checked([ollama, "list"], timeout=20)
     resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=10)
     resp.raise_for_status()
     return resp.json()
