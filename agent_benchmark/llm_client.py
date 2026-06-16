@@ -222,7 +222,10 @@ def _ollama_native_base_url(config: BenchmarkConfig, secrets: SecretConfig) -> s
 
 
 def _call_ollama_native_chat(config: BenchmarkConfig, secrets: SecretConfig, system: str, user: str, *, cache_namespace: str) -> Dict[str, Any]:
-    options: Dict[str, Any] = {"num_predict": config.max_output_tokens}
+    options: Dict[str, Any] = {
+        "num_predict": config.max_output_tokens,
+        "num_ctx": max(4096, int(getattr(config, "local_ollama_num_ctx", 4096) or 4096)),
+    }
     if config.temperature is not None:
         options["temperature"] = config.temperature
     payload = {

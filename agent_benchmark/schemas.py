@@ -55,6 +55,7 @@ class BenchmarkConfig(BaseModel):
     endpoint: str = "responses"
     no_paid_api_mode: bool = False
     local_model_base_url: str = ""
+    local_ollama_num_ctx: int = 4096
     initial_cash: float = 1000.0
     max_days: int = 20
     allow_short: bool = True

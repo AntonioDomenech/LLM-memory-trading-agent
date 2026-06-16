@@ -71,6 +71,7 @@ def test_local_json_call_uses_dummy_key_without_real_openai_key(monkeypatch):
     assert calls[0]["headers"]["Authorization"] == f"Bearer {LOCAL_DUMMY_API_KEY}"
     assert calls[0]["payload"]["think"] is False
     assert calls[0]["payload"]["stream"] is False
+    assert calls[0]["payload"]["options"]["num_ctx"] == 6144
     assert result["_api_provider"] == "ollama_local"
 
 
