@@ -253,6 +253,99 @@ def test_full_single_stock_train_test_pipeline_with_fake_local_server(tmp_path):
     assert store.list_memory(model="gemma4:12b", limit=5)
 
 
+def test_engine_resumes_paused_run_without_duplicate_completed_day(tmp_path):
+    server, base_url = _start_fake_chat_server()
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    store = BenchmarkStore(tmp_path / "benchmark.db")
+    engine = None
+    try:
+        _insert_market_rows(
+            warehouse,
+            ["2025-01-03", "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09"],
+            [100, 100, 105, 110, 120],
+        )
+        config = local_gemma_aapl_config(
+            train_start="2025-01-06",
+            train_end="2025-01-07",
+            test_start="2025-01-08",
+            test_end="2025-01-08",
+            local_model_base_url=f"{base_url}/v1",
+            max_output_tokens=500,
+            monitoring_enabled=False,
+            use_cached_llm=False,
+        )
+        secrets = local_gemma_secret_config(openai_base_url=f"{base_url}/v1", openai_api_key="")
+        run_id = "paused-local-run"
+        store.create_benchmark_run(run_id, config.model_dump() if hasattr(config, "model_dump") else config.dict())
+        store.save_benchmark_decision(
+            run_id=run_id,
+            phase="training",
+            decision_date="2025-01-03",
+            fill_date="2025-01-06",
+            stage="stage1",
+            symbol="AAPL",
+            input_payload={},
+            output_payload={"analyses": [{"symbol": "AAPL", "stance": "neutral"}], "_api_status": "ok"},
+            execution_payload={},
+        )
+        store.save_benchmark_decision(
+            run_id=run_id,
+            phase="training",
+            decision_date="2025-01-03",
+            fill_date="2025-01-06",
+            stage="exposure_critic",
+            symbol="AAPL",
+            input_payload={},
+            output_payload={"recommended_exposure_band": [0.0, 0.0], "_api_status": "ok"},
+            execution_payload={},
+        )
+        book = {"cash": 1000.0, "positions": {}, "equity": 1000.0, "long_exposure": 0.0, "short_exposure": 0.0, "gross_exposure": 0.0, "net_exposure": 0.0}
+        store.save_benchmark_decision(
+            run_id=run_id,
+            phase="training",
+            decision_date="2025-01-03",
+            fill_date="2025-01-06",
+            stage="stage2",
+            symbol="PORTFOLIO",
+            input_payload={},
+            output_payload={"target_exposure": 0.0, "expected_holding_days": 1, "target_weights": {"AAPL": 0.0}, "_api_status": "ok"},
+            execution_payload={
+                "portfolio_before": book,
+                "portfolio_after": book,
+                "target_weights": {"AAPL": 0.0},
+                "executed_target_weights": {"AAPL": 0.0},
+                "trades": [],
+                "events": [],
+                "fees": 0.0,
+                "slippage_cost": 0.0,
+                "model_failure": False,
+                "repair_attempted": False,
+                "repair_count": 0,
+            },
+        )
+        store.update_benchmark_run(
+            run_id,
+            status="paused",
+            phase="training",
+            started=True,
+            progress={"completed_days": 1, "total_days": 3, "model_calls": 3, "message": "Paused by test"},
+        )
+
+        engine = BenchmarkEngine(warehouse)
+        engine.run(run_id=run_id, config=config, secrets=secrets, store=store, dry_run=False, resume=True)
+        run = store.get_benchmark_run(run_id)
+    finally:
+        if engine:
+            engine.close()
+        warehouse.close()
+        server.shutdown()
+
+    stage2_dates = [item["decision_date"] for item in run["decisions"] if item["stage"] == "stage2"]
+    assert run["status"] == "completed"
+    assert stage2_dates.count("2025-01-03") == 1
+    assert stage2_dates == ["2025-01-03", "2025-01-06", "2025-01-07"]
+
+
 def _insert_market_rows(warehouse, dates, aapl_prices):
     for index, day in enumerate(dates):
         aapl_price = aapl_prices[index]

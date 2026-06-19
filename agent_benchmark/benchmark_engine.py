@@ -133,6 +133,7 @@ class BenchmarkEngine:
         store: BenchmarkStore,
         control: RunControl | None = None,
         dry_run: bool = False,
+        resume: bool = False,
     ) -> Dict[str, Any]:
         validate_no_paid_api_mode(config, secrets)
         symbols = self._symbols(config)
@@ -172,10 +173,37 @@ class BenchmarkEngine:
         total_days = sum(len(self._trading_pairs(start, end, limit)) for _, start, end, limit in phases)
         completed_days = 0
         invalid_stage2_days = 0
+        completed_keys = set()
+        if resume:
+            resume_state = self._load_resume_state(store, run_id, config)
+            book = resume_state["book"]
+            equity_curve = resume_state["equity_curve"]
+            all_executions = resume_state["executions"]
+            all_decisions = resume_state["decisions"]
+            model_calls = resume_state["model_calls"]
+            completed_days = len(all_decisions)
+            invalid_stage2_days = resume_state["invalid_stage2_days"]
+            completed_keys = resume_state["completed_keys"]
+            store.update_benchmark_run(
+                run_id,
+                status="running",
+                phase=(all_decisions[-1]["phase"] if all_decisions else "training"),
+                progress={
+                    "percent": self._percent(completed_days, total_days),
+                    "message": f"Resuming from checkpoint {completed_days}/{total_days}",
+                    "completed_days": completed_days,
+                    "total_days": total_days,
+                    "model_calls": model_calls,
+                    "resume": True,
+                },
+            )
 
         for phase, start, end, limit in phases:
             pairs = self._trading_pairs(start, end, limit)
             for pair in pairs:
+                pair_key = (phase, pair["decision_date"], pair["fill_date"])
+                if pair_key in completed_keys:
+                    continue
                 if control:
                     control.wait_if_paused(run_id)
                     if control.should_cancel(run_id):
@@ -339,6 +367,90 @@ class BenchmarkEngine:
             summary["deterministic_memory"] = memory_summary.__dict__
         store.update_benchmark_run(run_id, status="completed", phase="completed", summary=summary, progress={"percent": 100, "message": "Completed", "model_calls": model_calls}, finished=True)
         return {"summary": summary, "decisions": all_decisions}
+
+    def _load_resume_state(self, store: BenchmarkStore, run_id: str, config: BenchmarkConfig) -> Dict[str, Any]:
+        run = store.get_benchmark_run(run_id)
+        if not run:
+            raise ValueError(f"Cannot resume missing benchmark run {run_id!r}.")
+        decisions_by_day: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+        for item in run.get("decisions") or []:
+            key = (str(item.get("phase")), str(item.get("decision_date")), str(item.get("fill_date")))
+            bucket = decisions_by_day.setdefault(key, {"stage1": [], "stage2": None})
+            if item.get("stage") == "stage1":
+                bucket["stage1"].append(item.get("output") or {})
+            elif item.get("stage") == "stage2":
+                bucket["stage2"] = item
+
+        recorded_memory = self._recorded_resume_memory(store, run_id)
+        completed_keys = set()
+        decisions: List[Dict[str, Any]] = []
+        executions: List[Dict[str, Any]] = []
+        equity_curve: List[Dict[str, Any]] = []
+        book = initial_book(config.initial_cash)
+        invalid_stage2_days = 0
+        for key in sorted(decisions_by_day, key=lambda value: (value[1], value[0], value[2])):
+            bucket = decisions_by_day[key]
+            stage2 = bucket.get("stage2")
+            if not stage2:
+                continue
+            execution = stage2.get("execution") or {}
+            stage2_output = stage2.get("output") or {}
+            record = {
+                "phase": key[0],
+                "decision_date": key[1],
+                "fill_date": key[2],
+                "stage1_outputs": bucket.get("stage1") or [],
+                "stage2_output": stage2_output,
+                "execution": execution,
+            }
+            if ("diagnostic_lesson", key[1]) in recorded_memory:
+                record["diagnostic_lesson_recorded"] = True
+            if ("llm_reflection_lesson", key[1]) in recorded_memory:
+                record["llm_reflection_lesson_recorded"] = True
+            decisions.append(record)
+            executions.append(execution)
+            completed_keys.add(key)
+            if execution.get("model_failure"):
+                invalid_stage2_days += 1
+            after = execution.get("portfolio_after") or {}
+            if after:
+                book = PortfolioBook(**after)
+                equity_curve.append(
+                    {
+                        "date": key[2],
+                        "phase": key[0],
+                        "equity": book.equity,
+                        "cash": book.cash,
+                        "gross_exposure": book.gross_exposure,
+                        "net_exposure": book.net_exposure,
+                    }
+                )
+        progress = run.get("progress") or {}
+        model_calls = int(_safe_float(progress.get("model_calls")) or 0)
+        return {
+            "book": book,
+            "equity_curve": equity_curve,
+            "executions": executions,
+            "decisions": decisions,
+            "model_calls": model_calls,
+            "invalid_stage2_days": invalid_stage2_days,
+            "completed_keys": completed_keys,
+        }
+
+    def _recorded_resume_memory(self, store: BenchmarkStore, run_id: str) -> set[tuple[str, str]]:
+        if not hasattr(store, "_connect"):
+            return set()
+        with store._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT memory_type, decision_timestamp
+                FROM benchmark_memory
+                WHERE source_run_id = ?
+                  AND memory_type IN ('diagnostic_lesson', 'llm_reflection_lesson')
+                """,
+                (run_id,),
+            ).fetchall()
+        return {(str(row["memory_type"]), str(row["decision_timestamp"])) for row in rows}
 
     def run_live_snapshot(
         self,

@@ -182,10 +182,19 @@ def run_iteration(
     store: BenchmarkStore,
     repo_root: Path,
     commit_before_run: bool = True,
+    run_id: str | None = None,
+    resume: bool = False,
 ) -> Dict[str, Any]:
     validate_no_paid_api_mode(config, secrets)
-    run_id = f"local-gemma-aapl-{iteration}-{uuid.uuid4().hex[:8]}"
-    store.create_benchmark_run(run_id, model_to_dict(config))
+    if run_id:
+        existing = store.get_benchmark_run(run_id)
+        if not existing:
+            raise RuntimeError(f"Cannot resume missing benchmark run {run_id!r}.")
+        if existing.get("status") not in {"paused", "running"}:
+            raise RuntimeError(f"Cannot resume run {run_id!r} from status {existing.get('status')!r}.")
+    else:
+        run_id = f"local-gemma-aapl-{iteration}-{uuid.uuid4().hex[:8]}"
+        store.create_benchmark_run(run_id, model_to_dict(config))
     run_dir = DATA_DIR / "local_gemma_runs" / run_id
     preflight_report = _preflight(config, secrets, store)
     store.save_benchmark_report(run_id, "preflight", preflight_report)
@@ -203,7 +212,7 @@ def run_iteration(
     try:
         if monitor:
             monitor.start()
-        engine.run(run_id=run_id, config=config, secrets=secrets, store=store, control=control, dry_run=False)
+        engine.run(run_id=run_id, config=config, secrets=secrets, store=store, control=control, dry_run=False, resume=resume)
     except Exception as exc:
         store.append_benchmark_event(run_id, "error", "run_failed", {"error": str(exc)})
         store.update_benchmark_run(
@@ -237,6 +246,7 @@ def run_iteration(
         "iteration": iteration,
         "run_id": run_id,
         "commit_hash": commit_hash,
+        "resumed": resume,
         "config": model_to_dict(config),
         "evaluation": evaluation,
         "diagnostics": diagnostics,
@@ -251,16 +261,43 @@ def run_iteration(
     return report
 
 
-def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_run: bool = True) -> Dict[str, Any]:
+def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_run: bool = True, resume_run_id: str = "") -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
     config = local_gemma_aapl_config()
     secrets = local_gemma_secret_config()
+    store = BenchmarkStore()
+    if resume_run_id:
+        existing = store.get_benchmark_run(resume_run_id)
+        if not existing:
+            raise RuntimeError(f"Cannot resume missing benchmark run {resume_run_id!r}.")
+        config = BenchmarkConfig(**(existing.get("config") or {}))
     validate_no_paid_api_mode(config, secrets)
     model_status = ensure_ollama_model(config.model, pull=pull_model)
     smoke = run_local_json_smoke(config, secrets)
-    store = BenchmarkStore()
     reports: List[Dict[str, Any]] = []
-    for iteration in range(1, max_iterations + 1):
+    first_iteration = 1
+    if resume_run_id:
+        report = run_iteration(
+            iteration=1,
+            config=config,
+            secrets=secrets,
+            store=store,
+            repo_root=repo_root,
+            commit_before_run=commit_before_run,
+            run_id=resume_run_id,
+            resume=True,
+        )
+        reports.append(report)
+        if report["evaluation"]["success"]:
+            return {"status": "success", "model_status": model_status, "smoke": smoke, "reports": reports}
+        patch = propose_allowlisted_patch(report.get("diagnostics") or {}, report.get("evaluation") or {}, config)
+        if not patch:
+            return {"status": "blocked", "reason": "No allowlisted autonomous patch was available.", "model_status": model_status, "smoke": smoke, "reports": reports}
+        run_backend_tests(repo_root)
+        config = apply_allowlisted_patch(config, patch)
+        reports[-1]["next_patch"] = {"category": patch.category, "reason": patch.reason, "config_updates": patch.config_updates}
+        first_iteration = 2
+    for iteration in range(first_iteration, max_iterations + 1):
         report = run_iteration(
             iteration=iteration,
             config=config,
@@ -356,11 +393,13 @@ def main() -> None:
     parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-commit-before-run", action="store_true")
+    parser.add_argument("--resume-run-id", default="", help="Resume a paused local Gemma benchmark run from its saved checkpoint.")
     args = parser.parse_args()
     result = run_loop(
         max_iterations=args.max_iterations,
         pull_model=not args.no_pull,
         commit_before_run=not args.no_commit_before_run,
+        resume_run_id=args.resume_run_id,
     )
     print(json.dumps(result, indent=2, default=str))
 
