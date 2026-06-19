@@ -42,7 +42,7 @@ def test_local_gemma_config_is_chat_completions_and_no_paid_safe():
     assert config.use_cached_llm is False
     assert config.allow_short is True
     assert config.single_stock_action_space == "trinary_all_in"
-    assert config.max_daily_turnover == 2.0
+    assert config.max_daily_turnover == 0.0
 
 
 def test_no_paid_mode_rejects_non_loopback_url_and_paid_sources():
@@ -228,7 +228,7 @@ def test_allowlisted_patch_policy_only_applies_known_categories():
     updated = apply_allowlisted_patch(config, patch)
     assert updated.allow_short is True
     assert updated.single_stock_action_space == "trinary_all_in"
-    assert updated.max_daily_turnover == 2.0
+    assert updated.max_daily_turnover == 0.0
 
     with pytest.raises(ValueError):
         apply_allowlisted_patch(config, LocalPatch(category="arbitrary_code", reason="bad", config_updates={}))

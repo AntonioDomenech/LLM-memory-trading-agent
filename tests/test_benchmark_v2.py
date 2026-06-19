@@ -6,7 +6,7 @@ from agent_benchmark.llm_client import _ollama_schema_for_namespace, _post_json,
 from agent_benchmark.portfolio import execute_target_weights, initial_book
 from agent_benchmark.prompting import build_stage1_prompt, build_stage2_prompt
 from agent_benchmark.quality import build_run_diagnostics, canonicalize_fundamentals
-from agent_benchmark.schemas import BenchmarkConfig, SecretConfig
+from agent_benchmark.schemas import BenchmarkConfig, PortfolioBook, SecretConfig
 from agent_benchmark.storage import BenchmarkStore
 from agent_benchmark.jobs import BenchmarkJobManager, LiveScheduler
 from agent_benchmark.warehouse.store import Warehouse
@@ -379,7 +379,7 @@ def test_trinary_single_stock_actions_are_normalized_and_partial_targets_rejecte
             mode="single_stock",
             allow_short=True,
             max_gross_exposure=1.0,
-            max_daily_turnover=2.0,
+            max_daily_turnover=0.0,
             turnover_prompt_buffer=0.0,
             single_stock_action_space="trinary_all_in",
         )
@@ -431,6 +431,87 @@ def test_trinary_single_stock_actions_are_normalized_and_partial_targets_rejecte
     error_types = {item["type"] for item in errors}
     assert "invalid_trinary_action" in error_types
     assert "invalid_trinary_target_exposure" in error_types
+
+
+def test_trinary_full_flips_and_hold_ignore_turnover_drift():
+    engine = BenchmarkEngine()
+    try:
+        config = BenchmarkConfig(
+            mode="single_stock",
+            allow_short=True,
+            max_gross_exposure=1.0,
+            max_daily_turnover=0.0,
+            turnover_prompt_buffer=0.0,
+            single_stock_action_space="trinary_all_in",
+        )
+        manager_bundle = {
+            "current_position_weights": {"AAPL": -1.12},
+            "valid_target_exposure_range": engine._valid_target_exposure_range(config, {"AAPL": -1.12}, ["AAPL"]),
+        }
+        buy_all = engine._normalize_stage2_output(
+            config,
+            {
+                "action": "BUY_ALL",
+                "expected_holding_days": 20,
+                "rebalance_reason": "flip after bullish evidence",
+                "input_evidence_refs": [],
+                "data_quality_warnings_used": [],
+                "cash_drag_justification": "full long avoids missed upside",
+                "why_not_buy_hold": "same as buy-hold for this step",
+                "stage1_alignment": "follow",
+                "stage1_veto_reason": "",
+            },
+            ["AAPL"],
+            manager_bundle,
+        )
+        hold = engine._normalize_stage2_output(
+            config,
+            {
+                "action": "HOLD",
+                "expected_holding_days": 20,
+                "rebalance_reason": "no new evidence",
+                "input_evidence_refs": [],
+                "data_quality_warnings_used": [],
+                "cash_drag_justification": "no cash change",
+                "why_not_buy_hold": "holding the existing position",
+                "stage1_alignment": "partial",
+                "stage1_veto_reason": "",
+            },
+            ["AAPL"],
+            manager_bundle,
+        )
+        buy_errors = engine._allocation_errors(config, buy_all, ["AAPL"], manager_bundle=manager_bundle)
+        hold_errors = engine._allocation_errors(config, hold, ["AAPL"], manager_bundle=manager_bundle)
+        drifted_book = PortfolioBook(
+            cash=212.0,
+            positions={"AAPL": -1.0},
+            equity=100.0,
+            long_exposure=0.0,
+            short_exposure=1.12,
+            gross_exposure=1.12,
+            net_exposure=-1.12,
+        )
+        next_book, execution = engine._execute_stage2_output(
+            config,
+            hold,
+            {"AAPL": -1.12},
+            drifted_book,
+            {"AAPL": 112.0},
+            hold_errors,
+        )
+    finally:
+        engine.close()
+
+    assert manager_bundle["valid_target_exposure_range"]["allowed_actions"] == ["SHORT_ALL", "HOLD", "BUY_ALL"]
+    assert buy_all["target_exposure"] == 1.0
+    assert buy_all["estimated_turnover"] == pytest.approx(2.12)
+    assert buy_errors == []
+    assert hold["target_exposure"] == pytest.approx(-1.12)
+    assert hold["gross_exposure"] == pytest.approx(1.12)
+    assert hold_errors == []
+    assert next_book.positions == {"AAPL": -1.0}
+    assert execution["trades"] == []
+    assert execution["model_failure"] is False
 
 
 def test_single_stock_target_exposure_is_normalized_to_executable_weights():

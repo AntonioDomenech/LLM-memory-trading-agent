@@ -97,7 +97,7 @@ def local_gemma_aapl_config(**overrides: Any) -> BenchmarkConfig:
         "local_ollama_num_ctx": 6144,
         "allow_short": True,
         "max_gross_exposure": 1.0,
-        "max_daily_turnover": 2.0,
+        "max_daily_turnover": 0.0,
         "turnover_prompt_buffer": 0.0,
         "turnover_edge_multiplier": 0.0,
         "single_stock_action_space": "trinary_all_in",

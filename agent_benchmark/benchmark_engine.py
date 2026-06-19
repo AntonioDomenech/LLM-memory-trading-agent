@@ -276,11 +276,7 @@ class BenchmarkEngine:
                 model_calls += repair_calls
                 target_weights = self._coerce_target_weights(stage2_output.get("target_weights") or {}, symbols)
                 validation_errors = self._allocation_errors(config, stage2_output, symbols, book=book, prices=fill_prices)
-                if validation_errors and stage2_output.get("_api_status") not in {"dry_run", "missing_key"}:
-                    stage2_output["_allocation_validation_errors"] = validation_errors
-                    book, execution = reject_target_weights(book, target_weights, fill_prices, validation_errors)
-                else:
-                    book, execution = execute_target_weights(book, target_weights, fill_prices, config)
+                book, execution = self._execute_stage2_output(config, stage2_output, target_weights, book, fill_prices, validation_errors)
                 execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
                 execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
                 all_executions.append(execution)
@@ -584,11 +580,7 @@ class BenchmarkEngine:
         model_calls += repair_calls
         target_weights = self._coerce_target_weights(stage2_output.get("target_weights") or {}, symbols)
         validation_errors = self._allocation_errors(config, stage2_output, symbols, book=book, prices=fill_prices)
-        if validation_errors and stage2_output.get("_api_status") not in {"dry_run", "missing_key"}:
-            stage2_output["_allocation_validation_errors"] = validation_errors
-            next_book, execution = reject_target_weights(book, target_weights, fill_prices, validation_errors)
-        else:
-            next_book, execution = execute_target_weights(book, target_weights, fill_prices, config)
+        next_book, execution = self._execute_stage2_output(config, stage2_output, target_weights, book, fill_prices, validation_errors)
         execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
         execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
         store.save_benchmark_decision(
@@ -1751,17 +1743,14 @@ class BenchmarkEngine:
         }
         if config.single_stock_action_space == "trinary_all_in":
             action_targets = self._trinary_action_targets(config, current)
-            allowed_actions = [
-                action
-                for action, target in action_targets.items()
-                if target >= minimum - 1e-9 and target <= maximum + 1e-9
-            ]
             result.update(
                 {
                     "action_space": "trinary_all_in",
-                    "allowed_actions": allowed_actions,
-                    "allowed_target_exposures": {action: round(target, 8) for action, target in action_targets.items() if action in allowed_actions},
-                    "rule": "Choose one allowed action only: SHORT_ALL, HOLD, or BUY_ALL. HOLD keeps current_exposure; no fractional sizing.",
+                    "min": round(lower_bound, 8),
+                    "max": round(upper_bound, 8),
+                    "allowed_actions": list(action_targets),
+                    "allowed_target_exposures": {action: round(target, 8) for action, target in action_targets.items()},
+                    "rule": "Choose one allowed action only: SHORT_ALL, HOLD, or BUY_ALL. HOLD means no trade and keeps current_exposure; full flips are allowed in trinary mode, with turnover and slippage reported as costs rather than gating constraints.",
                 }
             )
         return result
@@ -2323,21 +2312,23 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         net = sum(weights.values())
         expected_cash = 1.0 - gross
         errors: List[Dict[str, Any]] = []
+        trinary_all_in = config.mode == "single_stock" and config.single_stock_action_space == "trinary_all_in"
+        trinary_action = str(output.get("action") or "").strip().upper() if trinary_all_in else ""
+        trinary_hold = trinary_action == "HOLD"
         if config.mode == "single_stock":
             if _safe_float(output.get("target_exposure")) is None:
                 errors.append({"type": "missing_or_invalid_target_exposure"})
-            if config.single_stock_action_space == "trinary_all_in":
+            if trinary_all_in:
                 symbol = symbols[0] if symbols else config.symbol.upper()
                 current_exposure = self._current_single_stock_exposure(symbol, manager_bundle, book=book, prices=prices)
                 action_targets = self._trinary_action_targets(config, current_exposure)
                 valid_range = (manager_bundle or {}).get("valid_target_exposure_range") or {}
                 allowed_actions = set(valid_range.get("allowed_actions") or action_targets.keys())
-                action = str(output.get("action") or "").strip().upper()
-                if action not in allowed_actions:
+                if trinary_action not in allowed_actions:
                     errors.append(
                         {
                             "type": "invalid_trinary_action",
-                            "action": action,
+                            "action": trinary_action,
                             "allowed_actions": sorted(allowed_actions),
                         }
                     )
@@ -2363,7 +2354,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             elif alignment == "veto" and not veto_reason.strip():
                 errors.append({"type": "empty_stage1_veto_reason_for_veto"})
         nonzero = [symbol for symbol, value in weights.items() if abs(value) > 1e-9]
-        if gross > config.max_gross_exposure + 1e-9:
+        if not trinary_hold and gross > config.max_gross_exposure + 1e-9:
             errors.append({"type": "gross_exposure_exceeded", "actual": round(gross, 8), "max": config.max_gross_exposure})
         if len(nonzero) > config.max_nonzero_positions:
             errors.append({"type": "too_many_nonzero_positions", "actual": len(nonzero), "max": config.max_nonzero_positions})
@@ -2404,7 +2395,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             elif config.mode != "single_stock" and abs(declared_turnover - actual_turnover) > 0.05:
                 errors.append({"type": "estimated_turnover_mismatch", "declared": declared_turnover, "actual": actual_turnover})
             turnover_limit = _safe_float(config.max_daily_turnover)
-            if turnover_limit is not None and turnover_limit > 0 and actual_turnover > turnover_limit + 1e-9:
+            if not trinary_all_in and turnover_limit is not None and turnover_limit > 0 and actual_turnover > turnover_limit + 1e-9:
                 errors.append(
                     {
                         "type": "max_daily_turnover_exceeded",
@@ -2428,6 +2419,39 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                         }
                     )
         return errors
+
+    def _execute_stage2_output(
+        self,
+        config: BenchmarkConfig,
+        stage2_output: Dict[str, Any],
+        target_weights: Dict[str, float],
+        book: PortfolioBook,
+        prices: Dict[str, float],
+        validation_errors: List[Dict[str, Any]],
+    ) -> tuple[PortfolioBook, Dict[str, Any]]:
+        if validation_errors and stage2_output.get("_api_status") not in {"dry_run", "missing_key"}:
+            stage2_output["_allocation_validation_errors"] = validation_errors
+            return reject_target_weights(book, target_weights, prices, validation_errors)
+        if (
+            config.mode == "single_stock"
+            and config.single_stock_action_space == "trinary_all_in"
+            and str(stage2_output.get("action") or "").strip().upper() == "HOLD"
+        ):
+            current = mark_to_market(book, prices)
+            payload = current.model_dump() if hasattr(current, "model_dump") else current.dict()
+            clean_targets = {symbol: round(float(value), 8) for symbol, value in target_weights.items()}
+            return current, {
+                "portfolio_before": payload,
+                "portfolio_after": payload,
+                "target_weights": clean_targets,
+                "executed_target_weights": clean_targets,
+                "trades": [],
+                "events": [],
+                "fees": 0.0,
+                "slippage_cost": 0.0,
+                "model_failure": False,
+            }
+        return execute_target_weights(book, target_weights, prices, config)
 
     def _strip_api_metadata(self, output: Dict[str, Any]) -> Dict[str, Any]:
         return {key: value for key, value in (output or {}).items() if not str(key).startswith("_")}
