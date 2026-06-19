@@ -344,6 +344,7 @@ def test_engine_resumes_paused_run_without_duplicate_completed_day(tmp_path):
     assert run["status"] == "completed"
     assert stage2_dates.count("2025-01-03") == 1
     assert stage2_dates == ["2025-01-03", "2025-01-06", "2025-01-07"]
+    assert run["summary"]["model_calls"] >= 10
 
 
 def _insert_market_rows(warehouse, dates, aapl_prices):

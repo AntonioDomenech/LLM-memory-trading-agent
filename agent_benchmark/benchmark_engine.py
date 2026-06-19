@@ -425,8 +425,7 @@ class BenchmarkEngine:
                         "net_exposure": book.net_exposure,
                     }
                 )
-        progress = run.get("progress") or {}
-        model_calls = int(_safe_float(progress.get("model_calls")) or 0)
+        model_calls = self._resume_model_call_count(store, run_id, run)
         return {
             "book": book,
             "equity_curve": equity_curve,
@@ -451,6 +450,33 @@ class BenchmarkEngine:
                 (run_id,),
             ).fetchall()
         return {(str(row["memory_type"]), str(row["decision_timestamp"])) for row in rows}
+
+    def _resume_model_call_count(self, store: BenchmarkStore, run_id: str, run: Dict[str, Any]) -> int:
+        calls = 0
+        for item in run.get("decisions") or []:
+            output = item.get("output") or {}
+            if output.get("_api_status") not in {"dry_run", "missing_key"}:
+                calls += 1
+        if not hasattr(store, "_connect"):
+            return calls
+        with store._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT metadata_json
+                FROM benchmark_memory
+                WHERE source_run_id = ?
+                  AND memory_type = 'llm_reflection_lesson'
+                """,
+                (run_id,),
+            ).fetchall()
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                metadata = {}
+            if metadata.get("api_status") not in {"dry_run", "missing_key"}:
+                calls += 1
+        return calls
 
     def run_live_snapshot(
         self,
