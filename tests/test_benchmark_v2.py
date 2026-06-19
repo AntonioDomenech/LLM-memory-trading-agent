@@ -143,7 +143,13 @@ def test_single_stock_stage2_prompt_uses_target_exposure_contract():
         "fill_date": "2025-01-03",
         "target_exposure_symbol": "AAPL",
         "valid_target_exposure_range": {"symbol": "AAPL", "min": -0.08, "max": 0.28},
-        "single_stock_opportunity_cost": {"policy": "soft"},
+        "single_stock_opportunity_cost": {
+            "policy": "soft",
+            "benchmark_hurdle": {
+                "comparison": "same_stock_buy_and_hold",
+                "test_window": {"start_date": "2025-01-01", "end_date": "2025-12-31"},
+            },
+        },
         "exposure_critic": {"recommended_exposure_band": [0.2, 0.5], "cash_drag_risk": "cash can lag"},
     }
 
@@ -155,6 +161,54 @@ def test_single_stock_stage2_prompt_uses_target_exposure_contract():
     assert "stage1_alignment" in system
     assert "valid_target_exposure_range" in user
     assert "exposure_critic" in user
+    assert "buy-and-hold" in system
+    assert "Generic" in system and "uncertainty is not enough" in system
+    assert "benchmark_hurdle" in user
+
+
+def test_single_stock_bundle_carries_official_2025_buy_hold_hurdle(tmp_path):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    engine = BenchmarkEngine(warehouse)
+    config = BenchmarkConfig(
+        mode="single_stock",
+        symbol="AAPL",
+        train_start="2000-01-01",
+        train_end="2024-12-31",
+        test_start="2025-01-01",
+        test_end="2025-12-31",
+        memory_mode="model_specific_cases_and_lessons",
+    )
+    store = BenchmarkStore(tmp_path / "benchmark.db")
+    memory = HybridMemory(store, config, SecretConfig())
+    try:
+        bundle = engine._build_bundle(
+            config,
+            memory,
+            "run",
+            "test",
+            "2025-01-02",
+            "2025-01-03",
+            ["AAPL"],
+            initial_book(config.initial_cash),
+        )
+        stage2 = engine._stage2_bundle(bundle, config)
+    finally:
+        engine.close()
+        warehouse.close()
+
+    hurdle = stage2["single_stock_opportunity_cost"]["benchmark_hurdle"]
+    assert hurdle["comparison"] == "same_stock_buy_and_hold"
+    assert hurdle["train_window"] == {
+        "start_date": "2000-01-01",
+        "end_date": "2024-12-31",
+        "purpose": "point_in_time_memory_only",
+    }
+    assert hurdle["test_window"] == {
+        "start_date": "2025-01-01",
+        "end_date": "2025-12-31",
+        "purpose": "official_success_score",
+    }
+    assert "buy-and-hold" in hurdle["requirement"]
 
 
 def test_stage2_allocation_repair_uses_same_model_before_simulator_rejection(monkeypatch):

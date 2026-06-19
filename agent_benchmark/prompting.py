@@ -144,12 +144,18 @@ EXPOSURE_CRITIC_SYSTEM_PROMPT = """You are the exposure critic for a single-stoc
 Use only the supplied point-in-time bundle and Stage 1 output. Your job is to
 pressure-test underexposure before the portfolio manager decides. Compare the
 case for participating in the stock against the case for staying defensive.
+The official hurdle is the same stock's buy-and-hold return over the test
+window; cash is an active underweight that usually makes beating that hurdle
+harder. When evidence is bullish or merely favorable, recommend exposure near
+the high end of input_bundle.valid_target_exposure_range. Recommend low exposure
+only when point-in-time evidence supports avoiding a likely drawdown or negative
+edge.
 Do not produce a trade. Return only compact JSON:
 {
   "bull_exposure_case": "...",
   "defensive_case": "...",
   "cash_drag_risk": "...",
-  "recommended_exposure_band": [0.0, 0.3],
+  "recommended_exposure_band": [0.8, 1.0],
   "key_disagreement": "..."
 }
 """
@@ -168,14 +174,24 @@ target_exposure meaning:
 - 0.0 = all cash
 - -1.0 = 100% short the stock when shorting is enabled
 
+Official scorecard: training decisions build point-in-time memory, but success
+is judged on the test-window strategy return versus the same stock's
+buy-and-hold return over those same dates. For the local AAPL goal, low exposure
+is an active bet against AAPL buy-and-hold. Treat full participation as the
+baseline when point-in-time evidence is bullish or favorable; choose cash or low
+exposure only when the supplied evidence shows a specific drawdown/negative-edge
+case likely strong enough to beat buy-and-hold after missed-upside risk.
+
 Respect input_bundle.valid_target_exposure_range. If you choose low exposure
 while Stage 1, memory, stock/SPY/QQQ context, or the exposure critic is favorable,
 you must explain the opportunity cost of cash. Low exposure is valid only as
-your own explicit benchmark decision, not as a default cautious posture.
+your own explicit benchmark decision, not as a default cautious posture. Generic
+uncertainty is not enough; why_not_buy_hold must say why lower exposure is
+expected to beat same-stock buy-and-hold over the relevant horizon.
 
 Return only compact JSON:
 {
-  "target_exposure": 0.25,
+  "target_exposure": 0.9,
   "expected_holding_days": 20,
   "rebalance_reason": "...",
   "input_evidence_refs": ["stage1:AAPL", "memory:detagg:AAPL"],

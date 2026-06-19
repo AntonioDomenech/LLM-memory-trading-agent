@@ -1015,6 +1015,12 @@ class BenchmarkEngine:
                 "opportunity_cost_policy": config.opportunity_cost_policy,
                 "exposure_critic_enabled": config.exposure_critic_enabled,
                 "outcome_learning_mode": config.outcome_learning_mode,
+                "official_success_metric": {
+                    "comparison": "same_stock_buy_and_hold" if config.mode == "single_stock" else "buy_hold_benchmarks",
+                    "train_window": {"start_date": config.train_start, "end_date": config.train_end, "purpose": "point_in_time_memory_only"},
+                    "test_window": {"start_date": config.test_start, "end_date": config.test_end, "purpose": "official_success_score"},
+                    "requirement": "AI strategy test-window total_return must exceed the matching buy-and-hold total_return.",
+                },
             },
         }
         payload["decision_support"] = self._decision_support(payload)
@@ -1142,11 +1148,12 @@ class BenchmarkEngine:
                         "policy": scoped_config.opportunity_cost_policy,
                         "stock_symbol": symbol,
                         "current_exposure": valid_range.get("current_exposure"),
+                        "benchmark_hurdle": manager.get("benchmark_rules", {}).get("official_success_metric"),
                         "benchmark_context": {
                             "SPY": context_by_symbol.get("SPY"),
                             "QQQ": context_by_symbol.get("QQQ"),
                         },
-                        "instruction": "Low exposure is valid, but explain why cash beats buy-and-hold participation when stock or benchmark context is favorable.",
+                        "instruction": "Low exposure is valid only with point-in-time evidence that cash or a smaller position should beat same-stock buy-and-hold after missed-upside risk.",
                     },
                 }
             )
