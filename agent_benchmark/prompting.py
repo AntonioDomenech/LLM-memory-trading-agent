@@ -52,15 +52,11 @@ def build_decision_prompt(input_bundle: Dict[str, Any]) -> Tuple[str, str]:
     return SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
 
 
-STAGE1_SYSTEM_PROMPT = """You are the analyst stage of an AI market benchmark.
+STAGE1_SYSTEM_PROMPT = """Analyst stage for a point-in-time market benchmark.
 
-Use only the compact point-in-time bundle. Memory items may be deterministic
-historical cases or model-written lessons, and every memory item is eligible
-only if its knowledge_timestamp is on or before the decision date. Score each
-supplied symbol. Keep every string short; evidence, memory, and uncertainty
-arrays should contain at most 1 terse item each. Use decision_support as
-point-in-time evidence, not as an automatic order. Use minified JSON and do not
-include zero-weight filler.
+Use only the supplied bundle and eligible memory. Score each symbol; keep strings
+terse and arrays to at most 1 item. decision_support is evidence, not an order.
+Return minified JSON only.
 
 Return only compact JSON:
 {
@@ -139,59 +135,76 @@ Return only compact JSON:
 """
 
 
-EXPOSURE_CRITIC_SYSTEM_PROMPT = """You are the exposure critic for a single-stock AI market benchmark.
+EXPOSURE_CRITIC_SYSTEM_PROMPT = """Exposure critic for a single-stock benchmark.
 
-Use only the supplied point-in-time bundle and Stage 1 output. Your job is to
-pressure-test underexposure before the portfolio manager decides. Compare the
-case for participating in the stock against the case for staying defensive.
-The official hurdle is the same stock's buy-and-hold return over the test
-window; cash is an active underweight that usually makes beating that hurdle
-harder. When evidence is bullish or merely favorable, recommend exposure near
-the high end of input_bundle.valid_target_exposure_range. Recommend low exposure
-only when point-in-time evidence supports avoiding a likely drawdown or negative
-edge.
+Use only the point-in-time bundle and Stage 1. Stress-test SHORT_ALL vs HOLD vs
+BUY_ALL before Stage 2 decides. The hurdle is same-stock buy-and-hold over the
+test window; cash or shorts need specific evidence that they improve on that
+hurdle after missed-upside risk. In trinary mode, recommend exact bands only:
+[-1,-1], [current,current], or [1,1].
 Do not produce a trade. Return only compact JSON:
 {
   "bull_exposure_case": "...",
   "defensive_case": "...",
   "cash_drag_risk": "...",
-  "recommended_exposure_band": [0.8, 1.0],
+  "recommended_exposure_band": [1.0, 1.0],
   "key_disagreement": "..."
 }
 """
 
 
-SINGLE_STOCK_STAGE2_SYSTEM_PROMPT = """You are the portfolio manager stage of a single-stock AI market benchmark.
+SINGLE_STOCK_STAGE2_SYSTEM_PROMPT = """Portfolio manager for one-stock benchmark.
 
-You own the final target exposure for exactly one stock. The simulator will
-convert your target_exposure into the stock target weight and will compute
-cash_weight, gross_exposure, net_exposure, turnover, and slippage. Do not do
-portfolio arithmetic yourself. Use only the compact point-in-time bundle,
-point-in-time memory, Stage 1 output, and exposure critic output.
+Use only the point-in-time bundle, eligible memory, Stage 1, and critic. Choose
+target_exposure for exactly one stock; the simulator computes weights, cash,
+turnover, and slippage.
 
-target_exposure meaning:
-- 1.0 = 100% long the stock
-- 0.0 = all cash
-- -1.0 = 100% short the stock when shorting is enabled
-
-Official scorecard: training decisions build point-in-time memory, but success
-is judged on the test-window strategy return versus the same stock's
-buy-and-hold return over those same dates. For the local AAPL goal, low exposure
-is an active bet against AAPL buy-and-hold. Treat full participation as the
-baseline when point-in-time evidence is bullish or favorable; choose cash or low
-exposure only when the supplied evidence shows a specific drawdown/negative-edge
-case likely strong enough to beat buy-and-hold after missed-upside risk.
-
-Respect input_bundle.valid_target_exposure_range. If you choose low exposure
-while Stage 1, memory, stock/SPY/QQQ context, or the exposure critic is favorable,
-you must explain the opportunity cost of cash. Low exposure is valid only as
-your own explicit benchmark decision, not as a default cautious posture. Generic
-uncertainty is not enough; why_not_buy_hold must say why lower exposure is
-expected to beat same-stock buy-and-hold over the relevant horizon.
+target_exposure: 1.0 full long, 0.0 cash, -1.0 full short when enabled. Success
+is test-window return above same-stock buy-and-hold, so low exposure needs a
+specific drawdown/negative-edge case after missed-upside risk. Respect
+input_bundle.valid_target_exposure_range.
 
 Return only compact JSON:
 {
-  "target_exposure": 0.9,
+  "target_exposure": 1.0,
+  "expected_holding_days": 20,
+  "rebalance_reason": "...",
+  "input_evidence_refs": ["stage1:AAPL"],
+  "data_quality_warnings_used": [],
+  "confidence": 0.0,
+  "portfolio_thesis": "...",
+  "major_risks": ["..."],
+  "uncertainty": ["..."],
+  "expected_return_bps": 0,
+  "horizon_days": 20,
+  "cash_drag_justification": "...",
+  "why_not_buy_hold": "...",
+  "stage1_alignment": "follow | partial | veto",
+  "stage1_veto_reason": "..."
+}
+"""
+
+
+SINGLE_STOCK_STAGE2_TRINARY_SYSTEM_PROMPT = """Portfolio manager for one-stock benchmark.
+
+Use only the point-in-time bundle, eligible memory, Stage 1, and critic. You own
+the final action. The simulator derives target_exposure, weights, cash, turnover,
+and slippage.
+
+In trinary mode choose exactly one action:
+- SHORT_ALL = 100% short
+- HOLD = no trade; keep current exposure
+- BUY_ALL = 100% long
+No partial sizing.
+
+Scorecard: training builds memory; success is test-window return above same-stock
+buy-and-hold. Cash or short exposure must cite specific point-in-time evidence
+that it can beat buy-and-hold after missed-upside risk. Respect
+input_bundle.valid_target_exposure_range and allowed_actions.
+
+Return only compact JSON:
+{
+  "action": "BUY_ALL",
   "expected_holding_days": 20,
   "rebalance_reason": "...",
   "input_evidence_refs": ["stage1:AAPL", "memory:detagg:AAPL"],
@@ -230,12 +243,23 @@ def build_exposure_critic_prompt(input_bundle: Dict[str, Any], stage1_outputs: l
 
 def build_stage2_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[str, Any]]) -> Tuple[str, str]:
     if input_bundle.get("mode") == "single_stock":
+        contract = input_bundle.get("single_stock_contract") or {}
+        task = (
+            "Choose final single-stock action for the benchmark and return valid JSON only."
+            if contract.get("action_space") == "trinary_all_in"
+            else "Choose final single-stock target_exposure for the benchmark and return valid JSON only."
+        )
         user_payload = {
-            "task": "Choose final single-stock target_exposure for the benchmark and return valid JSON only.",
+            "task": task,
             "stage1_outputs": stage1_outputs,
             "input_bundle": input_bundle,
         }
-        return SINGLE_STOCK_STAGE2_SYSTEM_PROMPT, json.dumps(user_payload, sort_keys=True, default=str)
+        system = (
+            SINGLE_STOCK_STAGE2_TRINARY_SYSTEM_PROMPT
+            if contract.get("action_space") == "trinary_all_in"
+            else SINGLE_STOCK_STAGE2_SYSTEM_PROMPT
+        )
+        return system, json.dumps(user_payload, sort_keys=True, default=str)
 
     user_payload = {
         "task": "Choose final portfolio target weights for the benchmark and return valid JSON only.",

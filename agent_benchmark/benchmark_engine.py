@@ -1012,6 +1012,7 @@ class BenchmarkEngine:
                 "turnover_prompt_buffer": config.turnover_prompt_buffer,
                 "slippage_bps": config.slippage_bps,
                 "fill_timing": config.fill_timing,
+                "single_stock_action_space": config.single_stock_action_space,
                 "opportunity_cost_policy": config.opportunity_cost_policy,
                 "exposure_critic_enabled": config.exposure_critic_enabled,
                 "outcome_learning_mode": config.outcome_learning_mode,
@@ -1135,7 +1136,9 @@ class BenchmarkEngine:
                     "target_exposure_symbol": symbol,
                     "valid_target_exposure_range": valid_range,
                     "single_stock_contract": {
-                        "model_returns": "target_exposure",
+                        "action_space": scoped_config.single_stock_action_space,
+                        "allowed_actions": valid_range.get("allowed_actions"),
+                        "model_returns": "action" if scoped_config.single_stock_action_space == "trinary_all_in" else "target_exposure",
                         "simulator_computes": ["target_weights", "cash_weight", "gross_exposure", "net_exposure", "estimated_turnover", "estimated_slippage_cost_bps"],
                         "required_opportunity_cost_fields": [
                             "cash_drag_justification",
@@ -1737,7 +1740,7 @@ class BenchmarkEngine:
         maximum = min(upper_bound, current + allowed_change)
         if minimum > maximum:
             minimum = maximum = max(lower_bound, min(upper_bound, current))
-        return {
+        result = {
             "symbol": symbol,
             "current_exposure": round(current, 8),
             "min": round(minimum, 8),
@@ -1746,6 +1749,47 @@ class BenchmarkEngine:
             "turnover_prompt_buffer": buffer,
             "rule": "Choose target_exposure inside [min, max] to avoid prompt-time turnover overflow.",
         }
+        if config.single_stock_action_space == "trinary_all_in":
+            action_targets = self._trinary_action_targets(config, current)
+            allowed_actions = [
+                action
+                for action, target in action_targets.items()
+                if target >= minimum - 1e-9 and target <= maximum + 1e-9
+            ]
+            result.update(
+                {
+                    "action_space": "trinary_all_in",
+                    "allowed_actions": allowed_actions,
+                    "allowed_target_exposures": {action: round(target, 8) for action, target in action_targets.items() if action in allowed_actions},
+                    "rule": "Choose one allowed action only: SHORT_ALL, HOLD, or BUY_ALL. HOLD keeps current_exposure; no fractional sizing.",
+                }
+            )
+        return result
+
+    def _trinary_action_targets(self, config: BenchmarkConfig, current_exposure: float) -> Dict[str, float]:
+        max_exposure = float(config.max_gross_exposure or 1.0)
+        actions = {"HOLD": float(current_exposure), "BUY_ALL": max_exposure}
+        if config.allow_short:
+            actions = {"SHORT_ALL": -max_exposure, **actions}
+        return actions
+
+    def _current_single_stock_exposure(
+        self,
+        symbol: str,
+        manager_bundle: Dict[str, Any] | None = None,
+        *,
+        book: PortfolioBook | None = None,
+        prices: Dict[str, float] | None = None,
+    ) -> float:
+        current = ((manager_bundle or {}).get("current_position_weights") or {}).get(symbol)
+        value = _safe_float(current)
+        if value is not None:
+            return float(value)
+        if book is not None and prices and symbol in prices:
+            marked = mark_to_market(book, prices)
+            equity = max(float(marked.equity or 0.0), 1e-9)
+            return float(marked.positions.get(symbol, 0.0) or 0.0) * float(prices.get(symbol) or 0.0) / equity
+        return 0.0
 
     def _single_stock_exposure(self, output: Dict[str, Any], symbols: List[str], manager_bundle: Dict[str, Any] | None = None) -> float:
         symbol = symbols[0] if symbols else ""
@@ -1774,7 +1818,16 @@ class BenchmarkEngine:
             return output
         normalized = dict(output or {})
         symbol = symbols[0] if symbols else config.symbol.upper()
-        exposure = self._single_stock_exposure(normalized, [symbol], manager_bundle)
+        current_exposure = self._current_single_stock_exposure(symbol, manager_bundle, book=book, prices=prices)
+        action = str(normalized.get("action") or "").strip().upper()
+        if config.single_stock_action_space == "trinary_all_in":
+            normalized["action"] = action
+            targets = self._trinary_action_targets(config, current_exposure)
+            exposure = targets.get(action)
+            if exposure is None:
+                exposure = self._single_stock_exposure(normalized, [symbol], manager_bundle)
+        else:
+            exposure = self._single_stock_exposure(normalized, [symbol], manager_bundle)
         target_weights = {symbol: exposure} if abs(exposure) > 1e-9 else {}
         gross = abs(exposure)
         normalized["target_exposure"] = round(float(exposure), 8)
@@ -2090,6 +2143,7 @@ class BenchmarkEngine:
             gross = abs(exposure)
             target_weights = {symbol: exposure} if abs(exposure) > 1e-9 else {}
             return {
+                "action": "HOLD",
                 "target_exposure": round(exposure, 8),
                 "target_weights": {key: round(value, 8) for key, value in target_weights.items()},
                 "cash_weight": round(1.0 - gross, 8),
@@ -2147,16 +2201,16 @@ class BenchmarkEngine:
         cache_namespace: str,
     ) -> tuple[Dict[str, Any], int]:
         current = stage2_output
-        errors = self._allocation_errors(config, current, symbols, book=book, prices=prices)
+        errors = self._allocation_errors(config, current, symbols, manager_bundle=manager_bundle, book=book, prices=prices)
         if not errors or current.get("_api_status") in {"dry_run", "missing_key"}:
             return current, 0
 
         if config.mode == "single_stock":
             repair_system = """You are the portfolio manager stage of a single-stock AI market benchmark.
 
-Your previous Stage 2 target_exposure violated hard benchmark constraints.
-Correct your own target_exposure and required explanation fields. The simulator
-will convert target_exposure into weights and compute portfolio arithmetic.
+Your previous Stage 2 action/target_exposure violated hard benchmark constraints.
+Correct your own action and required explanation fields. The simulator will
+derive target_exposure, weights, cash, turnover, and slippage.
 Return only valid compact JSON with the same single-stock Stage 2 schema.
 """
         else:
@@ -2174,7 +2228,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         for attempt in range(1, 3):
             repair_user = json.dumps(
                 {
-                    "task": "Repair your previous single-stock target_exposure and return valid JSON only." if config.mode == "single_stock" else "Repair your previous portfolio allocation and return valid JSON only.",
+                    "task": "Repair your previous single-stock action and return valid JSON only." if config.mode == "single_stock" else "Repair your previous portfolio allocation and return valid JSON only.",
                     "attempt": attempt,
                     "max_attempts": 2,
                     "hard_rules": {
@@ -2185,6 +2239,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                         "turnover_prompt_buffer": config.turnover_prompt_buffer,
                         "turnover_edge_multiplier": config.turnover_edge_multiplier,
                         "slippage_bps": config.slippage_bps,
+                        "single_stock_action_space": config.single_stock_action_space,
                         "valid_target_exposure_range": manager_bundle.get("valid_target_exposure_range"),
                         "single_stock_contract": manager_bundle.get("single_stock_contract"),
                         "gross_exposure_formula": "sum(abs(target_weights.values()))",
@@ -2229,7 +2284,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                         "cache_hit": bool(repaired.get("_api_cache_hit")),
                     }
                 )
-            errors = self._allocation_errors(config, repaired, symbols, book=book, prices=prices)
+            errors = self._allocation_errors(config, repaired, symbols, manager_bundle=manager_bundle, book=book, prices=prices)
             repaired["_allocation_repair"] = {
                 "attempted": True,
                 "attempts": attempt,
@@ -2257,11 +2312,12 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         output: Dict[str, Any],
         symbols: List[str],
         *,
+        manager_bundle: Dict[str, Any] | None = None,
         book: PortfolioBook | None = None,
         prices: Dict[str, float] | None = None,
     ) -> List[Dict[str, Any]]:
         if config.mode == "single_stock":
-            output = self._normalize_stage2_output(config, output, symbols, book=book, prices=prices)
+            output = self._normalize_stage2_output(config, output, symbols, manager_bundle, book=book, prices=prices)
         weights = self._coerce_target_weights(output.get("target_weights") or {}, symbols)
         gross = sum(abs(value) for value in weights.values())
         net = sum(weights.values())
@@ -2270,6 +2326,31 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         if config.mode == "single_stock":
             if _safe_float(output.get("target_exposure")) is None:
                 errors.append({"type": "missing_or_invalid_target_exposure"})
+            if config.single_stock_action_space == "trinary_all_in":
+                symbol = symbols[0] if symbols else config.symbol.upper()
+                current_exposure = self._current_single_stock_exposure(symbol, manager_bundle, book=book, prices=prices)
+                action_targets = self._trinary_action_targets(config, current_exposure)
+                valid_range = (manager_bundle or {}).get("valid_target_exposure_range") or {}
+                allowed_actions = set(valid_range.get("allowed_actions") or action_targets.keys())
+                action = str(output.get("action") or "").strip().upper()
+                if action not in allowed_actions:
+                    errors.append(
+                        {
+                            "type": "invalid_trinary_action",
+                            "action": action,
+                            "allowed_actions": sorted(allowed_actions),
+                        }
+                    )
+                exposure = _safe_float(output.get("target_exposure"))
+                allowed_targets = [target for name, target in action_targets.items() if name in allowed_actions]
+                if exposure is not None and not any(abs(exposure - target) <= 1e-4 for target in allowed_targets):
+                    errors.append(
+                        {
+                            "type": "invalid_trinary_target_exposure",
+                            "target_exposure": round(float(exposure), 8),
+                            "allowed_target_exposures": [round(float(target), 8) for target in allowed_targets],
+                        }
+                    )
             for field in ("cash_drag_justification", "why_not_buy_hold"):
                 if not isinstance(output.get(field), str) or not output.get(field, "").strip():
                     errors.append({"type": f"missing_{field}"})

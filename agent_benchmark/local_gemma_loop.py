@@ -150,14 +150,14 @@ def propose_allowlisted_patch(diagnostics: Dict[str, Any], evaluation: Dict[str,
     if int(evaluation.get("invalid_decisions") or 0) > 0:
         return LocalPatch(
             category="exposure_policy",
-            reason="Invalid decisions occurred; tighten to long-only single-stock execution with direct turnover math.",
-            config_updates={"allow_short": False, "max_daily_turnover": 1.0, "turnover_prompt_buffer": 0.0, "turnover_edge_multiplier": 0.0},
+            reason="Invalid decisions occurred; keep shorting available but enforce the trinary all-in action contract and full flip turnover.",
+            config_updates={"allow_short": True, "single_stock_action_space": "trinary_all_in", "max_daily_turnover": 2.0, "turnover_prompt_buffer": 0.0, "turnover_edge_multiplier": 0.0},
         )
     if metrics.get("cash_drag_proxy") and float(metrics["cash_drag_proxy"]) > 0:
         return LocalPatch(
             category="benchmark_config",
             reason="Diagnostics show cash drag; allow full buy-and-hold participation when evidence supports it.",
-            config_updates={"allow_short": False, "max_daily_turnover": 1.0, "turnover_prompt_buffer": 0.0, "max_gross_exposure": 1.0},
+            config_updates={"allow_short": True, "single_stock_action_space": "trinary_all_in", "max_daily_turnover": 2.0, "turnover_prompt_buffer": 0.0, "max_gross_exposure": 1.0},
         )
     if metrics.get("bullish_but_underexposed_days"):
         return LocalPatch(
@@ -168,8 +168,8 @@ def propose_allowlisted_patch(diagnostics: Dict[str, Any], evaluation: Dict[str,
     if not evaluation.get("beat_buy_hold"):
         return LocalPatch(
             category="benchmark_config",
-            reason="AI did not beat AAPL buy-and-hold; ensure the config permits full long exposure without turnover throttling.",
-            config_updates={"allow_short": False, "max_daily_turnover": 1.0, "turnover_prompt_buffer": 0.0, "turnover_edge_multiplier": 0.0},
+            reason="AI did not beat AAPL buy-and-hold; ensure the config permits full long/short all-in actions without turnover throttling.",
+            config_updates={"allow_short": True, "single_stock_action_space": "trinary_all_in", "max_daily_turnover": 2.0, "turnover_prompt_buffer": 0.0, "turnover_edge_multiplier": 0.0},
         )
     return None
 

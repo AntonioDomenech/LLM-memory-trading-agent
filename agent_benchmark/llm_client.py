@@ -308,28 +308,38 @@ def _ollama_schema_for_namespace(config: BenchmarkConfig, namespace: str) -> Dic
             "required": ["summary_lesson", "lesson_tags", "use_in_future_if", "avoid_if", "confidence"],
         }
     if namespace.startswith("stage2") and config.mode == "single_stock":
+        trinary = getattr(config, "single_stock_action_space", "continuous") == "trinary_all_in"
+        properties = {
+            "expected_holding_days": {"type": "integer", "minimum": 1, "maximum": 60},
+            "rebalance_reason": {"type": "string"},
+            "input_evidence_refs": {"type": "array", "items": {"type": "string"}},
+            "data_quality_warnings_used": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "portfolio_thesis": {"type": "string"},
+            "major_risks": {"type": "array", "items": {"type": "string"}},
+            "uncertainty": {"type": "array", "items": {"type": "string"}},
+            "expected_return_bps": {"type": "number"},
+            "horizon_days": {"type": "integer", "minimum": 1, "maximum": 60},
+            "cash_drag_justification": {"type": "string"},
+            "why_not_buy_hold": {"type": "string"},
+            "stage1_alignment": {"type": "string", "enum": ["follow", "partial", "veto"]},
+            "stage1_veto_reason": {"type": "string"},
+        }
+        if trinary:
+            actions = ["HOLD", "BUY_ALL"]
+            if config.allow_short:
+                actions.insert(0, "SHORT_ALL")
+            properties["action"] = {"type": "string", "enum": actions}
+            required_decision_field = "action"
+        else:
+            properties["target_exposure"] = {"type": "number", "minimum": -float(config.max_gross_exposure or 1.0) if config.allow_short else 0.0, "maximum": float(config.max_gross_exposure or 1.0)}
+            required_decision_field = "target_exposure"
         return {
             "type": "object",
             "additionalProperties": False,
-            "properties": {
-                "target_exposure": {"type": "number", "minimum": -float(config.max_gross_exposure or 1.0) if config.allow_short else 0.0, "maximum": float(config.max_gross_exposure or 1.0)},
-                "expected_holding_days": {"type": "integer", "minimum": 1, "maximum": 60},
-                "rebalance_reason": {"type": "string"},
-                "input_evidence_refs": {"type": "array", "items": {"type": "string"}},
-                "data_quality_warnings_used": {"type": "array", "items": {"type": "string"}},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "portfolio_thesis": {"type": "string"},
-                "major_risks": {"type": "array", "items": {"type": "string"}},
-                "uncertainty": {"type": "array", "items": {"type": "string"}},
-                "expected_return_bps": {"type": "number"},
-                "horizon_days": {"type": "integer", "minimum": 1, "maximum": 60},
-                "cash_drag_justification": {"type": "string"},
-                "why_not_buy_hold": {"type": "string"},
-                "stage1_alignment": {"type": "string", "enum": ["follow", "partial", "veto"]},
-                "stage1_veto_reason": {"type": "string"},
-            },
+            "properties": properties,
             "required": [
-                "target_exposure",
+                required_decision_field,
                 "expected_holding_days",
                 "rebalance_reason",
                 "input_evidence_refs",

@@ -78,6 +78,7 @@ class BenchmarkConfig(BaseModel):
     prompt_detail_level: Literal["compact", "full"] = "compact"
     embedding_provider: Literal["local", "openai"] = "local"
     decision_process: Literal["two_stage_llm"] = "two_stage_llm"
+    single_stock_action_space: Literal["continuous", "trinary_all_in"] = "continuous"
     opportunity_cost_policy: Literal["soft"] = "soft"
     exposure_critic_enabled: bool = True
     outcome_learning_mode: Literal["off", "diagnostic_lessons", "llm_reflection_lessons"] = "off"

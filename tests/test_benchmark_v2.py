@@ -2,7 +2,7 @@ from agent_benchmark.memory import HybridMemory
 from agent_benchmark.api_usage import estimate_run_api_usage
 from agent_benchmark.benchmark_engine import BenchmarkEngine
 from agent_benchmark.deterministic_memory import DeterministicMarketMemory
-from agent_benchmark.llm_client import _post_json, _retry_after_seconds, call_json_model
+from agent_benchmark.llm_client import _ollama_schema_for_namespace, _post_json, _retry_after_seconds, call_json_model
 from agent_benchmark.portfolio import execute_target_weights, initial_book
 from agent_benchmark.prompting import build_stage1_prompt, build_stage2_prompt
 from agent_benchmark.quality import build_run_diagnostics, canonicalize_fundamentals
@@ -150,20 +150,23 @@ def test_single_stock_stage2_prompt_uses_target_exposure_contract():
                 "test_window": {"start_date": "2025-01-01", "end_date": "2025-12-31"},
             },
         },
+        "single_stock_contract": {"action_space": "trinary_all_in", "allowed_actions": ["SHORT_ALL", "HOLD", "BUY_ALL"]},
         "exposure_critic": {"recommended_exposure_band": [0.2, 0.5], "cash_drag_risk": "cash can lag"},
     }
 
     system, user = build_stage2_prompt(bundle, [{"analyses": [{"symbol": "AAPL", "stance": "bullish"}]}])
 
-    assert "target_exposure" in system
+    assert "SHORT_ALL" in system
+    assert "BUY_ALL" in system
+    assert "No partial sizing" in system
     assert "cash_drag_justification" in system
     assert "why_not_buy_hold" in system
     assert "stage1_alignment" in system
     assert "valid_target_exposure_range" in user
     assert "exposure_critic" in user
     assert "buy-and-hold" in system
-    assert "Generic" in system and "uncertainty is not enough" in system
     assert "benchmark_hurdle" in user
+    assert "single-stock action" in user
 
 
 def test_single_stock_bundle_carries_official_2025_buy_hold_hurdle(tmp_path):
@@ -177,6 +180,10 @@ def test_single_stock_bundle_carries_official_2025_buy_hold_hurdle(tmp_path):
         test_start="2025-01-01",
         test_end="2025-12-31",
         memory_mode="model_specific_cases_and_lessons",
+        single_stock_action_space="trinary_all_in",
+        allow_short=True,
+        max_daily_turnover=2.0,
+        turnover_prompt_buffer=0.0,
     )
     store = BenchmarkStore(tmp_path / "benchmark.db")
     memory = HybridMemory(store, config, SecretConfig())
@@ -197,6 +204,8 @@ def test_single_stock_bundle_carries_official_2025_buy_hold_hurdle(tmp_path):
         warehouse.close()
 
     hurdle = stage2["single_stock_opportunity_cost"]["benchmark_hurdle"]
+    assert stage2["single_stock_contract"]["model_returns"] == "action"
+    assert stage2["single_stock_contract"]["allowed_actions"] == ["SHORT_ALL", "HOLD", "BUY_ALL"]
     assert hurdle["comparison"] == "same_stock_buy_and_hold"
     assert hurdle["train_window"] == {
         "start_date": "2000-01-01",
@@ -209,6 +218,21 @@ def test_single_stock_bundle_carries_official_2025_buy_hold_hurdle(tmp_path):
         "purpose": "official_success_score",
     }
     assert "buy-and-hold" in hurdle["requirement"]
+
+
+def test_ollama_schema_requires_action_for_trinary_single_stock_stage2():
+    config = BenchmarkConfig(
+        mode="single_stock",
+        allow_short=True,
+        single_stock_action_space="trinary_all_in",
+        max_gross_exposure=1.0,
+    )
+
+    schema = _ollama_schema_for_namespace(config, "stage2")
+
+    assert "action" in schema["required"]
+    assert "target_exposure" not in schema["required"]
+    assert schema["properties"]["action"]["enum"] == ["SHORT_ALL", "HOLD", "BUY_ALL"]
 
 
 def test_stage2_allocation_repair_uses_same_model_before_simulator_rejection(monkeypatch):
@@ -326,6 +350,17 @@ def test_single_stock_valid_target_exposure_range_clips_turnover_and_short_rules
             ["AAPL"],
         )
         near_limit = engine._valid_target_exposure_range(config, {"AAPL": 0.95}, ["AAPL"])
+        trinary = engine._valid_target_exposure_range(
+            BenchmarkConfig(
+                max_daily_turnover=2.0,
+                turnover_prompt_buffer=0.0,
+                allow_short=True,
+                max_gross_exposure=1.0,
+                single_stock_action_space="trinary_all_in",
+            ),
+            {"AAPL": 0.0},
+            ["AAPL"],
+        )
     finally:
         engine.close()
 
@@ -333,6 +368,69 @@ def test_single_stock_valid_target_exposure_range_clips_turnover_and_short_rules
     assert ranged["max"] == pytest.approx(0.28)
     assert long_only["min"] == 0.0
     assert near_limit["max"] == 1.0
+    assert trinary["allowed_actions"] == ["SHORT_ALL", "HOLD", "BUY_ALL"]
+    assert trinary["allowed_target_exposures"] == {"SHORT_ALL": -1.0, "HOLD": 0.0, "BUY_ALL": 1.0}
+
+
+def test_trinary_single_stock_actions_are_normalized_and_partial_targets_rejected():
+    engine = BenchmarkEngine()
+    try:
+        config = BenchmarkConfig(
+            mode="single_stock",
+            allow_short=True,
+            max_gross_exposure=1.0,
+            max_daily_turnover=2.0,
+            turnover_prompt_buffer=0.0,
+            single_stock_action_space="trinary_all_in",
+        )
+        manager_bundle = {
+            "current_position_weights": {"AAPL": 0.25},
+            "valid_target_exposure_range": engine._valid_target_exposure_range(config, {"AAPL": 0.25}, ["AAPL"]),
+        }
+        normalized = engine._normalize_stage2_output(
+            config,
+            {
+                "action": "SHORT_ALL",
+                "expected_holding_days": 20,
+                "rebalance_reason": "test",
+                "input_evidence_refs": [],
+                "data_quality_warnings_used": [],
+                "cash_drag_justification": "short avoids drawdown",
+                "why_not_buy_hold": "bearish evidence",
+                "stage1_alignment": "veto",
+                "stage1_veto_reason": "bearish evidence",
+            },
+            ["AAPL"],
+            manager_bundle,
+        )
+        hold = engine._normalize_stage2_output(config, {"action": "HOLD"}, ["AAPL"], manager_bundle)
+        errors = engine._allocation_errors(
+            config,
+            {
+                "target_exposure": 0.4,
+                "expected_holding_days": 20,
+                "rebalance_reason": "test",
+                "input_evidence_refs": [],
+                "data_quality_warnings_used": [],
+                "cash_drag_justification": "test",
+                "why_not_buy_hold": "test",
+                "stage1_alignment": "partial",
+                "stage1_veto_reason": "",
+            },
+            ["AAPL"],
+            manager_bundle=manager_bundle,
+        )
+    finally:
+        engine.close()
+
+    assert normalized["target_exposure"] == -1.0
+    assert normalized["target_weights"] == {"AAPL": -1.0}
+    assert normalized["cash_weight"] == 0.0
+    assert normalized["estimated_turnover"] == pytest.approx(1.25)
+    assert hold["target_exposure"] == pytest.approx(0.25)
+    error_types = {item["type"] for item in errors}
+    assert "invalid_trinary_action" in error_types
+    assert "invalid_trinary_target_exposure" in error_types
 
 
 def test_single_stock_target_exposure_is_normalized_to_executable_weights():
