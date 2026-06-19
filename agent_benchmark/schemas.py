@@ -82,6 +82,7 @@ class BenchmarkConfig(BaseModel):
     opportunity_cost_policy: Literal["soft"] = "soft"
     exposure_critic_enabled: bool = True
     outcome_learning_mode: Literal["off", "diagnostic_lessons", "llm_reflection_lessons"] = "off"
+    llm_reflection_cadence: Literal["daily", "weekly"] = "daily"
     turnover_prompt_buffer: float = 0.02
     strict_preflight: bool = True
     require_paid_micro_pilot: bool = True

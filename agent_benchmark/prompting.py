@@ -187,7 +187,7 @@ Return only compact JSON:
 
 SINGLE_STOCK_STAGE2_TRINARY_SYSTEM_PROMPT = """Portfolio manager for one-stock benchmark.
 
-Use only the point-in-time bundle, eligible memory, Stage 1, and critic. You own
+Use only the point-in-time bundle, eligible memory, and Stage 1. You own
 the final action. The simulator derives target_exposure, weights, cash, turnover,
 and slippage.
 

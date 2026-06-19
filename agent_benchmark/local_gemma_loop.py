@@ -162,8 +162,8 @@ def propose_allowlisted_patch(diagnostics: Dict[str, Any], evaluation: Dict[str,
     if metrics.get("bullish_but_underexposed_days"):
         return LocalPatch(
             category="critic_framing",
-            reason="Stage 1 was bullish while Stage 2 stayed underexposed; keep exposure critic enabled and widen target range.",
-            config_updates={"exposure_critic_enabled": True, "max_daily_turnover": 0.0, "turnover_prompt_buffer": 0.0},
+            reason="Stage 1 was bullish while Stage 2 stayed underexposed; keep trinary all-in choices fast and widen no-turnover target range.",
+            config_updates={"exposure_critic_enabled": False, "max_daily_turnover": 0.0, "turnover_prompt_buffer": 0.0},
         )
     if not evaluation.get("beat_buy_hold"):
         return LocalPatch(

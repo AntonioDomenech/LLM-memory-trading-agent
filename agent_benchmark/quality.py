@@ -148,12 +148,15 @@ def build_preflight_report(
     trading_dates = _trading_dates(warehouse, config.test_start, config.test_end)
     test_days = len(trading_dates)
     stage1_chunks = math.ceil(len(symbols) / max(1, int(config.stage1_chunk_size or 1)))
+    exposure_critic_calls = 1 if config.mode == "single_stock" and config.exposure_critic_enabled and config.single_stock_action_space != "trinary_all_in" else 0
+    decision_calls_per_day = stage1_chunks + 1 + exposure_critic_calls
     report["estimate"] = {
         "test_trading_days": test_days,
-        "decision_calls_per_day": stage1_chunks + 1 + (1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0),
-        "estimated_model_calls": test_days * (stage1_chunks + 1 + (1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0)),
+        "decision_calls_per_day": decision_calls_per_day,
+        "estimated_model_calls": test_days * decision_calls_per_day,
         "stage1_chunks_per_day": stage1_chunks,
-        "exposure_critic_calls_per_day": 1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0,
+        "exposure_critic_calls_per_day": exposure_critic_calls,
+        "llm_reflection_cadence": config.llm_reflection_cadence,
     }
 
     _price_coverage_check(report, warehouse, symbols, trading_dates)

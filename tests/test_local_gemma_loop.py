@@ -39,9 +39,11 @@ def test_local_gemma_config_is_chat_completions_and_no_paid_safe():
     assert config.no_paid_api_mode is True
     assert config.memory_mode == "model_specific_cases_and_lessons"
     assert config.outcome_learning_mode == "llm_reflection_lessons"
+    assert config.llm_reflection_cadence == "weekly"
     assert config.use_cached_llm is False
     assert config.allow_short is True
     assert config.single_stock_action_space == "trinary_all_in"
+    assert config.exposure_critic_enabled is False
     assert config.max_daily_turnover == 0.0
 
 
@@ -157,6 +159,77 @@ def test_llm_reflection_lessons_are_stored_point_in_time(tmp_path, monkeypatch):
     assert len(due) == 1
     assert due[0]["memory_type"] == "llm_reflection_lesson"
     assert "Full participation helped" in due[0]["content"]
+    assert due[0]["metadata"]["cadence"] == "weekly"
+
+
+def test_weekly_llm_reflection_lessons_batch_due_training_days(tmp_path, monkeypatch):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    store = BenchmarkStore(tmp_path / "benchmark.db")
+    captured = []
+    try:
+        _insert_market_rows(
+            warehouse,
+            ["2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-10", "2025-01-13"],
+            [100, 102, 104, 106, 108, 110],
+        )
+        engine = BenchmarkEngine(warehouse)
+        config = local_gemma_aapl_config(
+            train_start="2025-01-06",
+            train_end="2025-01-10",
+            test_start="2025-01-13",
+            test_end="2025-01-13",
+            local_model_base_url="http://127.0.0.1:11434/v1",
+        )
+        memory = HybridMemory(store, config, local_gemma_secret_config())
+
+        def fake_call(*args, **kwargs):
+            captured.append(json.loads(args[3])["input_bundle"])
+            return {
+                "summary_lesson": "Weekly trend participation helped.",
+                "lesson_tags": ["weekly_participation_helped"],
+                "use_in_future_if": "weekly trend repeats",
+                "avoid_if": "weekly setup changes",
+                "confidence": 0.8,
+                "_api_status": "ok",
+            }
+
+        monkeypatch.setattr("agent_benchmark.benchmark_engine.call_json_model", fake_call)
+        decisions = [
+            {
+                "phase": "training",
+                "decision_date": day,
+                "fill_date": day,
+                "stage1_outputs": [],
+                "stage2_output": {
+                    "action": "BUY_ALL",
+                    "target_exposure": 1.0,
+                    "expected_holding_days": 1,
+                    "input_evidence_refs": [],
+                    "data_quality_warnings_used": [],
+                },
+                "execution": {},
+            }
+            for day in ["2025-01-06", "2025-01-07", "2025-01-08"]
+        ]
+
+        early_calls = engine._record_due_llm_reflection_lessons(memory, config, local_gemma_secret_config(), "run", decisions, "2025-01-10", dry_run=False)
+        calls = engine._record_due_llm_reflection_lessons(memory, config, local_gemma_secret_config(), "run", decisions, "2025-01-13", dry_run=False)
+        early = memory.retrieve(decision_timestamp="2025-01-10", query="weekly", limit=5)
+        due = memory.retrieve(decision_timestamp="2025-01-13", query="weekly", limit=5)
+    finally:
+        engine.close()
+        warehouse.close()
+
+    assert early_calls == 0
+    assert calls == 1
+    assert len(captured) == 1
+    assert captured[0]["cadence"] == "weekly"
+    assert captured[0]["record_count"] == 3
+    assert early == []
+    assert len(due) == 1
+    assert due[0]["metadata"]["cadence"] == "weekly"
+    assert due[0]["metadata"]["source_decision_dates"] == ["2025-01-06", "2025-01-07", "2025-01-08"]
+    assert all(item["llm_reflection_lesson_recorded"] for item in decisions)
 
 
 def test_success_evaluator_requires_buy_hold_zero_invalid_and_local_cost():
@@ -283,7 +356,7 @@ def test_full_single_stock_train_test_pipeline_with_fake_local_server(tmp_path):
 
     assert run["status"] == "completed"
     assert run["summary"]["api_usage_estimate"]["estimated_cost_usd"] == 0.0
-    assert any(item["stage"] == "exposure_critic" for item in run["decisions"])
+    assert not any(item["stage"] == "exposure_critic" for item in run["decisions"])
     assert any(item["stage"] == "stage2" for item in run["decisions"])
     assert store.list_memory(model="gemma4:12b", limit=5)
 

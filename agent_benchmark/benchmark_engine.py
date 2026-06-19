@@ -78,11 +78,13 @@ class BenchmarkEngine:
         train_pairs = self._trading_pairs(config.train_start, config.train_end, config.max_train_days)
         test_pairs = self._trading_pairs(config.test_start, config.test_end, config.max_test_days)
         chunks_per_day = math.ceil(len(symbols) / max(1, config.stage1_chunk_size))
-        critic_calls_per_day = 1 if config.mode == "single_stock" and config.exposure_critic_enabled else 0
+        critic_calls_per_day = 1 if self._should_run_exposure_critic(config) else 0
         calls_per_day = chunks_per_day + 1 + critic_calls_per_day
         deterministic = config.memory_mode == "deterministic_market_cases"
-        lesson_upper_bound = 0 if deterministic else len(self.horizons)
         decision_days = len(test_pairs) if deterministic else len(train_pairs) + len(test_pairs)
+        estimated_lesson_calls = 0
+        if not deterministic and config.outcome_learning_mode == "llm_reflection_lessons":
+            estimated_lesson_calls = max(1, math.ceil(len(train_pairs) / 5)) if config.llm_reflection_cadence == "weekly" else len(train_pairs) * len(self.horizons)
         return {
             "symbols": len(symbols),
             "train_days": len(train_pairs),
@@ -92,9 +94,10 @@ class BenchmarkEngine:
             "decision_calls_per_day": calls_per_day,
             "exposure_critic_calls_per_day": critic_calls_per_day,
             "estimated_decision_calls": decision_days * calls_per_day,
-            "estimated_lesson_calls_upper_bound": decision_days * lesson_upper_bound,
+            "estimated_lesson_calls_upper_bound": estimated_lesson_calls,
             "uncapped": config.max_train_days == 0 or config.max_test_days == 0,
             "memory_mode": config.memory_mode,
+            "llm_reflection_cadence": config.llm_reflection_cadence,
         }
 
     def preview(self, config: BenchmarkConfig, secrets: SecretConfig, *, phase: str = "test", decision_date: str | None = None) -> Dict[str, Any]:
@@ -438,14 +441,24 @@ class BenchmarkEngine:
         with store._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT memory_type, decision_timestamp
+                SELECT memory_type, decision_timestamp, metadata_json
                 FROM benchmark_memory
                 WHERE source_run_id = ?
                   AND memory_type IN ('diagnostic_lesson', 'llm_reflection_lesson')
                 """,
                 (run_id,),
             ).fetchall()
-        return {(str(row["memory_type"]), str(row["decision_timestamp"])) for row in rows}
+        recorded: set[tuple[str, str]] = set()
+        for row in rows:
+            memory_type = str(row["memory_type"])
+            recorded.add((memory_type, str(row["decision_timestamp"])))
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                metadata = {}
+            for decision_timestamp in metadata.get("source_decision_dates") or []:
+                recorded.add((memory_type, str(decision_timestamp)))
+        return recorded
 
     def _resume_model_call_count(self, store: BenchmarkStore, run_id: str, run: Dict[str, Any]) -> int:
         calls = 0
@@ -1873,7 +1886,7 @@ class BenchmarkEngine:
         dry_run: bool,
         cache_namespace: str,
     ) -> int:
-        if config.mode != "single_stock" or not config.exposure_critic_enabled:
+        if not self._should_run_exposure_critic(config):
             return 0
         system, user = build_exposure_critic_prompt(manager_bundle, stage1_outputs)
         fallback = self._exposure_critic_fallback(manager_bundle, stage1_outputs)
@@ -1892,6 +1905,13 @@ class BenchmarkEngine:
             execution_payload={},
         )
         return 0 if output.get("_api_status") in {"dry_run", "missing_key"} else 1
+
+    def _should_run_exposure_critic(self, config: BenchmarkConfig) -> bool:
+        return bool(
+            config.mode == "single_stock"
+            and config.exposure_critic_enabled
+            and config.single_stock_action_space != "trinary_all_in"
+        )
 
     def _record_due_diagnostic_lessons(
         self,
@@ -1985,27 +2005,38 @@ class BenchmarkEngine:
         if config.outcome_learning_mode != "llm_reflection_lessons" or config.mode != "single_stock":
             return 0
         symbol = self._symbols(config)[0]
+        if config.llm_reflection_cadence == "weekly":
+            return self._record_due_weekly_llm_reflection_lessons(memory, config, secrets, run_id, decisions, decision_date, symbol, dry_run=dry_run)
+        return self._record_due_daily_llm_reflection_lessons(memory, config, secrets, run_id, decisions, decision_date, symbol, dry_run=dry_run)
+
+    def _record_due_daily_llm_reflection_lessons(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        secrets: SecretConfig,
+        run_id: str,
+        decisions: List[Dict[str, Any]],
+        decision_date: str,
+        symbol: str,
+        *,
+        dry_run: bool,
+    ) -> int:
         calls = 0
         for record in decisions:
             if record.get("llm_reflection_lesson_recorded") or record.get("phase") != "training":
                 continue
-            stage2 = record.get("stage2_output") or {}
-            horizon = int(_safe_float(stage2.get("expected_holding_days", stage2.get("horizon_days"))) or 1)
-            horizon = max(1, min(60, horizon))
-            outcome_date = self._nth_trading_date_after(str(record.get("fill_date")), horizon)
-            if not outcome_date or outcome_date > decision_date:
+            candidate = self._reflection_lesson_candidate(symbol, record, decision_date)
+            if not candidate:
                 continue
-            start_prices = self._price_map([symbol], str(record.get("fill_date")), field="open") or self._price_map([symbol], str(record.get("fill_date")), field="close")
-            end_prices = self._price_map([symbol], outcome_date, field="close")
-            start = _safe_float(start_prices.get(symbol) if start_prices else None)
-            end = _safe_float(end_prices.get(symbol) if end_prices else None)
-            if start is None or end is None or start <= 0:
-                continue
-            realized_return = end / start - 1.0
-            exposure = self._single_stock_exposure(stage2, [symbol])
+            stage2 = candidate["stage2_output"]
+            horizon = int(candidate["horizon"])
+            outcome_date = str(candidate["outcome_date"])
+            realized_return = float(candidate["realized_return"])
+            exposure = float(candidate["target_exposure"])
             fallback = self._reflection_lesson_fallback(symbol, record, horizon, outcome_date, realized_return, exposure)
             system, user = build_reflection_lesson_prompt(
                 {
+                    "cadence": "daily",
                     "symbol": symbol,
                     "decision_date": record.get("decision_date"),
                     "fill_date": record.get("fill_date"),
@@ -2058,6 +2089,195 @@ class BenchmarkEngine:
             )
             record["llm_reflection_lesson_recorded"] = True
         return calls
+
+    def _record_due_weekly_llm_reflection_lessons(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        secrets: SecretConfig,
+        run_id: str,
+        decisions: List[Dict[str, Any]],
+        decision_date: str,
+        symbol: str,
+        *,
+        dry_run: bool,
+    ) -> int:
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for record in decisions:
+            if record.get("llm_reflection_lesson_recorded") or record.get("phase") != "training":
+                continue
+            week = self._reflection_week_info(str(record.get("decision_date") or ""))
+            if not week:
+                continue
+            if decision_date <= week["week_end"]:
+                continue
+            bucket = grouped.setdefault(week["week_key"], {**week, "records": []})
+            bucket["records"].append(record)
+
+        calls = 0
+        for week_key in sorted(grouped):
+            bucket = grouped[week_key]
+            candidates: List[Dict[str, Any]] = []
+            ready = True
+            for record in sorted(bucket["records"], key=lambda item: str(item.get("decision_date"))):
+                candidate = self._reflection_lesson_candidate(symbol, record, decision_date)
+                if not candidate:
+                    ready = False
+                    break
+                candidates.append(candidate)
+            if not ready or not candidates:
+                continue
+            knowledge_timestamp = max(max(str(item["outcome_date"]) for item in candidates), str(bucket["week_end"]))
+            if knowledge_timestamp > decision_date:
+                continue
+            source_decision_dates = [str(item["record"].get("decision_date")) for item in candidates]
+            action_counts = Counter(str((item["stage2_output"] or {}).get("action") or "UNKNOWN") for item in candidates)
+            avg_realized_return = sum(float(item["realized_return"]) for item in candidates) / len(candidates)
+            avg_abs_exposure = sum(abs(float(item["target_exposure"])) for item in candidates) / len(candidates)
+            fallback = self._weekly_reflection_lesson_fallback(symbol, week_key, candidates, knowledge_timestamp)
+            compact_records = [
+                {
+                    "decision_date": item["record"].get("decision_date"),
+                    "fill_date": item["record"].get("fill_date"),
+                    "outcome_date": item["outcome_date"],
+                    "horizon_days": item["horizon"],
+                    "action": (item["stage2_output"] or {}).get("action"),
+                    "target_exposure": round(float(item["target_exposure"]), 8),
+                    "realized_return": round(float(item["realized_return"]), 8),
+                    "stage1_outputs": item["record"].get("stage1_outputs") or [],
+                    "stage2_output": self._strip_api_metadata(item["stage2_output"] or {}),
+                    "execution": item["record"].get("execution") or {},
+                }
+                for item in candidates
+            ]
+            system, user = build_reflection_lesson_prompt(
+                {
+                    "cadence": "weekly",
+                    "symbol": symbol,
+                    "week_key": week_key,
+                    "week_start": bucket["week_start"],
+                    "week_end": bucket["week_end"],
+                    "decision_dates": source_decision_dates,
+                    "knowledge_timestamp": knowledge_timestamp,
+                    "outcome_available_at": knowledge_timestamp,
+                    "record_count": len(candidates),
+                    "action_counts": dict(action_counts),
+                    "avg_realized_return": avg_realized_return,
+                    "avg_abs_exposure": avg_abs_exposure,
+                    "records": compact_records,
+                }
+            )
+            output = call_json_model(
+                config,
+                secrets,
+                system,
+                user,
+                dry_run=dry_run,
+                fallback=fallback,
+                cache_namespace="reflection-lesson-weekly",
+            )
+            if output.get("_api_status") not in {"dry_run", "missing_key"}:
+                calls += 1
+            lesson = str(output.get("summary_lesson") or output.get("lesson") or fallback["summary_lesson"]).strip()
+            content = (
+                f"{symbol} weekly LLM reflection {week_key} ({source_decision_dates[0]} to {source_decision_dates[-1]}) "
+                f"known on {knowledge_timestamp}: {lesson[:900]}"
+            )
+            memory.add(
+                portfolio_scope=config.mode,
+                symbol=symbol,
+                decision_timestamp=source_decision_dates[0],
+                knowledge_timestamp=knowledge_timestamp,
+                source_run_id=run_id,
+                memory_type="llm_reflection_lesson",
+                content=content,
+                outcome_horizon="weekly",
+                outcome_available_at=knowledge_timestamp,
+                metadata={
+                    "cadence": "weekly",
+                    "week_key": week_key,
+                    "week_start": bucket["week_start"],
+                    "week_end": bucket["week_end"],
+                    "source_decision_dates": source_decision_dates,
+                    "outcome_dates": [str(item["outcome_date"]) for item in candidates],
+                    "action_counts": dict(action_counts),
+                    "avg_realized_return": avg_realized_return,
+                    "avg_abs_exposure": avg_abs_exposure,
+                    "lesson_tags": output.get("lesson_tags") or [],
+                    "use_in_future_if": output.get("use_in_future_if", ""),
+                    "avoid_if": output.get("avoid_if", ""),
+                    "confidence": _safe_float(output.get("confidence")),
+                    "api_status": output.get("_api_status"),
+                },
+            )
+            for item in candidates:
+                item["record"]["llm_reflection_lesson_recorded"] = True
+        return calls
+
+    def _reflection_lesson_candidate(self, symbol: str, record: Dict[str, Any], decision_date: str) -> Dict[str, Any] | None:
+        stage2 = record.get("stage2_output") or {}
+        horizon = int(_safe_float(stage2.get("expected_holding_days", stage2.get("horizon_days"))) or 1)
+        horizon = max(1, min(60, horizon))
+        outcome_date = self._nth_trading_date_after(str(record.get("fill_date")), horizon)
+        if not outcome_date or outcome_date > decision_date:
+            return None
+        start_prices = self._price_map([symbol], str(record.get("fill_date")), field="open") or self._price_map([symbol], str(record.get("fill_date")), field="close")
+        end_prices = self._price_map([symbol], outcome_date, field="close")
+        start = _safe_float(start_prices.get(symbol) if start_prices else None)
+        end = _safe_float(end_prices.get(symbol) if end_prices else None)
+        if start is None or end is None or start <= 0:
+            return None
+        return {
+            "record": record,
+            "stage2_output": stage2,
+            "horizon": horizon,
+            "outcome_date": outcome_date,
+            "target_exposure": self._single_stock_exposure(stage2, [symbol]),
+            "realized_return": end / start - 1.0,
+        }
+
+    def _reflection_week_info(self, decision_timestamp: str) -> Dict[str, str] | None:
+        try:
+            day = datetime.fromisoformat(decision_timestamp[:10]).date()
+        except Exception:
+            return None
+        week_start = day - timedelta(days=day.weekday())
+        week_end = week_start + timedelta(days=6)
+        iso = day.isocalendar()
+        return {
+            "week_key": f"{iso.year}-W{iso.week:02d}",
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat(),
+        }
+
+    def _weekly_reflection_lesson_fallback(
+        self,
+        symbol: str,
+        week_key: str,
+        candidates: List[Dict[str, Any]],
+        knowledge_timestamp: str,
+    ) -> Dict[str, Any]:
+        avg_return = sum(float(item["realized_return"]) for item in candidates) / max(1, len(candidates))
+        avg_exposure = sum(float(item["target_exposure"]) for item in candidates) / max(1, len(candidates))
+        if avg_return > 0 and avg_exposure > 0:
+            tag = "weekly_participation_helped"
+            lesson = f"{week_key}: positive exposure generally helped during a positive realized week; similar trend evidence can justify BUY_ALL."
+        elif avg_return > 0 and avg_exposure <= 0:
+            tag = "weekly_missed_upside"
+            lesson = f"{week_key}: defensive or short exposure missed a positive realized week; require stronger bearish evidence before avoiding BUY_ALL."
+        elif avg_return < 0 and avg_exposure > 0:
+            tag = "weekly_long_exposure_hurt"
+            lesson = f"{week_key}: long exposure hurt during a negative realized week; similar weak setups can justify HOLD or SHORT_ALL."
+        else:
+            tag = "weekly_defense_helped"
+            lesson = f"{week_key}: defensive exposure helped during a weak realized week; similar downside evidence can justify SHORT_ALL or HOLD."
+        return {
+            "summary_lesson": lesson,
+            "lesson_tags": [tag],
+            "use_in_future_if": f"Similar {symbol} weekly setup appears after {knowledge_timestamp}.",
+            "avoid_if": "The weekly setup or action mix differs materially.",
+            "confidence": 0.5,
+        }
 
     def _reflection_lesson_fallback(
         self,
