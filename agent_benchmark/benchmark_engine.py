@@ -2144,9 +2144,8 @@ class BenchmarkEngine:
                     "action": (item["stage2_output"] or {}).get("action"),
                     "target_exposure": round(float(item["target_exposure"]), 8),
                     "realized_return": round(float(item["realized_return"]), 8),
-                    "stage1_outputs": item["record"].get("stage1_outputs") or [],
-                    "stage2_output": self._strip_api_metadata(item["stage2_output"] or {}),
-                    "execution": item["record"].get("execution") or {},
+                    "stage1": self._compact_reflection_stage1(item["record"].get("stage1_outputs") or [], symbol),
+                    "stage2": self._compact_reflection_stage2(item["stage2_output"] or {}),
                 }
                 for item in candidates
             ]
@@ -2277,6 +2276,34 @@ class BenchmarkEngine:
             "use_in_future_if": f"Similar {symbol} weekly setup appears after {knowledge_timestamp}.",
             "avoid_if": "The weekly setup or action mix differs materially.",
             "confidence": 0.5,
+        }
+
+    def _compact_reflection_stage1(self, stage1_outputs: List[Dict[str, Any]], symbol: str) -> Dict[str, Any]:
+        for output in stage1_outputs:
+            for item in output.get("analyses") or []:
+                if str(item.get("symbol") or "").upper() != symbol:
+                    continue
+                evidence = item.get("key_evidence") or []
+                uncertainty = item.get("uncertainty") or []
+                return {
+                    "stance": item.get("stance"),
+                    "confidence": _safe_float(item.get("confidence")),
+                    "expected_return_bps": _safe_float(item.get("expected_return_bps")),
+                    "evidence": str(evidence[0])[:140] if evidence else "",
+                    "uncertainty": str(uncertainty[0])[:120] if uncertainty else "",
+                }
+        return {}
+
+    def _compact_reflection_stage2(self, stage2_output: Dict[str, Any]) -> Dict[str, Any]:
+        clean = self._strip_api_metadata(stage2_output or {})
+        return {
+            "action": clean.get("action"),
+            "target_exposure": _safe_float(clean.get("target_exposure")),
+            "confidence": _safe_float(clean.get("confidence")),
+            "expected_return_bps": _safe_float(clean.get("expected_return_bps")),
+            "rebalance_reason": str(clean.get("rebalance_reason") or "")[:160],
+            "thesis": str(clean.get("portfolio_thesis") or "")[:180],
+            "why_not_buy_hold": str(clean.get("why_not_buy_hold") or "")[:160],
         }
 
     def _reflection_lesson_fallback(

@@ -225,6 +225,11 @@ def test_weekly_llm_reflection_lessons_batch_due_training_days(tmp_path, monkeyp
     assert len(captured) == 1
     assert captured[0]["cadence"] == "weekly"
     assert captured[0]["record_count"] == 3
+    assert len(json.dumps(captured[0], default=str)) < 5000
+    assert "execution" not in captured[0]["records"][0]
+    assert "stage1_outputs" not in captured[0]["records"][0]
+    assert "stage2_output" not in captured[0]["records"][0]
+    assert set(captured[0]["records"][0]["stage2"]) >= {"action", "target_exposure", "rebalance_reason"}
     assert early == []
     assert len(due) == 1
     assert due[0]["metadata"]["cadence"] == "weekly"
