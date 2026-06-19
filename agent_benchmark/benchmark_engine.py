@@ -2495,8 +2495,41 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                     metrics["alpha_equal_weight_selected"] = benchmark.get("excess_return")
                 elif key == "single_stock":
                     metrics["alpha_single_stock_buy_hold"] = benchmark.get("excess_return")
+
+        test_curve = [point for point in equity_curve if point.get("phase") == "test"]
+        if test_curve:
+            test_metrics = self._window_metrics(test_curve)
+            summary["test_metrics"] = test_metrics
+            test_comparison = self._buy_hold_comparison(
+                config,
+                symbols,
+                test_curve,
+                float(test_metrics.get("initial_equity") or 0.0),
+                _safe_float(test_metrics.get("total_return")),
+            )
+            if test_comparison.get("benchmarks"):
+                summary["test_buy_hold_comparison"] = test_comparison
+            summary["success_evaluation_window"] = {
+                "name": "2025_test",
+                "phase": "test",
+                "start_date": test_metrics.get("start_date"),
+                "end_date": test_metrics.get("end_date"),
+                "reason": "The local Gemma AAPL goal trains on historical data through 2024 and judges success only on 2025.",
+            }
         summary["metrics"] = metrics
         return summary
+
+    def _window_metrics(self, equity_curve: List[Dict[str, Any]]) -> Dict[str, Any]:
+        initial = _safe_float((equity_curve[0] or {}).get("equity")) if equity_curve else None
+        final = _safe_float((equity_curve[-1] or {}).get("equity")) if equity_curve else None
+        return {
+            "start_date": self._date(equity_curve[0].get("date")) if equity_curve else None,
+            "end_date": self._date(equity_curve[-1].get("date")) if equity_curve else None,
+            "days": len(equity_curve),
+            "initial_equity": initial,
+            "final_equity": final,
+            "total_return": final / initial - 1.0 if initial else 0.0,
+        }
 
     def _buy_hold_comparison(
         self,

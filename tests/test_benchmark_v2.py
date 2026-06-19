@@ -872,8 +872,8 @@ def test_summary_includes_buy_hold_market_comparison(tmp_path):
             BenchmarkConfig(selected_symbols=["AAPL", "MSFT"], initial_cash=1000),
             ["AAPL", "MSFT"],
             [
-                {"date": "2025-01-02", "equity": 1000},
-                {"date": "2025-01-03", "equity": 1050},
+                {"date": "2025-01-02", "phase": "test", "equity": 1000},
+                {"date": "2025-01-03", "phase": "test", "equity": 1050},
             ],
             [],
             model_calls=0,
@@ -892,6 +892,12 @@ def test_summary_includes_buy_hold_market_comparison(tmp_path):
     assert by_id["selected_equal_weight"]["total_return"] == pytest.approx(0.1)
     assert by_id["spy"]["excess_return"] == pytest.approx(-0.05)
     assert summary["metrics"]["alpha_spy"] == pytest.approx(-0.05)
+    assert summary["success_evaluation_window"]["name"] == "2025_test"
+    assert summary["test_metrics"]["total_return"] == pytest.approx(0.05)
+    assert summary["test_buy_hold_comparison"]["start_date"] == "2025-01-02"
+    assert summary["test_buy_hold_comparison"]["end_date"] == "2025-01-03"
+    test_by_id = {item["id"]: item for item in summary["test_buy_hold_comparison"]["benchmarks"]}
+    assert test_by_id["selected_equal_weight"]["total_return"] == pytest.approx(0.1)
 
 
 def test_api_usage_estimate_prefers_exact_provider_usage():

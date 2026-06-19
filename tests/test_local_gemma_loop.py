@@ -175,6 +175,36 @@ def test_success_evaluator_requires_buy_hold_zero_invalid_and_local_cost():
     assert evaluate_success(run, config)["success"] is False
 
 
+def test_success_evaluator_prefers_2025_test_window():
+    config = local_gemma_aapl_config()
+    run = {
+        "summary": {
+            "model": config.model,
+            "model_provider": config.model_provider,
+            "no_paid_api_mode": True,
+            "local_model_base_url": config.local_model_base_url,
+            "metrics": {"total_return": 0.05, "invalid_allocation_count": 0},
+            "test_metrics": {"start_date": "2025-01-02", "end_date": "2025-12-31", "total_return": 0.12},
+            "api_usage_estimate": {"local_only": True, "estimated_cost_usd": 0.0, "estimated_cost_display": "$0.00"},
+            "buy_hold_comparison": {"benchmarks": [{"id": "single_stock", "total_return": 0.50}]},
+            "test_buy_hold_comparison": {
+                "start_date": "2025-01-02",
+                "end_date": "2025-12-31",
+                "benchmarks": [{"id": "single_stock", "total_return": 0.10}],
+            },
+            "success_evaluation_window": {"name": "2025_test", "phase": "test"},
+        }
+    }
+
+    evaluation = evaluate_success(run, config)
+
+    assert evaluation["success"] is True
+    assert evaluation["beat_buy_hold"] is True
+    assert evaluation["ai_return"] == pytest.approx(0.12)
+    assert evaluation["buy_hold_return"] == pytest.approx(0.10)
+    assert evaluation["evaluation_window"]["name"] == "2025_test"
+
+
 def test_monitoring_parser_and_abort_thresholds():
     rows = parse_nvidia_smi_csv("92, 9790, 10000, 87, 280.5\n")
 

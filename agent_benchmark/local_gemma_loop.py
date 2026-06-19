@@ -114,9 +114,10 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
     summary = run.get("summary") or {}
     metrics = summary.get("metrics") or {}
     usage = summary.get("api_usage_estimate") or {}
-    comparison = summary.get("buy_hold_comparison") or {}
+    evaluation_metrics = summary.get("test_metrics") or metrics
+    comparison = summary.get("test_buy_hold_comparison") or summary.get("buy_hold_comparison") or {}
     single = next((item for item in comparison.get("benchmarks", []) if item.get("id") == "single_stock"), {})
-    ai_return = _float(metrics.get("total_return"))
+    ai_return = _float(evaluation_metrics.get("total_return"))
     buy_hold_return = _float(single.get("total_return"))
     invalid = int(metrics.get("invalid_allocation_count") or metrics.get("model_failures") or 0)
     local_only = bool(summary.get("no_paid_api_mode") and usage.get("local_only") and usage.get("estimated_cost_usd") == 0.0)
@@ -134,6 +135,13 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
         "model": summary.get("model") or config.model,
         "model_provider": summary.get("model_provider") or config.model_provider,
         "local_model_base_url": summary.get("local_model_base_url") or config.local_model_base_url,
+        "evaluation_window": summary.get("success_evaluation_window") or {
+            "name": "full_run_legacy",
+            "phase": None,
+            "start_date": comparison.get("start_date"),
+            "end_date": comparison.get("end_date"),
+            "reason": "Legacy summary did not include a separate test-window comparison.",
+        },
     }
 
 
