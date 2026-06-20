@@ -162,6 +162,8 @@ def test_single_stock_stage2_prompt_uses_target_exposure_contract():
     assert "cash_drag_justification" in system
     assert "why_not_buy_hold" in system
     assert "stage1_alignment" in system
+    assert "HOLD while short remains short" in system
+    assert "Shorts are tactical and high hurdle" in system
     assert "valid_target_exposure_range" in user
     assert "exposure_critic" in user
     assert "buy-and-hold" in system
@@ -206,6 +208,8 @@ def test_single_stock_bundle_carries_official_2025_buy_hold_hurdle(tmp_path):
     hurdle = stage2["single_stock_opportunity_cost"]["benchmark_hurdle"]
     assert stage2["single_stock_contract"]["model_returns"] == "action"
     assert stage2["single_stock_contract"]["allowed_actions"] == ["SHORT_ALL", "HOLD", "BUY_ALL"]
+    assert stage2["trinary_short_hurdle"]["hold_semantics"].startswith("HOLD means no trade")
+    assert "high volatility by itself" in stage2["trinary_short_hurdle"]["ordinary_signals_not_enough"]
     assert hurdle["comparison"] == "same_stock_buy_and_hold"
     assert hurdle["train_window"] == {
         "start_date": "2000-01-01",

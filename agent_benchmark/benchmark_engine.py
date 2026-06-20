@@ -1175,6 +1175,13 @@ class BenchmarkEngine:
                         },
                         "instruction": "Low exposure is valid only with point-in-time evidence that cash or a smaller position should beat same-stock buy-and-hold after missed-upside risk.",
                     },
+                    "trinary_short_hurdle": {
+                        "hold_semantics": "HOLD means no trade; if current_exposure is short, HOLD keeps a short position.",
+                        "rule": "SHORT_ALL and HOLD-while-short are tactical bearish actions, not neutral defaults.",
+                        "ordinary_signals_not_enough": ["weak short-term momentum", "negative news tone", "high volatility by itself"],
+                        "required_evidence": "Decisive downside evidence strong enough to beat buy-and-hold after rebound risk, short-squeeze risk, and slippage.",
+                        "exit_bias": "If already short and the downside case weakens, prefer BUY_ALL over HOLD.",
+                    },
                 }
             )
         return manager

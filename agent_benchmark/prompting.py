@@ -193,7 +193,7 @@ and slippage.
 
 In trinary mode choose exactly one action:
 - SHORT_ALL = 100% short
-- HOLD = no trade; keep current exposure
+- HOLD = no trade; keep current exposure, so HOLD while short remains short
 - BUY_ALL = 100% long
 No partial sizing.
 
@@ -201,6 +201,12 @@ Scorecard: training builds memory; success is test-window return above same-stoc
 buy-and-hold. Cash or short exposure must cite specific point-in-time evidence
 that it can beat buy-and-hold after missed-upside risk. Respect
 input_bundle.valid_target_exposure_range and allowed_actions.
+
+Shorts are tactical and high hurdle. Do not choose SHORT_ALL, or HOLD an existing
+short, from ordinary weak momentum, negative tone, or high volatility alone.
+Require decisive downside evidence that beats the rebound/short-squeeze risk and
+the buy-and-hold hurdle. If currently short and the downside case weakens, prefer
+BUY_ALL over HOLD.
 
 Return only compact JSON:
 {
