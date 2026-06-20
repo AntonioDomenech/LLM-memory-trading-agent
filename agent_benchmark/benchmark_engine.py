@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import math
 from collections import Counter
@@ -360,6 +361,8 @@ class BenchmarkEngine:
                         )
                         return {"summary": summary, "decisions": all_decisions}
 
+                self._recycle_warehouse_if_due(config, completed_days)
+
         summary = self._summary(config, symbols, equity_curve, all_executions, model_calls, dry_run)
         summary = self._attach_api_usage(summary, store, run_id, config)
         if memory_summary:
@@ -657,6 +660,15 @@ class BenchmarkEngine:
         if config.selected_symbols:
             return [symbol.upper() for symbol in config.selected_symbols]
         return list(STOCK_SYMBOLS)
+
+    def _recycle_warehouse_if_due(self, config: BenchmarkConfig, completed_days: int) -> None:
+        interval = int(getattr(config, "warehouse_recycle_interval_days", 0) or 0)
+        if interval <= 0 or completed_days <= 0 or completed_days % interval != 0:
+            return
+        if hasattr(self.warehouse, "reopen"):
+            self.warehouse.reopen()
+            self.deterministic_memory = DeterministicMarketMemory(self.warehouse)
+            gc.collect()
 
     def _trading_pairs(self, start: str, end: str, limit: int) -> List[Dict[str, str]]:
         query = """

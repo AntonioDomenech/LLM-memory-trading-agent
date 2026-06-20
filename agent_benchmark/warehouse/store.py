@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -28,10 +29,33 @@ class Warehouse:
         self.root.mkdir(parents=True, exist_ok=True)
         self.parquet_dir.mkdir(parents=True, exist_ok=True)
         self.conn = duckdb.connect(str(self.db_path))
+        self.configure_connection()
         self.create_schema()
 
     def close(self) -> None:
         self.conn.close()
+
+    def configure_connection(self) -> None:
+        memory_limit = os.environ.get("BENCHMARK_DUCKDB_MEMORY_LIMIT", "8GB")
+        temp_dir = self.root / "duckdb_tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        for pragma in (
+            f"PRAGMA memory_limit='{memory_limit}'",
+            f"PRAGMA temp_directory='{temp_dir.as_posix()}'",
+        ):
+            try:
+                self.conn.execute(pragma)
+            except Exception:
+                pass
+
+    def reopen(self) -> None:
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        self.conn = duckdb.connect(str(self.db_path))
+        self.configure_connection()
+        self.create_schema()
 
     def create_schema(self) -> None:
         self.conn.execute(

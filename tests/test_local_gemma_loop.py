@@ -10,6 +10,8 @@ from agent_benchmark.llm_client import call_json_model
 from agent_benchmark.local_gemma_loop import (
     ALLOWLISTED_PATCH_CATEGORIES,
     LocalPatch,
+    _config_for_resume,
+    _is_resumable_run,
     apply_allowlisted_patch,
     evaluate_success,
     propose_allowlisted_patch,
@@ -45,6 +47,7 @@ def test_local_gemma_config_is_chat_completions_and_no_paid_safe():
     assert config.single_stock_action_space == "trinary_all_in"
     assert config.exposure_critic_enabled is False
     assert config.max_daily_turnover == 0.0
+    assert config.warehouse_recycle_interval_days == 250
 
 
 def test_no_paid_mode_rejects_non_loopback_url_and_paid_sources():
@@ -296,6 +299,45 @@ def test_monitoring_parser_and_abort_thresholds():
 
     reason = evaluate_abort({"gpu": {"gpus": [{"temperature_c": 60, "vram_used_mb": 9900, "vram_total_mb": 10000}]}, "system_ram": {}}, AbortThresholds(vram_fraction=0.98))
     assert "VRAM" in reason
+
+
+def test_monitor_cancelled_run_can_resume_only_with_abort_reason():
+    assert _is_resumable_run({"status": "running"})
+    assert _is_resumable_run({"status": "paused"})
+    assert _is_resumable_run({"status": "cancelled", "summary": {"monitoring": {"abort_reason": "System RAM usage 95%"}}})
+    assert not _is_resumable_run({"status": "cancelled", "summary": {"monitoring": {"abort_reason": ""}}})
+    assert not _is_resumable_run({"status": "failed", "summary": {"monitoring": {"abort_reason": "System RAM usage 95%"}}})
+
+
+def test_resume_config_backfills_local_warehouse_recycle_default():
+    config = local_gemma_aapl_config()
+    payload = config.model_dump() if hasattr(config, "model_dump") else config.dict()
+    payload.pop("warehouse_recycle_interval_days")
+
+    resumed = _config_for_resume({"config": payload})
+
+    assert resumed.warehouse_recycle_interval_days == 250
+
+
+def test_engine_recycles_warehouse_when_interval_is_due():
+    class DummyWarehouse:
+        def __init__(self):
+            self.reopened = 0
+
+        def reopen(self):
+            self.reopened += 1
+
+    warehouse = DummyWarehouse()
+    engine = BenchmarkEngine.__new__(BenchmarkEngine)
+    engine.warehouse = warehouse
+    engine.deterministic_memory = None
+    config = local_gemma_aapl_config(warehouse_recycle_interval_days=2)
+
+    engine._recycle_warehouse_if_due(config, 1)
+    assert warehouse.reopened == 0
+
+    engine._recycle_warehouse_if_due(config, 2)
+    assert warehouse.reopened == 1
 
 
 def test_allowlisted_patch_policy_only_applies_known_categories():

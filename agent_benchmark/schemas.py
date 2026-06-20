@@ -98,6 +98,7 @@ class BenchmarkConfig(BaseModel):
     monitoring_gpu_temp_abort_c: float = 86.0
     monitoring_vram_abort_fraction: float = 0.98
     monitoring_ram_abort_fraction: float = 0.95
+    warehouse_recycle_interval_days: int = 0
     data_sources: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
 

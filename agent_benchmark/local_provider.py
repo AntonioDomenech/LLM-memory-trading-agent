@@ -116,6 +116,7 @@ def local_gemma_aapl_config(**overrides: Any) -> BenchmarkConfig:
         "macro_policy": "omit_if_missing",
         "news_policy": "real_titles_or_aggregate_events",
         "monitoring_enabled": True,
+        "warehouse_recycle_interval_days": 250,
         "data_sources": data_sources,
     }
     payload.update(overrides)

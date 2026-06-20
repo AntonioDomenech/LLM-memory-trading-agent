@@ -198,7 +198,7 @@ def run_iteration(
         existing = store.get_benchmark_run(run_id)
         if not existing:
             raise RuntimeError(f"Cannot resume missing benchmark run {run_id!r}.")
-        if existing.get("status") not in {"paused", "running"}:
+        if not _is_resumable_run(existing):
             raise RuntimeError(f"Cannot resume run {run_id!r} from status {existing.get('status')!r}.")
     else:
         run_id = f"local-gemma-aapl-{iteration}-{uuid.uuid4().hex[:8]}"
@@ -269,6 +269,27 @@ def run_iteration(
     return report
 
 
+def _is_resumable_run(run: Dict[str, Any]) -> bool:
+    status = run.get("status")
+    if status in {"paused", "running"}:
+        return True
+    if status == "cancelled":
+        monitoring = (run.get("summary") or {}).get("monitoring") or {}
+        return bool(monitoring.get("abort_reason"))
+    return False
+
+
+def _config_for_resume(run: Dict[str, Any]) -> BenchmarkConfig:
+    payload = dict(run.get("config") or {})
+    config = BenchmarkConfig(**payload)
+    if config.run_preset == "local_gemma_aapl_full" and int(config.warehouse_recycle_interval_days or 0) <= 0:
+        defaults = local_gemma_aapl_config()
+        config_payload = model_to_dict(config)
+        config_payload["warehouse_recycle_interval_days"] = defaults.warehouse_recycle_interval_days
+        config = BenchmarkConfig(**config_payload)
+    return config
+
+
 def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_run: bool = True, resume_run_id: str = "") -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
     config = local_gemma_aapl_config()
@@ -278,7 +299,7 @@ def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_
         existing = store.get_benchmark_run(resume_run_id)
         if not existing:
             raise RuntimeError(f"Cannot resume missing benchmark run {resume_run_id!r}.")
-        config = BenchmarkConfig(**(existing.get("config") or {}))
+        config = _config_for_resume(existing)
     validate_no_paid_api_mode(config, secrets)
     model_status = ensure_ollama_model(config.model, pull=pull_model)
     smoke = run_local_json_smoke(config, secrets)
@@ -401,7 +422,7 @@ def main() -> None:
     parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-commit-before-run", action="store_true")
-    parser.add_argument("--resume-run-id", default="", help="Resume a paused local Gemma benchmark run from its saved checkpoint.")
+    parser.add_argument("--resume-run-id", default="", help="Resume a paused or monitor-cancelled local Gemma benchmark run from its saved checkpoint.")
     args = parser.parse_args()
     result = run_loop(
         max_iterations=args.max_iterations,
