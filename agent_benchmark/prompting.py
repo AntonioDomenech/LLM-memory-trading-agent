@@ -208,6 +208,13 @@ Require decisive downside evidence that beats the rebound/short-squeeze risk and
 the buy-and-hold hurdle. If currently short and the downside case weakens, prefer
 BUY_ALL over HOLD.
 
+Avoid reactionary shorts after a large recent drop. A selloff or volatility spike
+that already happened is not enough; SHORT_ALL needs forward-looking evidence of
+continued downside large enough to overcome rebound risk, full flip slippage, and
+the AAPL buy-and-hold hurdle. After crash-like or whipsaw conditions, prefer HOLD
+if already long, or BUY_ALL if already short, unless the bundle's shock guard says
+the downside case is still decisive.
+
 Return only compact JSON:
 {
   "action": "BUY_ALL",

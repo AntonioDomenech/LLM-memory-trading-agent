@@ -1148,6 +1148,7 @@ class BenchmarkEngine:
             scoped_config = config or BenchmarkConfig(mode="single_stock", symbol=symbol)
             valid_range = self._valid_target_exposure_range(scoped_config, current_position_weights, [symbol])
             context_by_symbol = {item.get("symbol"): item for item in manager.get("index_context") or []}
+            shock_guard = self._single_stock_shock_guard(symbol, symbol_table, valid_range.get("current_exposure"))
             manager.update(
                 {
                     "target_exposure_symbol": symbol,
@@ -1175,16 +1176,44 @@ class BenchmarkEngine:
                         },
                         "instruction": "Low exposure is valid only with point-in-time evidence that cash or a smaller position should beat same-stock buy-and-hold after missed-upside risk.",
                     },
+                    "single_stock_shock_guard": shock_guard,
                     "trinary_short_hurdle": {
                         "hold_semantics": "HOLD means no trade; if current_exposure is short, HOLD keeps a short position.",
                         "rule": "SHORT_ALL and HOLD-while-short are tactical bearish actions, not neutral defaults.",
                         "ordinary_signals_not_enough": ["weak short-term momentum", "negative news tone", "high volatility by itself"],
                         "required_evidence": "Decisive downside evidence strong enough to beat buy-and-hold after rebound risk, short-squeeze risk, and slippage.",
+                        "no_reactionary_shorts": "Do not open SHORT_ALL just because AAPL already sold off or volatility spiked; after a large recent drop, require fresh forward-looking downside evidence beyond the already-realized move.",
+                        "whipsaw_cost": "Full flips pay slippage twice and reduce shares after a wrong-way rebound; in crash-like or whipsaw regimes, prefer HOLD if long or BUY_ALL if short unless the downside case is decisive.",
                         "exit_bias": "If already short and the downside case weakens, prefer BUY_ALL over HOLD.",
                     },
                 }
             )
         return manager
+
+    def _single_stock_shock_guard(self, symbol: str, symbol_table: List[Dict[str, Any]], current_exposure: Any) -> Dict[str, Any]:
+        row = next((item for item in symbol_table if str(item.get("symbol") or "").upper() == symbol), {})
+        r5 = _safe_float(row.get("r5"))
+        r20 = _safe_float(row.get("r20"))
+        r60 = _safe_float(row.get("r60"))
+        vol20 = _safe_float(row.get("vol20"))
+        exposure = _safe_float(current_exposure) or 0.0
+        large_recent_drop = (r5 is not None and r5 <= -0.07) or (r20 is not None and r20 <= -0.12)
+        high_whipsaw_risk = (
+            large_recent_drop
+            or (vol20 is not None and vol20 >= 0.45)
+            or (r5 is not None and abs(r5) >= 0.06)
+            or (r20 is not None and abs(r20) >= 0.12)
+        )
+        return {
+            "symbol": symbol,
+            "current_exposure": round(float(exposure), 6),
+            "recent_returns": {"r5": r5, "r20": r20, "r60": r60, "vol20": vol20},
+            "large_recent_drop": bool(large_recent_drop),
+            "high_whipsaw_risk": bool(high_whipsaw_risk),
+            "short_open_rule": "If large_recent_drop or high_whipsaw_risk is true, SHORT_ALL needs fresh forward-looking downside evidence, not only the already-realized selloff.",
+            "preferred_default": "When already long, prefer HOLD through shock/whipsaw conditions unless the downside case is decisive; when already short and the downside case is not decisive, prefer BUY_ALL.",
+            "benchmark_reason": "The hurdle is full-year AAPL buy-and-hold; reactionary flips after a drawdown must recover round-trip slippage and missed-rebound risk.",
+        }
 
     def _current_position_weights(self, portfolio_state: Dict[str, Any], market: Dict[str, Any]) -> Dict[str, float]:
         positions = portfolio_state.get("positions") or {}
