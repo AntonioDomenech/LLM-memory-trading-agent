@@ -139,6 +139,8 @@ class LiveScheduler:
         self._config = config
         self._secrets = secrets
         self._dry_run = dry_run
+        if config.memory_online_stream_id:
+            self._book = None
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -187,11 +189,12 @@ class LiveScheduler:
                 config=live_config,
                 secrets=secrets,
                 store=self.manager.store,
-                portfolio_book=self._book,
+                portfolio_book=None if live_config.memory_online_stream_id else self._book,
                 dry_run=dry_run,
                 timestamp=now,
             )
-            self._book = result.get("portfolio") or self._book
+            if not dry_run:
+                self._book = result.get("portfolio") or self._book
             run = self.manager.store.get_benchmark_run(run_id) or {"id": run_id, "status": "completed"}
             self.last_snapshot = {
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -214,12 +217,16 @@ class LiveScheduler:
         session = self._market_session()
         return {
             "running": running,
-            "frequency": "hourly",
+            "frequency": self._config.live_frequency if self._config else "hourly",
             "last_snapshot": self.last_snapshot,
             "market": session,
             "portfolio": model_to_dict(self._book) if self._book else None,
             "message": (
-                "Hourly local paper benchmark is active and will run during US market hours."
+                (
+                    "Daily-open local paper benchmark is active."
+                    if self._config and self._config.live_frequency == "daily_open"
+                    else "Hourly local paper benchmark is active and will run during US market hours."
+                )
                 if running
                 else "Live scheduler is stopped."
             ),
@@ -227,12 +234,36 @@ class LiveScheduler:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            if self._config and self._config.live_frequency == "daily_open":
+                delay = self._seconds_until_daily_open_snapshot()
+                if delay > 1.0:
+                    self._stop.wait(min(delay, 60 * 60))
+                    continue
             if self._config and self._secrets:
                 try:
                     self.snapshot(self._config, self._secrets, dry_run=self._dry_run, force=False)
                 except Exception as exc:
                     self.last_snapshot = {"created_at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
-            self._stop.wait(60 * 60)
+            self._stop.wait(60 if self._config and self._config.live_frequency == "daily_open" else 60 * 60)
+
+    def _seconds_until_daily_open_snapshot(self, now: datetime | None = None) -> float:
+        ny_tz = ZoneInfo("America/New_York")
+        current = (now or datetime.now(ny_tz)).astimezone(ny_tz)
+        successful_today = bool(
+            self.last_snapshot
+            and str(self.last_snapshot.get("created_at") or "")[:10] == current.date().isoformat()
+            and self.last_snapshot.get("status") == "completed"
+        )
+        target_date = current.date()
+        target = datetime.combine(target_date, clock_time(9, 35), ny_tz)
+        if successful_today or current.time() > clock_time(10, 0):
+            target_date += timedelta(days=1)
+        while target_date.weekday() >= 5 or target_date in _nyse_holidays(target_date.year):
+            target_date += timedelta(days=1)
+        target = datetime.combine(target_date, clock_time(9, 35), ny_tz)
+        if target_date == current.date() and current >= target:
+            return 0.0
+        return max(0.0, (target - current).total_seconds())
 
     def _market_session(self, now: datetime | None = None) -> Dict[str, Any]:
         ny_tz = ZoneInfo("America/New_York")

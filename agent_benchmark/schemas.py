@@ -35,6 +35,7 @@ class BenchmarkConfig(BaseModel):
         "budget_official",
         "full_official",
         "local_gemma_aapl_full",
+        "local_gemma_aapl_online",
     ] = "single_stock_diagnostic"
     symbol: str = "AAPL"
     company_name: str = "Apple"
@@ -49,7 +50,8 @@ class BenchmarkConfig(BaseModel):
     max_test_days: int = 5
     historical_cadence: Literal["daily"] = "daily"
     fill_timing: Literal["next_open"] = "next_open"
-    live_frequency: Literal["hourly"] = "hourly"
+    historical_price_basis: Literal["legacy", "adjusted"] = "legacy"
+    live_frequency: Literal["hourly", "daily_open"] = "hourly"
     model: str = ""
     model_provider: Literal["openai", "ollama_local"] = "openai"
     endpoint: str = "responses"
@@ -75,14 +77,41 @@ class BenchmarkConfig(BaseModel):
     deterministic_memory_max_items: int = 50
     memory_k_neighbors: int = 50
     memory_examples_per_symbol: int = 2
+    # Non-legacy memory runs must name both the reusable historical snapshot and
+    # the policy/feature contracts used to produce it.  The run id remains a
+    # runtime concern and is bound by HybridMemory rather than persisted here.
+    memory_namespace: str = "legacy"
+    memory_base_snapshot_id: str = ""
+    # Leave blank for isolated backtests (HybridMemory binds the benchmark
+    # run_id); set a durable id for online learning across live snapshots.
+    memory_online_stream_id: str = ""
+    memory_policy_version: str = "legacy"
+    memory_feature_schema_version: str = "legacy"
     prompt_detail_level: Literal["compact", "full"] = "compact"
     embedding_provider: Literal["local", "openai"] = "local"
     decision_process: Literal["two_stage_llm"] = "two_stage_llm"
-    single_stock_action_space: Literal["continuous", "trinary_all_in"] = "continuous"
+    single_stock_action_space: Literal["continuous", "trinary_all_in", "long_cash_hold"] = "continuous"
     opportunity_cost_policy: Literal["soft"] = "soft"
     exposure_critic_enabled: bool = True
-    outcome_learning_mode: Literal["off", "diagnostic_lessons", "llm_reflection_lessons"] = "off"
+    outcome_learning_mode: Literal["off", "diagnostic_lessons", "llm_reflection_lessons", "counterfactual_online"] = "off"
     llm_reflection_cadence: Literal["daily", "weekly"] = "daily"
+    decision_cadence: Literal["daily", "weekly_event"] = "daily"
+    minimum_holding_days: int = Field(default=1, ge=0)
+    action_hysteresis_confirmations: int = Field(default=1, ge=1)
+    event_drawdown_trigger: float = -0.08
+    event_volatility_trigger: float = 0.45
+    online_learning_horizon_days: Literal[1, 5, 20, 60] = 20
+    online_policy_enabled: bool = False
+    online_policy_max_neighbors: int = Field(default=64, ge=1)
+    online_policy_min_samples: int = Field(default=20, ge=1)
+    online_policy_min_neighbor_separation_days: int = Field(default=0, ge=0)
+    online_policy_min_feature_overlap: float = Field(default=0.5, gt=0.0, le=1.0)
+    online_policy_risk_off_probability: float = Field(default=0.60, gt=0.5, lt=1.0)
+    online_policy_min_confidence: float = Field(default=0.30, ge=0.0, le=1.0)
+    online_policy_min_active_return: float = Field(default=0.0, ge=0.0)
+    online_test_learning: bool = False
+    reset_book_at_test_start: bool = False
+    benchmark_contract_version: str = "legacy"
     turnover_prompt_buffer: float = 0.02
     strict_preflight: bool = True
     require_paid_micro_pilot: bool = True

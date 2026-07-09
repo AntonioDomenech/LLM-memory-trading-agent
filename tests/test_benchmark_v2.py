@@ -442,7 +442,7 @@ def test_trinary_single_stock_actions_are_normalized_and_partial_targets_rejecte
     assert "invalid_trinary_target_exposure" in error_types
 
 
-def test_trinary_full_flips_and_hold_ignore_turnover_drift():
+def test_trinary_full_flips_and_hold_mechanically_corrects_gross_drift():
     engine = BenchmarkEngine()
     try:
         config = BenchmarkConfig(
@@ -503,7 +503,7 @@ def test_trinary_full_flips_and_hold_ignore_turnover_drift():
         next_book, execution = engine._execute_stage2_output(
             config,
             hold,
-            {"AAPL": -1.12},
+            hold["target_weights"],
             drifted_book,
             {"AAPL": 112.0},
             hold_errors,
@@ -515,11 +515,13 @@ def test_trinary_full_flips_and_hold_ignore_turnover_drift():
     assert buy_all["target_exposure"] == 1.0
     assert buy_all["estimated_turnover"] == pytest.approx(2.12)
     assert buy_errors == []
-    assert hold["target_exposure"] == pytest.approx(-1.12)
-    assert hold["gross_exposure"] == pytest.approx(1.12)
+    assert -1.0 < hold["target_exposure"] < -0.99
+    assert hold["gross_exposure"] < 1.0
+    assert hold["_mechanical_deleverage"] is True
     assert hold_errors == []
-    assert next_book.positions == {"AAPL": -1.0}
-    assert execution["trades"] == []
+    assert next_book.gross_exposure <= 1.0 + 1e-9
+    assert execution["trades"]
+    assert execution["events"][-1]["type"] == "mechanical_gross_deleverage"
     assert execution["model_failure"] is False
 
 
@@ -1069,6 +1071,20 @@ def test_live_scheduler_explains_closed_weekend_market():
     assert "weekend" in session["message"]
 
 
+def test_daily_open_scheduler_waits_for_the_compatible_execution_window():
+    scheduler = LiveScheduler(BenchmarkJobManager())
+    ny = ZoneInfo("America/New_York")
+
+    assert scheduler._seconds_until_daily_open_snapshot(
+        datetime(2026, 6, 15, 9, 40, tzinfo=ny)
+    ) == 0.0
+    delay = scheduler._seconds_until_daily_open_snapshot(
+        datetime(2026, 6, 12, 11, 0, tzinfo=ny)
+    )
+
+    assert delay > 2 * 24 * 60 * 60
+
+
 def test_summary_includes_buy_hold_market_comparison(tmp_path):
     warehouse = Warehouse(tmp_path / "warehouse.duckdb")
     engine = None
@@ -1223,3 +1239,25 @@ def test_api_usage_estimate_can_reconstruct_old_runs_without_usage():
     assert usage["repair_calls"] == 1
     assert usage["billable_model_calls"] == 3
     assert usage["estimated_cost_usd"] > 0
+
+
+def test_api_usage_ignores_cadence_holds_without_model_calls():
+    config = BenchmarkConfig(model="local-test", model_provider="ollama_local", no_paid_api_mode=True)
+    run = {
+        "config": config.model_dump() if hasattr(config, "model_dump") else config.dict(),
+        "summary": {"model": config.model},
+        "decisions": [
+            {
+                "stage": "stage2",
+                "decision_date": "2025-01-03",
+                "input": {},
+                "output": {"_api_status": "cadence_hold", "action": "HOLD"},
+                "execution": {},
+            }
+        ],
+    }
+
+    usage = estimate_run_api_usage(run, config)
+
+    assert usage["stage2_calls"] == 0
+    assert usage["total_tokens"] == 0

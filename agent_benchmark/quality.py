@@ -14,7 +14,13 @@ from .warehouse.store import Warehouse
 from .warehouse.universe import STOCK_SYMBOLS
 
 
-OFFICIAL_PRESETS = {"single_stock_official", "budget_official", "full_official", "local_gemma_aapl_full"}
+OFFICIAL_PRESETS = {
+    "single_stock_official",
+    "budget_official",
+    "full_official",
+    "local_gemma_aapl_full",
+    "local_gemma_aapl_online",
+}
 CORE_CONTEXT_SYMBOLS = {"SPY", "QQQ"}
 STALE_FACT_DAYS = 730
 
@@ -126,6 +132,15 @@ def build_preflight_report(
         "train_end": config.train_end,
         "test_start": config.test_start,
         "test_end": config.test_end,
+        "benchmark_contract": {
+            "version": getattr(config, "benchmark_contract_version", "legacy"),
+            "historical_price_basis": getattr(config, "historical_price_basis", "legacy"),
+            "action_space": config.single_stock_action_space,
+            "online_test_learning": bool(getattr(config, "online_test_learning", False)),
+            "memory_namespace": getattr(config, "memory_namespace", "legacy"),
+            "memory_base_snapshot_id": getattr(config, "memory_base_snapshot_id", ""),
+            "memory_online_stream_id": getattr(config, "memory_online_stream_id", "") or "bound_to_run_id",
+        },
         "checks": [],
         "blocking_issues": [],
         "warnings": [],
@@ -146,17 +161,34 @@ def build_preflight_report(
     except Exception as exc:
         _add_check(report, {"id": "no_paid_api_mode", "status": "fail", "message": str(exc)})
     trading_dates = _trading_dates(warehouse, config.test_start, config.test_end)
+    if int(config.max_test_days or 0) > 0:
+        trading_dates = trading_dates[: int(config.max_test_days)]
     test_days = len(trading_dates)
     stage1_chunks = math.ceil(len(symbols) / max(1, int(config.stage1_chunk_size or 1)))
-    exposure_critic_calls = 1 if config.mode == "single_stock" and config.exposure_critic_enabled and config.single_stock_action_space != "trinary_all_in" else 0
+    exposure_critic_calls = 1 if config.mode == "single_stock" and config.exposure_critic_enabled and config.single_stock_action_space not in {"trinary_all_in", "long_cash_hold"} else 0
     decision_calls_per_day = stage1_chunks + 1 + exposure_critic_calls
+    cadence = getattr(config, "decision_cadence", "daily")
+    if cadence == "weekly_event":
+        scheduled_decision_days = len(
+            {
+                datetime.fromisoformat(value[:10]).isocalendar()[:2]
+                for value in trading_dates
+            }
+        )
+    else:
+        scheduled_decision_days = test_days
     report["estimate"] = {
         "test_trading_days": test_days,
         "decision_calls_per_day": decision_calls_per_day,
-        "estimated_model_calls": test_days * decision_calls_per_day,
+        "decision_cadence": cadence,
+        "scheduled_decision_days": scheduled_decision_days,
+        "estimated_model_calls": scheduled_decision_days * decision_calls_per_day,
+        "estimated_model_calls_upper_bound": test_days * decision_calls_per_day,
+        "event_trigger_calls_in_estimate": "included_only_in_upper_bound",
         "stage1_chunks_per_day": stage1_chunks,
         "exposure_critic_calls_per_day": exposure_critic_calls,
         "llm_reflection_cadence": config.llm_reflection_cadence,
+        "online_lessons_require_model_calls": False,
     }
 
     _price_coverage_check(report, warehouse, symbols, trading_dates)
@@ -264,6 +296,21 @@ def _macro_check(report: Dict[str, Any], warehouse: Warehouse, config: Benchmark
 
 
 def _news_check(report: Dict[str, Any], warehouse: Warehouse, config: BenchmarkConfig, symbols: List[str]) -> None:
+    if int(config.max_news_per_symbol or 0) <= 0 or int(config.data_sources.max_news_per_day or 0) <= 0:
+        _add_check(
+            report,
+            {
+                "id": "news_quality",
+                "status": "pass",
+                "message": "News is deliberately disabled; no event labels or synthetic titles enter the prompt.",
+                "total_rows": 0,
+                "real_headline_rows": 0,
+                "synthetic_or_nan_rows": 0,
+                "real_headline_rate": 0.0,
+                "policy": config.news_policy,
+            },
+        )
+        return
     placeholders = ", ".join(["?"] * len(symbols))
     df = warehouse.conn.execute(
         f"""
@@ -342,6 +389,13 @@ def _fundamental_check(report: Dict[str, Any], warehouse: Warehouse, config: Ben
 
 def _memory_check(report: Dict[str, Any], warehouse: Warehouse, config: BenchmarkConfig, symbols: List[str]) -> None:
     placeholders = ", ".join(["?"] * len(symbols))
+    adjusted = getattr(config, "historical_price_basis", "legacy") == "adjusted"
+    usable_price = (
+        "open IS NOT NULL AND close IS NOT NULL AND adj_close IS NOT NULL "
+        "AND open * adj_close / NULLIF(close, 0) > 0"
+        if adjusted
+        else "close IS NOT NULL"
+    )
     df = warehouse.conn.execute(
         f"""
         SELECT symbol, COUNT(*) AS rows
@@ -349,7 +403,7 @@ def _memory_check(report: Dict[str, Any], warehouse: Warehouse, config: Benchmar
         WHERE symbol IN ({placeholders})
           AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
           AND ohlcv_available = true
-          AND close IS NOT NULL
+          AND {usable_price}
         GROUP BY symbol
         """,
         [*symbols, config.train_start, config.train_end],
@@ -365,6 +419,7 @@ def _memory_check(report: Dict[str, Any], warehouse: Warehouse, config: Benchmar
             "weak_symbols": weak,
             "min_rows_per_symbol": min(counts.values()) if counts else 0,
             "memory_k_neighbors": config.memory_k_neighbors,
+            "historical_price_basis": getattr(config, "historical_price_basis", "legacy"),
         },
     )
 
@@ -546,6 +601,14 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
                 "nonzero_positions": sum(abs(float(value)) > 1e-9 for value in weights.values()),
                 "missing_contract_fields": missing_contract_fields,
                 "thesis": output.get("portfolio_thesis", ""),
+                "decision_kind": output.get("decision_kind") or execution.get("decision_kind") or "model_decision",
+                "requested_action": output.get("requested_action") or execution.get("requested_action") or output.get("action"),
+                "executed_action": output.get("executed_action") or execution.get("executed_action") or output.get("action"),
+                "deferred_action": (output.get("hysteresis") or execution.get("hysteresis") or {}).get("status") == "deferred",
+                "mechanical_deleverage": bool(
+                    execution.get("mechanical_deleverage")
+                    or any(event.get("type") == "mechanical_gross_deleverage" for event in execution.get("events") or [])
+                ),
             }
         )
         previous_equity = equity
@@ -616,11 +679,16 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
     symbol_pnl = []
     if warehouse is not None:
         final_date = str(decisions[-1].get("fill_date"))
+        price_expression = (
+            "open * adj_close / NULLIF(close, 0)"
+            if getattr(config, "historical_price_basis", "legacy") == "adjusted"
+            else "open"
+        )
         final_positions = (decisions[-1].get("execution") or {}).get("portfolio_after", {}).get("positions") or {}
         for symbol, shares in final_positions.items():
             try:
                 price = warehouse.conn.execute(
-                    "SELECT open FROM asset_daily WHERE symbol = ? AND date = CAST(? AS DATE)",
+                    f"SELECT {price_expression} FROM asset_daily WHERE symbol = ? AND date = CAST(? AS DATE)",
                     [symbol, final_date],
                 ).fetchone()
                 final_value = float(shares) * float(price[0]) if price and price[0] is not None else 0.0
@@ -638,6 +706,19 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
         )
     symbol_pnl.sort(key=lambda item: item["pnl"])
     synthetic_news_prompt_records = sum(1 for item in all_decisions if _payload_contains_synthetic_news_title(item.get("input") or {}))
+    run_id = str(run.get("id") or "")
+    cross_run_online_memory = 0
+    if not getattr(config, "memory_online_stream_id", ""):
+        for item in decisions:
+            for memory_item in (item.get("input") or {}).get("memory") or []:
+                if (
+                    memory_item.get("memory_layer") == "online"
+                    and memory_item.get("source_run_id")
+                    and str(memory_item.get("source_run_id")) != run_id
+                ):
+                    cross_run_online_memory += 1
+    maximum_observed_gross = float(df["gross_exposure"].max()) if not df.empty else 0.0
+    post_execution_gross_breaches = int((df["gross_exposure"] > float(config.max_gross_exposure) + 1e-8).sum())
     diagnostic_reasons = []
     invalid_allocations = int(df["model_failure"].sum())
     if invalid_allocations:
@@ -646,6 +727,10 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
         diagnostic_reasons.append("legacy_stage2_schema")
     if synthetic_news_prompt_records:
         diagnostic_reasons.append("synthetic_news_titles_in_prompt")
+    if cross_run_online_memory:
+        diagnostic_reasons.append("cross_run_online_memory")
+    if post_execution_gross_breaches:
+        diagnostic_reasons.append("post_execution_gross_breach")
 
     diagnostics = {
         "status": "ok",
@@ -674,6 +759,17 @@ def build_run_diagnostics(run: Dict[str, Any], config: BenchmarkConfig, warehous
             "invalid_allocations": invalid_allocations,
             "legacy_stage2_schema_days": legacy_stage2_schema_days,
             "synthetic_news_prompt_records": synthetic_news_prompt_records,
+            "cadence_hold_count": int((df["decision_kind"] == "cadence_hold").sum()),
+            "model_decision_count": int((df["decision_kind"] == "model_decision").sum()),
+            "deferred_action_change_count": int(df["deferred_action"].sum()),
+            "mechanical_deleverage_count": int(df["mechanical_deleverage"].sum()),
+            "requested_action_counts": dict(Counter(str(value) for value in df["requested_action"].dropna())),
+            "executed_action_counts": dict(Counter(str(value) for value in df["executed_action"].dropna())),
+            "cross_run_online_memory_count": cross_run_online_memory,
+            "maximum_observed_gross": maximum_observed_gross,
+            "post_execution_gross_breach_count": post_execution_gross_breaches,
+            "historical_price_basis": getattr(config, "historical_price_basis", "legacy"),
+            "benchmark_contract_version": getattr(config, "benchmark_contract_version", "legacy"),
             "avg_nonzero_positions": float(df["nonzero_positions"].mean()),
         },
         "worst_days": worst_days,

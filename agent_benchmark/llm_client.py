@@ -253,6 +253,11 @@ def _call_ollama_native_chat(config: BenchmarkConfig, secrets: SecretConfig, sys
 
 def _ollama_schema_for_namespace(config: BenchmarkConfig, namespace: str) -> Dict[str, Any] | str:
     namespace = namespace or ""
+    # Live calls use separate cache namespaces, but their output contracts are
+    # identical to replay.  Strip only this transport/cache prefix before
+    # dispatch so Ollama still enforces the native Stage schemas.
+    if namespace.startswith("live-"):
+        namespace = namespace[len("live-") :]
     if namespace.startswith("stage1"):
         return {
             "type": "object",
@@ -308,7 +313,8 @@ def _ollama_schema_for_namespace(config: BenchmarkConfig, namespace: str) -> Dic
             "required": ["summary_lesson", "lesson_tags", "use_in_future_if", "avoid_if", "confidence"],
         }
     if namespace.startswith("stage2") and config.mode == "single_stock":
-        trinary = getattr(config, "single_stock_action_space", "continuous") == "trinary_all_in"
+        action_space = getattr(config, "single_stock_action_space", "continuous")
+        discrete_actions = action_space in {"trinary_all_in", "long_cash_hold"}
         properties = {
             "expected_holding_days": {"type": "integer", "minimum": 1, "maximum": 60},
             "rebalance_reason": {"type": "string"},
@@ -325,10 +331,13 @@ def _ollama_schema_for_namespace(config: BenchmarkConfig, namespace: str) -> Dic
             "stage1_alignment": {"type": "string", "enum": ["follow", "partial", "veto"]},
             "stage1_veto_reason": {"type": "string"},
         }
-        if trinary:
-            actions = ["HOLD", "BUY_ALL"]
-            if config.allow_short:
-                actions.insert(0, "SHORT_ALL")
+        if discrete_actions:
+            if action_space == "long_cash_hold":
+                actions = ["CASH_ALL", "HOLD", "BUY_ALL"]
+            else:
+                actions = ["HOLD", "BUY_ALL"]
+                if config.allow_short:
+                    actions.insert(0, "SHORT_ALL")
             properties["action"] = {"type": "string", "enum": actions}
             required_decision_field = "action"
         else:

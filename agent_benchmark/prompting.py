@@ -54,8 +54,10 @@ def build_decision_prompt(input_bundle: Dict[str, Any]) -> Tuple[str, str]:
 
 STAGE1_SYSTEM_PROMPT = """Analyst stage for a point-in-time market benchmark.
 
-Use only the supplied bundle and eligible memory. Score each symbol; keep strings
-terse and arrays to at most 1 item. decision_support is evidence, not an order.
+Use only the supplied bundle and eligible memory. When recent_online_lessons is
+present, it contains reserved chronological lessons that must not be hidden by
+memory truncation; consider them alongside the historical cases. Score each
+symbol; keep strings terse and arrays to at most 1 item. decision_support is evidence, not an order.
 Return minified JSON only.
 
 Return only compact JSON:
@@ -236,6 +238,63 @@ Return only compact JSON:
 """
 
 
+SINGLE_STOCK_STAGE2_LONG_CASH_SYSTEM_PROMPT = """Portfolio manager for an adaptive one-stock benchmark.
+
+The baseline is to remain fully invested in the supplied stock. Use only the
+point-in-time bundle, structured historical cases, mature online lessons, the
+numerical online_policy support, and Stage 1. You propose the action and explain
+it; the simulator derives exposure, weights, turnover, and costs. The declared numerical
+cash gate is part of the policy contract: it may block CASH_ALL when empirical
+after-cost evidence does not clear the configured threshold, but it never invents
+a discretionary trade.
+
+The input_bundle.recent_online_lessons field reserves the newest mature lessons
+for this call. Consider them explicitly; they were unavailable to earlier
+decisions and are the mechanism by which the Gemma policy learns over time.
+
+Choose exactly one action:
+- BUY_ALL = 100% long
+- CASH_ALL = 100% cash
+- HOLD = no trade; preserve the current long or cash state
+
+Shorting and partial sizing are not allowed. CASH_ALL is a risk-off deviation
+from buy-and-hold, not a neutral default. Choose it only when the supplied
+online_policy evidence says cash has a positive expected advantage over staying
+long after missed-upside risk and trading costs. If the numerical sample is weak,
+too sparse, unreliable, or does not clear its configured gate, remain long. If currently
+in cash, HOLD continues the same risk-off bet and therefore needs the same
+evidence as CASH_ALL; otherwise choose BUY_ALL.
+
+The system learns chronologically: online lessons may be used only when their
+knowledge_timestamp and outcome_available_at are no later than the decision
+timestamp. Never infer a result from a pending outcome.
+
+Respect input_bundle.valid_target_exposure_range, allowed_actions, decision
+cadence, minimum-holding, and confirmation state. Explain any deviation from
+buy-and-hold using the numerical active-return evidence and genuinely available
+event information. Missing or aggregate-only news is not a bearish catalyst.
+
+Return only compact JSON:
+{
+  "action": "BUY_ALL",
+  "expected_holding_days": 20,
+  "rebalance_reason": "...",
+  "input_evidence_refs": ["online_policy", "memory:detagg:AAPL"],
+  "data_quality_warnings_used": ["..."],
+  "confidence": 0.0,
+  "portfolio_thesis": "...",
+  "major_risks": ["..."],
+  "uncertainty": ["..."],
+  "expected_return_bps": 0,
+  "horizon_days": 20,
+  "cash_drag_justification": "...",
+  "why_not_buy_hold": "...",
+  "stage1_alignment": "follow | partial | veto",
+  "stage1_veto_reason": "..."
+}
+"""
+
+
 def build_stage1_prompt(input_bundle: Dict[str, Any], symbols: list[str]) -> Tuple[str, str]:
     user_payload = {
         "task": "Score these candidate stocks for the benchmark portfolio and return valid JSON only.",
@@ -259,7 +318,7 @@ def build_stage2_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[
         contract = input_bundle.get("single_stock_contract") or {}
         task = (
             "Choose final single-stock action for the benchmark and return valid JSON only."
-            if contract.get("action_space") == "trinary_all_in"
+            if contract.get("action_space") in {"trinary_all_in", "long_cash_hold"}
             else "Choose final single-stock target_exposure for the benchmark and return valid JSON only."
         )
         user_payload = {
@@ -267,11 +326,12 @@ def build_stage2_prompt(input_bundle: Dict[str, Any], stage1_outputs: list[Dict[
             "stage1_outputs": stage1_outputs,
             "input_bundle": input_bundle,
         }
-        system = (
-            SINGLE_STOCK_STAGE2_TRINARY_SYSTEM_PROMPT
-            if contract.get("action_space") == "trinary_all_in"
-            else SINGLE_STOCK_STAGE2_SYSTEM_PROMPT
-        )
+        if contract.get("action_space") == "trinary_all_in":
+            system = SINGLE_STOCK_STAGE2_TRINARY_SYSTEM_PROMPT
+        elif contract.get("action_space") == "long_cash_hold":
+            system = SINGLE_STOCK_STAGE2_LONG_CASH_SYSTEM_PROMPT
+        else:
+            system = SINGLE_STOCK_STAGE2_SYSTEM_PROMPT
         return system, json.dumps(user_payload, sort_keys=True, default=str)
 
     user_payload = {

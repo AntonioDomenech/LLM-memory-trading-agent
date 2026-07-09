@@ -107,6 +107,11 @@ class BenchmarkStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     model TEXT NOT NULL,
                     mode TEXT NOT NULL,
+                    memory_namespace TEXT NOT NULL DEFAULT 'legacy',
+                    policy_fingerprint TEXT NOT NULL DEFAULT 'legacy',
+                    base_snapshot_id TEXT NOT NULL DEFAULT '',
+                    memory_layer TEXT NOT NULL DEFAULT 'legacy',
+                    online_stream_id TEXT NOT NULL DEFAULT '',
                     portfolio_scope TEXT NOT NULL,
                     symbol TEXT,
                     decision_timestamp TEXT NOT NULL,
@@ -118,7 +123,119 @@ class BenchmarkStore:
                     outcome_horizon TEXT,
                     outcome_available_at TEXT,
                     metadata_json TEXT NOT NULL,
+                    state_features_json TEXT NOT NULL DEFAULT '{}',
+                    counterfactual_outcomes_json TEXT NOT NULL DEFAULT '{}',
+                    pending_experience_id INTEGER,
                     created_at TEXT NOT NULL
+                )
+                """
+            )
+            # SQLite's CREATE TABLE IF NOT EXISTS does not evolve an existing
+            # table.  Additive migration keeps historical benchmark databases
+            # readable while marking their rows as explicitly legacy-scoped.
+            self._ensure_columns(
+                conn,
+                "benchmark_memory",
+                {
+                    "memory_namespace": "TEXT NOT NULL DEFAULT 'legacy'",
+                    "policy_fingerprint": "TEXT NOT NULL DEFAULT 'legacy'",
+                    "base_snapshot_id": "TEXT NOT NULL DEFAULT ''",
+                    "memory_layer": "TEXT NOT NULL DEFAULT 'legacy'",
+                    "online_stream_id": "TEXT NOT NULL DEFAULT ''",
+                    "state_features_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "counterfactual_outcomes_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "pending_experience_id": "INTEGER",
+                },
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_benchmark_memory_scope_time
+                ON benchmark_memory (
+                    model, mode, memory_namespace, policy_fingerprint,
+                    base_snapshot_id, memory_layer, online_stream_id,
+                    knowledge_timestamp
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS benchmark_pending_experiences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    memory_namespace TEXT NOT NULL,
+                    policy_fingerprint TEXT NOT NULL,
+                    base_snapshot_id TEXT NOT NULL,
+                    online_stream_id TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    portfolio_scope TEXT NOT NULL,
+                    symbol TEXT,
+                    decision_timestamp TEXT NOT NULL,
+                    outcome_available_at TEXT NOT NULL,
+                    outcome_horizon TEXT NOT NULL,
+                    chosen_action TEXT NOT NULL,
+                    state_features_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    matured_at TEXT,
+                    matured_memory_id INTEGER,
+                    counterfactual_outcomes_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_experience_identity
+                ON benchmark_pending_experiences (
+                    memory_namespace, policy_fingerprint, base_snapshot_id,
+                    online_stream_id, symbol, decision_timestamp, outcome_horizon
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pending_experience_due
+                ON benchmark_pending_experiences (
+                    memory_namespace, policy_fingerprint, base_snapshot_id,
+                    online_stream_id, status, outcome_available_at
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_pending_experience
+                ON benchmark_memory (pending_experience_id)
+                WHERE pending_experience_id IS NOT NULL
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS benchmark_live_state (
+                    memory_namespace TEXT NOT NULL,
+                    policy_fingerprint TEXT NOT NULL,
+                    base_snapshot_id TEXT NOT NULL,
+                    online_stream_id TEXT NOT NULL,
+                    portfolio_json TEXT NOT NULL,
+                    schedule_state_json TEXT NOT NULL,
+                    last_snapshot_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (
+                        memory_namespace, policy_fingerprint,
+                        base_snapshot_id, online_stream_id
+                    )
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS benchmark_base_snapshots (
+                    memory_namespace TEXT NOT NULL,
+                    base_snapshot_id TEXT NOT NULL,
+                    feature_schema_version TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (memory_namespace, base_snapshot_id, feature_schema_version)
                 )
                 """
             )
@@ -133,6 +250,13 @@ class BenchmarkStore:
                 )
                 """
             )
+
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
+        existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, declaration in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     def save_run(self, run_id: str, config: Dict[str, Any], summary: Dict[str, Any]) -> None:
         with self._connect() as conn:
@@ -405,69 +529,129 @@ class BenchmarkStore:
         outcome_horizon: str = "",
         outcome_available_at: str = "",
         metadata: Optional[Dict[str, Any]] = None,
+        memory_namespace: str = "legacy",
+        policy_fingerprint: str = "legacy",
+        base_snapshot_id: str = "",
+        memory_layer: str = "legacy",
+        online_stream_id: str = "",
+        state_features: Optional[Dict[str, Any]] = None,
+        counterfactual_outcomes: Optional[Dict[str, Any]] = None,
+        pending_experience_id: Optional[int] = None,
     ) -> int:
+        if memory_layer not in {"legacy", "base", "online"}:
+            raise ValueError(f"Unsupported memory layer: {memory_layer}")
+        if memory_layer == "online" and not online_stream_id:
+            raise ValueError("Online memory requires an online_stream_id")
+        if memory_layer != "online" and online_stream_id:
+            raise ValueError("Only online memory may set online_stream_id")
         with self._connect() as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO benchmark_memory
-                    (model, mode, portfolio_scope, symbol, decision_timestamp, knowledge_timestamp,
-                     source_run_id, memory_type, content, embedding_json, outcome_horizon,
-                     outcome_available_at, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    model,
-                    mode,
-                    portfolio_scope,
-                    symbol,
-                    decision_timestamp,
-                    knowledge_timestamp,
-                    source_run_id,
-                    memory_type,
-                    content,
-                    json.dumps(embedding) if embedding else "",
-                    outcome_horizon,
-                    outcome_available_at,
-                    json.dumps(metadata or {}, default=str),
-                    utc_now(),
-                ),
+            values = (
+                model,
+                mode,
+                memory_namespace,
+                policy_fingerprint,
+                base_snapshot_id,
+                memory_layer,
+                online_stream_id,
+                portfolio_scope,
+                symbol,
+                decision_timestamp,
+                knowledge_timestamp,
+                source_run_id,
+                memory_type,
+                content,
+                json.dumps(embedding) if embedding else "",
+                outcome_horizon,
+                outcome_available_at,
+                json.dumps(metadata or {}, default=str),
+                json.dumps(state_features or {}, default=str),
+                json.dumps(counterfactual_outcomes or {}, default=str),
+                pending_experience_id,
+                utc_now(),
             )
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO benchmark_memory
+                        (model, mode, memory_namespace, policy_fingerprint, base_snapshot_id,
+                         memory_layer, online_stream_id, portfolio_scope, symbol, decision_timestamp,
+                         knowledge_timestamp, source_run_id, memory_type, content, embedding_json,
+                         outcome_horizon, outcome_available_at, metadata_json, state_features_json,
+                         counterfactual_outcomes_json, pending_experience_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+            except sqlite3.IntegrityError:
+                if pending_experience_id is None:
+                    raise
+                existing = conn.execute(
+                    "SELECT id FROM benchmark_memory WHERE pending_experience_id = ?",
+                    (pending_experience_id,),
+                ).fetchone()
+                if existing is None:
+                    raise
+                return int(existing["id"])
             return int(cur.lastrowid)
 
-    def eligible_memory(self, *, model: str, mode: str, before_or_at: str, limit: int = 200) -> List[Dict[str, Any]]:
+    def eligible_memory(
+        self,
+        *,
+        model: str,
+        mode: str,
+        before_or_at: str,
+        limit: Optional[int] = 200,
+        memory_namespace: Optional[str] = None,
+        policy_fingerprint: Optional[str] = None,
+        base_snapshot_id: Optional[str] = None,
+        online_stream_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        where = [
+            "model = ?",
+            "mode = ?",
+            "datetime(knowledge_timestamp) <= datetime(?)",
+            "(COALESCE(outcome_available_at, '') = '' OR datetime(outcome_available_at) <= datetime(?))",
+        ]
+        params: List[Any] = [model, mode, before_or_at, before_or_at]
+        if memory_namespace is not None:
+            where.append("memory_namespace = ?")
+            params.append(memory_namespace)
+        if policy_fingerprint is not None:
+            where.append("policy_fingerprint = ?")
+            params.append(policy_fingerprint)
+        if base_snapshot_id is not None:
+            where.append("base_snapshot_id = ?")
+            params.append(base_snapshot_id)
+            if online_stream_id:
+                where.append("(memory_layer = 'base' OR (memory_layer = 'online' AND online_stream_id = ?))")
+                params.append(online_stream_id)
+            else:
+                where.append("memory_layer = 'base'")
+        elif online_stream_id is not None:
+            where.append("memory_layer = 'online' AND online_stream_id = ?")
+            params.append(online_stream_id)
+        limit_sql = ""
+        if limit is not None:
+            if limit <= 0:
+                return []
+            limit_sql = "LIMIT ?"
+            params.append(limit)
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT id, model, mode, portfolio_scope, symbol, decision_timestamp, knowledge_timestamp,
-                       source_run_id, memory_type, content, embedding_json, outcome_horizon,
-                       outcome_available_at, metadata_json, created_at
+                f"""
+                SELECT id, model, mode, memory_namespace, policy_fingerprint, base_snapshot_id,
+                       memory_layer, online_stream_id, portfolio_scope, symbol, decision_timestamp,
+                       knowledge_timestamp, source_run_id, memory_type, content, embedding_json,
+                       outcome_horizon, outcome_available_at, metadata_json, state_features_json,
+                       counterfactual_outcomes_json, pending_experience_id, created_at
                 FROM benchmark_memory
-                WHERE model = ? AND mode = ? AND knowledge_timestamp <= ?
+                WHERE {' AND '.join(where)}
                 ORDER BY knowledge_timestamp DESC, id DESC
-                LIMIT ?
+                {limit_sql}
                 """,
-                (model, mode, before_or_at, limit),
+                params,
             ).fetchall()
-        return [
-            {
-                "id": row["id"],
-                "model": row["model"],
-                "mode": row["mode"],
-                "portfolio_scope": row["portfolio_scope"],
-                "symbol": row["symbol"],
-                "decision_timestamp": row["decision_timestamp"],
-                "knowledge_timestamp": row["knowledge_timestamp"],
-                "source_run_id": row["source_run_id"],
-                "memory_type": row["memory_type"],
-                "content": row["content"],
-                "embedding": json.loads(row["embedding_json"]) if row["embedding_json"] else [],
-                "outcome_horizon": row["outcome_horizon"],
-                "outcome_available_at": row["outcome_available_at"],
-                "metadata": json.loads(row["metadata_json"] or "{}"),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
+        return [self._memory_row_to_dict(row, include_embedding=True) for row in rows]
 
     def list_memory(self, *, model: str = "", limit: int = 100) -> List[Dict[str, Any]]:
         params: List[Any] = []
@@ -479,9 +663,11 @@ class BenchmarkStore:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT id, model, mode, portfolio_scope, symbol, decision_timestamp, knowledge_timestamp,
-                       source_run_id, memory_type, content, outcome_horizon, outcome_available_at,
-                       metadata_json, created_at
+                SELECT id, model, mode, memory_namespace, policy_fingerprint, base_snapshot_id,
+                       memory_layer, online_stream_id, portfolio_scope, symbol, decision_timestamp,
+                       knowledge_timestamp, source_run_id, memory_type, content, outcome_horizon,
+                       outcome_available_at, metadata_json, state_features_json,
+                       counterfactual_outcomes_json, pending_experience_id, created_at
                 FROM benchmark_memory
                 {where}
                 ORDER BY knowledge_timestamp DESC, id DESC
@@ -489,25 +675,360 @@ class BenchmarkStore:
                 """,
                 params,
             ).fetchall()
-        return [
-            {
-                "id": row["id"],
-                "model": row["model"],
-                "mode": row["mode"],
-                "portfolio_scope": row["portfolio_scope"],
-                "symbol": row["symbol"],
-                "decision_timestamp": row["decision_timestamp"],
-                "knowledge_timestamp": row["knowledge_timestamp"],
-                "source_run_id": row["source_run_id"],
-                "memory_type": row["memory_type"],
-                "content": row["content"],
-                "outcome_horizon": row["outcome_horizon"],
-                "outcome_available_at": row["outcome_available_at"],
-                "metadata": json.loads(row["metadata_json"] or "{}"),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
+        return [self._memory_row_to_dict(row) for row in rows]
+
+    @staticmethod
+    def _memory_row_to_dict(row: sqlite3.Row, *, include_embedding: bool = False) -> Dict[str, Any]:
+        item = {
+            "id": row["id"],
+            "model": row["model"],
+            "mode": row["mode"],
+            "memory_namespace": row["memory_namespace"],
+            "policy_fingerprint": row["policy_fingerprint"],
+            "base_snapshot_id": row["base_snapshot_id"],
+            "memory_layer": row["memory_layer"],
+            "online_stream_id": row["online_stream_id"],
+            "portfolio_scope": row["portfolio_scope"],
+            "symbol": row["symbol"],
+            "decision_timestamp": row["decision_timestamp"],
+            "knowledge_timestamp": row["knowledge_timestamp"],
+            "source_run_id": row["source_run_id"],
+            "memory_type": row["memory_type"],
+            "content": row["content"],
+            "outcome_horizon": row["outcome_horizon"],
+            "outcome_available_at": row["outcome_available_at"],
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "state_features": json.loads(row["state_features_json"] or "{}"),
+            "counterfactual_outcomes": json.loads(row["counterfactual_outcomes_json"] or "{}"),
+            "pending_experience_id": row["pending_experience_id"],
+            "created_at": row["created_at"],
+        }
+        if include_embedding:
+            item["embedding"] = json.loads(row["embedding_json"]) if row["embedding_json"] else []
+        return item
+
+    def add_pending_experience(
+        self,
+        *,
+        memory_namespace: str,
+        policy_fingerprint: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        source_run_id: str,
+        portfolio_scope: str,
+        symbol: str,
+        decision_timestamp: str,
+        outcome_available_at: str,
+        outcome_horizon: str,
+        chosen_action: str,
+        state_features: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Durably queue an outcome once; replay/resume calls are idempotent."""
+
+        if not online_stream_id:
+            raise ValueError("Pending experience requires an online_stream_id")
+        now = utc_now()
+        identity = (
+            memory_namespace,
+            policy_fingerprint,
+            base_snapshot_id,
+            online_stream_id,
+            symbol,
+            decision_timestamp,
+            outcome_horizon,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO benchmark_pending_experiences
+                    (memory_namespace, policy_fingerprint, base_snapshot_id, online_stream_id,
+                     source_run_id, portfolio_scope, symbol, decision_timestamp,
+                     outcome_available_at, outcome_horizon, chosen_action, state_features_json,
+                     metadata_json, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (
+                    *identity[:4],
+                    source_run_id,
+                    portfolio_scope,
+                    symbol,
+                    decision_timestamp,
+                    outcome_available_at,
+                    outcome_horizon,
+                    chosen_action,
+                    json.dumps(state_features or {}, default=str),
+                    json.dumps(metadata or {}, default=str),
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT id
+                FROM benchmark_pending_experiences
+                WHERE memory_namespace = ? AND policy_fingerprint = ? AND base_snapshot_id = ?
+                  AND online_stream_id = ? AND symbol = ? AND decision_timestamp = ?
+                  AND outcome_horizon = ?
+                """,
+                identity,
+            ).fetchone()
+        if row is None:  # Defensive: the insert/select identity must agree.
+            raise RuntimeError("Unable to persist pending memory experience")
+        return int(row["id"])
+
+    def list_due_pending_experiences(
+        self,
+        *,
+        memory_namespace: str,
+        policy_fingerprint: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        as_of: str,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, memory_namespace, policy_fingerprint, base_snapshot_id,
+                       online_stream_id, source_run_id, portfolio_scope, symbol,
+                       decision_timestamp, outcome_available_at, outcome_horizon,
+                       chosen_action, state_features_json, metadata_json, status,
+                       matured_at, matured_memory_id, counterfactual_outcomes_json,
+                       created_at, updated_at
+                FROM benchmark_pending_experiences
+                WHERE memory_namespace = ? AND policy_fingerprint = ? AND base_snapshot_id = ?
+                  AND online_stream_id = ? AND status = 'pending'
+                  AND datetime(outcome_available_at) <= datetime(?)
+                ORDER BY outcome_available_at ASC, id ASC
+                LIMIT ?
+                """,
+                (
+                    memory_namespace,
+                    policy_fingerprint,
+                    base_snapshot_id,
+                    online_stream_id,
+                    as_of,
+                    limit,
+                ),
+            ).fetchall()
+        return [self._pending_experience_row_to_dict(row) for row in rows]
+
+    def list_recent_pending_experiences(
+        self,
+        *,
+        memory_namespace: str,
+        policy_fingerprint: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return recent scheduled decisions for durable cadence/hysteresis state."""
+
+        if limit <= 0:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, memory_namespace, policy_fingerprint, base_snapshot_id,
+                       online_stream_id, source_run_id, portfolio_scope, symbol,
+                       decision_timestamp, outcome_available_at, outcome_horizon,
+                       chosen_action, state_features_json, metadata_json, status,
+                       matured_at, matured_memory_id, counterfactual_outcomes_json,
+                       created_at, updated_at
+                FROM benchmark_pending_experiences
+                WHERE memory_namespace = ? AND policy_fingerprint = ? AND base_snapshot_id = ?
+                  AND online_stream_id = ?
+                ORDER BY decision_timestamp DESC, id DESC
+                LIMIT ?
+                """,
+                (
+                    memory_namespace,
+                    policy_fingerprint,
+                    base_snapshot_id,
+                    online_stream_id,
+                    limit,
+                ),
+            ).fetchall()
+        return [self._pending_experience_row_to_dict(row) for row in rows]
+
+    def mark_pending_experience_matured(
+        self,
+        experience_id: int,
+        *,
+        memory_namespace: str,
+        policy_fingerprint: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        matured_at: str,
+        counterfactual_outcomes: Dict[str, Any],
+        matured_memory_id: Optional[int] = None,
+    ) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE benchmark_pending_experiences
+                SET status = 'matured', matured_at = ?, matured_memory_id = ?,
+                    counterfactual_outcomes_json = ?, updated_at = ?
+                WHERE id = ? AND memory_namespace = ? AND policy_fingerprint = ?
+                  AND base_snapshot_id = ? AND online_stream_id = ?
+                  AND status = 'pending' AND datetime(outcome_available_at) <= datetime(?)
+                """,
+                (
+                    matured_at,
+                    matured_memory_id,
+                    json.dumps(counterfactual_outcomes or {}, default=str),
+                    utc_now(),
+                    experience_id,
+                    memory_namespace,
+                    policy_fingerprint,
+                    base_snapshot_id,
+                    online_stream_id,
+                    matured_at,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def get_live_state(
+        self,
+        *,
+        memory_namespace: str,
+        policy_fingerprint: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT portfolio_json, schedule_state_json, last_snapshot_at, updated_at
+                FROM benchmark_live_state
+                WHERE memory_namespace = ? AND policy_fingerprint = ?
+                  AND base_snapshot_id = ? AND online_stream_id = ?
+                """,
+                (
+                    memory_namespace,
+                    policy_fingerprint,
+                    base_snapshot_id,
+                    online_stream_id,
+                ),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "portfolio": json.loads(row["portfolio_json"] or "{}"),
+            "schedule_state": json.loads(row["schedule_state_json"] or "{}"),
+            "last_snapshot_at": row["last_snapshot_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def register_base_snapshot(
+        self,
+        *,
+        memory_namespace: str,
+        base_snapshot_id: str,
+        feature_schema_version: str,
+        content_hash: str,
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Freeze a named deterministic base snapshot to its first observed hash."""
+
+        identity = (memory_namespace, base_snapshot_id, feature_schema_version)
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT content_hash, metadata_json, created_at
+                FROM benchmark_base_snapshots
+                WHERE memory_namespace = ? AND base_snapshot_id = ?
+                  AND feature_schema_version = ?
+                """,
+                identity,
+            ).fetchone()
+            if existing is None:
+                created_at = utc_now()
+                conn.execute(
+                    """
+                    INSERT INTO benchmark_base_snapshots
+                        (memory_namespace, base_snapshot_id, feature_schema_version,
+                         content_hash, metadata_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (*identity, content_hash, json.dumps(metadata or {}, default=str), created_at),
+                )
+                return {"content_hash": content_hash, "metadata": metadata or {}, "created_at": created_at}
+        if str(existing["content_hash"]) != str(content_hash):
+            raise ValueError(
+                f"Base snapshot {base_snapshot_id!r} changed content: "
+                f"registered {existing['content_hash']}, rebuilt {content_hash}. "
+                "Bump memory_base_snapshot_id or restore the frozen warehouse."
+            )
+        return {
+            "content_hash": existing["content_hash"],
+            "metadata": json.loads(existing["metadata_json"] or "{}"),
+            "created_at": existing["created_at"],
+        }
+
+    def save_live_state(
+        self,
+        *,
+        memory_namespace: str,
+        policy_fingerprint: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        portfolio: Dict[str, Any],
+        schedule_state: Dict[str, Any],
+        last_snapshot_at: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO benchmark_live_state
+                    (memory_namespace, policy_fingerprint, base_snapshot_id,
+                     online_stream_id, portfolio_json, schedule_state_json,
+                     last_snapshot_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_namespace, policy_fingerprint, base_snapshot_id, online_stream_id)
+                DO UPDATE SET
+                    portfolio_json = excluded.portfolio_json,
+                    schedule_state_json = excluded.schedule_state_json,
+                    last_snapshot_at = excluded.last_snapshot_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    memory_namespace,
+                    policy_fingerprint,
+                    base_snapshot_id,
+                    online_stream_id,
+                    json.dumps(portfolio or {}, default=str),
+                    json.dumps(schedule_state or {}, default=str),
+                    last_snapshot_at,
+                    utc_now(),
+                ),
+            )
+
+    @staticmethod
+    def _pending_experience_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "memory_namespace": row["memory_namespace"],
+            "policy_fingerprint": row["policy_fingerprint"],
+            "base_snapshot_id": row["base_snapshot_id"],
+            "online_stream_id": row["online_stream_id"],
+            "source_run_id": row["source_run_id"],
+            "portfolio_scope": row["portfolio_scope"],
+            "symbol": row["symbol"],
+            "decision_timestamp": row["decision_timestamp"],
+            "outcome_available_at": row["outcome_available_at"],
+            "outcome_horizon": row["outcome_horizon"],
+            "chosen_action": row["chosen_action"],
+            "state_features": json.loads(row["state_features_json"] or "{}"),
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "status": row["status"],
+            "matured_at": row["matured_at"],
+            "matured_memory_id": row["matured_memory_id"],
+            "counterfactual_outcomes": json.loads(row["counterfactual_outcomes_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def list_benchmark_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
         with self._connect() as conn:

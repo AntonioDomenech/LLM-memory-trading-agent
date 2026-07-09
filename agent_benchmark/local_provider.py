@@ -49,6 +49,14 @@ def local_auth_headers(config: BenchmarkConfig | None, secrets: SecretConfig) ->
 
 
 def validate_no_paid_api_mode(config: BenchmarkConfig, secrets: SecretConfig) -> None:
+    if config.outcome_learning_mode == "counterfactual_online" and (
+        float(config.commission_per_trade or 0.0) != 0.0
+        or float(config.commission_per_share or 0.0) != 0.0
+    ):
+        raise ValueError(
+            "counterfactual_online currently supports slippage costs only; "
+            "commission_per_trade and commission_per_share must both be zero."
+        )
     if not config.no_paid_api_mode:
         return
 
@@ -121,6 +129,108 @@ def local_gemma_aapl_config(**overrides: Any) -> BenchmarkConfig:
     }
     payload.update(overrides)
     return BenchmarkConfig(**payload)
+
+
+def local_gemma_aapl_online_config(**overrides: Any) -> BenchmarkConfig:
+    """Return the isolated, chronological AAPL online-learning preset.
+
+    A blank ``memory_online_stream_id`` is deliberate: HybridMemory binds it to
+    the benchmark run id so every replay starts from the same clean historical
+    snapshot.  A live deployment can opt into a durable stream id and keep
+    maturing lessons across process restarts.
+    """
+
+    data_sources = DataSourceConfig(
+        news_sources=[],
+        max_news_per_day=0,
+        include_sec_fundamentals=True,
+        include_fred_macro=False,
+        include_index_context=True,
+    )
+    payload: Dict[str, Any] = {
+        "mode": "single_stock",
+        "run_preset": "local_gemma_aapl_online",
+        "symbol": "AAPL",
+        "company_name": "Apple",
+        "train_start": "2000-01-01",
+        "train_end": "2024-12-31",
+        "test_start": "2025-01-01",
+        "test_end": "2025-12-31",
+        "max_train_days": 0,
+        "max_test_days": 0,
+        "historical_price_basis": "adjusted",
+        "live_frequency": "daily_open",
+        "model": LOCAL_OLLAMA_MODEL,
+        "model_provider": "ollama_local",
+        "endpoint": "chat_completions",
+        "no_paid_api_mode": True,
+        "local_model_base_url": LOCAL_OLLAMA_BASE_URL,
+        "local_ollama_num_ctx": 6144,
+        "allow_short": False,
+        "max_gross_exposure": 1.0,
+        "max_daily_turnover": 0.0,
+        "turnover_prompt_buffer": 0.0,
+        "turnover_edge_multiplier": 0.0,
+        "single_stock_action_space": "long_cash_hold",
+        "temperature": 0.0,
+        "max_output_tokens": 520,
+        "use_cached_llm": False,
+        "stage1_chunk_size": 1,
+        "max_news_per_symbol": 0,
+        "memory_mode": "deterministic_market_cases",
+        "memory_retrieval": "structured",
+        "deterministic_memory_per_symbol": 8,
+        "deterministic_memory_max_items": 100,
+        "memory_k_neighbors": 75,
+        "memory_examples_per_symbol": 6,
+        "memory_namespace": "aapl-online-v1",
+        "memory_base_snapshot_id": "aapl-2000-2024-adjusted-v1",
+        "memory_online_stream_id": "",
+        "memory_policy_version": "long-cash-counterfactual-v1",
+        "memory_feature_schema_version": "aapl-market-state-v1",
+        "outcome_learning_mode": "counterfactual_online",
+        "online_test_learning": True,
+        "online_learning_horizon_days": 20,
+        "online_policy_enabled": True,
+        "online_policy_min_samples": 40,
+        "online_policy_max_neighbors": 75,
+        "online_policy_min_neighbor_separation_days": 21,
+        "online_policy_min_feature_overlap": 0.90,
+        "online_policy_risk_off_probability": 0.62,
+        "online_policy_min_confidence": 0.55,
+        "online_policy_min_active_return": 0.002,
+        "decision_cadence": "weekly_event",
+        "minimum_holding_days": 5,
+        "action_hysteresis_confirmations": 2,
+        "event_drawdown_trigger": -0.08,
+        "event_volatility_trigger": 0.45,
+        "reset_book_at_test_start": True,
+        "benchmark_contract_version": "aapl-online-v1",
+        "embedding_provider": "local",
+        "exposure_critic_enabled": False,
+        "strict_preflight": True,
+        "require_paid_micro_pilot": False,
+        "macro_policy": "omit_if_missing",
+        "news_policy": "real_titles_or_aggregate_events",
+        "monitoring_enabled": True,
+        "warehouse_recycle_interval_days": 250,
+        "data_sources": data_sources,
+    }
+    payload.update(overrides)
+    return BenchmarkConfig(**payload)
+
+
+def local_gemma_aapl_live_config(
+    *,
+    stream_id: str = "aapl-live-v1",
+    **overrides: Any,
+) -> BenchmarkConfig:
+    """Return the online preset with an explicit durable live-learning stream."""
+
+    stream_id = str(stream_id or "").strip()
+    if not stream_id:
+        raise ValueError("A durable live stream_id is required.")
+    return local_gemma_aapl_online_config(memory_online_stream_id=stream_id, **overrides)
 
 
 def local_gemma_secret_config(**overrides: Any) -> SecretConfig:

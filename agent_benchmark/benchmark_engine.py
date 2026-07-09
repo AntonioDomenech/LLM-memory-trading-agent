@@ -6,6 +6,7 @@ import math
 from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Protocol
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -15,6 +16,15 @@ from .llm_client import call_json_model
 from .local_provider import validate_no_paid_api_mode
 from .memory import HybridMemory
 from .news import fetch_news_bundle
+from .online_policy import (
+    CalibratedOnlineRiskOffEstimator,
+    CounterfactualCostModel,
+    MaturedLesson,
+    PointInTimeSnapshot,
+    PricePoint,
+    RiskOffEstimatorConfig,
+    create_matured_lesson,
+)
 from .portfolio import estimate_target_turnover, execute_target_weights, initial_book, mark_to_market, reject_target_weights
 from .prompting import build_exposure_critic_prompt, build_reflection_lesson_prompt, build_stage1_prompt, build_stage2_prompt
 from .quality import canonicalize_fundamentals, is_synthetic_news_title
@@ -82,7 +92,16 @@ class BenchmarkEngine:
         critic_calls_per_day = 1 if self._should_run_exposure_critic(config) else 0
         calls_per_day = chunks_per_day + 1 + critic_calls_per_day
         deterministic = config.memory_mode == "deterministic_market_cases"
-        decision_days = len(test_pairs) if deterministic else len(train_pairs) + len(test_pairs)
+        decision_pairs = test_pairs if deterministic else train_pairs + test_pairs
+        if config.decision_cadence == "weekly_event":
+            decision_days = len(
+                {
+                    datetime.fromisoformat(pair["decision_date"][:10]).date().isocalendar()[:2]
+                    for pair in decision_pairs
+                }
+            )
+        else:
+            decision_days = len(decision_pairs)
         estimated_lesson_calls = 0
         if not deterministic and config.outcome_learning_mode == "llm_reflection_lessons":
             estimated_lesson_calls = max(1, math.ceil(len(train_pairs) / 5)) if config.llm_reflection_cadence == "weekly" else len(train_pairs) * len(self.horizons)
@@ -95,6 +114,8 @@ class BenchmarkEngine:
             "decision_calls_per_day": calls_per_day,
             "exposure_critic_calls_per_day": critic_calls_per_day,
             "estimated_decision_calls": decision_days * calls_per_day,
+            "scheduled_decision_days": decision_days,
+            "estimated_decision_calls_upper_bound": len(decision_pairs) * calls_per_day,
             "estimated_lesson_calls_upper_bound": estimated_lesson_calls,
             "uncapped": config.max_train_days == 0 or config.max_test_days == 0,
             "memory_mode": config.memory_mode,
@@ -117,6 +138,17 @@ class BenchmarkEngine:
         memory = HybridMemory(BenchmarkStore(), config, secrets)
         book = initial_book(config.initial_cash)
         bundle = self._build_bundle(config, memory, "preview", phase, pair["decision_date"], pair["fill_date"], symbols, book)
+        if config.online_policy_enabled:
+            estimator = self._build_online_estimator(
+                config,
+                symbols,
+                memory,
+                cutoff=pair["decision_date"],
+            )
+            snapshot = self._online_snapshot(bundle, symbols[0])
+            support = estimator.decision_support(snapshot).to_dict()
+            bundle["online_policy"] = support
+            bundle.setdefault("decision_support", {})["online_policy"] = support
         first_chunk = symbols[: max(1, config.stage1_chunk_size)]
         stage1_system, stage1_user = build_stage1_prompt(self._stage1_bundle(bundle, first_chunk), first_chunk)
         stage2_system, stage2_user = build_stage2_prompt(self._stage2_bundle(bundle, config), [{"symbol": symbol, "stance": "preview"} for symbol in first_chunk])
@@ -141,18 +173,30 @@ class BenchmarkEngine:
     ) -> Dict[str, Any]:
         validate_no_paid_api_mode(config, secrets)
         symbols = self._symbols(config)
-        memory = HybridMemory(store, config, secrets)
+        memory = HybridMemory(store, config, secrets, run_id=run_id)
         book = initial_book(config.initial_cash)
         equity_curve: List[Dict[str, Any]] = []
         all_executions: List[Dict[str, Any]] = []
         all_decisions: List[Dict[str, Any]] = []
         model_calls = 0
         deterministic = config.memory_mode == "deterministic_market_cases"
+        online_estimator: CalibratedOnlineRiskOffEstimator | None = None
 
         store.update_benchmark_run(run_id, status="running", phase="training", started=True, progress={"percent": 0, "message": "Preparing deterministic historical memory" if deterministic else "Starting training replay"})
         memory_summary = None
         if deterministic:
             memory_summary = self.deterministic_memory.prepare(config, symbols)
+            if not dry_run:
+                memory.register_base_snapshot(
+                    content_hash=memory_summary.content_hash,
+                    metadata={
+                        "symbols": symbols,
+                        "cases": memory_summary.cases,
+                        "train_start": memory_summary.train_start,
+                        "train_end": memory_summary.train_end,
+                        "price_basis": config.historical_price_basis,
+                    },
+                )
             store.append_benchmark_event(
                 run_id,
                 "training",
@@ -167,6 +211,19 @@ class BenchmarkEngine:
                     "percent": 5,
                     "message": f"Built deterministic memory from {memory_summary.cases:,} historical cases",
                     "deterministic_memory_cases": memory_summary.cases,
+                },
+            )
+
+        if config.online_policy_enabled:
+            online_estimator = self._build_online_estimator(config, symbols, memory)
+            store.append_benchmark_event(
+                run_id,
+                "training",
+                "online_policy_ready",
+                {
+                    "historical_lessons": len(online_estimator.lessons),
+                    "horizon_days": config.online_learning_horizon_days,
+                    "memory_scope": memory.context,
                 },
             )
 
@@ -203,6 +260,12 @@ class BenchmarkEngine:
             )
 
         for phase, start, end, limit in phases:
+            if (
+                phase == "test"
+                and config.reset_book_at_test_start
+                and not any(key[0] == "test" for key in completed_keys)
+            ):
+                book = initial_book(config.initial_cash)
             pairs = self._trading_pairs(start, end, limit)
             for pair in pairs:
                 pair_key = (phase, pair["decision_date"], pair["fill_date"])
@@ -216,71 +279,142 @@ class BenchmarkEngine:
 
                 decision_date = pair["decision_date"]
                 fill_date = pair["fill_date"]
-                close_prices = self._price_map(symbols, decision_date, field="close")
+                close_prices = self._price_map(symbols, decision_date, field=self._historical_mark_field(config))
                 if close_prices:
                     book = mark_to_market(book, close_prices)
 
                 model_calls += self._record_due_learning_lessons(memory, config, secrets, run_id, all_decisions, decision_date, dry_run=dry_run)
+                if online_estimator is not None and not dry_run:
+                    self._mature_due_online_experiences(
+                        memory,
+                        config,
+                        run_id,
+                        decision_date,
+                        online_estimator,
+                    )
                 bundle = self._build_bundle(config, memory, run_id, phase, decision_date, fill_date, symbols, book)
+                online_snapshot = None
+                if online_estimator is not None:
+                    online_snapshot = self._online_snapshot(bundle, symbols[0])
+                    online_support = online_estimator.decision_support(online_snapshot).to_dict()
+                    bundle["online_policy"] = online_support
+                    bundle.setdefault("decision_support", {})["online_policy"] = online_support
+
+                schedule = self._decision_schedule(config, phase, bundle, all_decisions)
                 stage1_outputs = []
-                for chunk in _chunks(symbols, config.stage1_chunk_size):
-                    chunk_bundle = self._stage1_bundle(bundle, chunk)
-                    system, user = build_stage1_prompt(chunk_bundle, chunk)
-                    fallback = self._stage1_fallback(chunk)
-                    output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace="stage1")
-                    model_calls += 0 if output.get("_api_status") in {"dry_run", "missing_key"} else 1
-                    stage1_outputs.append(output)
-                    store.save_benchmark_decision(
+                manager_bundle = self._stage2_bundle(bundle, config)
+                if schedule["call_model"]:
+                    for chunk in _chunks(symbols, config.stage1_chunk_size):
+                        chunk_bundle = self._stage1_bundle(bundle, chunk)
+                        system, user = build_stage1_prompt(chunk_bundle, chunk)
+                        fallback = self._stage1_fallback(chunk)
+                        output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace="stage1")
+                        model_calls += 0 if output.get("_api_status") in {"dry_run", "missing_key"} else 1
+                        stage1_outputs.append(output)
+                        store.save_benchmark_decision(
+                            run_id=run_id,
+                            phase=phase,
+                            decision_date=decision_date,
+                            fill_date=fill_date,
+                            stage="stage1",
+                            symbol=",".join(chunk),
+                            input_payload=chunk_bundle,
+                            output_payload=output,
+                            execution_payload={},
+                        )
+
+                    prompt_stage1_outputs = [self._strip_api_metadata(output) for output in stage1_outputs]
+                    critic_calls = self._maybe_run_exposure_critic(
+                        config,
+                        secrets,
+                        manager_bundle,
+                        prompt_stage1_outputs,
                         run_id=run_id,
                         phase=phase,
                         decision_date=decision_date,
                         fill_date=fill_date,
-                        stage="stage1",
-                        symbol=",".join(chunk),
-                        input_payload=chunk_bundle,
-                        output_payload=output,
-                        execution_payload={},
+                        symbols=symbols,
+                        store=store,
+                        dry_run=dry_run,
+                        cache_namespace="exposure-critic",
                     )
+                    model_calls += critic_calls
+                    system, user = build_stage2_prompt(manager_bundle, prompt_stage1_outputs)
+                    stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="stage2")
+                    model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
+                    stage2_output = self._apply_online_policy_gate(config, stage2_output, manager_bundle)
+                    stage2_output = self._apply_action_hysteresis(
+                        config,
+                        phase,
+                        stage2_output,
+                        manager_bundle,
+                        all_decisions,
+                    )
+                    decision_kind = "model_decision"
+                else:
+                    stage2_output = self._cadence_hold_output(symbols, manager_bundle, schedule)
+                    # The no-model cadence path still enforces the mechanical
+                    # long baseline.  Staying in cash is an active risk-off
+                    # decision and requires the same evidence as entering cash.
+                    stage2_output = self._apply_online_policy_gate(config, stage2_output, manager_bundle)
+                    stage2_output = self._apply_action_hysteresis(
+                        config,
+                        phase,
+                        stage2_output,
+                        manager_bundle,
+                        all_decisions,
+                    )
+                    decision_kind = "cadence_hold"
 
-                manager_bundle = self._stage2_bundle(bundle, config)
-                prompt_stage1_outputs = [self._strip_api_metadata(output) for output in stage1_outputs]
-                critic_calls = self._maybe_run_exposure_critic(
-                    config,
-                    secrets,
-                    manager_bundle,
-                    prompt_stage1_outputs,
-                    run_id=run_id,
-                    phase=phase,
-                    decision_date=decision_date,
-                    fill_date=fill_date,
-                    symbols=symbols,
-                    store=store,
-                    dry_run=dry_run,
-                    cache_namespace="exposure-critic",
-                )
-                model_calls += critic_calls
-                system, user = build_stage2_prompt(manager_bundle, prompt_stage1_outputs)
-                stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="stage2")
-                model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
-                fill_prices = self._price_map(symbols, fill_date, field="open")
+                stage2_output["decision_kind"] = decision_kind
+                stage2_output["learning_eligible"] = decision_kind == "model_decision"
+                stage2_output["_schedule_state"] = schedule
+                fill_prices = self._price_map(symbols, fill_date, field=self._historical_fill_field(config))
                 if not fill_prices:
-                    fill_prices = self._price_map(symbols, fill_date, field="close")
+                    fill_prices = self._price_map(symbols, fill_date, field=self._historical_mark_field(config))
+                phase_start_equity = float(book.equity)
                 stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=fill_prices)
-                stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
-                    config,
-                    secrets,
-                    manager_bundle,
-                    stage2_output,
-                    symbols,
-                    book=book,
-                    prices=fill_prices,
-                    dry_run=dry_run,
-                    cache_namespace="stage2-repair",
-                )
+                if decision_kind == "model_decision":
+                    stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
+                        config,
+                        secrets,
+                        manager_bundle,
+                        stage2_output,
+                        symbols,
+                        book=book,
+                        prices=fill_prices,
+                        dry_run=dry_run,
+                        cache_namespace="stage2-repair",
+                    )
+                    stage2_output = self._apply_online_policy_gate(config, stage2_output, manager_bundle)
+                    stage2_output = self._apply_action_hysteresis(
+                        config,
+                        phase,
+                        stage2_output,
+                        manager_bundle,
+                        all_decisions,
+                    )
+                    stage2_output["decision_kind"] = decision_kind
+                    stage2_output["learning_eligible"] = True
+                    stage2_output["_schedule_state"] = schedule
+                    stage2_output = self._normalize_stage2_output(
+                        config,
+                        stage2_output,
+                        symbols,
+                        manager_bundle,
+                        book=book,
+                        prices=fill_prices,
+                    )
+                else:
+                    repair_calls = 0
                 model_calls += repair_calls
                 target_weights = self._coerce_target_weights(stage2_output.get("target_weights") or {}, symbols)
                 validation_errors = self._allocation_errors(config, stage2_output, symbols, book=book, prices=fill_prices)
                 book, execution = self._execute_stage2_output(config, stage2_output, target_weights, book, fill_prices, validation_errors)
+                execution["decision_kind"] = decision_kind
+                execution["requested_action"] = stage2_output.get("requested_action") or stage2_output.get("action")
+                execution["executed_action"] = stage2_output.get("executed_action") or stage2_output.get("action")
+                execution["hysteresis"] = stage2_output.get("hysteresis") or {}
                 execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
                 execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
                 all_executions.append(execution)
@@ -288,11 +422,24 @@ class BenchmarkEngine:
                     "phase": phase,
                     "decision_date": decision_date,
                     "fill_date": fill_date,
+                    "decision_kind": decision_kind,
                     "stage1_outputs": stage1_outputs,
                     "stage2_output": stage2_output,
                     "execution": execution,
                 }
                 all_decisions.append(decision_record)
+                if online_snapshot is not None and decision_kind == "model_decision" and not dry_run:
+                    self._queue_online_experience(
+                        memory,
+                        config,
+                        run_id,
+                        phase,
+                        online_snapshot,
+                        fill_date,
+                        fill_prices,
+                        stage2_output,
+                        execution,
+                    )
                 store.save_benchmark_decision(
                     run_id=run_id,
                     phase=phase,
@@ -304,8 +451,7 @@ class BenchmarkEngine:
                     output_payload=stage2_output,
                     execution_payload=execution,
                 )
-                equity_curve.append(
-                    {
+                curve_point = {
                         "date": fill_date,
                         "phase": phase,
                         "equity": book.equity,
@@ -313,7 +459,9 @@ class BenchmarkEngine:
                         "gross_exposure": book.gross_exposure,
                         "net_exposure": book.net_exposure,
                     }
-                )
+                if not any(point.get("phase") == phase for point in equity_curve):
+                    curve_point["phase_start_equity"] = phase_start_equity
+                equity_curve.append(curve_point)
                 completed_days += 1
                 progress = {
                     "percent": self._percent(completed_days, total_days),
@@ -330,7 +478,7 @@ class BenchmarkEngine:
                 else:
                     store.update_benchmark_run(run_id, status="running", phase=phase, progress=progress)
 
-                if execution.get("model_failure") and not dry_run and config.run_preset in {"single_stock_official", "budget_official", "full_official", "local_gemma_aapl_full"}:
+                if execution.get("model_failure") and not dry_run and config.run_preset in {"single_stock_official", "budget_official", "full_official", "local_gemma_aapl_full", "local_gemma_aapl_online"}:
                     invalid_stage2_days += 1
                     invalid_rate = invalid_stage2_days / max(1, completed_days)
                     should_abort = invalid_stage2_days >= config.invalid_run_abort_count or (completed_days >= 20 and invalid_rate > config.invalid_run_abort_rate)
@@ -401,6 +549,7 @@ class BenchmarkEngine:
                 "phase": key[0],
                 "decision_date": key[1],
                 "fill_date": key[2],
+                "decision_kind": stage2_output.get("decision_kind", "model_decision"),
                 "stage1_outputs": bucket.get("stage1") or [],
                 "stage2_output": stage2_output,
                 "execution": execution,
@@ -417,8 +566,7 @@ class BenchmarkEngine:
             after = execution.get("portfolio_after") or {}
             if after:
                 book = PortfolioBook(**after)
-                equity_curve.append(
-                    {
+                point = {
                         "date": key[2],
                         "phase": key[0],
                         "equity": book.equity,
@@ -426,7 +574,10 @@ class BenchmarkEngine:
                         "gross_exposure": book.gross_exposure,
                         "net_exposure": book.net_exposure,
                     }
-                )
+                if not any(item.get("phase") == key[0] for item in equity_curve):
+                    before = execution.get("portfolio_before") or {}
+                    point["phase_start_equity"] = float(before.get("equity") or book.equity)
+                equity_curve.append(point)
         model_calls = self._resume_model_call_count(store, run_id, run)
         return {
             "book": book,
@@ -467,7 +618,7 @@ class BenchmarkEngine:
         calls = 0
         for item in run.get("decisions") or []:
             output = item.get("output") or {}
-            if output.get("_api_status") not in {"dry_run", "missing_key"}:
+            if output.get("_api_status") not in {"dry_run", "missing_key", "cadence_hold"}:
                 calls += 1
         if not hasattr(store, "_connect"):
             return calls
@@ -490,6 +641,10 @@ class BenchmarkEngine:
                 calls += 1
         return calls
 
+    @staticmethod
+    def _current_ny_time() -> datetime:
+        return datetime.now(ZoneInfo("America/New_York"))
+
     def run_live_snapshot(
         self,
         *,
@@ -502,11 +657,51 @@ class BenchmarkEngine:
         timestamp: datetime | None = None,
     ) -> Dict[str, Any]:
         validate_no_paid_api_mode(config, secrets)
+        if (
+            (config.outcome_learning_mode == "counterfactual_online" or config.online_policy_enabled)
+            and not config.memory_online_stream_id
+        ):
+            raise ValueError(
+                "Live counterfactual learning requires a stable memory_online_stream_id; "
+                "use local_gemma_aapl_live_config() or set one explicitly."
+            )
         symbols = self._symbols(config)
-        now = timestamp or datetime.now()
-        decision_timestamp = now.astimezone().isoformat(timespec="seconds")
+        now = timestamp or datetime.now().astimezone()
+        if now.tzinfo is None:
+            # A naive caller timestamp is interpreted in the machine's local
+            # timezone first; never reinterpret a Madrid wall clock as New York.
+            now = now.astimezone()
+        if config.live_frequency == "daily_open":
+            ny_tz = ZoneInfo("America/New_York")
+            ny_now = now.astimezone(ny_tz)
+            minute_of_day = ny_now.hour * 60 + ny_now.minute
+            if not (9 * 60 + 30 <= minute_of_day <= 10 * 60):
+                raise ValueError(
+                    "The AAPL online live contract runs once in the opening window "
+                    "(09:30-10:00 America/New_York) as a bounded operational approximation "
+                    "to the historical next-open fill."
+                )
+            now = ny_now
+        decision_timestamp = now.isoformat(timespec="seconds")
         decision_date = now.date().isoformat()
-        memory = HybridMemory(store, config, secrets)
+        memory = HybridMemory(store, config, secrets, run_id=run_id)
+        live_state = memory.load_live_state()
+        if (
+            not dry_run
+            and config.live_frequency == "daily_open"
+            and str((live_state or {}).get("last_snapshot_at") or "")[:10] == decision_date
+        ):
+            raise ValueError(
+                f"The durable live stream already completed its {decision_date} opening-window snapshot."
+            )
+        restored_book = None
+        if portfolio_book is None and live_state and live_state.get("portfolio"):
+            try:
+                restored_book = PortfolioBook(**live_state["portfolio"])
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "The durable live portfolio state is invalid; refusing to restart from cash."
+                ) from exc
 
         store.update_benchmark_run(
             run_id,
@@ -515,11 +710,50 @@ class BenchmarkEngine:
             started=True,
             progress={"percent": 10, "message": "Collecting live market snapshot"},
         )
-        market, fill_prices, source_status = self._live_market_snapshots(symbols)
-        if not fill_prices:
-            raise ValueError("No live prices were available for the selected symbols.")
+        market, mark_prices, source_status = self._live_market_snapshots(
+            symbols,
+            config,
+            decision_time=now,
+        )
+        if not mark_prices:
+            raise ValueError("No completed-session prices were available for the selected symbols.")
 
-        book = mark_to_market(portfolio_book or initial_book(config.initial_cash), fill_prices)
+        base_book = portfolio_book or restored_book or initial_book(config.initial_cash)
+        base_book, corporate_action_events = self._apply_live_corporate_actions(
+            base_book,
+            live_state,
+            decision_timestamp,
+        )
+        source_status.extend(corporate_action_events)
+        book = mark_to_market(base_book, mark_prices)
+        live_estimator: CalibratedOnlineRiskOffEstimator | None = None
+        if config.online_policy_enabled:
+            live_memory_summary = self.deterministic_memory.prepare(config, symbols)
+            if not dry_run:
+                memory.register_base_snapshot(
+                    content_hash=live_memory_summary.content_hash,
+                    metadata={
+                        "symbols": symbols,
+                        "cases": live_memory_summary.cases,
+                        "train_start": live_memory_summary.train_start,
+                        "train_end": live_memory_summary.train_end,
+                        "price_basis": config.historical_price_basis,
+                    },
+                )
+            live_estimator = self._build_online_estimator(
+                config,
+                symbols,
+                memory,
+                cutoff=decision_timestamp,
+            )
+            if not dry_run:
+                self._mature_due_online_experiences(
+                    memory,
+                    config,
+                    run_id,
+                    decision_timestamp,
+                    live_estimator,
+                )
         bundle = self._build_live_bundle(
             config,
             secrets,
@@ -533,27 +767,51 @@ class BenchmarkEngine:
             source_status,
             dry_run=dry_run,
         )
+        online_snapshot = None
+        if live_estimator is not None:
+            online_snapshot = self._online_snapshot(bundle, symbols[0])
+            online_support = live_estimator.decision_support(online_snapshot).to_dict()
+            bundle["online_policy"] = online_support
+            bundle.setdefault("decision_support", {})["online_policy"] = online_support
+
+        live_history = self._online_experience_decisions(memory)
+        if live_state and live_state.get("schedule_state"):
+            live_history.append(
+                {
+                    "phase": "live",
+                    "decision_date": live_state.get("last_snapshot_at"),
+                    "fill_date": live_state.get("last_snapshot_at"),
+                    "decision_kind": "cadence_hold",
+                    "stage2_output": {
+                        "decision_kind": "cadence_hold",
+                        "_schedule_state": live_state.get("schedule_state") or {},
+                    },
+                    "execution": {"trades": []},
+                }
+            )
+        schedule = self._decision_schedule(config, "live", bundle, live_history)
 
         stage1_outputs = []
         model_calls = 0
-        for chunk in _chunks(symbols, config.stage1_chunk_size):
-            chunk_bundle = self._stage1_bundle(bundle, chunk)
-            system, user = build_stage1_prompt(chunk_bundle, chunk)
-            fallback = self._stage1_fallback(chunk)
-            output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace="live-stage1")
-            model_calls += 0 if output.get("_api_status") in {"dry_run", "missing_key"} else 1
-            stage1_outputs.append(output)
-            store.save_benchmark_decision(
-                run_id=run_id,
-                phase="live",
-                decision_date=decision_timestamp,
-                fill_date=decision_timestamp,
-                stage="stage1",
-                symbol=",".join(chunk),
-                input_payload=chunk_bundle,
-                output_payload=output,
-                execution_payload={},
-            )
+        if schedule["call_model"]:
+            for chunk in _chunks(symbols, config.stage1_chunk_size):
+                chunk_bundle = self._stage1_bundle(bundle, chunk)
+                system, user = build_stage1_prompt(chunk_bundle, chunk)
+                fallback = self._stage1_fallback(chunk)
+                output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=fallback, cache_namespace="live-stage1")
+                model_calls += 0 if output.get("_api_status") in {"dry_run", "missing_key"} else 1
+                stage1_outputs.append(output)
+                store.save_benchmark_decision(
+                    run_id=run_id,
+                    phase="live",
+                    decision_date=decision_timestamp,
+                    fill_date=decision_timestamp,
+                    stage="stage1",
+                    symbol=",".join(chunk),
+                    input_payload=chunk_bundle,
+                    output_payload=output,
+                    execution_payload={},
+                )
 
         store.update_benchmark_run(
             run_id,
@@ -562,48 +820,148 @@ class BenchmarkEngine:
             progress={"percent": 65, "message": "Asking the portfolio manager pass"},
         )
         manager_bundle = self._stage2_bundle(bundle, config)
-        prompt_stage1_outputs = [self._strip_api_metadata(output) for output in stage1_outputs]
-        critic_calls = self._maybe_run_exposure_critic(
-            config,
-            secrets,
-            manager_bundle,
-            prompt_stage1_outputs,
-            run_id=run_id,
-            phase="live",
-            decision_date=decision_timestamp,
-            fill_date=decision_timestamp,
-            symbols=symbols,
-            store=store,
-            dry_run=dry_run,
-            cache_namespace="live-exposure-critic",
+        if schedule["call_model"]:
+            prompt_stage1_outputs = [self._strip_api_metadata(output) for output in stage1_outputs]
+            critic_calls = self._maybe_run_exposure_critic(
+                config,
+                secrets,
+                manager_bundle,
+                prompt_stage1_outputs,
+                run_id=run_id,
+                phase="live",
+                decision_date=decision_timestamp,
+                fill_date=decision_timestamp,
+                symbols=symbols,
+                store=store,
+                dry_run=dry_run,
+                cache_namespace="live-exposure-critic",
+            )
+            model_calls += critic_calls
+            system, user = build_stage2_prompt(manager_bundle, prompt_stage1_outputs)
+            stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="live-stage2")
+            model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
+            stage2_output = self._apply_online_policy_gate(config, stage2_output, manager_bundle)
+            stage2_output = self._apply_action_hysteresis(
+                config,
+                "live",
+                stage2_output,
+                manager_bundle,
+                live_history,
+            )
+            decision_kind = "model_decision"
+        else:
+            stage2_output = self._cadence_hold_output(symbols, manager_bundle, schedule)
+            stage2_output = self._apply_online_policy_gate(config, stage2_output, manager_bundle)
+            stage2_output = self._apply_action_hysteresis(
+                config,
+                "live",
+                stage2_output,
+                manager_bundle,
+                live_history,
+            )
+            decision_kind = "cadence_hold"
+        stage2_output["decision_kind"] = decision_kind
+        stage2_output["learning_eligible"] = decision_kind == "model_decision"
+        stage2_output["_schedule_state"] = schedule
+        stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=mark_prices)
+        if decision_kind == "model_decision":
+            stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
+                config,
+                secrets,
+                manager_bundle,
+                stage2_output,
+                symbols,
+                book=book,
+                prices=mark_prices,
+                dry_run=dry_run,
+                cache_namespace="live-stage2-repair",
+            )
+            stage2_output = self._apply_online_policy_gate(config, stage2_output, manager_bundle)
+            stage2_output = self._apply_action_hysteresis(
+                config,
+                "live",
+                stage2_output,
+                manager_bundle,
+                live_history,
+            )
+            stage2_output["decision_kind"] = decision_kind
+            stage2_output["learning_eligible"] = True
+            stage2_output["_schedule_state"] = schedule
+            stage2_output = self._normalize_stage2_output(
+                config,
+                stage2_output,
+                symbols,
+                manager_bundle,
+                book=book,
+                prices=mark_prices,
+            )
+        else:
+            repair_calls = 0
+        model_calls += repair_calls
+        # Fetch execution data only after every model/repair call and policy
+        # transformation is complete, so no current-session quote can influence
+        # the decision.  The helper fails closed on prior-session or stale bars.
+        decision_finalized_at = self._current_ny_time()
+        fill_prices, execution_price_status = self._live_execution_prices(
+            symbols,
+            decision_time=decision_finalized_at,
         )
-        model_calls += critic_calls
-        system, user = build_stage2_prompt(manager_bundle, prompt_stage1_outputs)
-        stage2_output = call_json_model(config, secrets, system, user, dry_run=dry_run, fallback=self._stage2_fallback(symbols, manager_bundle), cache_namespace="live-stage2")
-        model_calls += 0 if stage2_output.get("_api_status") in {"dry_run", "missing_key"} else 1
-        stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=fill_prices)
-        stage2_output, repair_calls = self._repair_stage2_allocation_if_needed(
+        if len(fill_prices) != len(symbols):
+            missing = sorted(set(symbols) - set(fill_prices))
+            raise ValueError(
+                "No fresh current-session execution quote was available for: "
+                + ", ".join(missing)
+            )
+        observed_timestamps = [
+            str(item.get("observed_at"))
+            for item in execution_price_status
+            if item.get("status") == "ok" and item.get("observed_at")
+        ]
+        if not observed_timestamps:
+            raise ValueError("The execution quote did not include a post-fetch observation timestamp.")
+        fill_timestamp = max(observed_timestamps)
+        book = mark_to_market(book, fill_prices)
+        stage2_output = self._normalize_stage2_output(
             config,
-            secrets,
-            manager_bundle,
             stage2_output,
             symbols,
+            manager_bundle,
             book=book,
             prices=fill_prices,
-            dry_run=dry_run,
-            cache_namespace="live-stage2-repair",
         )
-        model_calls += repair_calls
         target_weights = self._coerce_target_weights(stage2_output.get("target_weights") or {}, symbols)
         validation_errors = self._allocation_errors(config, stage2_output, symbols, book=book, prices=fill_prices)
         next_book, execution = self._execute_stage2_output(config, stage2_output, target_weights, book, fill_prices, validation_errors)
+        execution["decision_kind"] = decision_kind
+        execution["requested_action"] = stage2_output.get("requested_action") or stage2_output.get("action")
+        execution["executed_action"] = stage2_output.get("executed_action") or stage2_output.get("action")
+        execution["hysteresis"] = stage2_output.get("hysteresis") or {}
+        execution["fill_timestamp"] = fill_timestamp
         execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
         execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
+        if online_snapshot is not None and decision_kind == "model_decision" and not dry_run:
+            self._queue_online_experience(
+                memory,
+                config,
+                run_id,
+                "live",
+                online_snapshot,
+                fill_timestamp,
+                fill_prices,
+                stage2_output,
+                execution,
+            )
+        if not dry_run and config.memory_online_stream_id:
+            memory.save_live_state(
+                portfolio=model_to_dict(next_book),
+                schedule_state=schedule,
+                last_snapshot_at=fill_timestamp,
+            )
         store.save_benchmark_decision(
             run_id=run_id,
             phase="live",
             decision_date=decision_timestamp,
-            fill_date=decision_timestamp,
+            fill_date=fill_timestamp,
             stage="stage2",
             symbol="PORTFOLIO",
             input_payload=manager_bundle,
@@ -616,8 +974,9 @@ class BenchmarkEngine:
             "live_snapshot_completed",
             {
                 "decision_timestamp": decision_timestamp,
+                "fill_timestamp": fill_timestamp,
                 "available_prices": len(fill_prices),
-                "source_status": source_status,
+                "source_status": [*source_status, *execution_price_status],
             },
         )
         summary = self._summary(
@@ -653,6 +1012,79 @@ class BenchmarkEngine:
             finished=True,
         )
         return {"summary": summary, "portfolio": next_book}
+
+    def _apply_live_corporate_actions(
+        self,
+        book: PortfolioBook,
+        live_state: Dict[str, Any] | None,
+        as_of: str,
+    ) -> tuple[PortfolioBook, List[Dict[str, Any]]]:
+        """Credit dividends and split shares once between durable live marks."""
+
+        last_snapshot = str((live_state or {}).get("last_snapshot_at") or "")[:10]
+        current_date = str(as_of)[:10]
+        if not last_snapshot or last_snapshot >= current_date or not book.positions:
+            return book, []
+        cash = float(book.cash)
+        positions = dict(book.positions)
+        events: List[Dict[str, Any]] = []
+        try:
+            import yfinance as yf
+
+            start = (datetime.fromisoformat(last_snapshot) + timedelta(days=1)).date().isoformat()
+            end = (datetime.fromisoformat(current_date) + timedelta(days=1)).date().isoformat()
+            for symbol, initial_shares in list(positions.items()):
+                frame = yf.Ticker(symbol).history(
+                    start=start,
+                    end=end,
+                    auto_adjust=False,
+                    actions=True,
+                )
+                if frame is None or frame.empty:
+                    raise RuntimeError(f"No corporate-action reconciliation data for {symbol}.")
+                shares = float(initial_shares)
+                dividend_cash = 0.0
+                for _, row in frame.sort_index().iterrows():
+                    dividend = _safe_float(row.get("Dividends")) or 0.0
+                    split = _safe_float(row.get("Stock Splits")) or 0.0
+                    if dividend:
+                        payment = shares * dividend
+                        cash += payment
+                        dividend_cash += payment
+                    if split and split > 0:
+                        shares *= split
+                positions[symbol] = shares
+                if dividend_cash:
+                    events.append(
+                        {
+                            "symbol": symbol,
+                            "source": "yfinance_actions",
+                            "status": "dividend_credited",
+                            "cash": round(dividend_cash, 8),
+                        }
+                    )
+                if abs(shares - float(initial_shares)) > 1e-10:
+                    events.append(
+                        {
+                            "symbol": symbol,
+                            "source": "yfinance_actions",
+                            "status": "split_applied",
+                            "shares_before": float(initial_shares),
+                            "shares_after": shares,
+                        }
+                    )
+        except Exception as exc:
+            raise RuntimeError(f"Unable to reconcile live dividends/splits: {exc}") from exc
+        updated = PortfolioBook(
+            cash=cash,
+            positions=positions,
+            equity=book.equity,
+            long_exposure=book.long_exposure,
+            short_exposure=book.short_exposure,
+            gross_exposure=book.gross_exposure,
+            net_exposure=book.net_exposure,
+        )
+        return updated, events
 
     def _symbols(self, config: BenchmarkConfig) -> List[str]:
         if config.mode == "single_stock":
@@ -702,13 +1134,28 @@ class BenchmarkEngine:
     def _date(self, value: Any) -> str:
         return _iso(value)[:10]
 
+    def _historical_fill_field(self, config: BenchmarkConfig) -> str:
+        return "adjusted_open" if getattr(config, "historical_price_basis", "legacy") == "adjusted" else "open"
+
+    def _historical_mark_field(self, config: BenchmarkConfig) -> str:
+        return "adj_close" if getattr(config, "historical_price_basis", "legacy") == "adjusted" else "close"
+
     def _price_map(self, symbols: List[str], target_date: str, *, field: str = "close") -> Dict[str, float]:
         if not symbols:
             return {}
+        expressions = {
+            "open": "open",
+            "close": "close",
+            "adj_close": "adj_close",
+            "adjusted_open": "open * adj_close / NULLIF(close, 0)",
+        }
+        expression = expressions.get(field)
+        if expression is None:
+            raise ValueError(f"Unsupported historical price field: {field}")
         placeholders = ", ".join(["?"] * len(symbols))
         rows = self.warehouse.conn.execute(
             f"""
-            SELECT symbol, {field}
+            SELECT symbol, {expression} AS price
             FROM asset_daily
             WHERE symbol IN ({placeholders})
               AND date = CAST(? AS DATE)
@@ -718,7 +1165,12 @@ class BenchmarkEngine:
         ).fetchall()
         return {row[0]: float(row[1]) for row in rows if row[1] is not None}
 
-    def _market_snapshots(self, symbols: List[str], decision_date: str) -> Dict[str, Any]:
+    def _market_snapshots(
+        self,
+        symbols: List[str],
+        decision_date: str,
+        config: BenchmarkConfig | None = None,
+    ) -> Dict[str, Any]:
         placeholders = ", ".join(["?"] * len(symbols))
         df = self.warehouse.conn.execute(
             f"""
@@ -727,7 +1179,7 @@ class BenchmarkEngine:
             WHERE symbol IN ({placeholders})
               AND date <= CAST(? AS DATE)
               AND ohlcv_available = true
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) <= 65
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) <= 260
             ORDER BY symbol, date
             """,
             [*symbols, decision_date],
@@ -738,12 +1190,41 @@ class BenchmarkEngine:
         for symbol, group in df.groupby("symbol"):
             group = group.sort_values("date")
             latest = group.iloc[-1]
-            closes = group["close"].astype(float)
+            adjusted_basis = getattr(config, "historical_price_basis", "legacy") == "adjusted"
+            price_column = "adj_close" if adjusted_basis else "close"
+            closes = group[price_column].astype(float)
+            volumes = group["volume"].astype(float)
             def trailing(days: int) -> float | None:
                 if len(closes) <= days:
                     return None
                 base = float(closes.iloc[-days - 1])
                 return float(closes.iloc[-1]) / base - 1.0 if base else None
+
+            def sma_distance(days: int) -> float | None:
+                if len(closes) < days:
+                    return None
+                average = float(closes.tail(days).mean())
+                return float(closes.iloc[-1]) / average - 1.0 if average else None
+
+            def drawdown(days: int) -> float | None:
+                if len(closes) < days:
+                    return None
+                peak = float(closes.tail(days).max())
+                return float(closes.iloc[-1]) / peak - 1.0 if peak else None
+
+            volume_z20 = None
+            if len(volumes) >= 20:
+                window = volumes.tail(20)
+                std = float(window.std())
+                if std > 0:
+                    volume_z20 = (float(window.iloc[-1]) - float(window.mean())) / std
+            previous_close = float(closes.iloc[-2]) if len(closes) > 1 else None
+            latest_open = _safe_float(latest["open"])
+            if adjusted_basis and latest_open is not None:
+                raw_close = _safe_float(latest["close"])
+                adjusted_close = _safe_float(latest["adj_close"])
+                if raw_close and adjusted_close:
+                    latest_open = latest_open * adjusted_close / raw_close
             snapshots[symbol] = {
                 "symbol": symbol,
                 "as_of_date": self._date(latest["date"]),
@@ -751,22 +1232,40 @@ class BenchmarkEngine:
                 "high": _safe_float(latest["high"]),
                 "low": _safe_float(latest["low"]),
                 "close": _safe_float(latest["close"]),
-                "adj_close": _safe_float(latest["adj_close"]),
                 "volume": _safe_float(latest["volume"]),
-                "return_1d": _safe_float(latest["return_1d"]),
+                "return_1d": _pct(trailing(1)),
                 "return_5d": _pct(trailing(5)),
                 "return_20d": _pct(trailing(20)),
                 "return_60d": _pct(trailing(60)),
+                "return_120d": _pct(trailing(120)),
+                "return_252d": _pct(trailing(252)),
                 "volatility_20d": _safe_float(closes.pct_change().tail(20).std() * (252 ** 0.5)) if len(closes) > 20 else None,
+                "volatility_60d": _safe_float(closes.pct_change().tail(60).std() * (252 ** 0.5)) if len(closes) > 60 else None,
+                "sma20_distance": _pct(sma_distance(20)),
+                "sma50_distance": _pct(sma_distance(50)),
+                "sma200_distance": _pct(sma_distance(200)),
+                "drawdown_60d": _pct(drawdown(60)),
+                "drawdown_252d": _pct(drawdown(252)),
+                "volume_z20": _safe_float(volume_z20),
+                "gap_1d": _pct((latest_open / previous_close - 1.0) if latest_open is not None and previous_close else None),
                 "source": latest.get("source", ""),
                 "history_points": int(len(group)),
             }
         return snapshots
 
-    def _context(self, decision_date: str) -> List[Dict[str, Any]]:
+    def _context(
+        self,
+        decision_date: str,
+        config: BenchmarkConfig | None = None,
+    ) -> List[Dict[str, Any]]:
+        price_column = (
+            "adj_close"
+            if getattr(config, "historical_price_basis", "legacy") == "adjusted"
+            else "close"
+        )
         df = self.warehouse.conn.execute(
-            """
-            SELECT date, symbol, close, return_1d, source
+            f"""
+            SELECT date, symbol, {price_column} AS close, return_1d, source
             FROM context_daily
             WHERE date <= CAST(? AS DATE) AND ohlcv_available = true
             QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) <= 65
@@ -793,7 +1292,7 @@ class BenchmarkEngine:
                     "date": latest.get("date"),
                     "symbol": symbol,
                     "close": _safe_float(latest.get("close")),
-                    "return_1d": _safe_float(latest.get("return_1d")),
+                    "return_1d": _pct(trailing(1)),
                     "return_5d": _pct(trailing(5)),
                     "return_20d": _pct(trailing(20)),
                     "return_60d": _pct(trailing(60)),
@@ -973,12 +1472,13 @@ class BenchmarkEngine:
         symbols: List[str],
         book: PortfolioBook,
     ) -> Dict[str, Any]:
-        market = self._market_snapshots(symbols, decision_date)
+        market = self._market_snapshots(symbols, decision_date, config)
         news, news_quality = self._news(symbols, decision_date, config.max_news_per_symbol, config)
         fundamentals, fundamental_quality = self._fundamentals(symbols, decision_date)
         macro = self._macro(config, decision_date)
         data_quality = self._data_quality(symbols, decision_date)
         query = json.dumps({"phase": phase, "date": decision_date, "portfolio": book.model_dump(), "market": market}, default=str)[:6000]
+        online_memories: List[Dict[str, Any]] = []
         if config.memory_mode == "deterministic_market_cases":
             memories = self.deterministic_memory.retrieve(
                 config,
@@ -989,9 +1489,25 @@ class BenchmarkEngine:
                 max_items=config.deterministic_memory_max_items,
             )
             memories.extend(self._diagnostic_lesson_memories(memory, config, decision_date, query, limit=6))
+            if config.outcome_learning_mode == "counterfactual_online":
+                retrieved_online_memories = memory.retrieve(
+                    decision_timestamp=decision_date,
+                    limit=50,
+                )
+                online_memories = [
+                    item
+                    for item in retrieved_online_memories
+                    if item.get("memory_type") == "counterfactual_online_lesson"
+                ][:6]
+                memories.extend(online_memories)
         else:
             lesson_limit = max(1, min(14, int(config.memory_examples_per_symbol or 2) * max(1, len(symbols))))
             memories = memory.retrieve(decision_timestamp=decision_date, query=query, limit=lesson_limit)
+            online_memories = [
+                item
+                for item in memories
+                if item.get("memory_type") == "counterfactual_online_lesson"
+            ]
         payload = {
             "schema_version": "benchmark-input-v2",
             "mode": config.mode,
@@ -1003,7 +1519,7 @@ class BenchmarkEngine:
             "candidate_universe": self._symbol_metadata(symbols),
             "portfolio_state": book.model_dump() if hasattr(book, "model_dump") else book.dict(),
             "market_snapshots": market,
-            "index_context": self._context(decision_date),
+            "index_context": self._context(decision_date, config),
             "fundamentals": fundamentals,
             "fundamental_quality": fundamental_quality,
             "macro_context": macro,
@@ -1018,9 +1534,18 @@ class BenchmarkEngine:
                 "warnings": self._input_quality_warnings(macro, news_quality, fundamental_quality),
             },
             "memory": memories,
+            # Reserved separately so compact prompt truncation can never hide
+            # every newly matured lesson behind the deterministic case bank.
+            "recent_online_lessons": online_memories,
             "benchmark_rules": {
-                "model_owns_decision": True,
-                "simulator_role": "mechanics_only",
+                "model_owns_decision": not config.online_policy_enabled,
+                "model_proposes_action": True,
+                "simulator_role": "mechanics_and_declared_online_cash_gate" if config.online_policy_enabled else "mechanics_only",
+                "online_cash_gate": {
+                    "enabled": config.online_policy_enabled,
+                    "authority": "permission_not_forced_trade",
+                    "rule": "CASH_ALL may be blocked unless mature empirical evidence shows positive after-cost active advantage.",
+                },
                 "allow_short": config.allow_short,
                 "max_gross_exposure": config.max_gross_exposure,
                 "max_nonzero_positions": config.max_nonzero_positions,
@@ -1033,6 +1558,9 @@ class BenchmarkEngine:
                 "opportunity_cost_policy": config.opportunity_cost_policy,
                 "exposure_critic_enabled": config.exposure_critic_enabled,
                 "outcome_learning_mode": config.outcome_learning_mode,
+                "decision_cadence": config.decision_cadence,
+                "minimum_holding_days": config.minimum_holding_days,
+                "action_hysteresis_confirmations": config.action_hysteresis_confirmations,
                 "official_success_metric": {
                     "comparison": "same_stock_buy_and_hold" if config.mode == "single_stock" else "buy_hold_benchmarks",
                     "train_window": {"start_date": config.train_start, "end_date": config.train_end, "purpose": "point_in_time_memory_only"},
@@ -1076,6 +1604,13 @@ class BenchmarkEngine:
             "data_quality": data_quality,
             "input_quality": bundle.get("input_quality") or {},
             "decision_support": self._filter_decision_support(bundle.get("decision_support") or {}, symbol_set),
+            "online_policy": bundle.get("online_policy") or {},
+            "recent_online_lessons": self._filter_memory(
+                bundle.get("recent_online_lessons") or [],
+                symbol_set,
+                limit=max(1, len(symbols) * 2),
+                include_structured=True,
+            ),
             "memory": self._filter_memory(bundle.get("memory") or [], symbol_set, limit=max(2, len(symbols) * 2)),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
         }
@@ -1104,7 +1639,17 @@ class BenchmarkEngine:
                     "r5": snap.get("return_5d"),
                     "r20": snap.get("return_20d"),
                     "r60": snap.get("return_60d"),
+                    "r120": snap.get("return_120d"),
+                    "r252": snap.get("return_252d"),
                     "vol20": snap.get("volatility_20d"),
+                    "vol60": snap.get("volatility_60d"),
+                    "sma20_distance": snap.get("sma20_distance"),
+                    "sma50_distance": snap.get("sma50_distance"),
+                    "sma200_distance": snap.get("sma200_distance"),
+                    "drawdown_60d": snap.get("drawdown_60d"),
+                    "drawdown_252d": snap.get("drawdown_252d"),
+                    "volume_z20": snap.get("volume_z20"),
+                    "gap_1d": snap.get("gap_1d"),
                     "current_weight": current_position_weights.get(symbol, 0.0),
                     "signal_rank": support.get("rank"),
                     "signal_score": support.get("score"),
@@ -1139,6 +1684,13 @@ class BenchmarkEngine:
             "input_quality": bundle.get("input_quality") or {},
             "data_quality": bundle.get("data_quality") or {},
             "decision_support": self._compact_decision_support(decision_support),
+            "online_policy": bundle.get("online_policy") or {},
+            "recent_online_lessons": self._filter_memory(
+                bundle.get("recent_online_lessons") or [],
+                set(),
+                limit=2,
+                include_structured=True,
+            ),
             "memory": self._filter_memory(bundle.get("memory") or [], set(), limit=4),
             "benchmark_rules": bundle.get("benchmark_rules") or {},
             "omitted_raw_sections": ["market_snapshots", "fundamentals", "news_and_events"],
@@ -1156,7 +1708,7 @@ class BenchmarkEngine:
                     "single_stock_contract": {
                         "action_space": scoped_config.single_stock_action_space,
                         "allowed_actions": valid_range.get("allowed_actions"),
-                        "model_returns": "action" if scoped_config.single_stock_action_space == "trinary_all_in" else "target_exposure",
+                        "model_returns": "action" if scoped_config.single_stock_action_space in {"trinary_all_in", "long_cash_hold"} else "target_exposure",
                         "simulator_computes": ["target_weights", "cash_weight", "gross_exposure", "net_exposure", "estimated_turnover", "estimated_slippage_cost_bps"],
                         "required_opportunity_cost_fields": [
                             "cash_drag_justification",
@@ -1188,6 +1740,17 @@ class BenchmarkEngine:
                     },
                 }
             )
+            if scoped_config.single_stock_action_space == "long_cash_hold":
+                manager["long_cash_policy"] = {
+                    "baseline": "BUY_ALL",
+                    "allowed_actions": ["CASH_ALL", "HOLD", "BUY_ALL"],
+                    "shorting_allowed": False,
+                    "cash_rule": "CASH_ALL requires positive expected active return versus remaining long after costs, supported by mature point-in-time evidence.",
+                    "weak_evidence_default": "BUY_ALL when in cash; HOLD when already long. HOLD-in-cash requires the same evidence as CASH_ALL.",
+                    "pending_outcomes_are_ineligible": True,
+                }
+                manager.pop("trinary_short_hurdle", None)
+                manager.pop("single_stock_shock_guard", None)
         return manager
 
     def _single_stock_shock_guard(self, symbol: str, symbol_table: List[Dict[str, Any]], current_exposure: Any) -> Dict[str, Any]:
@@ -1220,6 +1783,11 @@ class BenchmarkEngine:
         equity = _safe_float(portfolio_state.get("equity")) or 0.0
         if equity <= 0:
             return {}
+        if len(positions) == 1:
+            symbol, shares = next(iter(positions.items()))
+            net_exposure = _safe_float(portfolio_state.get("net_exposure"))
+            if net_exposure is not None and abs(float(shares or 0.0)) > 1e-12:
+                return {str(symbol).upper(): round(float(net_exposure), 8)}
         weights: Dict[str, float] = {}
         for symbol, shares in positions.items():
             snap = market.get(symbol) or {}
@@ -1309,7 +1877,696 @@ class BenchmarkEngine:
         lessons = memory.retrieve(decision_timestamp=decision_timestamp, query=query, limit=limit)
         return [item for item in lessons if item.get("memory_type") == "diagnostic_lesson"][:limit]
 
-    def _filter_memory(self, memories: List[Dict[str, Any]], symbols: set[str], *, limit: int) -> List[Dict[str, Any]]:
+    def _build_online_estimator(
+        self,
+        config: BenchmarkConfig,
+        symbols: List[str],
+        memory: HybridMemory,
+        *,
+        cutoff: str | None = None,
+    ) -> CalibratedOnlineRiskOffEstimator:
+        estimator = CalibratedOnlineRiskOffEstimator(
+            RiskOffEstimatorConfig(
+                symbol=symbols[0],
+                max_neighbors=int(config.online_policy_max_neighbors),
+                min_samples=min(
+                    int(config.online_policy_min_samples),
+                    int(config.online_policy_max_neighbors),
+                ),
+                min_neighbor_separation_days=int(config.online_policy_min_neighbor_separation_days),
+                min_feature_overlap=float(config.online_policy_min_feature_overlap),
+                risk_off_probability=float(config.online_policy_risk_off_probability),
+                min_confidence=float(config.online_policy_min_confidence),
+                min_active_return=float(config.online_policy_min_active_return),
+            )
+        )
+        lessons = list(
+            self.deterministic_memory.online_lessons(
+                config,
+                symbols,
+                horizon_days=int(config.online_learning_horizon_days),
+            )
+        )
+        stored = memory.retrieve(
+            decision_timestamp=cutoff or config.test_end,
+            limit=100_000,
+        )
+        for item in stored:
+            if item.get("memory_type") != "counterfactual_online_lesson":
+                continue
+            payload = (item.get("metadata") or {}).get("matured_lesson")
+            if not isinstance(payload, dict):
+                continue
+            try:
+                lessons.append(MaturedLesson.from_dict(payload))
+            except (KeyError, TypeError, ValueError):
+                continue
+        unique: Dict[str, MaturedLesson] = {}
+        for lesson in lessons:
+            unique[lesson.lesson_id] = lesson
+        ordered = sorted(
+            unique.values(),
+            key=lambda item: (item.knowledge_timestamp, item.snapshot.decision_timestamp, item.lesson_id),
+        )
+        estimator.update_many(ordered)
+        return estimator
+
+    def _online_snapshot(self, bundle: Dict[str, Any], symbol: str) -> PointInTimeSnapshot:
+        market = (bundle.get("market_snapshots") or {}).get(symbol) or {}
+        context = {
+            str(item.get("symbol") or "").upper(): item
+            for item in (bundle.get("index_context") or [])
+        }
+        feature_names = (
+            "return_5d",
+            "return_20d",
+            "return_60d",
+            "return_120d",
+            "return_252d",
+            "volatility_20d",
+            "volatility_60d",
+            "sma20_distance",
+            "sma50_distance",
+            "sma200_distance",
+            "drawdown_60d",
+            "drawdown_252d",
+            "volume_z20",
+        )
+        features = {
+            name: float(value)
+            for name in feature_names
+            if (value := _safe_float(market.get(name))) is not None
+            and math.isfinite(float(value))
+        }
+        decision_date = str(bundle.get("decision_date") or market.get("as_of_date") or "")
+        stock_feature_timestamp = str(
+            market.get("feature_as_of_timestamp") or market.get("as_of_date") or decision_date
+        )
+        feature_timestamps = {name: stock_feature_timestamp for name in features}
+        for feature, context_symbol, field in (
+            ("spy_return_20d", "SPY", "return_20d"),
+            ("qqq_return_20d", "QQQ", "return_20d"),
+            ("vix_close", "^VIX", "close"),
+        ):
+            value = _safe_float((context.get(context_symbol) or {}).get(field))
+            if value is not None and math.isfinite(value):
+                features[feature] = float(value)
+                context_item = context.get(context_symbol) or {}
+                feature_timestamps[feature] = str(
+                    context_item.get("feature_as_of_timestamp")
+                    or context_item.get("as_of_date")
+                    or context_item.get("date")
+                    or decision_date
+                )
+        if not features:
+            raise ValueError(f"No point-in-time numerical features are available for {symbol}.")
+        return PointInTimeSnapshot(
+            symbol=symbol,
+            decision_timestamp=decision_date,
+            as_of_timestamp=decision_date,
+            features=features,
+            feature_timestamps=feature_timestamps,
+        )
+
+    def _mature_due_online_experiences(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        run_id: str,
+        as_of: str,
+        estimator: CalibratedOnlineRiskOffEstimator,
+    ) -> int:
+        if config.outcome_learning_mode != "counterfactual_online":
+            return 0
+        matured = 0
+        for pending in memory.due_pending_experiences(as_of=as_of, limit=500):
+            metadata = pending.get("metadata") or {}
+            entry_timestamp = str(metadata.get("entry_timestamp") or "")
+            entry_price = _safe_float(metadata.get("entry_price"))
+            horizon = int(_safe_float(metadata.get("horizon_days")) or config.online_learning_horizon_days)
+            symbol = str(pending.get("symbol") or config.symbol).upper()
+            resolved_outcome = self._resolve_online_outcome(
+                config,
+                symbol,
+                entry_timestamp,
+                horizon,
+                as_of,
+                entry_price_basis=str(metadata.get("entry_price_basis") or ""),
+            )
+            if not resolved_outcome:
+                continue
+            (
+                outcome_timestamp,
+                exit_price,
+                outcome_source,
+                entry_rebase_factor,
+                cumulative_split_factor,
+            ) = resolved_outcome
+            if entry_price is None or entry_price <= 0 or exit_price is None or exit_price <= 0:
+                continue
+            label_entry_price = float(entry_price)
+            if metadata.get("entry_price_basis") == "raw_live_quote" and self._historical_fill_field(config) == "adjusted_open":
+                if entry_rebase_factor is None or entry_rebase_factor <= 0:
+                    continue
+                label_entry_price *= float(entry_rebase_factor)
+            try:
+                snapshot = PointInTimeSnapshot(
+                    symbol=symbol,
+                    decision_timestamp=str(pending.get("decision_timestamp")),
+                    as_of_timestamp=str(pending.get("decision_timestamp")),
+                    features=pending.get("state_features") or {},
+                )
+                lesson = create_matured_lesson(
+                    snapshot,
+                    [
+                        PricePoint(timestamp=entry_timestamp, price=label_entry_price),
+                        PricePoint(timestamp=outcome_timestamp, price=exit_price),
+                    ],
+                    cost_model=CounterfactualCostModel(
+                        transaction_cost_bps=float(config.slippage_bps),
+                    ),
+                    knowledge_timestamp=as_of,
+                )
+            except (TypeError, ValueError):
+                continue
+            content = (
+                f"{symbol} counterfactual lesson from {snapshot.decision_timestamp}, "
+                f"known {lesson.knowledge_timestamp}: LONG={lesson.outcomes.long.net_return:+.2%}, "
+                f"CASH={lesson.outcomes.cash.net_return:+.2%}, "
+                f"cash active={lesson.cash_active_return:+.2%}."
+            )
+            storage_knowledge_timestamp = str(as_of)
+            memory_id = memory.add(
+                portfolio_scope=config.mode,
+                symbol=symbol,
+                decision_timestamp=snapshot.decision_timestamp,
+                knowledge_timestamp=storage_knowledge_timestamp,
+                source_run_id=run_id,
+                memory_type="counterfactual_online_lesson",
+                content=content,
+                outcome_horizon=f"{horizon}d",
+                outcome_available_at=storage_knowledge_timestamp,
+                metadata={
+                    **metadata,
+                    "matured_lesson": lesson.to_dict(),
+                    "outcome_timestamp": outcome_timestamp,
+                    "knowledge_timestamp": lesson.knowledge_timestamp,
+                    "outcome_price_source": outcome_source,
+                    "execution_entry_price": entry_price,
+                    "label_entry_price": label_entry_price,
+                    "entry_adjustment_factor": entry_rebase_factor,
+                    "entry_rebase_factor": entry_rebase_factor,
+                    "cumulative_split_factor": cumulative_split_factor,
+                },
+                state_features=dict(snapshot.features),
+                counterfactual_outcomes=lesson.outcomes.to_dict(),
+                pending_experience_id=int(pending["id"]),
+            )
+            memory.mark_experience_matured(
+                int(pending["id"]),
+                matured_at=storage_knowledge_timestamp,
+                counterfactual_outcomes=lesson.outcomes.to_dict(),
+                matured_memory_id=memory_id,
+            )
+            if not any(item.lesson_id == lesson.lesson_id for item in estimator.lessons):
+                estimator.update(lesson)
+            matured += 1
+        return matured
+
+    def _resolve_online_outcome(
+        self,
+        config: BenchmarkConfig,
+        symbol: str,
+        entry_timestamp: str,
+        horizon: int,
+        as_of: str,
+        *,
+        entry_price_basis: str = "",
+    ) -> tuple[str, float, str, float | None, float] | None:
+        """Resolve the exact later trading-session open without future leakage."""
+
+        expression = (
+            "open * adj_close / NULLIF(close, 0)"
+            if self._historical_fill_field(config) == "adjusted_open"
+            else "open"
+        )
+        rows = self.warehouse.conn.execute(
+            f"""
+            SELECT date, {expression} AS price
+            FROM asset_daily
+            WHERE symbol = ?
+              AND date > CAST(? AS DATE)
+              AND date <= CAST(? AS DATE)
+              AND market_open = true
+              AND ohlcv_available = true
+              AND ({expression}) > 0
+            ORDER BY date
+            LIMIT ?
+            """,
+            [symbol, entry_timestamp[:10], as_of[:10], int(horizon)],
+        ).fetchall()
+        entry_adjustment_factor = None
+        raw_live_adjusted = (
+            entry_price_basis == "raw_live_quote"
+            and self._historical_fill_field(config) == "adjusted_open"
+        )
+        if self._historical_fill_field(config) == "adjusted_open":
+            entry_row = self.warehouse.conn.execute(
+                """
+                SELECT adj_close / NULLIF(close, 0)
+                FROM asset_daily
+                WHERE symbol = ? AND date = CAST(? AS DATE)
+                  AND ohlcv_available = true
+                """,
+                [symbol, entry_timestamp[:10]],
+            ).fetchone()
+            entry_adjustment_factor = _safe_float(entry_row[0]) if entry_row else None
+        if not raw_live_adjusted and len(rows) >= int(horizon) and (
+            self._historical_fill_field(config) != "adjusted_open"
+            or entry_adjustment_factor is not None
+        ):
+            return self._date(rows[-1][0]), float(rows[-1][1]), "warehouse", entry_adjustment_factor, 1.0
+
+        # Historical replays are deliberately local and deterministic.  A
+        # durable live stream may use the same free Yahoo source as the live
+        # snapshot to fill a gap when the local warehouse has not been refreshed.
+        if not config.memory_online_stream_id:
+            return None
+        try:
+            import yfinance as yf
+
+            start = datetime.fromisoformat(entry_timestamp[:10]).date().isoformat()
+            end = (datetime.fromisoformat(as_of[:10]) + timedelta(days=1)).date().isoformat()
+            frame = yf.download(
+                symbol,
+                start=start,
+                end=end,
+                interval="1d",
+                auto_adjust=False,
+                actions=True,
+                progress=False,
+                threads=False,
+            )
+            frame = self._yf_symbol_frame(frame, symbol, [symbol])
+            if frame.empty:
+                return None
+            if raw_live_adjusted and "stock_splits" not in frame.columns:
+                # Without explicit action data we cannot know whether Yahoo
+                # retrospectively restated historical OHLC after a split.
+                return None
+            entry_date = entry_timestamp[:10]
+            entry_rows = frame[[str(value)[:10] == entry_date for value in frame.index]]
+            outcome_rows = frame[[str(value)[:10] > entry_date for value in frame.index]]
+            if entry_rows.empty or len(outcome_rows) < int(horizon):
+                return None
+            entry_row = entry_rows.iloc[-1]
+            row = outcome_rows.iloc[int(horizon) - 1]
+            open_price = _safe_float(row.get("open"))
+            close_price = _safe_float(row.get("close"))
+            adjusted_close = _safe_float(row.get("adj_close"))
+            if open_price is None or open_price <= 0:
+                return None
+            price = open_price
+            if self._historical_fill_field(config) == "adjusted_open":
+                if close_price is None or close_price <= 0 or adjusted_close is None or adjusted_close <= 0:
+                    return None
+                price = open_price * adjusted_close / close_price
+                entry_close = _safe_float(entry_row.get("close"))
+                entry_adjusted_close = _safe_float(entry_row.get("adj_close"))
+                if entry_close is None or entry_close <= 0 or entry_adjusted_close is None:
+                    return None
+                entry_adjustment_factor = entry_adjusted_close / entry_close
+            cumulative_split_factor = 1.0
+            if raw_live_adjusted:
+                for action_index, action_row in frame.sort_index().iterrows():
+                    action_date = str(action_index)[:10]
+                    if not (entry_date < action_date <= as_of[:10]):
+                        continue
+                    split = _safe_float(action_row.get("stock_splits")) or 0.0
+                    if split > 0:
+                        cumulative_split_factor *= float(split)
+                if cumulative_split_factor <= 0 or entry_adjustment_factor is None:
+                    return None
+                entry_adjustment_factor /= cumulative_split_factor
+            return (
+                self._date(outcome_rows.index[int(horizon) - 1]),
+                float(price),
+                "yfinance_live_backfill",
+                entry_adjustment_factor,
+                cumulative_split_factor,
+            )
+        except Exception:
+            return None
+
+    def _queue_online_experience(
+        self,
+        memory: HybridMemory,
+        config: BenchmarkConfig,
+        run_id: str,
+        phase: str,
+        snapshot: PointInTimeSnapshot,
+        fill_date: str,
+        fill_prices: Dict[str, float],
+        stage2_output: Dict[str, Any],
+        execution: Dict[str, Any] | None = None,
+    ) -> int | None:
+        if config.outcome_learning_mode != "counterfactual_online":
+            return None
+        if phase == "test" and not config.online_test_learning:
+            return None
+        symbol = snapshot.symbol
+        entry_price = _safe_float(fill_prices.get(symbol))
+        if entry_price is None or entry_price <= 0:
+            return None
+        horizon = int(config.online_learning_horizon_days)
+        outcome_date = self._nth_trading_date_after(fill_date, horizon)
+        if not outcome_date:
+            # Live data cannot contain future exchange sessions.  Use the
+            # earliest weekday estimate and retry until the resolver observes
+            # the exact number of later market sessions.  Holidays can make
+            # this estimate early, but never make a lesson mature early.
+            outcome_date = pd.bdate_range(
+                start=datetime.fromisoformat(fill_date[:10]).date(),
+                periods=horizon + 1,
+            )[-1].date().isoformat()
+        return memory.add_pending_experience(
+            source_run_id=run_id,
+            portfolio_scope=config.mode,
+            symbol=symbol,
+            decision_timestamp=str(snapshot.decision_timestamp),
+            outcome_available_at=outcome_date,
+            outcome_horizon=f"{horizon}d",
+            chosen_action=str(stage2_output.get("executed_action") or stage2_output.get("action") or "HOLD"),
+            state_features=dict(snapshot.features),
+            metadata={
+                "phase": phase,
+                "entry_timestamp": fill_date,
+                "entry_price": float(entry_price),
+                "entry_price_basis": (
+                    "raw_live_quote"
+                    if phase == "live"
+                    else self._historical_fill_field(config)
+                ),
+                "horizon_days": horizon,
+                "requested_action": stage2_output.get("requested_action") or stage2_output.get("action"),
+                "executed_action": stage2_output.get("executed_action") or stage2_output.get("action"),
+                "policy_candidate_action": stage2_output.get("policy_candidate_action") or stage2_output.get("action"),
+                "schedule_state": stage2_output.get("_schedule_state") or {},
+                "trade_executed": bool((execution or {}).get("trades")),
+                "snapshot": snapshot.to_dict(),
+            },
+        )
+
+    def _decision_schedule(
+        self,
+        config: BenchmarkConfig,
+        phase: str,
+        bundle: Dict[str, Any],
+        decisions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        decision_date = str(bundle.get("decision_date") or "")[:10]
+        symbol = str(config.symbol or "AAPL").upper()
+        snapshot = (bundle.get("market_snapshots") or {}).get(symbol) or {}
+        state = {
+            "drawdown_60d": _safe_float(snapshot.get("drawdown_60d")),
+            "volatility_20d": _safe_float(snapshot.get("volatility_20d")),
+            "return_5d": _safe_float(snapshot.get("return_5d")),
+        }
+        if config.decision_cadence == "daily":
+            return {
+                "call_model": True,
+                "reason": "daily",
+                "event_reasons": [],
+                "decision_date": decision_date,
+                **state,
+            }
+        phase_records = [item for item in decisions if item.get("phase") == phase]
+        model_records = [
+            item
+            for item in phase_records
+            if (item.get("decision_kind") or (item.get("stage2_output") or {}).get("decision_kind"))
+            != "cadence_hold"
+        ]
+        if not model_records:
+            return {
+                "call_model": True,
+                "reason": "phase_start",
+                "event_reasons": [],
+                "decision_date": decision_date,
+                **state,
+            }
+        last_model_date = str(model_records[-1].get("decision_date") or "")[:10]
+        current_week = datetime.fromisoformat(decision_date).date().isocalendar()[:2]
+        previous_week = datetime.fromisoformat(last_model_date).date().isocalendar()[:2]
+        weekly_boundary = current_week != previous_week
+        previous_state = (
+            ((phase_records[-1].get("stage2_output") or {}).get("_schedule_state") or {})
+            if phase_records
+            else {}
+        )
+        event_reasons: List[str] = []
+        drawdown = state["drawdown_60d"]
+        prior_drawdown = _safe_float(previous_state.get("drawdown_60d"))
+        if (
+            drawdown is not None
+            and drawdown <= float(config.event_drawdown_trigger)
+            and (prior_drawdown is None or prior_drawdown > float(config.event_drawdown_trigger))
+        ):
+            event_reasons.append("drawdown_threshold_crossed")
+        volatility = state["volatility_20d"]
+        prior_volatility = _safe_float(previous_state.get("volatility_20d"))
+        if (
+            volatility is not None
+            and volatility >= float(config.event_volatility_trigger)
+            and (prior_volatility is None or prior_volatility < float(config.event_volatility_trigger))
+        ):
+            event_reasons.append("volatility_threshold_crossed")
+        call_model = bool(weekly_boundary or event_reasons)
+        return {
+            "call_model": call_model,
+            "reason": "event" if event_reasons else ("weekly_boundary" if weekly_boundary else "cadence_hold"),
+            "event_reasons": event_reasons,
+            "decision_date": decision_date,
+            **state,
+        }
+
+    def _online_experience_decisions(self, memory: HybridMemory) -> List[Dict[str, Any]]:
+        """Rehydrate durable model-decision state across live process restarts."""
+
+        decisions: List[Dict[str, Any]] = []
+        for item in reversed(memory.recent_experiences(limit=100)):
+            metadata = item.get("metadata") or {}
+            action = str(metadata.get("executed_action") or item.get("chosen_action") or "HOLD")
+            stage2 = {
+                "action": action,
+                "requested_action": metadata.get("requested_action") or action,
+                "executed_action": action,
+                "policy_candidate_action": metadata.get("policy_candidate_action") or action,
+                "decision_kind": "model_decision",
+                "_schedule_state": metadata.get("schedule_state") or {},
+            }
+            decisions.append(
+                {
+                    "phase": metadata.get("phase") or "live",
+                    "decision_date": item.get("decision_timestamp"),
+                    "fill_date": metadata.get("entry_timestamp") or item.get("decision_timestamp"),
+                    "decision_kind": "model_decision",
+                    "stage2_output": stage2,
+                    "execution": {"trades": [{}]} if metadata.get("trade_executed") else {"trades": []},
+                }
+            )
+        return decisions
+
+    def _cadence_hold_output(
+        self,
+        symbols: List[str],
+        manager_bundle: Dict[str, Any],
+        schedule: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        output = self._stage2_fallback(symbols, manager_bundle)
+        symbol = symbols[0] if symbols else "AAPL"
+        current = _safe_float((manager_bundle.get("current_position_weights") or {}).get(symbol)) or 0.0
+        output.update(
+            {
+                "action": "HOLD",
+                "target_exposure": float(current),
+                "target_weights": {symbol: float(current)} if abs(current) > 1e-9 else {},
+                "gross_exposure": abs(float(current)),
+                "net_exposure": float(current),
+                "cash_weight": 1.0 - abs(float(current)),
+                "cash_target_weight": 1.0 - abs(float(current)),
+                "estimated_turnover": 0.0,
+                "estimated_slippage_cost_bps": 0.0,
+                "rebalance_reason": "scheduled_cadence_hold",
+                "portfolio_thesis": "No scheduled Gemma call; preserve the current long/cash state.",
+                "_api_status": "cadence_hold",
+                "schedule": schedule,
+                "requested_action": "HOLD",
+                "executed_action": "HOLD",
+            }
+        )
+        return output
+
+    def _apply_online_policy_gate(
+        self,
+        config: BenchmarkConfig,
+        output: Dict[str, Any],
+        manager_bundle: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        gated = dict(output or {})
+        requested = str(gated.get("requested_action") or gated.get("action") or "").strip().upper()
+        candidate_action = str(gated.get("action") or "").strip().upper()
+        gated["requested_action"] = requested
+        if not config.online_policy_enabled or config.single_stock_action_space != "long_cash_hold":
+            return gated
+        support = manager_bundle.get("online_policy") or {}
+        symbol = str(manager_bundle.get("target_exposure_symbol") or config.symbol).upper()
+        current = _safe_float((manager_bundle.get("current_position_weights") or {}).get(symbol)) or 0.0
+        recommendation = str(support.get("recommended_action") or "HOLD").upper()
+        if candidate_action == "CASH_ALL" and recommendation != "CASH_ALL":
+            replacement = "HOLD" if current > 0.05 else "BUY_ALL"
+            gated["action"] = replacement
+            gated["online_policy_gate"] = {
+                "blocked_action": "CASH_ALL",
+                "executed_candidate": replacement,
+                "reason": (
+                    "cash_requires_positive_confident_after_cost_active_advantage"
+                    if current > 0.05
+                    else "remaining_in_cash_requires_the_same_positive_active_edge_as_entering_cash"
+                ),
+                "recommended_action": recommendation,
+                "cash_outperformance_probability": support.get("cash_outperformance_probability"),
+                "expected_active_return": support.get("expected_active_return"),
+                "lower_bound": support.get("lower_bound"),
+                "confidence": support.get("confidence"),
+            }
+        elif candidate_action == "HOLD" and current <= 0.05 and recommendation != "CASH_ALL":
+            gated["action"] = "BUY_ALL"
+            gated["online_policy_gate"] = {
+                "blocked_action": "HOLD_IN_CASH",
+                "executed_candidate": "BUY_ALL",
+                "reason": "remaining_in_cash_requires_the_same_positive_active_edge_as_entering_cash",
+                "recommended_action": recommendation,
+                "cash_outperformance_probability": support.get("cash_outperformance_probability"),
+                "expected_active_return": support.get("expected_active_return"),
+                "lower_bound": support.get("lower_bound"),
+                "confidence": support.get("confidence"),
+            }
+        if gated.get("action") == "BUY_ALL" and (gated.get("online_policy_gate") or {}).get("blocked_action") in {
+            "CASH_ALL",
+            "HOLD_IN_CASH",
+        }:
+            # This is the safety/default policy restoring buy-and-hold, not a
+            # discretionary regime switch.  Hysteresis must never preserve an
+            # unsupported cash position by delaying it.
+            gated["_policy_gate_forced_baseline"] = True
+        return gated
+
+    def _apply_action_hysteresis(
+        self,
+        config: BenchmarkConfig,
+        phase: str,
+        output: Dict[str, Any],
+        manager_bundle: Dict[str, Any],
+        decisions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        resolved = dict(output or {})
+        if config.single_stock_action_space != "long_cash_hold":
+            return resolved
+        symbol = str(manager_bundle.get("target_exposure_symbol") or config.symbol).upper()
+        current = _safe_float((manager_bundle.get("current_position_weights") or {}).get(symbol)) or 0.0
+        current_action = "BUY_ALL" if current > 0.5 * float(config.max_gross_exposure) else "CASH_ALL"
+        candidate = str(
+            resolved.get("policy_candidate_action") or resolved.get("action") or "HOLD"
+        ).strip().upper()
+        requested = str(resolved.get("requested_action") or candidate).strip().upper()
+        resolved["requested_action"] = requested
+        resolved["policy_candidate_action"] = candidate
+        if resolved.get("_policy_gate_forced_baseline") and candidate == "BUY_ALL":
+            resolved["action"] = "BUY_ALL"
+            resolved["executed_action"] = "BUY_ALL"
+            resolved["hysteresis"] = {
+                "status": "policy_gate_forced_baseline",
+                "current_action": current_action,
+                "candidate_action": candidate,
+                "confirmations": 1,
+                "required_confirmations": 0,
+                "holding_days": 0,
+                "required_holding_days": 0,
+            }
+            return resolved
+        if candidate not in {"CASH_ALL", "HOLD", "BUY_ALL"}:
+            resolved["executed_action"] = candidate
+            return resolved
+        if candidate == "HOLD" or candidate == current_action:
+            resolved["executed_action"] = candidate
+            return resolved
+
+        phase_records = [item for item in decisions if item.get("phase") == phase]
+        prior_model = [
+            item
+            for item in phase_records
+            if (item.get("decision_kind") or (item.get("stage2_output") or {}).get("decision_kind"))
+            != "cadence_hold"
+        ]
+        # Start from the buy-and-hold baseline immediately.  Later regime
+        # switches need both time in state and repeated independent calls.
+        if not prior_model and current_action == "CASH_ALL" and candidate == "BUY_ALL":
+            resolved["executed_action"] = "BUY_ALL"
+            resolved["hysteresis"] = {"status": "initial_buy_hold_baseline", "confirmations": 1}
+            return resolved
+
+        confirmations = 1
+        for record in reversed(prior_model):
+            prior = record.get("stage2_output") or {}
+            prior_candidate = str(
+                prior.get("policy_candidate_action") or prior.get("executed_action") or prior.get("action") or ""
+            ).upper()
+            if prior_candidate != candidate:
+                break
+            confirmations += 1
+        last_trade_index = -1
+        last_trade_date = ""
+        for index, record in enumerate(phase_records):
+            if (record.get("execution") or {}).get("trades"):
+                last_trade_index = index
+                last_trade_date = str(record.get("fill_date") or record.get("decision_date") or "")[:10]
+        holding_days = len(phase_records) - last_trade_index - 1 if last_trade_index >= 0 else len(phase_records)
+        current_date = str(manager_bundle.get("decision_date") or "")[:10]
+        if last_trade_date and current_date:
+            try:
+                elapsed_business_days = max(0, len(pd.bdate_range(last_trade_date, current_date)) - 1)
+                holding_days = max(holding_days, elapsed_business_days)
+            except Exception:
+                pass
+        required_confirmations = int(config.action_hysteresis_confirmations)
+        required_holding = int(config.minimum_holding_days)
+        allowed = confirmations >= required_confirmations and holding_days >= required_holding
+        resolved["hysteresis"] = {
+            "status": "confirmed" if allowed else "deferred",
+            "current_action": current_action,
+            "candidate_action": candidate,
+            "confirmations": confirmations,
+            "required_confirmations": required_confirmations,
+            "holding_days": holding_days,
+            "required_holding_days": required_holding,
+        }
+        if allowed:
+            resolved["action"] = candidate
+            resolved["executed_action"] = candidate
+            return resolved
+        resolved["action"] = "HOLD"
+        resolved["executed_action"] = "HOLD"
+        return resolved
+
+    def _filter_memory(
+        self,
+        memories: List[Dict[str, Any]],
+        symbols: set[str],
+        *,
+        limit: int,
+        include_structured: bool = False,
+    ) -> List[Dict[str, Any]]:
         filtered = []
         for item in memories:
             symbol = item.get("symbol") or ""
@@ -1318,17 +2575,45 @@ class BenchmarkEngine:
             content = str(item.get("content") or "")
             if len(content) > 260:
                 content = content[:257].rstrip() + "..."
-            filtered.append(
-                {
-                    "id": item.get("id"),
-                    "memory_type": item.get("memory_type"),
-                    "symbol": symbol,
-                    "decision_timestamp": item.get("decision_timestamp"),
-                    "knowledge_timestamp": item.get("knowledge_timestamp"),
-                    "content": content,
-                    "retrieval_score": item.get("retrieval_score"),
-                }
-            )
+            compact = {
+                "id": item.get("id"),
+                "memory_type": item.get("memory_type"),
+                "symbol": symbol,
+                "decision_timestamp": item.get("decision_timestamp"),
+                "knowledge_timestamp": item.get("knowledge_timestamp"),
+                "source_run_id": item.get("source_run_id"),
+                "memory_layer": item.get("memory_layer"),
+                "memory_namespace": item.get("memory_namespace"),
+                "online_stream_id": item.get("online_stream_id"),
+                "content": content,
+                "retrieval_score": item.get("retrieval_score"),
+            }
+            if include_structured:
+                compact_features: Dict[str, float] = {}
+                for name in sorted((item.get("state_features") or {})):
+                    value = _safe_float((item.get("state_features") or {}).get(name))
+                    if value is None or not math.isfinite(value):
+                        continue
+                    compact_features[str(name)] = float(value)
+                    if len(compact_features) >= 20:
+                        break
+                compact["state_features"] = compact_features
+                outcomes = item.get("counterfactual_outcomes") or {}
+                compact_outcomes: Dict[str, Any] = {}
+                cash_active = _safe_float(outcomes.get("cash_active_return"))
+                if cash_active is not None:
+                    compact_outcomes["cash_active_return"] = float(cash_active)
+                for action in ("LONG", "CASH", "SHORT"):
+                    raw_action = outcomes.get(action) or {}
+                    action_values: Dict[str, float] = {}
+                    for field in ("gross_return", "net_return", "total_cost"):
+                        value = _safe_float(raw_action.get(field))
+                        if value is not None:
+                            action_values[field] = float(value)
+                    if action_values:
+                        compact_outcomes[action] = action_values
+                compact["counterfactual_outcomes"] = compact_outcomes
+            filtered.append(compact)
             if len(filtered) >= limit:
                 break
         return filtered
@@ -1551,6 +2836,7 @@ class BenchmarkEngine:
         dry_run: bool,
     ) -> Dict[str, Any]:
         query = json.dumps({"phase": "live", "timestamp": decision_timestamp, "portfolio": model_to_dict(book), "market": market}, default=str)[:6000]
+        online_memories: List[Dict[str, Any]] = []
         if config.memory_mode == "deterministic_market_cases":
             memories = self.deterministic_memory.retrieve(
                 config,
@@ -1561,8 +2847,20 @@ class BenchmarkEngine:
                 max_items=config.deterministic_memory_max_items,
             )
             memories.extend(self._diagnostic_lesson_memories(memory, config, decision_timestamp, query, limit=6))
+            if config.outcome_learning_mode == "counterfactual_online":
+                online_memories = [
+                    item
+                    for item in memory.retrieve(decision_timestamp=decision_timestamp, limit=50)
+                    if item.get("memory_type") == "counterfactual_online_lesson"
+                ][:6]
+                memories.extend(online_memories)
         else:
             memories = memory.retrieve(decision_timestamp=decision_timestamp, query=query, limit=14)
+            online_memories = [
+                item
+                for item in memories
+                if item.get("memory_type") == "counterfactual_online_lesson"
+            ]
         live_news, live_news_quality = self._live_news(config, secrets, symbols, decision_date, dry_run=dry_run)
         fundamentals, fundamental_quality = self._fundamentals(symbols, decision_date)
         macro = self._macro(config, decision_date)
@@ -1579,11 +2877,19 @@ class BenchmarkEngine:
             "phase": "live",
             "decision_date": decision_timestamp,
             "fill_date": decision_timestamp,
-            "information_cutoff": f"Only information available on or before {decision_timestamp} may be used. The paper trade fills at the latest available live price.",
+            "information_cutoff": (
+                f"Only completed daily information available before {decision_timestamp} may be used. "
+                "The current-session execution quote is fetched only after the decision payload is finalized "
+                "and is never shown to the model."
+            ),
             "candidate_universe": self._symbol_metadata(symbols),
             "portfolio_state": model_to_dict(book),
             "market_snapshots": market,
-            "index_context": self._live_context(config, source_status),
+            "index_context": self._live_context(
+                config,
+                source_status,
+                decision_time=datetime.fromisoformat(decision_timestamp),
+            ),
             "fundamentals": fundamentals,
             "fundamental_quality": fundamental_quality,
             "macro_context": macro,
@@ -1598,9 +2904,16 @@ class BenchmarkEngine:
                 "warnings": self._input_quality_warnings(macro, live_news_quality, fundamental_quality),
             },
             "memory": memories,
+            "recent_online_lessons": online_memories,
             "benchmark_rules": {
-                "model_owns_decision": True,
-                "simulator_role": "mechanics_only",
+                "model_owns_decision": not config.online_policy_enabled,
+                "model_proposes_action": True,
+                "simulator_role": "mechanics_and_declared_online_cash_gate" if config.online_policy_enabled else "mechanics_only",
+                "online_cash_gate": {
+                    "enabled": config.online_policy_enabled,
+                    "authority": "permission_not_forced_trade",
+                    "rule": "CASH_ALL may be blocked unless mature empirical evidence shows positive after-cost active advantage.",
+                },
                 "allow_short": config.allow_short,
                 "max_gross_exposure": config.max_gross_exposure,
                 "max_nonzero_positions": config.max_nonzero_positions,
@@ -1608,16 +2921,25 @@ class BenchmarkEngine:
                 "turnover_edge_multiplier": config.turnover_edge_multiplier,
                 "turnover_prompt_buffer": config.turnover_prompt_buffer,
                 "slippage_bps": config.slippage_bps,
-                "fill_timing": "live_latest_price",
+                "fill_timing": "post_decision_current_session_quote",
                 "opportunity_cost_policy": config.opportunity_cost_policy,
                 "exposure_critic_enabled": config.exposure_critic_enabled,
                 "outcome_learning_mode": config.outcome_learning_mode,
+                "decision_cadence": config.decision_cadence,
+                "minimum_holding_days": config.minimum_holding_days,
+                "action_hysteresis_confirmations": config.action_hysteresis_confirmations,
             },
         }
         payload["decision_support"] = self._decision_support(payload)
         return payload
 
-    def _live_market_snapshots(self, symbols: List[str]) -> tuple[Dict[str, Any], Dict[str, float], List[Dict[str, Any]]]:
+    def _live_market_snapshots(
+        self,
+        symbols: List[str],
+        config: BenchmarkConfig | None = None,
+        *,
+        decision_time: datetime | None = None,
+    ) -> tuple[Dict[str, Any], Dict[str, float], List[Dict[str, Any]]]:
         snapshots: Dict[str, Any] = {}
         prices: Dict[str, float] = {}
         status: List[Dict[str, Any]] = []
@@ -1626,21 +2948,118 @@ class BenchmarkEngine:
         try:
             import yfinance as yf
 
-            daily = yf.download(" ".join(symbols), period="6mo", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
-            intraday = yf.download(" ".join(symbols), period="1d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+            daily = yf.download(" ".join(symbols), period="2y", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
             for symbol in symbols:
                 day_frame = self._yf_symbol_frame(daily, symbol, symbols)
-                intra_frame = self._yf_symbol_frame(intraday, symbol, symbols)
-                snapshot = self._snapshot_from_live_frames(symbol, day_frame, intra_frame)
+                snapshot = self._snapshot_from_live_frames(
+                    symbol,
+                    day_frame,
+                    pd.DataFrame(),
+                    adjusted=getattr(config, "historical_price_basis", "legacy") == "adjusted",
+                    decision_time=decision_time,
+                )
                 if snapshot:
                     snapshots[symbol] = snapshot
                     prices[symbol] = float(snapshot["close"])
-                    status.append({"symbol": symbol, "source": "yfinance", "status": "ok", "as_of": snapshot.get("as_of_timestamp")})
+                    status.append({"symbol": symbol, "source": "yfinance_completed_daily", "status": "ok", "as_of": snapshot.get("as_of_timestamp")})
                 else:
                     status.append({"symbol": symbol, "source": "yfinance", "status": "missing"})
         except Exception as exc:
             status.append({"source": "yfinance", "status": "error", "message": str(exc)})
         return snapshots, prices, status
+
+    def _live_execution_prices(
+        self,
+        symbols: List[str],
+        *,
+        decision_time: datetime,
+        observed_at: datetime | None = None,
+        maximum_age_minutes: int = 1,
+    ) -> tuple[Dict[str, float], List[Dict[str, Any]]]:
+        """Fetch executable paper quotes after inference and reject stale sessions."""
+
+        prices: Dict[str, float] = {}
+        status: List[Dict[str, Any]] = []
+        if not symbols:
+            return prices, status
+        finalized = decision_time
+        if finalized.tzinfo is None:
+            finalized = finalized.astimezone()
+        finalized_ny = pd.Timestamp(finalized).tz_convert("America/New_York")
+        try:
+            import yfinance as yf
+
+            raw = yf.download(
+                " ".join(symbols),
+                period="1d",
+                interval="1m",
+                group_by="ticker",
+                auto_adjust=False,
+                prepost=False,
+                progress=False,
+                threads=True,
+            )
+            fetched = observed_at or self._current_ny_time()
+            if fetched.tzinfo is None:
+                fetched = fetched.astimezone()
+            expected_ny = pd.Timestamp(fetched).tz_convert("America/New_York")
+            if expected_ny < finalized_ny:
+                raise ValueError("Execution observation cannot precede decision finalization.")
+            for symbol in symbols:
+                frame = self._yf_symbol_frame(raw, symbol, symbols)
+                if frame.empty or "close" not in frame.columns:
+                    status.append({"symbol": symbol, "source": "yfinance_intraday_execution", "status": "missing"})
+                    continue
+                frame = frame.dropna(subset=["close"]).sort_index()
+                if frame.empty:
+                    status.append({"symbol": symbol, "source": "yfinance_intraday_execution", "status": "missing"})
+                    continue
+                quote_timestamp = pd.Timestamp(frame.index[-1])
+                if quote_timestamp.tzinfo is None:
+                    quote_timestamp = quote_timestamp.tz_localize("America/New_York")
+                else:
+                    quote_timestamp = quote_timestamp.tz_convert("America/New_York")
+                age_seconds = float((expected_ny - quote_timestamp).total_seconds())
+                minute_of_day = quote_timestamp.hour * 60 + quote_timestamp.minute
+                expected_minute = expected_ny.hour * 60 + expected_ny.minute
+                current_bar_floor = expected_ny.floor("min")
+                valid_session = (
+                    quote_timestamp.date() == expected_ny.date()
+                    and 9 * 60 + 30 <= expected_minute <= 10 * 60
+                    and 9 * 60 + 30 <= minute_of_day <= 10 * 60
+                    and quote_timestamp >= current_bar_floor
+                    and -5.0 <= age_seconds <= float(maximum_age_minutes * 60)
+                )
+                if not valid_session:
+                    status.append(
+                        {
+                            "symbol": symbol,
+                            "source": "yfinance_intraday_execution",
+                            "status": "stale_or_future",
+                            "quote_timestamp": quote_timestamp.isoformat(),
+                            "decision_finalized_at": finalized_ny.isoformat(),
+                            "observed_at": expected_ny.isoformat(),
+                        }
+                    )
+                    continue
+                price = _safe_float(frame.iloc[-1].get("close"))
+                if price is None or price <= 0:
+                    status.append({"symbol": symbol, "source": "yfinance_intraday_execution", "status": "invalid_price"})
+                    continue
+                prices[symbol] = float(price)
+                status.append(
+                    {
+                        "symbol": symbol,
+                        "source": "yfinance_intraday_execution",
+                        "status": "ok",
+                        "quote_timestamp": quote_timestamp.isoformat(),
+                        "decision_finalized_at": finalized_ny.isoformat(),
+                        "observed_at": expected_ny.isoformat(),
+                    }
+                )
+        except Exception as exc:
+            status.append({"source": "yfinance_intraday_execution", "status": "error", "message": str(exc)})
+        return prices, status
 
     def _yf_symbol_frame(self, raw: pd.DataFrame, symbol: str, symbols: List[str]) -> pd.DataFrame:
         if raw is None or raw.empty:
@@ -1666,51 +3085,117 @@ class BenchmarkEngine:
             frame["adj_close"] = frame["adj_close"]
         return frame.dropna(how="all")
 
-    def _snapshot_from_live_frames(self, symbol: str, daily: pd.DataFrame, intraday: pd.DataFrame) -> Dict[str, Any] | None:
+    def _snapshot_from_live_frames(
+        self,
+        symbol: str,
+        daily: pd.DataFrame,
+        intraday: pd.DataFrame,
+        *,
+        adjusted: bool = False,
+        decision_time: datetime | None = None,
+    ) -> Dict[str, Any] | None:
         if daily is None or daily.empty or "close" not in daily.columns:
             return None
         daily = daily.dropna(subset=["close"]).sort_index()
         if daily.empty:
             return None
         intraday = intraday.dropna(subset=["close"]).sort_index() if intraday is not None and not intraday.empty and "close" in intraday.columns else pd.DataFrame()
-        latest_bar = intraday.iloc[-1] if not intraday.empty else daily.iloc[-1]
-        latest_index = intraday.index[-1] if not intraday.empty else daily.index[-1]
-        closes = daily["close"].astype(float)
-        current = _safe_float(latest_bar.get("close")) or float(closes.iloc[-1])
-        previous_close = float(closes.iloc[-2]) if len(closes) > 1 else current
+        completed = daily
+        if decision_time is not None:
+            cutoff = decision_time
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.astimezone()
+            cutoff_date = cutoff.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+            completed = daily[[str(value)[:10] < cutoff_date for value in daily.index]]
+        elif not intraday.empty and len(daily) > 1:
+            live_date = str(intraday.index[-1])[:10]
+            if str(daily.index[-1])[:10] == live_date:
+                completed = daily.iloc[:-1]
+        price_column = "adj_close" if adjusted and "adj_close" in completed.columns else "close"
+        completed = completed.dropna(subset=[price_column])
+        if completed.empty:
+            return None
+        closes = completed[price_column].astype(float)
+        feature_current = float(closes.iloc[-1])
+        previous_close = float(closes.iloc[-2]) if len(closes) > 1 else feature_current
+        raw_previous_close = float(completed["close"].dropna().iloc[-1])
+        volumes = completed["volume"].astype(float) if "volume" in completed.columns else pd.Series(dtype=float)
 
         def trailing(days: int) -> float | None:
             if len(closes) <= days:
                 return None
             base = float(closes.iloc[-days - 1])
-            return current / base - 1.0 if base else None
+            return feature_current / base - 1.0 if base else None
 
-        timestamp = latest_index.isoformat() if hasattr(latest_index, "isoformat") else str(latest_index)
+        def sma_distance(days: int) -> float | None:
+            if len(closes) < days:
+                return None
+            average = float(closes.tail(days).mean())
+            return feature_current / average - 1.0 if average else None
+
+        def drawdown(days: int) -> float | None:
+            if len(closes) < days:
+                return None
+            peak = float(closes.tail(days).max())
+            return feature_current / peak - 1.0 if peak else None
+
+        volume_z20 = None
+        if len(volumes) >= 20:
+            volume_window = volumes.tail(20)
+            volume_std = float(volume_window.std())
+            if volume_std > 0:
+                volume_z20 = (float(volume_window.iloc[-1]) - float(volume_window.mean())) / volume_std
+
+        feature_index = completed.index[-1]
+        feature_timestamp = feature_index.isoformat() if hasattr(feature_index, "isoformat") else str(feature_index)
+        completed_bar = completed.iloc[-1]
         return {
             "symbol": symbol,
-            "as_of_date": str(latest_index)[:10],
-            "as_of_timestamp": timestamp,
-            "source": "yfinance_live",
-            "open": _safe_float(latest_bar.get("open")),
-            "high": _safe_float(latest_bar.get("high")),
-            "low": _safe_float(latest_bar.get("low")),
-            "close": current,
-            "adj_close": _safe_float(daily.iloc[-1].get("adj_close")) if "adj_close" in daily.columns else None,
-            "volume": _safe_float(latest_bar.get("volume")),
-            "previous_close": previous_close,
-            "return_1d": current / previous_close - 1.0 if previous_close else None,
+            "date": str(feature_index)[:10],
+            "as_of_date": str(feature_index)[:10],
+            "as_of_timestamp": feature_timestamp,
+            "feature_as_of_timestamp": feature_timestamp,
+            "source": "yfinance_last_completed_daily",
+            "open": _safe_float(completed_bar.get("open")),
+            "high": _safe_float(completed_bar.get("high")),
+            "low": _safe_float(completed_bar.get("low")),
+            "close": _safe_float(completed_bar.get("close")),
+            "adj_close": _safe_float(completed_bar.get("adj_close")) if "adj_close" in completed.columns else None,
+            "volume": _safe_float(completed_bar.get("volume")),
+            "previous_close": raw_previous_close,
+            "return_1d": feature_current / previous_close - 1.0 if previous_close else None,
             "return_5d": _pct(trailing(5)),
             "return_20d": _pct(trailing(20)),
             "return_60d": _pct(trailing(60)),
+            "return_120d": _pct(trailing(120)),
+            "return_252d": _pct(trailing(252)),
             "volatility_20d": _safe_float(closes.pct_change().tail(20).std() * (252 ** 0.5)) if len(closes) > 20 else None,
-            "history_points": int(len(daily)),
+            "volatility_60d": _safe_float(closes.pct_change().tail(60).std() * (252 ** 0.5)) if len(closes) > 60 else None,
+            "sma20_distance": _pct(sma_distance(20)),
+            "sma50_distance": _pct(sma_distance(50)),
+            "sma200_distance": _pct(sma_distance(200)),
+            "drawdown_60d": _pct(drawdown(60)),
+            "drawdown_252d": _pct(drawdown(252)),
+            "volume_z20": _safe_float(volume_z20),
+            "history_points": int(len(completed)),
+            "feature_timing": "last_completed_daily_close",
         }
 
-    def _live_context(self, config: BenchmarkConfig, source_status: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _live_context(
+        self,
+        config: BenchmarkConfig,
+        source_status: List[Dict[str, Any]],
+        *,
+        decision_time: datetime | None = None,
+    ) -> List[Dict[str, Any]]:
         if not config.data_sources.include_index_context:
             return []
         context_symbols = [symbol.upper() for symbol in config.data_sources.index_symbols]
-        snapshots, _, status = self._live_market_snapshots(context_symbols)
+        snapshots, _, status = self._live_market_snapshots(
+            context_symbols,
+            config,
+            decision_time=decision_time,
+        )
         source_status.extend([{"context_symbol": item.get("symbol"), **item} for item in status])
         return list(snapshots.values())
 
@@ -1802,26 +3287,37 @@ class BenchmarkEngine:
             "turnover_prompt_buffer": buffer,
             "rule": "Choose target_exposure inside [min, max] to avoid prompt-time turnover overflow.",
         }
-        if config.single_stock_action_space == "trinary_all_in":
-            action_targets = self._trinary_action_targets(config, current)
+        if config.single_stock_action_space in {"trinary_all_in", "long_cash_hold"}:
+            action_targets = self._discrete_action_targets(config, current)
+            long_cash = config.single_stock_action_space == "long_cash_hold"
             result.update(
                 {
-                    "action_space": "trinary_all_in",
+                    "action_space": config.single_stock_action_space,
                     "min": round(lower_bound, 8),
                     "max": round(upper_bound, 8),
                     "allowed_actions": list(action_targets),
                     "allowed_target_exposures": {action: round(target, 8) for action, target in action_targets.items()},
-                    "rule": "Choose one allowed action only: SHORT_ALL, HOLD, or BUY_ALL. HOLD means no trade and keeps current_exposure; full flips are allowed in trinary mode, with turnover and slippage reported as costs rather than gating constraints.",
+                    "rule": (
+                        "Choose one allowed action only: CASH_ALL, HOLD, or BUY_ALL. HOLD means no trade and keeps the current long/cash state; shorting and partial sizing are not allowed."
+                        if long_cash
+                        else "Choose one allowed action only: SHORT_ALL, HOLD, or BUY_ALL. HOLD means no trade and keeps current_exposure; full flips are allowed in trinary mode, with turnover and slippage reported as costs rather than gating constraints."
+                    ),
                 }
             )
         return result
 
-    def _trinary_action_targets(self, config: BenchmarkConfig, current_exposure: float) -> Dict[str, float]:
+    def _discrete_action_targets(self, config: BenchmarkConfig, current_exposure: float) -> Dict[str, float]:
         max_exposure = float(config.max_gross_exposure or 1.0)
+        if config.single_stock_action_space == "long_cash_hold":
+            return {"CASH_ALL": 0.0, "HOLD": float(current_exposure), "BUY_ALL": max_exposure}
         actions = {"HOLD": float(current_exposure), "BUY_ALL": max_exposure}
         if config.allow_short:
             actions = {"SHORT_ALL": -max_exposure, **actions}
         return actions
+
+    def _trinary_action_targets(self, config: BenchmarkConfig, current_exposure: float) -> Dict[str, float]:
+        """Backward-compatible alias for the legacy trinary contract."""
+        return self._discrete_action_targets(config, current_exposure)
 
     def _current_single_stock_exposure(
         self,
@@ -1870,12 +3366,21 @@ class BenchmarkEngine:
         symbol = symbols[0] if symbols else config.symbol.upper()
         current_exposure = self._current_single_stock_exposure(symbol, manager_bundle, book=book, prices=prices)
         action = str(normalized.get("action") or "").strip().upper()
-        if config.single_stock_action_space == "trinary_all_in":
+        if config.single_stock_action_space in {"trinary_all_in", "long_cash_hold"}:
             normalized["action"] = action
-            targets = self._trinary_action_targets(config, current_exposure)
+            targets = self._discrete_action_targets(config, current_exposure)
             exposure = targets.get(action)
             if exposure is None:
                 exposure = self._single_stock_exposure(normalized, [symbol], manager_bundle)
+            if action == "HOLD" and abs(float(exposure)) > float(config.max_gross_exposure or 1.0) + 1e-9:
+                normalized["_mechanical_deleverage"] = True
+                normalized["_pre_deleverage_exposure"] = round(float(exposure), 8)
+                # Trading the drift back to exactly 1.0 can remain microscopically
+                # over the cap after slippage reduces equity.  Leave a tiny,
+                # cost-aware buffer so the post-trade book is actually valid.
+                slip_buffer = max(1e-6, 2.0 * float(config.slippage_bps or 0.0) / 10_000.0)
+                safe_limit = float(config.max_gross_exposure or 1.0) * (1.0 - slip_buffer)
+                exposure = math.copysign(safe_limit, float(exposure))
         else:
             exposure = self._single_stock_exposure(normalized, [symbol], manager_bundle)
         target_weights = {symbol: exposure} if abs(exposure) > 1e-9 else {}
@@ -1958,7 +3463,7 @@ class BenchmarkEngine:
         return bool(
             config.mode == "single_stock"
             and config.exposure_critic_enabled
-            and config.single_stock_action_space != "trinary_all_in"
+            and config.single_stock_action_space not in {"trinary_all_in", "long_cash_hold"}
         )
 
     def _record_due_diagnostic_lessons(
@@ -2424,10 +3929,21 @@ class BenchmarkEngine:
         if (manager_bundle or {}).get("mode") == "single_stock":
             symbol = symbols[0] if symbols else str((manager_bundle or {}).get("target_exposure_symbol") or "AAPL").upper()
             exposure = float(current_weights.get(symbol, 0.0))
+            action = "HOLD"
+            contract = (manager_bundle or {}).get("single_stock_contract") or {}
+            if contract.get("action_space") == "long_cash_hold" and exposure <= 1e-9:
+                # Missing-model behavior starts from the benchmark baseline,
+                # rather than silently making cash the default strategy.
+                exposure = float(
+                    ((manager_bundle or {}).get("valid_target_exposure_range") or {})
+                    .get("allowed_target_exposures", {})
+                    .get("BUY_ALL", 1.0)
+                )
+                action = "BUY_ALL"
             gross = abs(exposure)
             target_weights = {symbol: exposure} if abs(exposure) > 1e-9 else {}
             return {
-                "action": "HOLD",
+                "action": action,
                 "target_exposure": round(exposure, 8),
                 "target_weights": {key: round(value, 8) for key, value in target_weights.items()},
                 "cash_weight": round(1.0 - gross, 8),
@@ -2435,7 +3951,11 @@ class BenchmarkEngine:
                 "gross_exposure": round(gross, 8),
                 "net_exposure": round(exposure, 8),
                 "confidence": 0.0,
-                "portfolio_thesis": "Fallback/no model call; keep current single-stock exposure.",
+                "portfolio_thesis": (
+                    "Fallback/no model call; start from the buy-and-hold baseline."
+                    if action == "BUY_ALL"
+                    else "Fallback/no model call; keep current single-stock exposure."
+                ),
                 "major_risks": [],
                 "uncertainty": ["No model allocation was produced."],
                 "expected_return_bps": 0,
@@ -2607,32 +4127,36 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         net = sum(weights.values())
         expected_cash = 1.0 - gross
         errors: List[Dict[str, Any]] = []
-        trinary_all_in = config.mode == "single_stock" and config.single_stock_action_space == "trinary_all_in"
-        trinary_action = str(output.get("action") or "").strip().upper() if trinary_all_in else ""
-        trinary_hold = trinary_action == "HOLD"
+        discrete_all_in = config.mode == "single_stock" and config.single_stock_action_space in {"trinary_all_in", "long_cash_hold"}
+        discrete_action = str(output.get("action") or "").strip().upper() if discrete_all_in else ""
         if config.mode == "single_stock":
             if _safe_float(output.get("target_exposure")) is None:
                 errors.append({"type": "missing_or_invalid_target_exposure"})
-            if trinary_all_in:
+            if discrete_all_in:
                 symbol = symbols[0] if symbols else config.symbol.upper()
                 current_exposure = self._current_single_stock_exposure(symbol, manager_bundle, book=book, prices=prices)
-                action_targets = self._trinary_action_targets(config, current_exposure)
+                action_targets = self._discrete_action_targets(config, current_exposure)
                 valid_range = (manager_bundle or {}).get("valid_target_exposure_range") or {}
                 allowed_actions = set(valid_range.get("allowed_actions") or action_targets.keys())
-                if trinary_action not in allowed_actions:
+                error_prefix = "trinary" if config.single_stock_action_space == "trinary_all_in" else "long_cash"
+                if discrete_action not in allowed_actions:
                     errors.append(
                         {
-                            "type": "invalid_trinary_action",
-                            "action": trinary_action,
+                            "type": f"invalid_{error_prefix}_action",
+                            "action": discrete_action,
                             "allowed_actions": sorted(allowed_actions),
                         }
                     )
                 exposure = _safe_float(output.get("target_exposure"))
                 allowed_targets = [target for name, target in action_targets.items() if name in allowed_actions]
-                if exposure is not None and not any(abs(exposure - target) <= 1e-4 for target in allowed_targets):
+                if (
+                    exposure is not None
+                    and not output.get("_mechanical_deleverage")
+                    and not any(abs(exposure - target) <= 1e-4 for target in allowed_targets)
+                ):
                     errors.append(
                         {
-                            "type": "invalid_trinary_target_exposure",
+                            "type": f"invalid_{error_prefix}_target_exposure",
                             "target_exposure": round(float(exposure), 8),
                             "allowed_target_exposures": [round(float(target), 8) for target in allowed_targets],
                         }
@@ -2649,7 +4173,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             elif alignment == "veto" and not veto_reason.strip():
                 errors.append({"type": "empty_stage1_veto_reason_for_veto"})
         nonzero = [symbol for symbol, value in weights.items() if abs(value) > 1e-9]
-        if not trinary_hold and gross > config.max_gross_exposure + 1e-9:
+        if gross > config.max_gross_exposure + 1e-9:
             errors.append({"type": "gross_exposure_exceeded", "actual": round(gross, 8), "max": config.max_gross_exposure})
         if len(nonzero) > config.max_nonzero_positions:
             errors.append({"type": "too_many_nonzero_positions", "actual": len(nonzero), "max": config.max_nonzero_positions})
@@ -2690,7 +4214,7 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             elif config.mode != "single_stock" and abs(declared_turnover - actual_turnover) > 0.05:
                 errors.append({"type": "estimated_turnover_mismatch", "declared": declared_turnover, "actual": actual_turnover})
             turnover_limit = _safe_float(config.max_daily_turnover)
-            if not trinary_all_in and turnover_limit is not None and turnover_limit > 0 and actual_turnover > turnover_limit + 1e-9:
+            if not discrete_all_in and turnover_limit is not None and turnover_limit > 0 and actual_turnover > turnover_limit + 1e-9:
                 errors.append(
                     {
                         "type": "max_daily_turnover_exceeded",
@@ -2729,10 +4253,22 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             return reject_target_weights(book, target_weights, prices, validation_errors)
         if (
             config.mode == "single_stock"
-            and config.single_stock_action_space == "trinary_all_in"
+            and config.single_stock_action_space in {"trinary_all_in", "long_cash_hold"}
             and str(stage2_output.get("action") or "").strip().upper() == "HOLD"
         ):
             current = mark_to_market(book, prices)
+            if stage2_output.get("_mechanical_deleverage"):
+                next_book, execution = execute_target_weights(book, target_weights, prices, config)
+                execution.setdefault("events", []).append(
+                    {
+                        "type": "mechanical_gross_deleverage",
+                        "from_exposure": stage2_output.get("_pre_deleverage_exposure"),
+                        "to_exposure": stage2_output.get("target_exposure"),
+                        "max_gross_exposure": config.max_gross_exposure,
+                    }
+                )
+                execution["mechanical_deleverage"] = True
+                return next_book, execution
             payload = current.model_dump() if hasattr(current, "model_dump") else current.dict()
             clean_targets = {symbol: round(float(value), 8) for symbol, value in target_weights.items()}
             return current, {
@@ -2813,6 +4349,20 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         fees = sum(float(execution.get("fees") or 0.0) for execution in executions)
         slippage = sum(float(execution.get("slippage_cost") or 0.0) for execution in executions)
         repair_count = sum(int(execution.get("repair_count") or 0) for execution in executions)
+        cadence_holds = sum(1 for execution in executions if execution.get("decision_kind") == "cadence_hold")
+        deferred_changes = sum(
+            1
+            for execution in executions
+            if (execution.get("hysteresis") or {}).get("status") == "deferred"
+        )
+        mechanical_deleverages = sum(1 for execution in executions if execution.get("mechanical_deleverage"))
+        maximum_observed_gross = max(
+            [
+                float((execution.get("portfolio_after") or {}).get("gross_exposure") or 0.0)
+                for execution in executions
+            ]
+            or [0.0]
+        )
         turnover_values = []
         long_pnl = 0.0
         short_pnl = 0.0
@@ -2854,6 +4404,10 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 "model_failures": model_failures,
                 "invalid_allocation_count": model_failures,
                 "repair_count": repair_count,
+                "cadence_hold_count": cadence_holds,
+                "deferred_action_change_count": deferred_changes,
+                "mechanical_deleverage_count": mechanical_deleverages,
+                "maximum_observed_gross": maximum_observed_gross,
                 "fees": fees,
                 "slippage_cost": slippage,
                 "gross_of_cost_final_equity": gross_of_cost_final,
@@ -2870,6 +4424,15 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 "alpha_equal_weight_balanced_50": None,
             },
             "equity_curve": equity_curve,
+            "benchmark_contract": {
+                "version": config.benchmark_contract_version,
+                "historical_price_basis": config.historical_price_basis,
+                "action_space": config.single_stock_action_space,
+                "decision_cadence": config.decision_cadence,
+                "online_test_learning": config.online_test_learning,
+                "memory_namespace": config.memory_namespace,
+                "memory_base_snapshot_id": config.memory_base_snapshot_id,
+            },
         }
         return self.enrich_summary_with_buy_hold(config, symbols, summary)
 
@@ -2927,7 +4490,16 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         return summary
 
     def _window_metrics(self, equity_curve: List[Dict[str, Any]]) -> Dict[str, Any]:
-        initial = _safe_float((equity_curve[0] or {}).get("equity")) if equity_curve else None
+        initial = (
+            _safe_float(
+                (equity_curve[0] or {}).get(
+                    "phase_start_equity",
+                    (equity_curve[0] or {}).get("equity"),
+                )
+            )
+            if equity_curve
+            else None
+        )
         final = _safe_float((equity_curve[-1] or {}).get("equity")) if equity_curve else None
         return {
             "start_date": self._date(equity_curve[0].get("date")) if equity_curve else None,
@@ -2960,6 +4532,10 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 end_date=end_date,
                 initial=initial,
                 ai_return=ai_return,
+                price_basis=getattr(config, "historical_price_basis", "legacy"),
+                slippage_bps=float(config.slippage_bps or 0.0),
+                commission_per_trade=float(config.commission_per_trade or 0.0),
+                commission_per_share=float(config.commission_per_share or 0.0),
             )
             if single:
                 benchmarks.append(single)
@@ -2974,11 +4550,18 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 end_date=end_date,
                 initial=initial,
                 ai_return=ai_return,
+                price_basis=getattr(config, "historical_price_basis", "legacy"),
+                slippage_bps=float(config.slippage_bps or 0.0),
+                commission_per_trade=float(config.commission_per_trade or 0.0),
+                commission_per_share=float(config.commission_per_share or 0.0),
             )
             if benchmark:
                 benchmarks.append(benchmark)
 
-        if symbols:
+        if symbols and not (
+            config.mode == "single_stock"
+            and getattr(config, "historical_price_basis", "legacy") == "adjusted"
+        ):
             equal_weight_id = "balanced_50_equal_weight" if set(symbols) == set(STOCK_SYMBOLS) else "selected_equal_weight"
             equal_weight_label = (
                 "Balanced 50 equal-weight buy & hold"
@@ -3020,16 +4603,24 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         end_date: str,
         initial: float,
         ai_return: float | None,
+        price_basis: str = "legacy",
+        slippage_bps: float = 0.0,
+        commission_per_trade: float = 0.0,
+        commission_per_share: float = 0.0,
     ) -> Dict[str, Any] | None:
         if table not in {"asset_daily", "context_daily"}:
             return None
+        adjusted_open_basis = price_basis == "adjusted"
+        price_expression = "open * adj_close / NULLIF(close, 0)" if adjusted_open_basis else "adj_close"
         df = self.warehouse.conn.execute(
             f"""
-            SELECT date, adj_close
+            SELECT date, {price_expression} AS execution_price
             FROM {table}
             WHERE symbol = ?
               AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
               AND ohlcv_available = true
+              AND ({price_expression}) IS NOT NULL
+              AND ({price_expression}) > 0
               AND adj_close IS NOT NULL
               AND adj_close > 0
             ORDER BY date
@@ -3038,17 +4629,26 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
         ).fetchdf()
         if df.empty:
             return None
-        first_price = float(df.iloc[0]["adj_close"])
+        first_price = float(df.iloc[0]["execution_price"])
         if not first_price:
             return None
-        values = [initial * float(price) / first_price for price in df["adj_close"]]
+        if adjusted_open_basis:
+            slip = float(slippage_bps or 0.0) / 10000.0
+            investable = max(0.0, float(initial) - float(commission_per_trade or 0.0))
+            entry_cost_per_share = first_price * (1.0 + slip) + float(commission_per_share or 0.0)
+            shares = investable / entry_cost_per_share if entry_cost_per_share > 0 else 0.0
+        else:
+            shares = float(initial) / first_price
+        values = [shares * float(price) for price in df["execution_price"]]
         final = float(values[-1]) if values else initial
         total_return = final / initial - 1.0 if initial else 0.0
         return {
             "id": benchmark_id,
             "label": label,
             "symbol": symbol,
-            "method": "single_instrument_buy_hold",
+            "method": "single_instrument_buy_hold_next_open" if adjusted_open_basis else "single_instrument_buy_hold",
+            "price_basis": price_basis,
+            "entry_slippage_bps": slippage_bps if adjusted_open_basis else 0.0,
             "start_date": self._date(df.iloc[0]["date"]),
             "end_date": self._date(df.iloc[-1]["date"]),
             "observations": int(len(df)),

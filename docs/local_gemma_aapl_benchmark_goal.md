@@ -1,5 +1,7 @@
 # Local Gemma AAPL Benchmark Goal
 
+> Legacy loop specification. New work should use [aapl_online_learning_system.md](aapl_online_learning_system.md), which preserves this preset under `--preset legacy` but replaces replay-wide LLM reflections and short exposure with the chronological long/cash online system.
+
 ## Compact Goal Prompt
 
 Execute `docs/local_gemma_aapl_benchmark_goal.md` end-to-end. Implement and run the local-only Ollama `gemma4:12b` AAPL benchmark loop with no paid APIs, API cost `$0.00`, point-in-time LLM memory, monitoring, tests, and allowlisted autonomous patches. Work on `codex/local-gemma-aapl-loop`. Commit current code before each train/test process. Repeat train/test/diagnose/patch until AI beats AAPL buy-and-hold in 2025 with zero invalid decisions and local-only proof, or until the user stops/hard safety blocker.

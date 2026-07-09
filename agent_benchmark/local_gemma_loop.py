@@ -19,6 +19,7 @@ from .llm_client import call_json_model
 from .local_provider import (
     LOCAL_OLLAMA_MODEL,
     local_gemma_aapl_config,
+    local_gemma_aapl_online_config,
     local_gemma_secret_config,
     validate_no_paid_api_mode,
 )
@@ -282,25 +283,83 @@ def _is_resumable_run(run: Dict[str, Any]) -> bool:
 def _config_for_resume(run: Dict[str, Any]) -> BenchmarkConfig:
     payload = dict(run.get("config") or {})
     config = BenchmarkConfig(**payload)
-    if config.run_preset == "local_gemma_aapl_full" and int(config.warehouse_recycle_interval_days or 0) <= 0:
-        defaults = local_gemma_aapl_config()
+    if config.run_preset in {"local_gemma_aapl_full", "local_gemma_aapl_online"} and int(config.warehouse_recycle_interval_days or 0) <= 0:
+        defaults = local_gemma_aapl_online_config() if config.run_preset == "local_gemma_aapl_online" else local_gemma_aapl_config()
         config_payload = model_to_dict(config)
         config_payload["warehouse_recycle_interval_days"] = defaults.warehouse_recycle_interval_days
         config = BenchmarkConfig(**config_payload)
     return config
 
 
-def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_run: bool = True, resume_run_id: str = "") -> Dict[str, Any]:
+def _config_for_preset(preset: str) -> BenchmarkConfig:
+    if preset == "legacy":
+        return local_gemma_aapl_config()
+    if preset == "aapl-online":
+        return local_gemma_aapl_online_config()
+    raise ValueError(f"Unknown local Gemma preset {preset!r}.")
+
+
+def _with_day_limits(
+    config: BenchmarkConfig,
+    *,
+    max_train_days: int | None,
+    max_test_days: int | None,
+) -> BenchmarkConfig:
+    updates: Dict[str, Any] = {}
+    for field, value in (("max_train_days", max_train_days), ("max_test_days", max_test_days)):
+        if value is None:
+            continue
+        if int(value) < 0:
+            raise ValueError(f"{field} cannot be negative.")
+        updates[field] = int(value)
+    if not updates:
+        return config
+    payload = model_to_dict(config)
+    payload.update(updates)
+    return BenchmarkConfig(**payload)
+
+
+def run_loop(
+    max_iterations: int = 3,
+    *,
+    pull_model: bool = True,
+    commit_before_run: bool = True,
+    resume_run_id: str = "",
+    preset: str = "aapl-online",
+    max_train_days: int | None = None,
+    max_test_days: int | None = None,
+    preflight_only: bool = False,
+) -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
-    config = local_gemma_aapl_config()
+    config = _config_for_preset(preset)
     secrets = local_gemma_secret_config()
     store = BenchmarkStore()
     if resume_run_id:
+        if preflight_only:
+            raise ValueError("--preflight-only cannot be combined with --resume-run-id.")
+        if max_train_days is not None or max_test_days is not None:
+            raise ValueError("Day limits cannot be changed while resuming a saved run.")
         existing = store.get_benchmark_run(resume_run_id)
         if not existing:
             raise RuntimeError(f"Cannot resume missing benchmark run {resume_run_id!r}.")
         config = _config_for_resume(existing)
+    else:
+        config = _with_day_limits(config, max_train_days=max_train_days, max_test_days=max_test_days)
     validate_no_paid_api_mode(config, secrets)
+    if preflight_only:
+        preflight_report = _preflight(config, secrets, store)
+        return {
+            "status": f"preflight_{preflight_report.get('status', 'unknown')}",
+            "preset": preset,
+            "config": model_to_dict(config),
+            "model_status": "not_checked",
+            "smoke": "not_run",
+            "preflight": preflight_report,
+        }
+
+    online_preset = config.run_preset == "local_gemma_aapl_online"
+    if online_preset:
+        max_iterations = 1
     model_status = ensure_ollama_model(config.model, pull=pull_model)
     smoke = run_local_json_smoke(config, secrets)
     reports: List[Dict[str, Any]] = []
@@ -319,6 +378,8 @@ def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_
         reports.append(report)
         if report["evaluation"]["success"]:
             return {"status": "success", "model_status": model_status, "smoke": smoke, "reports": reports}
+        if online_preset:
+            return {"status": "target_not_met", "model_status": model_status, "smoke": smoke, "reports": reports}
         patch = propose_allowlisted_patch(report.get("diagnostics") or {}, report.get("evaluation") or {}, config)
         if not patch:
             return {"status": "blocked", "reason": "No allowlisted autonomous patch was available.", "model_status": model_status, "smoke": smoke, "reports": reports}
@@ -338,6 +399,8 @@ def run_loop(max_iterations: int = 3, *, pull_model: bool = True, commit_before_
         reports.append(report)
         if report["evaluation"]["success"]:
             return {"status": "success", "model_status": model_status, "smoke": smoke, "reports": reports}
+        if online_preset:
+            return {"status": "target_not_met", "model_status": model_status, "smoke": smoke, "reports": reports}
         patch = propose_allowlisted_patch(report.get("diagnostics") or {}, report.get("evaluation") or {}, config)
         if not patch:
             return {"status": "blocked", "reason": "No allowlisted autonomous patch was available.", "model_status": model_status, "smoke": smoke, "reports": reports}
@@ -419,7 +482,20 @@ def _float(value: Any) -> float | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local-only Ollama Gemma AAPL benchmark loop.")
-    parser.add_argument("--max-iterations", type=int, default=3)
+    parser.add_argument("--max-iterations", type=int, default=3, help="Legacy loop limit; the aapl-online preset always runs exactly one iteration.")
+    parser.add_argument(
+        "--preset",
+        choices=("aapl-online", "legacy"),
+        default="aapl-online",
+        help="Use the chronological online-learning system (default) or the preserved legacy loop.",
+    )
+    parser.add_argument("--max-train-days", type=int, default=None, help="Override the preset training-day cap; 0 means the full window.")
+    parser.add_argument("--max-test-days", type=int, default=None, help="Override the preset test-day cap; 0 means the full window.")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Validate configuration and local data without pulling/calling Gemma or starting a benchmark.",
+    )
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-commit-before-run", action="store_true")
     parser.add_argument("--resume-run-id", default="", help="Resume a paused or monitor-cancelled local Gemma benchmark run from its saved checkpoint.")
@@ -429,6 +505,10 @@ def main() -> None:
         pull_model=not args.no_pull,
         commit_before_run=not args.no_commit_before_run,
         resume_run_id=args.resume_run_id,
+        preset=args.preset,
+        max_train_days=args.max_train_days,
+        max_test_days=args.max_test_days,
+        preflight_only=args.preflight_only,
     )
     print(json.dumps(result, indent=2, default=str))
 

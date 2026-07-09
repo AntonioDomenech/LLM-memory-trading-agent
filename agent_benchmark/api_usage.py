@@ -177,7 +177,7 @@ def _usage_from_provider_metadata(decisions: List[Dict[str, Any]]) -> Dict[str, 
     logical_calls = 0
     for decision in decisions:
         output = decision.get("output") or {}
-        if (output.get("_api_status") or "ok") in {"dry_run", "missing_key"}:
+        if (output.get("_api_status") or "ok") in {"dry_run", "missing_key", "cadence_hold"}:
             continue
         if decision.get("stage") in {"stage1", "stage2"}:
             logical_calls += 1
@@ -229,7 +229,7 @@ def _usage_from_saved_prompts(decisions: List[Dict[str, Any]], config: Benchmark
     for decision in decisions:
         stage = decision.get("stage")
         output = decision.get("output") or {}
-        if (output.get("_api_status") or "ok") in {"dry_run", "missing_key"}:
+        if (output.get("_api_status") or "ok") in {"dry_run", "missing_key", "cadence_hold"}:
             continue
         if output.get("_api_cache_hit"):
             local_cache_hits += 1
