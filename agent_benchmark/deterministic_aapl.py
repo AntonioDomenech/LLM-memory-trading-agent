@@ -364,6 +364,15 @@ def simulate_period(
                 slippage = abs(delta) * abs(fill_price - price)
                 cash -= delta * fill_price + fees
                 shares += delta
+                # Eliminate harmless floating-point dust at the exact
+                # all-cash/all-invested boundaries.  This matters for the
+                # unleveraged runner: a mathematical 100% target must not be
+                # reported as borrowed cash or exposure infinitesimally above
+                # one merely because of binary arithmetic.
+                if abs(cash) <= 1e-10:
+                    cash = 0.0
+                if abs(shares) <= 1e-12:
+                    shares = 0.0
         equity_after = cash + shares * price
         actual_exposure = shares * price / equity_after
         if actual_exposure > max_exposure + 1e-8 or actual_exposure < -1e-10:
