@@ -1,0 +1,205 @@
+{
+  "api_calls": 0,
+  "boundary_audit": {
+    "context_aligned_rows": 4780,
+    "context_first_aligned_date": "1999-12-31",
+    "context_last_aligned_date": "2018-12-31",
+    "iwm_vix_complete_rows": 4678,
+    "iwm_vix_missing_cells": 103,
+    "price_first_date": "1999-12-31",
+    "price_last_date": "2018-12-31",
+    "price_rows": 4780,
+    "tnx_cells_used": 0
+  },
+  "contract_version": "aapl-one-session-rare-loss-forest-development-v1",
+  "llm_calls": 0,
+  "network_access": false,
+  "physical_data_end": "2018-12-31",
+  "post_2018_market_data_accessed": false,
+  "source": {
+    "context": {
+      "allowed_symbols": [
+        "IWM",
+        "VIX"
+      ],
+      "bounded_result_rows": 13880,
+      "bounded_result_sha256": "sha256:c81f2d267bc57c97861e8639d4aa39f651ed63175d642cc195ddce1dcd2a263a",
+      "network_access": false,
+      "physical_data_end": "2018-12-31",
+      "query": "SELECT date, symbol, close, adj_close\nFROM read_parquet(?)\nWHERE CAST(date AS DATE) <= DATE '2018-12-31'\n  AND upper(replace(trim(symbol), '^', '')) IN ('IWM', 'VIX')\nORDER BY CAST(date AS DATE), upper(replace(trim(symbol), '^', ''))",
+      "query_parameters": [
+        "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\data\\warehouse\\parquet\\context_daily.parquet"
+      ],
+      "source_file_sha256": "sha256:e89afc65b631017773cab60e95d98d30d42cf3b8ead512b23cb7caff258fe444",
+      "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\data\\warehouse\\parquet\\context_daily.parquet",
+      "source_type": "local_context_daily_parquet_bounded_query"
+    },
+    "price": {
+      "cftc_clean_records": 2824,
+      "cftc_coverage_audit": {
+        "complete_release_alignment_ratio": 1.0,
+        "complete_three_market_report_dates": 711,
+        "contracts": {
+          "1170E1": {
+            "coverage_ratio": 0.9442231075697212,
+            "end_coverage_lag_days": 0,
+            "expected_weekly_rows_approx": 753,
+            "first_report_date": "2004-07-27",
+            "first_report_lag_days": 0,
+            "last_report_date": "2018-12-31",
+            "maximum_internal_gap_days": 168,
+            "passed": true,
+            "rows": 711,
+            "structural_coverage_contract": {
+              "maximum_gap_days": 175,
+              "minimum_coverage_ratio": 0.94
+            }
+          },
+          "13874A": {
+            "coverage_ratio": 0.9963996399639964,
+            "end_coverage_lag_days": 0,
+            "expected_weekly_rows_approx": 1111,
+            "first_report_date": "1997-09-16",
+            "first_report_lag_days": 0,
+            "last_report_date": "2018-12-31",
+            "maximum_internal_gap_days": 25,
+            "passed": true,
+            "rows": 1107,
+            "structural_coverage_contract": {
+              "maximum_gap_days": 28,
+              "minimum_coverage_ratio": 0.99
+            }
+          },
+          "209742": {
+            "coverage_ratio": 1.000981354268891,
+            "end_coverage_lag_days": 0,
+            "expected_weekly_rows_approx": 1019,
+            "first_report_date": "1999-06-22",
+            "first_report_lag_days": 0,
+            "last_report_date": "2018-12-31",
+            "maximum_internal_gap_days": 11,
+            "passed": true,
+            "rows": 1020,
+            "structural_coverage_contract": {
+              "maximum_gap_days": 14,
+              "minimum_coverage_ratio": 0.99
+            }
+          }
+        },
+        "expected_end": "2018-12-31",
+        "expected_start": "1997-09-16",
+        "failures": [],
+        "official_row_count_proof": {
+          "count_response_sha256": "sha256:b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+          "official_rows": 2838,
+          "passed": true,
+          "payload_rows": 2838
+        },
+        "passed": true
+      },
+      "cftc_later_availability_rows_excluded": 0,
+      "cftc_records_available_by_2018_end": 2824,
+      "source_artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\cftc_cot_v1\\cftc-cot-development-20260710T175155Z-9ad7307f",
+      "source_artifact_git_commit": "cf903cd05d365bbc04d3bbfbfed269380bfbb849",
+      "source_checksums": {
+        ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+        "cftc_exclusions.json": "f67a720cbca6c64217ea060b11ed790c09c19a974123ee8cc168c590e5ca503b",
+        "cftc_retrieval_metadata.json": "aeefda780abcffc5f817fcc7993e24dc3527c0f105f1fd02fc1f369c40be8e43",
+        "cot_26w_z075_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+        "cot_26w_z075_base_5bps_strategy.csv": "f9e4ec5353d53e9a9687f5fbcda4e1af2f1b0dd175f88852355778d89afe6182",
+        "cot_26w_z075_policy_decisions.csv": "8a5a1962a0b2b6b9f08b013f20ee44f0826d74143d6ff8e1ddf49c1ccf961e2f",
+        "cot_26w_z075_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+        "cot_26w_z075_stress_10bps_strategy.csv": "4af392c97b512d49b8efd4e7a57ed60f7926ae0e0c9c2cfaef7882fd57fd6a2d",
+        "cot_26w_z125_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+        "cot_26w_z125_base_5bps_strategy.csv": "53d25c8b6e03ec1fffe7dfec984aa17d2ef3c6af3d4d67c780234795afee5a68",
+        "cot_26w_z125_policy_decisions.csv": "3dd3a733cae0294abbbdadd88e861b50a6a8078b78e8033e9345d31df3784d58",
+        "cot_26w_z125_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+        "cot_26w_z125_stress_10bps_strategy.csv": "b2aa7cf6c4ca4ca48ae10dea086c24dfecbac66fef2108592aadc7fd410981f1",
+        "cot_52w_z075_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+        "cot_52w_z075_base_5bps_strategy.csv": "67311c7dee99490bc0687e9651cf116fdb3683b3cc138a7802d8d719dceb461f",
+        "cot_52w_z075_policy_decisions.csv": "664397a3bd22b40559da71cd3ccab18272b29a52d96a932589dfa9053c4133f2",
+        "cot_52w_z075_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+        "cot_52w_z075_stress_10bps_strategy.csv": "d7328d02b5325e1964432d13002850a7fe18ecc2ec5c1e6ab0853aa6635c1846",
+        "cot_52w_z125_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+        "cot_52w_z125_base_5bps_strategy.csv": "df1c832651f29ea9e9b2658b64651070cc221a6efa7b105b4e334ce382f53eac",
+        "cot_52w_z125_policy_decisions.csv": "5efe855a82ac7d6b38ad2c02e882d20fee759eb39df6a0c71f909ff459677ae6",
+        "cot_52w_z125_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+        "cot_52w_z125_stress_10bps_strategy.csv": "0dbe8fb07933778903452732b304517f7054f8762d3938967069dfe8b88bec76",
+        "development_cftc_official_count_proof_through_2018.csv": "b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+        "development_cftc_raw_through_2018.csv": "dd73770d94c96f18b93b59e8b3ee82fedda2fde3c20c8e182e8e4d53bdbad2a5",
+        "development_prices_through_2018.csv": "6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+        "report.json": "25a2fc28ba617ebba5ee615e5bd5d02969cff3c7a68865e1605488efd6f2684a",
+        "selection_manifest.json": "b05600c44d0c3f8e33bff99f6bd70b3d2594faca7dc6704085915ff2c7b04927"
+      },
+      "source_checksums_sha256": "sha256:243f471d3d08e027b6417ad98c57766b6c0b44ff988b1b9d390a3cdc1e2a4e6c",
+      "source_manifest_sha256": "sha256:b05600c44d0c3f8e33bff99f6bd70b3d2594faca7dc6704085915ff2c7b04927",
+      "source_report_run_id": "cftc-cot-development-20260710T175155Z-9ad7307f",
+      "source_type": "checksum_verified_cftc_development_artifact"
+    }
+  },
+  "source_identity": {
+    "git": {
+      "branch": "codex/aapl-one-session-rare-loss-forest-v1",
+      "commit": "cf903cd05d365bbc04d3bbfbfed269380bfbb849",
+      "dirty": false,
+      "status": ""
+    },
+    "repository": {
+      "repo_root": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent",
+      "tracked_source_files": [
+        ".gitattributes",
+        "agent_benchmark/cftc_cot.py",
+        "agent_benchmark/cftc_cot_experiment.py",
+        "agent_benchmark/cftc_cot_policy.py",
+        "agent_benchmark/deterministic_aapl.py",
+        "agent_benchmark/direct_edge_features.py",
+        "agent_benchmark/downside_ensemble_experiment.py",
+        "agent_benchmark/downside_features.py",
+        "agent_benchmark/downside_forest.py",
+        "agent_benchmark/downside_scoring.py",
+        "agent_benchmark/downside_walkforward.py",
+        "agent_benchmark/regime_consensus_experiment.py",
+        "agent_benchmark/regime_consensus_features.py",
+        "agent_benchmark/regime_hmm.py",
+        "agent_benchmark/regime_consensus_scoring.py",
+        "agent_benchmark/regime_consensus_walkforward.py",
+        "agent_benchmark/unleveraged_aapl.py",
+        "docs/regime_consensus_experiment.md",
+        "requirements.txt",
+        "agent_benchmark/rare_loss_experiment.py",
+        "agent_benchmark/rare_loss_features.py",
+        "agent_benchmark/rare_loss_forest.py",
+        "agent_benchmark/rare_loss_scoring.py",
+        "agent_benchmark/rare_loss_walkforward.py",
+        "docs/aapl_one_session_rare_loss_forest_v1.md"
+      ]
+    },
+    "source_hashes": {
+      ".gitattributes": "cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440",
+      "agent_benchmark/cftc_cot.py": "7609e5f5be098bbe476c1d4f7427505160eece52cf6384b03488c6f601a3d1a0",
+      "agent_benchmark/cftc_cot_experiment.py": "9b35230dcad7b91d1ad997aec5193f7fd6880363d18b1ec4ba94ba0cb444cf92",
+      "agent_benchmark/cftc_cot_policy.py": "adfe29068ae5957a1f3558c4792251ddeb904ca49dc934a2d8dd0c56cf33216c",
+      "agent_benchmark/deterministic_aapl.py": "6a2297d298792766da7d7ed9a86c4c86d5dfa7749bb071d39136fd3b6e5ca15e",
+      "agent_benchmark/direct_edge_features.py": "9af4e06ae33b534f904f29167ead0546431e7f9c6ce05af6e8267f26ad426c52",
+      "agent_benchmark/downside_ensemble_experiment.py": "8d4ce06913af805c9cb72234049e9a7beb576d0266a334a1c958fea885ab7d9c",
+      "agent_benchmark/downside_features.py": "1c3fdf3f1772c4dfd0ef544354212f38c4874702f5e9323c2ff5b92fb0d3c5d1",
+      "agent_benchmark/downside_forest.py": "e3856864846832b21eeca9dc661d30d7421fb9269a05dd47e214a48c1eea3bf8",
+      "agent_benchmark/downside_scoring.py": "244f64ab42388bd7f572a9b795d4f9eea12a39be22e413f33b035b7cbb253177",
+      "agent_benchmark/downside_walkforward.py": "b7c02297598f0d316d0f83b629be68021531dc6f8da5c8b0baa517d4cca94d01",
+      "agent_benchmark/rare_loss_experiment.py": "650495abe41b3a33e05a3a12f4c4b369cd0d0b9f63f9ba6ad298fbd76a8c919a",
+      "agent_benchmark/rare_loss_features.py": "85ef8a9fc86e680d663ccc3ce28f2e62f5f257f5b3ac5ebc7543c375f05373e5",
+      "agent_benchmark/rare_loss_forest.py": "dbf384f2c8b7f28c896421fabb371e5d8fc28c00f4a766201e6d247f46812a30",
+      "agent_benchmark/rare_loss_scoring.py": "7565947976c5cc86e4ddc88e9603a533320c0ff55fa29c89713c532c764bf551",
+      "agent_benchmark/rare_loss_walkforward.py": "8067fdc3a9cd9750979cb60f5cfe206709207a69dc7a30de602ca11df457013f",
+      "agent_benchmark/regime_consensus_experiment.py": "97a0940402a5283031620204a6fae213a11218286da14264d649c02e7614bf2b",
+      "agent_benchmark/regime_consensus_features.py": "8c78e6b9db2388b9835ddae1b70bf212a7eefd4107a13d65d95dff0a0568c274",
+      "agent_benchmark/regime_consensus_scoring.py": "061d7b85609fd611eaadd06d6fd6a8a2689b4887e67b407d4f8bbe36c4233829",
+      "agent_benchmark/regime_consensus_walkforward.py": "b16c5fb0d649f8c26820cf963dca1c8f2d6f6f1c29df1e0beb322d8b4172d031",
+      "agent_benchmark/regime_hmm.py": "b4a2ae44e7b435c19e225478729be48be4cb248f5a871ad0cfda9cfab9f2a6ba",
+      "agent_benchmark/unleveraged_aapl.py": "ad752cc5d57edb644b4134b37f0b86a5ee5b7f1bb9d65dda9eea0e2933c0f590",
+      "docs/aapl_one_session_rare_loss_forest_v1.md": "6766a8d288be38447e657e1104d42107670ab56a0992aa2b4226ae385bad43e0",
+      "docs/regime_consensus_experiment.md": "31781bded9d2e3ded007336cca1c5d96a855c9a4097649f012c50d11198feb70",
+      "requirements.txt": "9038c7b5b2d98e8723aa4346813228978040e4bf20cd7ef5310b7e9b4481ec99"
+    }
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\rare_loss_forest_v1\\rare-loss-development-20260710T230138Z-cb841be8",
+  "candidate_count": 2,
+  "candidate_results_sha256": "sha256:b855882a30f2dbad68c906167cd1957f9e5af3ac3978fd87932d657ae25e017b",
+  "contract_version": "aapl-one-session-rare-loss-forest-development-v1",
+  "created_at_utc": "2026-07-10T23:01:38.103643+00:00",
+  "development_pass": false,
+  "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+  "physical_data_end": "2018-12-31",
+  "post_2018_market_data_accessed": false,
+  "refit": {
+    "performed": false,
+    "reason": "no_development_candidate_passed"
+  },
+  "reproducibility": {
+    "api_cost_display": "$0.00",
+    "completed_before_seal_within_limit": true,
+    "estimated_external_cost_usd": 0.0,
+    "llm_calls": 0,
+    "local_numeric_forest_fits_before_seal": 14,
+    "model_calls": 0,
+    "model_calls_semantics": "external_or_llm_model_calls_only",
+    "network_calls": 0,
+    "runtime_limit_seconds": 3600.0,
+    "runtime_seconds_before_seal": 23.75075070001185
+  },
+  "run_id": "rare-loss-development-20260710T230138Z-cb841be8",
+  "selected_candidate_id": null,
+  "selection_manifest": {
+    "candidate_family": [
+      {
+        "candidate_id": "tail975",
+        "cash_decision_rows": 1,
+        "expected_clipped_edge_10bps_gate": 0.001,
+        "ordinary_cash_win_probability_gate": 0.55,
+        "severe_probability_minimum_multiple_of_causal_prevalence": 2.0,
+        "training_oob_severe_tail_quantile": 0.975
+      },
+      {
+        "candidate_id": "tail990",
+        "cash_decision_rows": 1,
+        "expected_clipped_edge_10bps_gate": 0.001,
+        "ordinary_cash_win_probability_gate": 0.55,
+        "severe_probability_minimum_multiple_of_causal_prevalence": 2.0,
+        "training_oob_severe_tail_quantile": 0.99
+      }
+    ],
+    "candidate_results_sha256": "sha256:b855882a30f2dbad68c906167cd1957f9e5af3ac3978fd87932d657ae25e017b",
+    "contract_version": "aapl-one-session-rare-loss-forest-development-v1",
+    "cost_scenarios_bps": {
+      "base_5bps": 5.0,
+      "stress_10bps": 10.0
+    },
+    "development_forest_fit_count": 14,
+    "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+    "execution": {
+      "actions": [
+        "LONG_100_PERCENT",
+        "CASH_100_PERCENT"
+      ],
+      "asset": "AAPL",
+      "cash_interest_rate": 0.0,
+      "decision_information_cutoff": "completed close t",
+      "fill": "next adjusted AAPL open",
+      "leverage": false,
+      "maximum_target_exposure": 1.0,
+      "shorting": false
+    },
+    "later_stage_lock": {
+      "candidate_grid_may_change_after_this_run": false,
+      "failure_stops_price_market_only_family": true,
+      "features_may_change_after_this_run": false,
+      "forest_configuration_may_change_after_this_run": false,
+      "only_selected_candidate_may_advance": true,
+      "thresholds_may_change_after_this_run": false
+    },
+    "manifest_sha256": "sha256:d45b6c98bf210eb1cadf172c1812deecd3618bdd4ef922e6d269bc75743760e3",
+    "model_variants": [
+      "full",
+      "core"
+    ],
+    "payload_sha256": {
+      "buy_hold_base_5bps.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+      "buy_hold_stress_10bps.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+      "candidate_results.json": "sha256:6ac5137f6fdd42c944b4e5b26535ba505434924c5edade301dc821ef44068a43",
+      "candidate_targets_2005_2018.csv": "sha256:eac5f12ad08ca9388947009506ee8c5e2b8d2cdae379c23af938e5f23fb515e9",
+      "core_tail975_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+      "core_tail975_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+      "core_tail990_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+      "core_tail990_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+      "development_context_through_2018.csv": "sha256:a7a46ff6396d86c69e79b8a13faba88e15490d0ac93f3353e6ecc17085459249",
+      "development_prices_through_2018.csv": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+      "feature_provenance.json": "sha256:4bd79d61ac31537ba4c08a3818aad3bce7b255e1254f35d5e9968aff961c8e28",
+      "full_tail975_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+      "full_tail975_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+      "full_tail990_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+      "full_tail990_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+      "input_provenance.json": "sha256:44a9676b26e7ddb4e065c4a6e73dc2d90c14aa3cd1bdab49e4f8ce24ae667458",
+      "oof_forest_states.json": "sha256:e2aeb461309a265910687f4201ad4d7e2539d0ba18da8fd1d825211ae8746d5e",
+      "oof_predictions_2005_2018.csv": "sha256:21ca91d13bbd7991c3b8cb28e46a57c4d9544dc9bab85cb5cdd229b417b9eb46"
+    },
+    "physical_data_end": "2018-12-31",
+    "post_2018_market_data_access_allowed": false,
+    "post_2018_market_data_accessed": false,
+    "refit": {
+      "performed": false,
+      "reason": "no_development_candidate_passed"
+    },
+    "selected_candidate_id": null,
+    "selection_tie_break": [
+      "highest 10bps minimum-fold active-log edge",
+      "highest 10bps total active-log edge",
+      "highest severe-event Brier relative improvement",
+      "fewest completed CASH episodes",
+      "fewest CASH days",
+      "lexical candidate id"
+    ],
+    "source_exclusion_audits": {
+      "cftc": {
+        "decision": "no positioning value enters a feature, fit, or gate",
+        "finding": "weekly positioning already failed its separate frozen approach",
+        "included": false
+      },
+      "llm": {
+        "decision": "zero LLM calls; the forest is deterministic local NumPy",
+        "finding": "an LLM cannot add information to the same numeric inputs",
+        "included": false
+      },
+      "macro_and_tnx": {
+        "decision": "bounded context physically contains only IWM and VIX",
+        "finding": "stored macro values are placeholder or vintage-unsafe",
+        "included": false
+      },
+      "news": {
+        "decision": "excluded from this final price/market-only experiment",
+        "finding": "available rows are not proven point-in-time historical text",
+        "included": false
+      }
+    },
+    "stage": "development",
+    "walk_forward_folds": [
+      {
+        "first_entry_year": 2005,
+        "fold_id": "2005-2006",
+        "last_entry_year": 2006
+      },
+      {
+        "first_entry_year": 2007,
+        "fold_id": "2007-2008",
+        "last_entry_year": 2008
+      },
+      {
+        "first_entry_year": 2009,
+        "fold_id": "2009-2010",
+        "last_entry_year": 2010
+      },
+      {
+        "first_entry_year": 2011,
+        "fold_id": "2011-2012",
+        "last_entry_year": 2012
+      },
+      {
+        "first_entry_year": 2013,
+        "fold_id": "2013-2014",
+        "last_entry_year": 2014
+      },
+      {
+        "first_entry_year": 2015,
+        "fold_id": "2015-2016",
+        "last_entry_year": 2016
+      },
+      {
+        "first_entry_year": 2017,
+        "fold_id": "2017-2018",
+        "last_entry_year": 2018
+      }
+    ]
+  },
+  "stage": "development"
+}

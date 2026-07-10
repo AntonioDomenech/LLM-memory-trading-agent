@@ -1,0 +1,77 @@
+{
+  "cash_horizon": "one open-to-open session",
+  "context_alignment": "exact AAPL session date; no fill or interpolation",
+  "core_feature_columns": [
+    "aapl_lr_1",
+    "aapl_lr_5",
+    "aapl_lr_20",
+    "aapl_intraday_lr",
+    "aapl_gap_lr",
+    "aapl_downside_rv_20",
+    "aapl_drawdown_60",
+    "aapl_drawdown_252",
+    "aapl_minus_qqq_lr_5",
+    "aapl_minus_qqq_lr_20",
+    "qqq_lr_5",
+    "qqq_lr_20",
+    "qqq_lr_60",
+    "qqq_rv_20",
+    "qqq_minus_spy_lr_20"
+  ],
+  "decision_timestamp": "after completed close t",
+  "excluded_sources": {
+    "cftc": {
+      "decision": "no positioning value enters a feature, fit, or gate",
+      "finding": "weekly positioning already failed its separate frozen approach",
+      "included": false
+    },
+    "llm": {
+      "decision": "zero LLM calls; the forest is deterministic local NumPy",
+      "finding": "an LLM cannot add information to the same numeric inputs",
+      "included": false
+    },
+    "macro_and_tnx": {
+      "decision": "bounded context physically contains only IWM and VIX",
+      "finding": "stored macro values are placeholder or vintage-unsafe",
+      "included": false
+    },
+    "news": {
+      "decision": "excluded from this final price/market-only experiment",
+      "finding": "available rows are not proven point-in-time historical text",
+      "included": false
+    }
+  },
+  "execution_timestamp": "adjusted AAPL open t+1",
+  "full_feature_columns": [
+    "aapl_lr_1",
+    "aapl_lr_5",
+    "aapl_lr_20",
+    "aapl_intraday_lr",
+    "aapl_gap_lr",
+    "aapl_downside_rv_20",
+    "aapl_drawdown_60",
+    "aapl_drawdown_252",
+    "aapl_minus_qqq_lr_5",
+    "aapl_minus_qqq_lr_20",
+    "qqq_lr_5",
+    "qqq_lr_20",
+    "qqq_lr_60",
+    "qqq_rv_20",
+    "qqq_minus_spy_lr_20",
+    "iwm_lr_5",
+    "iwm_lr_20",
+    "qqq_minus_iwm_lr_20",
+    "vix_z_252",
+    "vix_lr_5"
+  ],
+  "label_maturity": "adjusted AAPL open t+2",
+  "missing_policy": "all twenty inputs required for both models; otherwise LONG",
+  "sentiment_feature_columns": [
+    "iwm_lr_5",
+    "iwm_lr_20",
+    "qqq_minus_iwm_lr_20",
+    "vix_z_252",
+    "vix_lr_5"
+  ],
+  "training_policy": "seven fixed purged expanding folds; maturity strictly before fold"
+}
