@@ -43,7 +43,7 @@ Because development takes place after all these dates, none is a truly unseen
 holdout. Passing is retrospective evidence only; it is not a profit guarantee.
 Prospective paper trading is required before risking capital.
 
-Promotion requires all of the following:
+The retrospective paper-trading-candidate gate requires all of the following:
 
 - more than one basis point of excess return in every fresh period at 5 bps,
   under both final-open and terminal-close marks;
@@ -77,18 +77,19 @@ did not change during a particular run; it does not prove the original search
 history or create a pristine holdout. Reports also hash every ledger CSV, the
 selection manifest, and the final report via a separate `checksums.json` file.
 
-Promotion also requires the exact 6,875-session joint AAPL/SPY/QQQ date
+The retrospective gate also requires the exact 6,875-session joint AAPL/SPY/QQQ date
 sequence through 2026-07-09. Its date-only hash detects an omitted interior
 session even if the cache still reaches the required final date. The supplied
 repository root must be the actual repository containing both executing source
 files, and both must be Git-tracked; an unrelated clean repository cannot be
 used to launder dirty strategy code.
 
-Dates alone do not authenticate prices. Capital promotion therefore also
+Dates alone do not authenticate prices. The retrospective gate therefore also
 requires the full content hash of the known fresh Yahoo snapshot downloaded on
 2026-07-10. An alternative or later revised snapshot remains usable for a
-diagnostic run but cannot promote capital until it is independently reviewed
-and its hash is committed explicitly.
+diagnostic run but cannot pass the reproducibility gate until it is independently
+reviewed and its hash is committed explicitly. Real capital still requires a
+separate locked prospective paper-trading result.
 
 ## Commands
 

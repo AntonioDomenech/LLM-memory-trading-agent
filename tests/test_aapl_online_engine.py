@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 
 from agent_benchmark.benchmark_engine import BenchmarkEngine
 from agent_benchmark.llm_client import _ollama_schema_for_namespace
-from agent_benchmark.local_provider import local_gemma_aapl_online_config
+from agent_benchmark.local_provider import (
+    local_gemma_aapl_causal_replay_config,
+    local_gemma_aapl_live_config,
+    local_gemma_aapl_online_config,
+)
 from agent_benchmark.memory import HybridMemory
 from agent_benchmark.online_policy import (
     CalibratedOnlineRiskOffEstimator,
@@ -142,13 +146,159 @@ def test_live_online_run_rejects_an_ephemeral_stream_before_market_access(tmp_pa
         engine.close()
 
 
+def test_live_learning_requires_frozen_code_and_model_identity(tmp_path):
+    engine = BenchmarkEngine(Warehouse(tmp_path / "warehouse.duckdb"))
+    try:
+        with pytest.raises(ValueError, match="local_model_digest and implementation_commit"):
+            engine.run_live_snapshot(
+                run_id="snapshot-identity",
+                config=local_gemma_aapl_live_config(stream_id="live-identity"),
+                secrets=SecretConfig(),
+                store=BenchmarkStore(tmp_path / "benchmark.db"),
+                dry_run=False,
+            )
+    finally:
+        engine.close()
+
+
+def test_live_learning_verifies_identity_against_current_runtime(tmp_path, monkeypatch):
+    engine = BenchmarkEngine(Warehouse(tmp_path / "warehouse.duckdb"))
+    config = local_gemma_aapl_live_config(
+        stream_id="live-identity",
+        local_model_digest="sha256:expected-model",
+        implementation_commit="a" * 40,
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_repository_identity",
+        lambda: {"commit": "b" * 40, "dirty": False},
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_local_model_digest",
+        lambda current: current.local_model_digest,
+    )
+    try:
+        with pytest.raises(ValueError, match="current clean Git HEAD"):
+            engine.run_live_snapshot(
+                run_id="snapshot-identity-mismatch",
+                config=config,
+                secrets=SecretConfig(),
+                store=BenchmarkStore(tmp_path / "benchmark.db"),
+                dry_run=False,
+            )
+    finally:
+        engine.close()
+
+
+def test_live_stream_rejects_state_from_different_code_or_model_contract(tmp_path, monkeypatch):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    store = BenchmarkStore(tmp_path / "benchmark.db")
+    engine = BenchmarkEngine(warehouse)
+    old_config = local_gemma_aapl_live_config(
+        stream_id="live-stable-name",
+        local_model_digest="sha256:old-model",
+        implementation_commit="a" * 40,
+    )
+    old_memory = HybridMemory(store, old_config, SecretConfig(), run_id="old-snapshot")
+    old_memory.save_live_state(
+        portfolio={"cash": 500.0, "positions": {"AAPL": 5.0}, "equity": 1000.0},
+        schedule_state={},
+        last_snapshot_at="2026-07-09T09:36:00-04:00",
+    )
+    new_config = local_gemma_aapl_live_config(
+        stream_id="live-stable-name",
+        local_model_digest="sha256:new-model",
+        implementation_commit="b" * 40,
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_repository_identity",
+        lambda: {"commit": new_config.implementation_commit, "dirty": False},
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_local_model_digest",
+        lambda current: current.local_model_digest,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="incompatible model/code contract"):
+            engine.run_live_snapshot(
+                run_id="new-snapshot",
+                config=new_config,
+                secrets=SecretConfig(),
+                store=store,
+                dry_run=False,
+                timestamp=datetime(2026, 7, 10, 9, 40, tzinfo=ZoneInfo("America/New_York")),
+            )
+    finally:
+        engine.close()
+        warehouse.close()
+
+
+@pytest.mark.parametrize("save_stale_state", [False, True])
+def test_live_stream_fails_closed_after_partial_learning_checkpoint(
+    tmp_path,
+    monkeypatch,
+    save_stale_state,
+):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    store = BenchmarkStore(tmp_path / "benchmark.db")
+    engine = BenchmarkEngine(warehouse)
+    config = local_gemma_aapl_live_config(
+        stream_id="live-partial",
+        local_model_digest="sha256:model",
+        implementation_commit="a" * 40,
+    )
+    memory = HybridMemory(store, config, SecretConfig(), run_id="partial-snapshot")
+    if save_stale_state:
+        memory.save_live_state(
+            portfolio={"cash": 1000.0, "positions": {}, "equity": 1000.0},
+            schedule_state={},
+            last_snapshot_at="2026-07-09T09:36:00-04:00",
+        )
+    memory.add_pending_experience(
+        source_run_id="partial-snapshot",
+        portfolio_scope="single_stock",
+        symbol="AAPL",
+        decision_timestamp="2026-07-10T09:35:00-04:00",
+        outcome_available_at="2026-08-07",
+        outcome_horizon="20d",
+        chosen_action="BUY_ALL",
+        state_features={"return_20d": 0.01},
+        metadata={
+            "entry_timestamp": "2026-07-10T09:36:00-04:00",
+            "entry_price": 100.0,
+            "horizon_days": 20,
+        },
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_repository_identity",
+        lambda: {"commit": config.implementation_commit, "dirty": False},
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_local_model_digest",
+        lambda current: current.local_model_digest,
+    )
+    expected = "newer executed experience" if save_stale_state else "no portfolio state"
+    try:
+        with pytest.raises(RuntimeError, match=expected):
+            engine.run_live_snapshot(
+                run_id="resume-after-partial",
+                config=config,
+                secrets=SecretConfig(),
+                store=store,
+                dry_run=False,
+                timestamp=datetime(2026, 7, 10, 9, 40, tzinfo=ZoneInfo("America/New_York")),
+            )
+    finally:
+        engine.close()
+        warehouse.close()
+
+
 def test_live_online_run_rejects_incompatible_intraday_timing(tmp_path):
     engine = BenchmarkEngine(Warehouse(tmp_path / "warehouse.duckdb"))
     try:
         with pytest.raises(ValueError, match="09:30-10:00"):
             engine.run_live_snapshot(
                 run_id="snapshot-1",
-                config=local_gemma_aapl_online_config(memory_online_stream_id="live-test"),
+                config=local_gemma_aapl_live_config(stream_id="live-test"),
                 secrets=SecretConfig(),
                 store=BenchmarkStore(tmp_path / "benchmark.db"),
                 dry_run=True,
@@ -158,11 +308,23 @@ def test_live_online_run_rejects_incompatible_intraday_timing(tmp_path):
         engine.close()
 
 
-def test_durable_live_stream_rejects_duplicate_session_snapshot(tmp_path):
+def test_durable_live_stream_rejects_duplicate_session_snapshot(tmp_path, monkeypatch):
     warehouse = Warehouse(tmp_path / "warehouse.duckdb")
     store = BenchmarkStore(tmp_path / "benchmark.db")
     engine = BenchmarkEngine(warehouse)
-    config = local_gemma_aapl_online_config(memory_online_stream_id="live-once")
+    config = local_gemma_aapl_live_config(
+        stream_id="live-once",
+        local_model_digest="sha256:test-model",
+        implementation_commit="a" * 40,
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_repository_identity",
+        lambda: {"commit": config.implementation_commit, "dirty": False},
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_local_model_digest",
+        lambda current: current.local_model_digest,
+    )
     memory = HybridMemory(store, config, SecretConfig(), run_id="snapshot-1")
     memory.save_live_state(
         portfolio={"cash": 1000.0, "positions": {}, "equity": 1000.0},
@@ -184,11 +346,23 @@ def test_durable_live_stream_rejects_duplicate_session_snapshot(tmp_path):
         warehouse.close()
 
 
-def test_durable_live_stream_fails_closed_on_malformed_portfolio_state(tmp_path):
+def test_durable_live_stream_fails_closed_on_malformed_portfolio_state(tmp_path, monkeypatch):
     warehouse = Warehouse(tmp_path / "warehouse.duckdb")
     store = BenchmarkStore(tmp_path / "benchmark.db")
     engine = BenchmarkEngine(warehouse)
-    config = local_gemma_aapl_online_config(memory_online_stream_id="live-corrupt")
+    config = local_gemma_aapl_live_config(
+        stream_id="live-corrupt",
+        local_model_digest="sha256:test-model",
+        implementation_commit="a" * 40,
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_repository_identity",
+        lambda: {"commit": config.implementation_commit, "dirty": False},
+    )
+    monkeypatch.setattr(
+        "agent_benchmark.benchmark_engine.resolve_local_model_digest",
+        lambda current: current.local_model_digest,
+    )
     memory = HybridMemory(store, config, SecretConfig(), run_id="snapshot-1")
     memory.save_live_state(
         portfolio={"cash": "not-a-number", "positions": {"AAPL": "bad"}, "equity": 1000.0},
@@ -401,9 +575,7 @@ def test_pending_2025_experience_becomes_usable_only_after_maturity(tmp_path):
             """,
             [day, price, price, price, price, price],
         )
-    config = local_gemma_aapl_online_config(
-        train_start="2024-01-01",
-        train_end="2024-12-31",
+    config = local_gemma_aapl_causal_replay_config(
         test_start=dates[0],
         test_end=dates[-1],
         online_policy_min_samples=1,
@@ -453,6 +625,45 @@ def test_pending_2025_experience_becomes_usable_only_after_maturity(tmp_path):
     assert memory.due_pending_experiences(as_of=dates[-1]) == []
 
 
+def test_frozen_holdout_fails_closed_if_learning_path_is_called(tmp_path):
+    store = BenchmarkStore(tmp_path / "benchmark.db")
+    engine = BenchmarkEngine(Warehouse(tmp_path / "warehouse.duckdb"))
+    config = local_gemma_aapl_online_config()
+    memory = HybridMemory(store, config, SecretConfig(), run_id="frozen-a")
+    estimator = CalibratedOnlineRiskOffEstimator(
+        RiskOffEstimatorConfig(symbol="AAPL", min_samples=1, max_neighbors=5)
+    )
+    snapshot = PointInTimeSnapshot(
+        symbol="AAPL",
+        decision_timestamp="2025-01-02",
+        as_of_timestamp="2025-01-02",
+        features={"return_20d": 0.0},
+    )
+    try:
+        with pytest.raises(RuntimeError, match="forbids queuing"):
+            engine._queue_online_experience(
+                memory,
+                config,
+                "frozen-a",
+                "test",
+                snapshot,
+                "2025-01-03",
+                {"AAPL": 100.0},
+                {"action": "BUY_ALL"},
+            )
+        with pytest.raises(RuntimeError, match="forbids maturing"):
+            engine._mature_due_online_experiences(
+                memory,
+                config,
+                "frozen-a",
+                "2025-02-03",
+                estimator,
+                phase="test",
+            )
+    finally:
+        engine.close()
+
+
 def test_adjusted_open_buy_hold_and_phase_start_equity_use_same_contract(tmp_path):
     warehouse = Warehouse(tmp_path / "warehouse.duckdb")
     engine = BenchmarkEngine(warehouse)
@@ -492,6 +703,45 @@ def test_adjusted_open_buy_hold_and_phase_start_equity_use_same_contract(tmp_pat
     assert window["total_return"] == pytest.approx(0.10)
 
 
+def test_frozen_holdout_calendar_reports_use_one_continuous_account(tmp_path):
+    warehouse = Warehouse(tmp_path / "warehouse.duckdb")
+    engine = BenchmarkEngine(warehouse)
+    rows = [
+        ("2024-01-02", 100.0),
+        ("2024-12-31", 110.0),
+        ("2025-01-02", 111.0),
+        ("2025-12-31", 121.0),
+        ("2026-01-02", 122.0),
+        ("2026-07-09", 127.0),
+    ]
+    try:
+        for day, price in rows:
+            warehouse.conn.execute(
+                """
+                INSERT INTO asset_daily VALUES
+                    (CAST(? AS DATE), 'AAPL', true, true, true, ?, ?, ?, ?, ?, 1000, 0, 'test', '')
+                """,
+                [day, price, price, price, price, price],
+            )
+        reports = engine._continuous_single_stock_period_reports(
+            local_gemma_aapl_online_config(slippage_bps=0.0),
+            ["AAPL"],
+            [
+                {"date": day, "phase": "test", "equity": 1000.0 * price / 100.0, **({"phase_start_equity": 1000.0} if index == 0 else {})}
+                for index, (day, price) in enumerate(rows)
+            ],
+        )
+    finally:
+        engine.close()
+        warehouse.close()
+
+    assert list(reports) == ["2024", "2025", "2026_ytd"]
+    assert reports["2024"]["strategy_return"] == pytest.approx(0.10)
+    assert reports["2025"]["strategy_return"] == pytest.approx(0.10)
+    assert reports["2026_ytd"]["strategy_return"] == pytest.approx(127.0 / 121.0 - 1.0)
+    assert all(item["accounting"] == "continuous_account_no_calendar_reset" for item in reports.values())
+
+
 def test_live_lesson_rebases_raw_entry_and_adjusted_exit_together(tmp_path, monkeypatch):
     warehouse = Warehouse(tmp_path / "warehouse.duckdb")
     store = BenchmarkStore(tmp_path / "benchmark.db")
@@ -507,8 +757,8 @@ def test_live_lesson_rebases_raw_entry_and_adjusted_exit_together(tmp_path, monk
             """,
             [day, raw, raw, raw, raw, adjusted],
         )
-    config = local_gemma_aapl_online_config(
-        memory_online_stream_id="live-test",
+    config = local_gemma_aapl_live_config(
+        stream_id="live-test",
         test_start=dates[0],
         test_end=dates[-1],
         online_policy_min_samples=1,
@@ -598,8 +848,8 @@ def test_live_lesson_rebases_raw_entry_across_intervening_split(tmp_path, monkey
         index=pd.to_datetime(dates),
     )
     monkeypatch.setattr("yfinance.download", lambda *args, **kwargs: yahoo)
-    config = local_gemma_aapl_online_config(
-        memory_online_stream_id="live-split-test",
+    config = local_gemma_aapl_live_config(
+        stream_id="live-split-test",
         online_policy_min_samples=1,
         online_policy_max_neighbors=5,
     )
@@ -771,7 +1021,7 @@ def test_live_dry_run_orders_quote_after_model_and_does_not_mutate_learning_stat
     warehouse = Warehouse(tmp_path / "warehouse.duckdb")
     store = BenchmarkStore(tmp_path / "benchmark.db")
     engine = BenchmarkEngine(warehouse)
-    config = local_gemma_aapl_online_config(memory_online_stream_id="dry-run-live")
+    config = local_gemma_aapl_live_config(stream_id="dry-run-live")
     config.data_sources.include_index_context = False
     run_id = "dry-run-snapshot"
     store.create_benchmark_run(run_id, config.model_dump() if hasattr(config, "model_dump") else config.dict())
@@ -873,8 +1123,6 @@ def test_replay_dry_run_does_not_mutate_learning_state(tmp_path):
     store = BenchmarkStore(tmp_path / "benchmark.db")
     engine = BenchmarkEngine(warehouse)
     config = local_gemma_aapl_online_config(
-        train_start="2024-01-01",
-        train_end="2024-01-31",
         test_start="2025-01-01",
         test_end="2025-01-31",
     )
@@ -903,6 +1151,8 @@ def test_replay_dry_run_does_not_mutate_learning_state(tmp_path):
         warehouse.close()
 
     assert result["summary"]["dry_run"] is True
+    assert result["summary"]["frozen_learning_state_proof"]["unchanged"] is True
+    assert result["summary"]["frozen_learning_state_proof"]["test_outcomes_used_for_learning"] is False
     assert counts == {
         "benchmark_memory": 0,
         "benchmark_pending_experiences": 0,

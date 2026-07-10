@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -16,9 +18,11 @@ import requests
 from .benchmark_engine import BenchmarkEngine
 from .config_store import DATA_DIR
 from .llm_client import call_json_model
+from .memory import build_frozen_system_manifest, verify_frozen_system_manifest
 from .local_provider import (
     LOCAL_OLLAMA_MODEL,
     local_gemma_aapl_config,
+    local_gemma_aapl_causal_replay_config,
     local_gemma_aapl_online_config,
     local_gemma_secret_config,
     validate_no_paid_api_mode,
@@ -69,7 +73,20 @@ def ensure_ollama_model(model: str = LOCAL_OLLAMA_MODEL, *, pull: bool = True) -
     installed = {item.get("name") for item in tags.get("models", []) if item.get("name")}
     installed.update({item.get("model") for item in tags.get("models", []) if item.get("model")})
     if model in installed:
-        return {"status": "present", "model": model, "installed_models": sorted(installed)}
+        record = next(
+            (
+                item
+                for item in tags.get("models", [])
+                if model in {item.get("name"), item.get("model")}
+            ),
+            {},
+        )
+        return {
+            "status": "present",
+            "model": model,
+            "digest": str(record.get("digest") or ""),
+            "installed_models": sorted(installed),
+        }
     if not pull:
         raise RuntimeError(f"Ollama model {model!r} is not installed.")
     _run_checked([ollama, "pull", model], timeout=60 * 60)
@@ -78,7 +95,20 @@ def ensure_ollama_model(model: str = LOCAL_OLLAMA_MODEL, *, pull: bool = True) -
     installed.update({item.get("model") for item in tags.get("models", []) if item.get("model")})
     if model not in installed:
         raise RuntimeError(f"Pulled {model!r}, but Ollama does not list it as installed.")
-    return {"status": "pulled", "model": model, "installed_models": sorted(installed)}
+    record = next(
+        (
+            item
+            for item in tags.get("models", [])
+            if model in {item.get("name"), item.get("model")}
+        ),
+        {},
+    )
+    return {
+        "status": "pulled",
+        "model": model,
+        "digest": str(record.get("digest") or ""),
+        "installed_models": sorted(installed),
+    }
 
 
 def ollama_executable() -> str:
@@ -122,16 +152,94 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
     buy_hold_return = _float(single.get("total_return"))
     invalid = int(metrics.get("invalid_allocation_count") or metrics.get("model_failures") or 0)
     local_only = bool(summary.get("no_paid_api_mode") and usage.get("local_only") and usage.get("estimated_cost_usd") == 0.0)
-    beat_buy_hold = ai_return is not None and buy_hold_return is not None and ai_return > buy_hold_return
+    overall_beat_buy_hold = ai_return is not None and buy_hold_return is not None and ai_return > buy_hold_return
+    period_results = ((summary.get("frozen_holdout") or {}).get("periods") or {})
+    expected_periods = set()
+    if config.evaluation_mode == "frozen_holdout":
+        start_year = date.fromisoformat(config.test_start).year
+        end_date = date.fromisoformat(config.test_end)
+        for year in range(start_year, end_date.year + 1):
+            expected_periods.add(
+                f"{year}_ytd"
+                if year == end_date.year and (end_date.month, end_date.day) != (12, 31)
+                else str(year)
+            )
+    required_periods_present = bool(expected_periods) and set(period_results) == expected_periods
+    all_required_periods_beat = (
+        required_periods_present
+        and all(bool(item.get("beat_buy_hold")) for item in period_results.values())
+        if config.evaluation_mode == "frozen_holdout"
+        else True
+    )
+    beat_buy_hold = bool(overall_beat_buy_hold and all_required_periods_beat)
+    learning_proof = summary.get("frozen_learning_state_proof") or {}
+    learning_before = learning_proof.get("before") or {}
+    learning_after = learning_proof.get("after") or {}
+    data_proof = summary.get("evaluation_data_snapshot") or {}
+    data_before = data_proof.get("before") or {}
+    data_after = data_proof.get("after") or {}
+    manifest = summary.get("frozen_system_manifest") or {}
+    manifest_config = manifest.get("config") or {}
+    frozen_certification_checks = {
+        "learning_state_unchanged": bool(
+            learning_proof.get("unchanged")
+            and learning_proof.get("test_outcomes_used_for_learning") is False
+            and learning_before.get("sha256")
+            and learning_before.get("sha256") == learning_after.get("sha256")
+        ),
+        "evaluation_data_unchanged": bool(
+            data_proof.get("unchanged_during_run")
+            and data_before.get("sha256")
+            and data_before.get("sha256") == data_after.get("sha256")
+            and int(data_after.get("session_count") or 0) > 0
+        ),
+        "manifest_hash_valid": verify_frozen_system_manifest(manifest),
+        "manifest_matches_run_config": bool(manifest_config == model_to_dict(config)),
+        "manifest_binds_evaluation_data": bool(
+            manifest.get("evaluation_data_snapshot") == data_after
+        ),
+        "manifest_binds_training_data": bool(manifest.get("base_content_hash")),
+        "model_digest_bound": bool(
+            config.local_model_digest
+            and manifest.get("local_model_digest") == config.local_model_digest
+        ),
+        "implementation_commit_bound": bool(
+            config.implementation_commit
+            and manifest.get("git_commit") == config.implementation_commit
+        ),
+        "prompt_and_implementation_bound": bool(
+            manifest.get("prompt_contract_sha256")
+            and manifest.get("implementation_sha256")
+        ),
+        "report_role_is_frozen": bool(
+            (summary.get("benchmark_contract") or {}).get("evaluation_mode")
+            == "frozen_holdout"
+            and (summary.get("frozen_holdout") or {}).get("test_evidence") is True
+        ),
+    }
+    frozen_certified = bool(
+        config.evaluation_mode == "frozen_holdout"
+        and all(frozen_certification_checks.values())
+    )
+    evidence_eligible = frozen_certified
     return {
-        "success": bool(beat_buy_hold and invalid == 0 and local_only),
+        "success": bool(beat_buy_hold and invalid == 0 and local_only and evidence_eligible),
         "beat_buy_hold": beat_buy_hold,
+        "overall_beat_buy_hold": overall_beat_buy_hold,
+        "all_required_periods_beat_buy_hold": all_required_periods_beat,
+        "required_periods_present": required_periods_present,
+        "expected_periods": sorted(expected_periods),
+        "period_results": period_results,
         "ai_return": ai_return,
         "buy_hold_return": buy_hold_return,
         "excess_return": ai_return - buy_hold_return if ai_return is not None and buy_hold_return is not None else None,
         "invalid_decisions": invalid,
         "local_only_cost_proof": local_only,
         "estimated_cost_usd": usage.get("estimated_cost_usd"),
+        "evaluation_mode": config.evaluation_mode,
+        "eligible_as_frozen_test_evidence": evidence_eligible,
+        "frozen_certified": frozen_certified,
+        "frozen_certification_checks": frozen_certification_checks,
         "api_cost_display": usage.get("estimated_cost_display"),
         "model": summary.get("model") or config.model,
         "model_provider": summary.get("model_provider") or config.model_provider,
@@ -201,9 +309,32 @@ def run_iteration(
             raise RuntimeError(f"Cannot resume missing benchmark run {run_id!r}.")
         if not _is_resumable_run(existing):
             raise RuntimeError(f"Cannot resume run {run_id!r} from status {existing.get('status')!r}.")
+        commit_hash = current_git_hash(repo_root)
+        if config.evaluation_mode != "legacy":
+            if not config.implementation_commit:
+                raise RuntimeError("Frozen/causal resume lacks its original implementation commit")
+            if commit_hash != config.implementation_commit:
+                raise RuntimeError(
+                    "Resume implementation commit differs from the run's frozen contract"
+                )
     else:
+        commit_hash = (
+            commit_current_state(repo_root, f"local gemma benchmark iteration {iteration}")
+            if commit_before_run
+            else current_git_hash(repo_root)
+        )
+        if config.evaluation_mode != "legacy":
+            config_payload = model_to_dict(config)
+            config_payload["implementation_commit"] = commit_hash
+            config = BenchmarkConfig(**config_payload)
         run_id = f"local-gemma-aapl-{iteration}-{uuid.uuid4().hex[:8]}"
         store.create_benchmark_run(run_id, model_to_dict(config))
+    if config.evaluation_mode != "legacy":
+        if not config.local_model_digest:
+            raise RuntimeError("Frozen/causal runs require the exact local Ollama model digest")
+        dirty = _run_checked(["git", "status", "--porcelain"], cwd=repo_root).stdout.strip()
+        if dirty:
+            raise RuntimeError("Frozen/causal runs require a clean committed worktree")
     run_dir = DATA_DIR / "local_gemma_runs" / run_id
     preflight_report = _preflight(config, secrets, store)
     store.save_benchmark_report(run_id, "preflight", preflight_report)
@@ -213,7 +344,6 @@ def run_iteration(
         store.update_benchmark_run(run_id, status="failed", phase="preflight", error=message, progress={"message": message}, finished=True)
         raise RuntimeError(message)
 
-    commit_hash = commit_current_state(repo_root, f"local gemma benchmark iteration {iteration}") if commit_before_run else current_git_hash(repo_root)
     monitor_path = run_dir / "monitoring.jsonl"
     monitor = ResourceMonitor(monitor_path, config) if config.monitoring_enabled else None
     control = LocalBenchmarkControl(store, monitor)
@@ -237,9 +367,54 @@ def run_iteration(
         if monitor:
             monitor.stop()
         engine.close()
+    if config.evaluation_mode != "legacy":
+        if current_git_hash(repo_root) != commit_hash:
+            message = "Implementation commit changed during the frozen/causal run"
+            store.update_benchmark_run(
+                run_id,
+                status="failed",
+                phase="failed",
+                error=message,
+                finished=True,
+            )
+            raise RuntimeError(message)
+        dirty_after = _run_checked(["git", "status", "--porcelain"], cwd=repo_root).stdout.strip()
+        if dirty_after:
+            message = "Worktree changed during the frozen/causal run"
+            store.update_benchmark_run(
+                run_id,
+                status="failed",
+                phase="failed",
+                error=message,
+                finished=True,
+            )
+            raise RuntimeError(message)
     run = store.get_benchmark_run(run_id) or {"id": run_id, "summary": {}, "decisions": []}
     summary = run.get("summary") or {}
     summary["commit_hash"] = commit_hash
+    if config.evaluation_mode != "legacy":
+        prompt_path = Path(__file__).with_name("prompting.py")
+        implementation_paths = (
+            Path(__file__).with_name("benchmark_engine.py"),
+            Path(__file__).with_name("deterministic_memory.py"),
+            Path(__file__).with_name("online_policy.py"),
+        )
+        prompt_hash = hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+        implementation_hasher = hashlib.sha256()
+        for path in implementation_paths:
+            implementation_hasher.update(path.name.encode("utf-8"))
+            implementation_hasher.update(path.read_bytes())
+        base_content_hash = str(
+            ((summary.get("deterministic_memory") or {}).get("content_hash")) or ""
+        )
+        summary["frozen_system_manifest"] = build_frozen_system_manifest(
+            config,
+            base_content_hash=base_content_hash,
+            evaluation_data_snapshot=(summary.get("evaluation_data_snapshot") or {}).get("after") or {},
+            git_commit=commit_hash,
+            prompt_contract_sha256=prompt_hash,
+            implementation_sha256=implementation_hasher.hexdigest(),
+        )
     summary["monitoring"] = {
         "enabled": bool(monitor),
         "path": str(monitor_path) if monitor else "",
@@ -296,6 +471,8 @@ def _config_for_preset(preset: str) -> BenchmarkConfig:
         return local_gemma_aapl_config()
     if preset == "aapl-online":
         return local_gemma_aapl_online_config()
+    if preset == "aapl-causal-replay":
+        return local_gemma_aapl_causal_replay_config()
     raise ValueError(f"Unknown local Gemma preset {preset!r}.")
 
 
@@ -360,7 +537,18 @@ def run_loop(
     online_preset = config.run_preset == "local_gemma_aapl_online"
     if online_preset:
         max_iterations = 1
+    expected_resume_digest = str(config.local_model_digest or "") if resume_run_id else ""
     model_status = ensure_ollama_model(config.model, pull=pull_model)
+    observed_digest = str(model_status.get("digest") or "")
+    if (
+        resume_run_id
+        and config.evaluation_mode != "legacy"
+        and (not expected_resume_digest or observed_digest != expected_resume_digest)
+    ):
+        raise RuntimeError("Resume Ollama model digest differs from the run's frozen contract")
+    config_payload = model_to_dict(config)
+    config_payload["local_model_digest"] = observed_digest
+    config = BenchmarkConfig(**config_payload)
     smoke = run_local_json_smoke(config, secrets)
     reports: List[Dict[str, Any]] = []
     first_iteration = 1
@@ -485,7 +673,7 @@ def main() -> None:
     parser.add_argument("--max-iterations", type=int, default=3, help="Legacy loop limit; the aapl-online preset always runs exactly one iteration.")
     parser.add_argument(
         "--preset",
-        choices=("aapl-online", "legacy"),
+        choices=("aapl-online", "aapl-causal-replay", "legacy"),
         default="aapl-online",
         help="Use the chronological online-learning system (default) or the preserved legacy loop.",
     )

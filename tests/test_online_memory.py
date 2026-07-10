@@ -2,7 +2,12 @@ import sqlite3
 
 import pytest
 
-from agent_benchmark.memory import HybridMemory, build_policy_fingerprint
+from agent_benchmark.memory import (
+    HybridMemory,
+    build_frozen_system_manifest,
+    build_policy_fingerprint,
+    verify_frozen_system_manifest,
+)
 from agent_benchmark.schemas import BenchmarkConfig, SecretConfig
 from agent_benchmark.storage import BenchmarkStore
 
@@ -45,13 +50,63 @@ def _add_lesson(memory, *, content, knowledge_timestamp, layer=None, features=No
     )
 
 
+def test_frozen_system_manifest_changes_with_contract_or_artifact():
+    config = _scoped_config(
+        evaluation_mode="frozen_holdout",
+        train_end="2023-12-31",
+        test_start="2024-01-01",
+        selection_cutoff="2023-12-31",
+        fixed_evaluation_cutoff="2026-07-09",
+    )
+    baseline = build_frozen_system_manifest(
+        config,
+        base_content_hash="sha256:data",
+        evaluation_data_snapshot={"sha256": "sha256:evaluation"},
+        git_commit="a" * 40,
+        prompt_contract_sha256="b" * 64,
+        implementation_sha256="c" * 64,
+    )
+    changed_config = _scoped_config(
+        evaluation_mode="frozen_holdout",
+        train_end="2023-12-31",
+        test_start="2024-01-01",
+        selection_cutoff="2023-12-31",
+        fixed_evaluation_cutoff="2026-07-09",
+        online_policy_risk_off_probability=0.67,
+    )
+    changed = build_frozen_system_manifest(
+        changed_config,
+        base_content_hash="sha256:data",
+        evaluation_data_snapshot={"sha256": "sha256:evaluation"},
+        git_commit="a" * 40,
+        prompt_contract_sha256="b" * 64,
+        implementation_sha256="c" * 64,
+    )
+    changed_prompt = build_frozen_system_manifest(
+        config,
+        base_content_hash="sha256:data",
+        evaluation_data_snapshot={"sha256": "sha256:evaluation"},
+        git_commit="a" * 40,
+        prompt_contract_sha256="d" * 64,
+        implementation_sha256="c" * 64,
+    )
+
+    assert baseline["frozen_manifest_sha256"] != changed["frozen_manifest_sha256"]
+    assert baseline["frozen_manifest_sha256"] != changed_prompt["frozen_manifest_sha256"]
+    assert verify_frozen_system_manifest(baseline) is True
+    tampered = {**baseline, "base_content_hash": "sha256:tampered"}
+    assert verify_frozen_system_manifest(tampered) is False
+
+
 def test_base_snapshot_is_shared_but_backtest_overlays_are_run_isolated(tmp_path):
     store = BenchmarkStore(tmp_path / "benchmark.db")
     config = _scoped_config(memory_online_stream_id="")
     base = HybridMemory(store, config, SecretConfig())
     registered = base.register_base_snapshot(content_hash="sha256:abc", metadata={"cases": 10})
     assert registered["content_hash"] == "sha256:abc"
-    assert base.register_base_snapshot(content_hash="sha256:abc", metadata={})["metadata"] == {"cases": 10}
+    assert base.register_base_snapshot(content_hash="sha256:abc", metadata={"cases": 10})["metadata"] == {"cases": 10}
+    with pytest.raises(ValueError, match="changed cutoff or provenance metadata"):
+        base.register_base_snapshot(content_hash="sha256:abc", metadata={})
     with pytest.raises(ValueError, match="changed content"):
         base.register_base_snapshot(content_hash="sha256:different", metadata={})
     base.add_base(
@@ -84,6 +139,15 @@ def test_base_snapshot_is_shared_but_backtest_overlays_are_run_isolated(tmp_path
 
     incompatible = _scoped_config(memory_policy_version="long-cash-v2")
     assert build_policy_fingerprint(incompatible) != build_policy_fingerprint(config)
+    first_commit = _scoped_config(
+        local_model_digest="sha256:model",
+        implementation_commit="a" * 40,
+    )
+    second_commit = _scoped_config(
+        local_model_digest="sha256:model",
+        implementation_commit="b" * 40,
+    )
+    assert build_policy_fingerprint(first_commit) != build_policy_fingerprint(second_commit)
     other_policy = HybridMemory(store, incompatible, SecretConfig(), run_id="replay-a")
     assert other_policy.retrieve(decision_timestamp="2025-02-01") == []
 

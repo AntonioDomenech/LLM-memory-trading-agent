@@ -46,6 +46,12 @@ FINAL_PERIODS = (
     EvaluationPeriod("2026_ytd", "2026-01-01", "2026-07-09"),
 )
 
+TRAINING_START = "2000-01-01"
+TRAINING_CUTOFF = "2023-12-31"
+FROZEN_HOLDOUT_MODE = "frozen_holdout"
+CAUSAL_ONLINE_REPLAY_MODE = "causal_online_replay"
+LEARNING_MODES = frozenset({FROZEN_HOLDOUT_MODE, CAUSAL_ONLINE_REPLAY_MODE})
+
 # A date-only hash is stable across later price/dividend revisions and detects
 # an omitted interior session even when a corrupted cache reaches the required
 # final date.
@@ -369,6 +375,78 @@ def spec_sha256(spec: LongCashSpec) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _validate_learning_mode(learning_mode: str) -> None:
+    if learning_mode not in LEARNING_MODES:
+        raise ValueError(
+            f"Unsupported learning mode {learning_mode!r}; expected one of {sorted(LEARNING_MODES)}"
+        )
+
+
+def evaluation_protocol_manifest(spec: LongCashSpec) -> Dict[str, Any]:
+    """Describe the non-overlapping roles of training, holdout, and live replay."""
+
+    spec.validate()
+    cutoff = pd.Timestamp(spec.selection_data_cutoff)
+    first_holdout = pd.Timestamp(FINAL_PERIODS[0].start)
+    if cutoff >= first_holdout:
+        raise ValueError("Training/selection data must end before the frozen holdout begins")
+    return {
+        "training_and_selection": {
+            "start": TRAINING_START,
+            "end": spec.selection_data_cutoff,
+            "outcomes_may_be_used_for_learning": True,
+            "may_select_features_models_and_thresholds": True,
+            "reported_role": "training_and_internal_validation_diagnostic_not_test_evidence",
+            "final_refit": "refit the frozen model once using all causally mature labels through the cutoff",
+        },
+        "primary_frozen_holdout": {
+            "periods": [asdict(period) for period in FINAL_PERIODS],
+            "learning_mode": FROZEN_HOLDOUT_MODE,
+            "outcomes_may_be_used_for_learning": False,
+            "model_or_threshold_updates": False,
+            "current_completed_market_features_allowed": True,
+            "reported_role": "primary_out_of_sample_test",
+        },
+        "separate_causal_online_replay": {
+            "periods": [asdict(period) for period in FINAL_PERIODS],
+            "learning_mode": CAUSAL_ONLINE_REPLAY_MODE,
+            "outcomes_may_be_used_for_learning": "only after the configured outcome has matured",
+            "future_outcomes_allowed": False,
+            "reported_role": "operational_adaptation_diagnostic_not_primary_holdout",
+        },
+        "evidence_caveat": (
+            "The repository has already inspected 2024 onward during earlier development. "
+            "This contract prevents candidate-specific training leakage, but only future locked "
+            "paper trading can provide a globally pristine prospective test."
+        ),
+    }
+
+
+def frozen_model_identity(
+    spec: LongCashSpec,
+    *,
+    training_data_sha256: str,
+    implementation_sha256: str,
+    ledger_dependency_sha256: str,
+) -> Dict[str, Any]:
+    """Hash every deterministic input that defines the pre-holdout model."""
+
+    payload = {
+        "learning_mode": FROZEN_HOLDOUT_MODE,
+        "training_start": TRAINING_START,
+        "training_cutoff": spec.selection_data_cutoff,
+        "strategy_sha256": spec_sha256(spec),
+        "training_data_sha256": training_data_sha256,
+        "implementation_sha256": implementation_sha256,
+        "ledger_dependency_sha256": ledger_dependency_sha256,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return {
+        **payload,
+        "frozen_model_contract_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
 def selection_manifest(spec: LongCashSpec) -> Dict[str, Any]:
     manifest = {**SELECTION_PROTOCOL, "selected_spec": asdict(spec)}
     if spec.name == HIERARCHICAL_EMPIRICAL_BAYES_V1.name:
@@ -424,19 +502,25 @@ def _bayes_bucket(value: float, cut: float) -> int:
 def build_empirical_bayes_forecast(
     frame: pd.DataFrame,
     spec: LongCashSpec,
+    *,
+    learning_mode: str = FROZEN_HOLDOUT_MODE,
 ) -> pd.DataFrame:
     """Build a strictly chronological next-open loss forecast.
 
     A lesson created at close j uses the return from open j+1 to open j+2.
     The loop adds that lesson immediately before predicting at close j+2, when
-    the exit open is already observable. No later label can alter an earlier
-    prediction.
+    the exit open is already observable. In ``frozen_holdout`` mode, only
+    lessons whose outcome was knowable by the selection cutoff enter the
+    estimator. In ``causal_online_replay`` mode, later lessons may enter only
+    after they mature. No later label can alter an earlier prediction.
     """
 
     spec.validate()
+    _validate_learning_mode(learning_mode)
     if spec.rule_type != "hierarchical_empirical_bayes":
         raise ValueError("Empirical-Bayes forecast requires its frozen rule type")
     data = canonical_context_frame(frame)
+    learning_cutoff = pd.Timestamp(spec.selection_data_cutoff)
     aapl_daily = data["aapl_adj_close"].pct_change()
     qqq_daily = data["qqq_adj_close"].pct_change()
     relative_daily = aapl_daily - qqq_daily
@@ -502,8 +586,13 @@ def build_empirical_bayes_forecast(
 
     for current in range(len(data)):
         matured = current - 2
+        outcome_is_allowed = (
+            learning_mode == CAUSAL_ONLINE_REPLAY_MODE
+            or data.index[current] <= learning_cutoff
+        )
         if (
             matured >= 0
+            and outcome_is_allowed
             and data.index[matured] >= pd.Timestamp(spec.bayes_learning_start)
             and states[matured] is not None
         ):
@@ -573,7 +662,7 @@ def build_empirical_bayes_forecast(
         ):
             target[current] = 0.0
 
-    return pd.DataFrame(
+    forecast = pd.DataFrame(
         {
             "target_exposure": target,
             "posterior_cash_win_probability": posterior,
@@ -585,13 +674,30 @@ def build_empirical_bayes_forecast(
         },
         index=data.index,
     )
+    forecast.attrs.update(
+        {
+            "learning_mode": learning_mode,
+            "learning_cutoff": spec.selection_data_cutoff,
+            "post_cutoff_outcomes_used_for_learning": bool(
+                learning_mode == CAUSAL_ONLINE_REPLAY_MODE
+            ),
+        }
+    )
+    return forecast
 
 
 def empirical_bayes_predictive_diagnostics(
     frame: pd.DataFrame,
     spec: LongCashSpec,
+    *,
+    learning_mode: str = FROZEN_HOLDOUT_MODE,
 ) -> Dict[str, Any]:
-    forecast = build_empirical_bayes_forecast(frame, spec)
+    _validate_learning_mode(learning_mode)
+    forecast = build_empirical_bayes_forecast(
+        frame,
+        spec,
+        learning_mode=learning_mode,
+    )
     result: Dict[str, Any] = {}
     periods = {
         "pre_2024": ("2000-01-01", "2023-12-31"),
@@ -637,16 +743,49 @@ def empirical_bayes_predictive_diagnostics(
         "predicted_interval": "adjusted open t+1 to adjusted open t+2",
         "label_first_available": "open t+2; added before close t+2 decision",
         "future_labels_used": False,
-        "continues_learning_in_final_periods": True,
+        "learning_mode": learning_mode,
+        "learning_cutoff": spec.selection_data_cutoff,
+        "continues_learning_in_final_periods": bool(
+            learning_mode == CAUSAL_ONLINE_REPLAY_MODE
+        ),
+        "reported_role": (
+            "primary_out_of_sample_test"
+            if learning_mode == FROZEN_HOLDOUT_MODE
+            else "operational_adaptation_diagnostic_not_primary_holdout"
+        ),
+    }
+    post_cutoff = forecast.loc[pd.Timestamp(spec.selection_data_cutoff) + pd.Timedelta(days=1) :]
+    if len(post_cutoff):
+        first_count = int(post_cutoff["global_matured_samples"].iloc[0])
+        last_count = int(post_cutoff["global_matured_samples"].iloc[-1])
+    else:
+        first_count = last_count = int(forecast["global_matured_samples"].iloc[-1])
+    result["learning_proof"] = {
+        "post_cutoff_first_matured_sample_count": first_count,
+        "post_cutoff_last_matured_sample_count": last_count,
+        "post_cutoff_sample_count_increase": last_count - first_count,
+        "frozen_count_remained_constant": bool(
+            learning_mode != FROZEN_HOLDOUT_MODE or last_count == first_count
+        ),
     }
     return result
 
 
-def build_long_cash_target(frame: pd.DataFrame, spec: LongCashSpec) -> pd.Series:
+def build_long_cash_target(
+    frame: pd.DataFrame,
+    spec: LongCashSpec,
+    *,
+    learning_mode: str = FROZEN_HOLDOUT_MODE,
+) -> pd.Series:
     spec.validate()
+    _validate_learning_mode(learning_mode)
     data = canonical_context_frame(frame)
     if spec.rule_type == "hierarchical_empirical_bayes":
-        return build_empirical_bayes_forecast(data, spec)["target_exposure"]
+        return build_empirical_bayes_forecast(
+            data,
+            spec,
+            learning_mode=learning_mode,
+        )["target_exposure"]
     intraday_return = data["aapl_close"] / data["aapl_open"] - 1.0
     percentile = intraday_return.rolling(
         spec.aapl_percentile_lookback,
@@ -798,8 +937,10 @@ def evaluate_fresh_periods(
     costs: CostAssumptions,
     *,
     initial_cash: float = 1000.0,
+    learning_mode: str = FROZEN_HOLDOUT_MODE,
 ) -> tuple[Dict[str, Any], Dict[str, pd.DataFrame]]:
-    target = build_long_cash_target(frame, spec)
+    _validate_learning_mode(learning_mode)
+    target = build_long_cash_target(frame, spec, learning_mode=learning_mode)
     benchmark_target = pd.Series(1.0, index=canonical_context_frame(frame).index)
     reports: Dict[str, Any] = {}
     merged_ledgers: Dict[str, pd.DataFrame] = {}
@@ -870,12 +1011,14 @@ def evaluate_continuous_account(
     costs: CostAssumptions,
     *,
     initial_cash: float = 1000.0,
+    learning_mode: str = FROZEN_HOLDOUT_MODE,
 ) -> tuple[Dict[str, Any], pd.DataFrame]:
     if not periods:
         raise ValueError("At least one continuous-account period is required")
     period = EvaluationPeriod("continuous", periods[0].start, periods[-1].end)
     data = canonical_context_frame(frame)
-    target = build_long_cash_target(data, spec)
+    _validate_learning_mode(learning_mode)
+    target = build_long_cash_target(data, spec, learning_mode=learning_mode)
     benchmark_target = pd.Series(1.0, index=data.index)
     strategy = simulate_unleveraged_period(
         data, target, period, costs, initial_cash=initial_cash
@@ -1194,6 +1337,11 @@ def run_unleveraged_experiment(
     started = time.perf_counter()
     created_at = datetime.now(timezone.utc)
     spec.validate()
+    if spec.selection_data_cutoff != TRAINING_CUTOFF:
+        raise ValueError(
+            f"Promotion runs require the exact {TRAINING_START} through {TRAINING_CUTOFF} "
+            "training/selection window"
+        )
     if tuple(periods) != FINAL_PERIODS:
         raise ValueError(
             "Promotion runs require the exact ordered 2024, 2025, and 2026-YTD periods"
@@ -1215,11 +1363,18 @@ def run_unleveraged_experiment(
     session_coverage = assert_final_session_coverage(frame)
     data_hash = context_data_sha256(frame)
     data_authenticity = context_snapshot_authenticity(frame)
-    candidate_hash_at_start = hashlib.sha256(
-        f"{spec_sha256(spec)}:{implementation_hash_at_start}:{ledger_dependency_hash_at_start}:{data_hash}".encode(
-            "utf-8"
-        )
-    ).hexdigest()
+    canonical_frame = canonical_context_frame(frame)
+    training_frame = canonical_frame.loc[TRAINING_START : spec.selection_data_cutoff]
+    if training_frame.empty or training_frame.index.max() > pd.Timestamp(spec.selection_data_cutoff):
+        raise ValueError("Training snapshot does not obey the pre-holdout cutoff")
+    training_data_hash = context_data_sha256(training_frame)
+    frozen_model_at_start = frozen_model_identity(
+        spec,
+        training_data_sha256=training_data_hash,
+        implementation_sha256=implementation_hash_at_start,
+        ledger_dependency_sha256=ledger_dependency_hash_at_start,
+    )
+    candidate_hash_at_start = str(frozen_model_at_start["frozen_model_contract_sha256"])
     holdout_touch = reserve_holdout_touch(
         repo_root.resolve() / "data" / "unleveraged_aapl" / "holdout_registry.json",
         candidate_hash=candidate_hash_at_start,
@@ -1240,9 +1395,19 @@ def run_unleveraged_experiment(
     scenario_ledgers: Dict[str, Dict[str, pd.DataFrame]] = {}
     continuous_ledgers: Dict[str, pd.DataFrame] = {}
     for name, costs in scenarios_costs.items():
-        fresh, ledgers = evaluate_fresh_periods(frame, spec, periods, costs)
+        fresh, ledgers = evaluate_fresh_periods(
+            frame,
+            spec,
+            periods,
+            costs,
+            learning_mode=FROZEN_HOLDOUT_MODE,
+        )
         continuous, continuous_ledger = evaluate_continuous_account(
-            frame, spec, periods, costs
+            frame,
+            spec,
+            periods,
+            costs,
+            learning_mode=FROZEN_HOLDOUT_MODE,
         )
         scenarios[name] = {
             "costs": asdict(costs),
@@ -1251,6 +1416,34 @@ def run_unleveraged_experiment(
         }
         scenario_ledgers[name] = ledgers
         continuous_ledgers[name] = continuous_ledger
+
+    online_replay_scenarios: Dict[str, Any] = {}
+    online_replay_ledgers: Dict[str, Dict[str, pd.DataFrame]] = {}
+    online_replay_continuous_ledgers: Dict[str, pd.DataFrame] = {}
+    if spec.rule_type == "hierarchical_empirical_bayes":
+        for name in ("base_5bps", "stress_10bps"):
+            costs = scenarios_costs[name]
+            fresh, ledgers = evaluate_fresh_periods(
+                frame,
+                spec,
+                periods,
+                costs,
+                learning_mode=CAUSAL_ONLINE_REPLAY_MODE,
+            )
+            continuous, continuous_ledger = evaluate_continuous_account(
+                frame,
+                spec,
+                periods,
+                costs,
+                learning_mode=CAUSAL_ONLINE_REPLAY_MODE,
+            )
+            online_replay_scenarios[name] = {
+                "costs": asdict(costs),
+                "fresh_accounts": fresh,
+                "continuous_account": continuous,
+            }
+            online_replay_ledgers[name] = ledgers
+            online_replay_continuous_ledgers[name] = continuous_ledger
 
     run_id = f"aapl-unleveraged-{spec.name}-{created_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     run_dir = output_dir / run_id
@@ -1273,6 +1466,20 @@ def run_unleveraged_experiment(
         _atomic_write_csv(
             continuous_ledgers[scenario_name],
             run_dir / f"daily_{scenario_name}_continuous.csv",
+            index=False,
+            float_format="%.12g",
+        )
+    for scenario_name, ledgers in online_replay_ledgers.items():
+        for period_name, ledger in ledgers.items():
+            _atomic_write_csv(
+                ledger,
+                run_dir / f"daily_online_replay_{scenario_name}_{period_name}.csv",
+                index=False,
+                float_format="%.12g",
+            )
+        _atomic_write_csv(
+            online_replay_continuous_ledgers[scenario_name],
+            run_dir / f"daily_online_replay_{scenario_name}_continuous.csv",
             index=False,
             float_format="%.12g",
         )
@@ -1306,19 +1513,42 @@ def run_unleveraged_experiment(
         integrity_errors.append("ledger_dependency_changed_during_run")
     if git_state_end.get("commit") != git_state.get("commit"):
         integrity_errors.append("git_commit_changed_during_run")
-    candidate_hash = hashlib.sha256(
-        f"{spec_sha256(spec)}:{implementation_hash}:{ledger_dependency_hash}:{data_hash}".encode(
-            "utf-8"
-        )
-    ).hexdigest()
+    frozen_model = frozen_model_identity(
+        spec,
+        training_data_sha256=training_data_hash,
+        implementation_sha256=implementation_hash,
+        ledger_dependency_sha256=ledger_dependency_hash,
+    )
+    candidate_hash = str(frozen_model["frozen_model_contract_sha256"])
     if candidate_hash != candidate_hash_at_start:
         integrity_errors.append("candidate_hash_changed_during_run")
     manifest = selection_manifest(spec)
-    predictive_diagnostics = (
-        empirical_bayes_predictive_diagnostics(frame, spec)
-        if spec.rule_type == "hierarchical_empirical_bayes"
-        else None
-    )
+    predictive_diagnostics = None
+    if spec.rule_type == "hierarchical_empirical_bayes":
+        frozen_diagnostics = empirical_bayes_predictive_diagnostics(
+            frame,
+            spec,
+            learning_mode=FROZEN_HOLDOUT_MODE,
+        )
+        online_diagnostics = empirical_bayes_predictive_diagnostics(
+            frame,
+            spec,
+            learning_mode=CAUSAL_ONLINE_REPLAY_MODE,
+        )
+        predictive_diagnostics = {
+            "training_diagnostics_not_test_evidence": frozen_diagnostics["pre_2024"],
+            "primary_frozen_holdout": {
+                key: frozen_diagnostics[key] for key in ("2024", "2025", "2026_ytd")
+            },
+            "separate_causal_online_replay": {
+                key: online_diagnostics[key] for key in ("2024", "2025", "2026_ytd")
+            },
+            "frozen_learning_proof": frozen_diagnostics["learning_proof"],
+            "online_learning_proof": online_diagnostics["learning_proof"],
+            "frozen_contract": frozen_diagnostics["causal_contract"],
+            "online_contract": online_diagnostics["causal_contract"],
+        }
+    retrospective_gate_pass = bool(base_success and stress_success and not integrity_errors)
     report = {
         "run_id": run_id,
         "created_at_utc": created_at.isoformat(),
@@ -1337,6 +1567,12 @@ def run_unleveraged_experiment(
             "first_observation": canonical_context_frame(frame).index.min().date().isoformat(),
             "last_observation": canonical_context_frame(frame).index.max().date().isoformat(),
             "observations": int(len(frame)),
+            "training_snapshot": {
+                "start": training_frame.index.min().date().isoformat(),
+                "end": training_frame.index.max().date().isoformat(),
+                "observations": int(len(training_frame)),
+                "sha256": training_data_hash,
+            },
             "session_coverage_proof": session_coverage,
             "price_snapshot_authenticity": data_authenticity,
         },
@@ -1355,6 +1591,8 @@ def run_unleveraged_experiment(
         },
         "selection": {
             "selection_data_cutoff": spec.selection_data_cutoff,
+            "evaluation_protocol": evaluation_protocol_manifest(spec),
+            "frozen_model": frozen_model,
             "final_holdout_touch_count": int(holdout_touch["touch_count"]),
             "holdout_touch_registry": holdout_touch,
             "frozen_manifest": manifest,
@@ -1369,12 +1607,21 @@ def run_unleveraged_experiment(
         "bear_market_diagnostics": bear_diagnostics,
         "predictive_diagnostics": predictive_diagnostics,
         "scenarios": scenarios,
+        "causal_online_replay_scenarios": online_replay_scenarios,
         "promotion": {
             "base_success": base_success,
             "stress_10bps_success": stress_success,
-            "capital_promotion_success": bool(base_success and stress_success and not integrity_errors),
+            "retrospective_gate_pass": retrospective_gate_pass,
+            "paper_trading_candidate": retrospective_gate_pass,
+            "capital_promotion_success": False,
+            "capital_promotion_blocker": (
+                "Historical 2024-2026 outcomes are not globally pristine; real-capital promotion "
+                "requires a separately locked prospective paper-trading gate."
+            ),
             "integrity_errors": integrity_errors,
             "evidence_classification": "retrospective_historical_fit_not_profit_guarantee",
+            "primary_score_uses": FROZEN_HOLDOUT_MODE,
+            "online_replay_can_affect_primary_score": False,
         },
         "reproducibility": {
             "git": git_state,
@@ -1422,6 +1669,8 @@ def run_unleveraged_experiment(
         final_elapsed <= 3600.0
     )
     if final_elapsed > 3600.0:
+        report["promotion"]["retrospective_gate_pass"] = False
+        report["promotion"]["paper_trading_candidate"] = False
         report["promotion"]["capital_promotion_success"] = False
         if "runtime_exceeded_3600_seconds" not in report["promotion"]["integrity_errors"]:
             report["promotion"]["integrity_errors"].append(
@@ -1479,7 +1728,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "api_cost_display": report["reproducibility"]["api_cost_display"],
     }
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if report["promotion"]["capital_promotion_success"] else 2
+    return 0 if report["promotion"]["retrospective_gate_pass"] else 2
 
 
 if __name__ == "__main__":

@@ -11,7 +11,9 @@ import pytest
 
 from agent_benchmark.deterministic_aapl import CostAssumptions, EvaluationPeriod
 from agent_benchmark.unleveraged_aapl import (
+    CAUSAL_ONLINE_REPLAY_MODE,
     CONTEXTUAL_EXHAUSTION_V1,
+    FROZEN_HOLDOUT_MODE,
     GAP_DOWN_CASH_V1,
     HIERARCHICAL_EMPIRICAL_BAYES_V1,
     LongCashSpec,
@@ -23,6 +25,7 @@ from agent_benchmark.unleveraged_aapl import (
     context_snapshot_authenticity,
     evaluate_continuous_account,
     evaluate_fresh_periods,
+    evaluation_protocol_manifest,
     reserve_holdout_touch,
     session_dates_sha256,
     simulate_unleveraged_period,
@@ -256,6 +259,63 @@ def test_empirical_bayes_predictions_do_not_change_when_later_future_is_modified
         original.loc[original.index[:550], predictive_columns],
         replay.loc[replay.index[:550], predictive_columns],
     )
+
+
+def test_frozen_holdout_never_adds_post_cutoff_outcomes_to_model():
+    rng = np.random.default_rng(41)
+    frame = context_frame(760, start="2022-01-03")
+    shocks = np.exp(np.cumsum(rng.normal(0.0, 0.018, len(frame))))
+    for column in ("aapl_open", "aapl_close", "aapl_adj_close"):
+        frame[column] = frame[column].to_numpy() * shocks
+    forecast = build_empirical_bayes_forecast(
+        frame,
+        HIERARCHICAL_EMPIRICAL_BAYES_V1,
+        learning_mode=FROZEN_HOLDOUT_MODE,
+    )
+    post_cutoff = forecast.loc["2024-01-01":, "global_matured_samples"]
+    assert len(post_cutoff) > 100
+    assert post_cutoff.nunique() == 1
+    assert forecast.attrs["post_cutoff_outcomes_used_for_learning"] is False
+
+
+def test_causal_online_replay_adds_only_matured_post_cutoff_outcomes():
+    rng = np.random.default_rng(43)
+    frame = context_frame(760, start="2022-01-03")
+    shocks = np.exp(np.cumsum(rng.normal(0.0, 0.018, len(frame))))
+    for column in ("aapl_open", "aapl_close", "aapl_adj_close"):
+        frame[column] = frame[column].to_numpy() * shocks
+    frozen = build_empirical_bayes_forecast(
+        frame,
+        HIERARCHICAL_EMPIRICAL_BAYES_V1,
+        learning_mode=FROZEN_HOLDOUT_MODE,
+    )
+    online = build_empirical_bayes_forecast(
+        frame,
+        HIERARCHICAL_EMPIRICAL_BAYES_V1,
+        learning_mode=CAUSAL_ONLINE_REPLAY_MODE,
+    )
+    pre_cutoff = frame.index <= pd.Timestamp("2023-12-31")
+    pd.testing.assert_series_equal(
+        frozen.loc[pre_cutoff, "global_matured_samples"],
+        online.loc[pre_cutoff, "global_matured_samples"],
+    )
+    assert online.loc["2024-01-01":, "global_matured_samples"].iloc[-1] > frozen.loc[
+        "2024-01-01":, "global_matured_samples"
+    ].iloc[-1]
+    assert online.attrs["post_cutoff_outcomes_used_for_learning"] is True
+
+
+def test_evaluation_protocol_never_calls_training_results_test_evidence():
+    protocol = evaluation_protocol_manifest(HIERARCHICAL_EMPIRICAL_BAYES_V1)
+    training = protocol["training_and_selection"]
+    frozen = protocol["primary_frozen_holdout"]
+    online = protocol["separate_causal_online_replay"]
+    assert training["end"] == "2023-12-31"
+    assert training["reported_role"] == "training_and_internal_validation_diagnostic_not_test_evidence"
+    assert frozen["outcomes_may_be_used_for_learning"] is False
+    assert frozen["model_or_threshold_updates"] is False
+    assert frozen["reported_role"] == "primary_out_of_sample_test"
+    assert online["reported_role"] == "operational_adaptation_diagnostic_not_primary_holdout"
 
 
 def test_empirical_bayes_spec_matches_frozen_pre_2024_selection():

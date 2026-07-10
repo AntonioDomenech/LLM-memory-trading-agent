@@ -115,6 +115,18 @@ def _trading_dates(warehouse: Warehouse, start: str, end: str) -> List[str]:
     return [str(value)[:10] for value in df["date"].tolist()] if not df.empty else []
 
 
+def _calendar_coverage_end(warehouse: Warehouse, symbol: str, end: str) -> str:
+    row = warehouse.conn.execute(
+        """
+        SELECT MAX(date)
+        FROM context_daily
+        WHERE symbol = ? AND date <= CAST(? AS DATE)
+        """,
+        [symbol, end],
+    ).fetchone()
+    return str(row[0])[:10] if row and row[0] is not None else ""
+
+
 def build_preflight_report(
     config: BenchmarkConfig,
     secrets: SecretConfig,
@@ -134,6 +146,13 @@ def build_preflight_report(
         "test_end": config.test_end,
         "benchmark_contract": {
             "version": getattr(config, "benchmark_contract_version", "legacy"),
+            "evaluation_mode": getattr(config, "evaluation_mode", "legacy"),
+            "selection_cutoff": getattr(config, "selection_cutoff", ""),
+            "fixed_evaluation_cutoff": getattr(config, "fixed_evaluation_cutoff", ""),
+            "globally_pristine": bool(getattr(config, "globally_pristine", False)),
+            "historical_holdout_reveal_count_lower_bound": int(
+                getattr(config, "historical_holdout_reveal_count_lower_bound", 0) or 0
+            ),
             "historical_price_basis": getattr(config, "historical_price_basis", "legacy"),
             "action_space": config.single_stock_action_space,
             "online_test_learning": bool(getattr(config, "online_test_learning", False)),
@@ -147,6 +166,19 @@ def build_preflight_report(
     }
     try:
         validate_no_paid_api_mode(config, secrets)
+        if config.evaluation_mode != "legacy":
+            _add_check(
+                report,
+                {
+                    "id": "evaluation_split",
+                    "status": "pass",
+                    "message": (
+                        f"{config.train_start} through {config.selection_cutoff} is learning data; "
+                        f"{config.test_start} through {config.test_end} is {config.evaluation_mode}."
+                    ),
+                    "test_outcomes_used_for_learning": bool(config.online_test_learning),
+                },
+            )
         if config.no_paid_api_mode:
             _add_check(
                 report,
@@ -161,6 +193,21 @@ def build_preflight_report(
     except Exception as exc:
         _add_check(report, {"id": "no_paid_api_mode", "status": "fail", "message": str(exc)})
     trading_dates = _trading_dates(warehouse, config.test_start, config.test_end)
+    if config.evaluation_mode != "legacy":
+        covered_through = _calendar_coverage_end(warehouse, "SPY", config.test_end)
+        _add_check(
+            report,
+            {
+                "id": "fixed_evaluation_end_coverage",
+                "status": "pass" if covered_through == config.test_end else "fail",
+                "message": (
+                    f"Evaluation calendar is covered through {covered_through or 'no date'}; "
+                    f"the frozen contract requires {config.test_end}."
+                ),
+                "covered_through": covered_through,
+                "required_end": config.test_end,
+            },
+        )
     if int(config.max_test_days or 0) > 0:
         trading_dates = trading_dates[: int(config.max_test_days)]
     test_days = len(trading_dates)

@@ -1,14 +1,14 @@
 # Local Gemma AAPL Benchmark Goal
 
-> Legacy loop specification. New work should use [aapl_online_learning_system.md](aapl_online_learning_system.md), which preserves this preset under `--preset legacy` but replaces replay-wide LLM reflections and short exposure with the chronological long/cash online system.
+> Rejected legacy loop specification retained only for reproduction. Its 2000-2024/2025 split, replay-wide LLM reflections, autonomous holdout patching, and short exposure are not the current experiment. New work must use [aapl_online_learning_system.md](aapl_online_learning_system.md).
 
 ## Compact Goal Prompt
 
-Execute `docs/local_gemma_aapl_benchmark_goal.md` end-to-end. Implement and run the local-only Ollama `gemma4:12b` AAPL benchmark loop with no paid APIs, API cost `$0.00`, point-in-time LLM memory, monitoring, tests, and allowlisted autonomous patches. Work on `codex/local-gemma-aapl-loop`. Commit current code before each train/test process. Repeat train/test/diagnose/patch until AI beats AAPL buy-and-hold in 2025 with zero invalid decisions and local-only proof, or until the user stops/hard safety blocker.
+Do not execute this legacy prompt for a new experiment. Use the frozen pre-2024 contract in `docs/aapl_online_learning_system.md`.
 
 ## Summary
 
-Run the Apple benchmark entirely locally with Ollama and Gemma 4 12B, with hard no-paid-API safeguards. The loop trains on 2000-2024 using LLM-generated memory, tests on full-year 2025, then autonomously analyzes and patches the agent until it beats AAPL buy-and-hold or the user stops it.
+This section documents the earlier system that trained through 2024 and then repeatedly inspected/modified against 2025. It is retained as historical evidence and must not be described as a clean holdout design.
 
 Local hardware reports an RTX 3080 with 10GB VRAM, not a 3060. Gemma 4 12B Q4 is expected to fit around 6.7GB, so it is the right first target.
 
@@ -63,7 +63,7 @@ Local hardware reports an RTX 3080 with 10GB VRAM, not a 3060. Gemma 4 12B Q4 is
 - One full loop iteration means:
   - Preflight.
   - Commit the current code state before starting the train/test process.
-  - Train on 2000-2024.
+  - Legacy only: train on 2000-2024.
   - Test on 2025.
   - Collect diagnostics.
   - Judge success.

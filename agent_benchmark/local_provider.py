@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import ipaddress
+import subprocess
+from datetime import date
+from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
+
+import requests
 
 from .schemas import BenchmarkConfig, DataSourceConfig, SecretConfig
 
@@ -48,7 +53,100 @@ def local_auth_headers(config: BenchmarkConfig | None, secrets: SecretConfig) ->
     }
 
 
+def resolve_local_model_digest(config: BenchmarkConfig) -> str:
+    """Read the exact digest currently served by the local Ollama runtime."""
+
+    parsed = urlparse(config.local_model_base_url or LOCAL_OLLAMA_BASE_URL)
+    tags_url = f"{parsed.scheme}://{parsed.netloc}/api/tags"
+    response = requests.get(tags_url, timeout=10)
+    response.raise_for_status()
+    models = (response.json() or {}).get("models") or []
+    record = next(
+        (
+            item
+            for item in models
+            if config.model in {item.get("name"), item.get("model")}
+        ),
+        None,
+    )
+    digest = str((record or {}).get("digest") or "")
+    if not digest:
+        raise RuntimeError(f"Ollama did not report a digest for {config.model!r}")
+    return digest
+
+
+def resolve_repository_identity(repo_root: Path | None = None) -> Dict[str, Any]:
+    """Return the current Git commit and cleanliness of the local implementation."""
+
+    root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    return {"commit": commit, "dirty": dirty, "repo_root": str(root)}
+
+
+def with_verified_local_runtime_identity(config: BenchmarkConfig) -> BenchmarkConfig:
+    """Stamp a config with the model/code identity verified at this moment."""
+
+    repository = resolve_repository_identity()
+    if repository["dirty"]:
+        raise RuntimeError("Live learning requires a clean committed worktree")
+    payload = config.model_dump() if hasattr(config, "model_dump") else config.dict()
+    payload["local_model_digest"] = resolve_local_model_digest(config)
+    payload["implementation_commit"] = repository["commit"]
+    return BenchmarkConfig(**payload)
+
+
 def validate_no_paid_api_mode(config: BenchmarkConfig, secrets: SecretConfig) -> None:
+    if config.evaluation_mode != "legacy":
+        try:
+            train_end = date.fromisoformat(config.train_end)
+            test_start = date.fromisoformat(config.test_start)
+            test_end = date.fromisoformat(config.test_end)
+            selection_cutoff = date.fromisoformat(config.selection_cutoff)
+            fixed_cutoff = (
+                date.fromisoformat(config.fixed_evaluation_cutoff)
+                if config.fixed_evaluation_cutoff
+                else None
+            )
+        except ValueError as exc:
+            raise ValueError("Non-legacy evaluation contracts require ISO date cutoffs") from exc
+        if train_end >= test_start:
+            raise ValueError("Training must end strictly before the evaluation window starts")
+        if selection_cutoff != train_end:
+            raise ValueError("selection_cutoff must exactly equal train_end")
+        if fixed_cutoff is not None and test_end > fixed_cutoff:
+            raise ValueError("test_end cannot exceed fixed_evaluation_cutoff")
+        if config.evaluation_mode == "frozen_holdout":
+            if config.online_test_learning:
+                raise ValueError("frozen_holdout forbids learning from evaluation outcomes")
+            if str(config.memory_online_stream_id or "").strip():
+                raise ValueError("frozen_holdout forbids a durable online learning stream")
+            if int(config.max_test_days or 0) != 0:
+                raise ValueError(
+                    "frozen_holdout forbids partial test-day smoke runs; use pre-2024 or synthetic data"
+                )
+        elif config.evaluation_mode == "causal_online_replay":
+            if not config.online_test_learning:
+                raise ValueError("causal_online_replay requires matured test learning")
+        elif config.evaluation_mode == "live_learning":
+            if not config.online_test_learning:
+                raise ValueError("live_learning requires matured online learning")
+            if not str(config.memory_online_stream_id or "").strip():
+                raise ValueError("live_learning requires a durable memory_online_stream_id")
     if config.outcome_learning_mode == "counterfactual_online" and (
         float(config.commission_per_trade or 0.0) != 0.0
         or float(config.commission_per_share or 0.0) != 0.0
@@ -132,12 +230,12 @@ def local_gemma_aapl_config(**overrides: Any) -> BenchmarkConfig:
 
 
 def local_gemma_aapl_online_config(**overrides: Any) -> BenchmarkConfig:
-    """Return the isolated, chronological AAPL online-learning preset.
+    """Return the primary AAPL preset with a frozen post-2023 evaluation model.
 
     A blank ``memory_online_stream_id`` is deliberate: HybridMemory binds it to
     the benchmark run id so every replay starts from the same clean historical
-    snapshot.  A live deployment can opt into a durable stream id and keep
-    maturing lessons across process restarts.
+    snapshot. Evaluation outcomes cannot enter memory. A separate causal replay
+    or live deployment may resume learning after outcomes mature.
     """
 
     data_sources = DataSourceConfig(
@@ -153,9 +251,9 @@ def local_gemma_aapl_online_config(**overrides: Any) -> BenchmarkConfig:
         "symbol": "AAPL",
         "company_name": "Apple",
         "train_start": "2000-01-01",
-        "train_end": "2024-12-31",
-        "test_start": "2025-01-01",
-        "test_end": "2025-12-31",
+        "train_end": "2023-12-31",
+        "test_start": "2024-01-01",
+        "test_end": "2026-07-09",
         "max_train_days": 0,
         "max_test_days": 0,
         "historical_price_basis": "adjusted",
@@ -183,13 +281,18 @@ def local_gemma_aapl_online_config(**overrides: Any) -> BenchmarkConfig:
         "deterministic_memory_max_items": 100,
         "memory_k_neighbors": 75,
         "memory_examples_per_symbol": 6,
-        "memory_namespace": "aapl-online-v1",
-        "memory_base_snapshot_id": "aapl-2000-2024-adjusted-v1",
+        "memory_namespace": "aapl-frozen-v2",
+        "memory_base_snapshot_id": "aapl-2000-2023-adjusted-v2",
         "memory_online_stream_id": "",
-        "memory_policy_version": "long-cash-counterfactual-v1",
+        "memory_policy_version": "long-cash-counterfactual-v2",
         "memory_feature_schema_version": "aapl-market-state-v1",
         "outcome_learning_mode": "counterfactual_online",
-        "online_test_learning": True,
+        "evaluation_mode": "frozen_holdout",
+        "selection_cutoff": "2023-12-31",
+        "fixed_evaluation_cutoff": "2026-07-09",
+        "globally_pristine": False,
+        "historical_holdout_reveal_count_lower_bound": 10,
+        "online_test_learning": False,
         "online_learning_horizon_days": 20,
         "online_policy_enabled": True,
         "online_policy_min_samples": 40,
@@ -205,7 +308,7 @@ def local_gemma_aapl_online_config(**overrides: Any) -> BenchmarkConfig:
         "event_drawdown_trigger": -0.08,
         "event_volatility_trigger": 0.45,
         "reset_book_at_test_start": True,
-        "benchmark_contract_version": "aapl-online-v1",
+        "benchmark_contract_version": "aapl-frozen-holdout-v2",
         "embedding_provider": "local",
         "exposure_critic_enabled": False,
         "strict_preflight": True,
@@ -220,6 +323,19 @@ def local_gemma_aapl_online_config(**overrides: Any) -> BenchmarkConfig:
     return BenchmarkConfig(**payload)
 
 
+def local_gemma_aapl_causal_replay_config(**overrides: Any) -> BenchmarkConfig:
+    """Replay post-2023 data while learning only after each outcome matures."""
+
+    payload: Dict[str, Any] = {
+        "evaluation_mode": "causal_online_replay",
+        "online_test_learning": True,
+        "memory_namespace": "aapl-causal-replay-v2",
+        "benchmark_contract_version": "aapl-causal-online-v2",
+    }
+    payload.update(overrides)
+    return local_gemma_aapl_online_config(**payload)
+
+
 def local_gemma_aapl_live_config(
     *,
     stream_id: str = "aapl-live-v1",
@@ -230,7 +346,15 @@ def local_gemma_aapl_live_config(
     stream_id = str(stream_id or "").strip()
     if not stream_id:
         raise ValueError("A durable live stream_id is required.")
-    return local_gemma_aapl_online_config(memory_online_stream_id=stream_id, **overrides)
+    payload: Dict[str, Any] = {
+        "memory_online_stream_id": stream_id,
+        "evaluation_mode": "live_learning",
+        "online_test_learning": True,
+        "memory_namespace": "aapl-live-v2",
+        "benchmark_contract_version": "aapl-live-learning-v2",
+    }
+    payload.update(overrides)
+    return local_gemma_aapl_online_config(**payload)
 
 
 def local_gemma_secret_config(**overrides: Any) -> SecretConfig:

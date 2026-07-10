@@ -58,6 +58,8 @@ class BenchmarkConfig(BaseModel):
     no_paid_api_mode: bool = False
     local_model_base_url: str = ""
     local_ollama_num_ctx: int = 4096
+    local_model_digest: str = ""
+    implementation_commit: str = ""
     initial_cash: float = 1000.0
     max_days: int = 20
     allow_short: bool = True
@@ -109,6 +111,17 @@ class BenchmarkConfig(BaseModel):
     online_policy_risk_off_probability: float = Field(default=0.60, gt=0.5, lt=1.0)
     online_policy_min_confidence: float = Field(default=0.30, ge=0.0, le=1.0)
     online_policy_min_active_return: float = Field(default=0.0, ge=0.0)
+    evaluation_mode: Literal[
+        "legacy",
+        "training_diagnostic",
+        "frozen_holdout",
+        "causal_online_replay",
+        "live_learning",
+    ] = "legacy"
+    selection_cutoff: str = ""
+    fixed_evaluation_cutoff: str = ""
+    globally_pristine: bool = False
+    historical_holdout_reveal_count_lower_bound: int = Field(default=0, ge=0)
     online_test_learning: bool = False
     reset_book_at_test_start: bool = False
     benchmark_contract_version: str = "legacy"

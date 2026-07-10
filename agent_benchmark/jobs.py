@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from .benchmark_engine import BenchmarkEngine
+from .local_provider import with_verified_local_runtime_identity
 from .schemas import BenchmarkConfig, PortfolioBook, SecretConfig, model_to_dict
 from .storage import BenchmarkStore
 
@@ -178,6 +179,8 @@ class LiveScheduler:
         run_id = str(uuid.uuid4())
         live_config = config.model_copy(deep=True) if hasattr(config, "model_copy") else BenchmarkConfig(**config.dict())
         live_config.run_preset = config.run_preset
+        if live_config.evaluation_mode == "live_learning" and not dry_run:
+            live_config = with_verified_local_runtime_identity(live_config)
         payload = live_config.model_dump() if hasattr(live_config, "model_dump") else live_config.dict()
         payload["live_started_at"] = now.isoformat(timespec="seconds")
         self.manager.store.create_benchmark_run(run_id, payload)

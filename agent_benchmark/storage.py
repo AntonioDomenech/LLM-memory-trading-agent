@@ -921,6 +921,76 @@ class BenchmarkStore:
             "updated_at": row["updated_at"],
         }
 
+    def incompatible_online_stream_fingerprints(
+        self,
+        *,
+        memory_namespace: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        policy_fingerprint: str,
+    ) -> List[str]:
+        """Find state under the same human stream id but a different contract."""
+
+        parameters = (memory_namespace, base_snapshot_id, online_stream_id, policy_fingerprint)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT policy_fingerprint
+                FROM (
+                    SELECT policy_fingerprint
+                    FROM benchmark_live_state
+                    WHERE memory_namespace = ? AND base_snapshot_id = ?
+                      AND online_stream_id = ? AND policy_fingerprint <> ?
+                    UNION
+                    SELECT policy_fingerprint
+                    FROM benchmark_pending_experiences
+                    WHERE memory_namespace = ? AND base_snapshot_id = ?
+                      AND online_stream_id = ? AND policy_fingerprint <> ?
+                    UNION
+                    SELECT policy_fingerprint
+                    FROM benchmark_memory
+                    WHERE memory_namespace = ? AND base_snapshot_id = ?
+                      AND online_stream_id = ? AND policy_fingerprint <> ?
+                )
+                ORDER BY policy_fingerprint
+                """,
+                (*parameters, *parameters, *parameters),
+            ).fetchall()
+        return [str(row[0]) for row in rows if row[0]]
+
+    def online_stream_artifact_counts(
+        self,
+        *,
+        memory_namespace: str,
+        base_snapshot_id: str,
+        online_stream_id: str,
+        policy_fingerprint: str,
+    ) -> Dict[str, int]:
+        parameters = (
+            memory_namespace,
+            policy_fingerprint,
+            base_snapshot_id,
+            online_stream_id,
+        )
+        with self._connect() as conn:
+            pending = conn.execute(
+                """
+                SELECT COUNT(*) FROM benchmark_pending_experiences
+                WHERE memory_namespace = ? AND policy_fingerprint = ?
+                  AND base_snapshot_id = ? AND online_stream_id = ?
+                """,
+                parameters,
+            ).fetchone()[0]
+            memories = conn.execute(
+                """
+                SELECT COUNT(*) FROM benchmark_memory
+                WHERE memory_namespace = ? AND policy_fingerprint = ?
+                  AND base_snapshot_id = ? AND online_stream_id = ?
+                """,
+                parameters,
+            ).fetchone()[0]
+        return {"pending_experiences": int(pending), "online_memories": int(memories)}
+
     def register_base_snapshot(
         self,
         *,
@@ -961,9 +1031,18 @@ class BenchmarkStore:
                 f"registered {existing['content_hash']}, rebuilt {content_hash}. "
                 "Bump memory_base_snapshot_id or restore the frozen warehouse."
             )
+        existing_metadata = json.loads(existing["metadata_json"] or "{}")
+        requested_metadata = metadata or {}
+        existing_canonical = json.dumps(existing_metadata, sort_keys=True, separators=(",", ":"), default=str)
+        requested_canonical = json.dumps(requested_metadata, sort_keys=True, separators=(",", ":"), default=str)
+        if existing_canonical != requested_canonical:
+            raise ValueError(
+                f"Base snapshot {base_snapshot_id!r} changed cutoff or provenance metadata. "
+                "Bump memory_base_snapshot_id or restore the original contract."
+            )
         return {
             "content_hash": existing["content_hash"],
-            "metadata": json.loads(existing["metadata_json"] or "{}"),
+            "metadata": existing_metadata,
             "created_at": existing["created_at"],
         }
 

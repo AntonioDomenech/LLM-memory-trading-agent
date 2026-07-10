@@ -20,10 +20,12 @@ from agent_benchmark.local_provider import (
     LOCAL_DUMMY_API_KEY,
     is_loopback_url,
     local_gemma_aapl_config,
+    local_gemma_aapl_causal_replay_config,
+    local_gemma_aapl_online_config,
     local_gemma_secret_config,
     validate_no_paid_api_mode,
 )
-from agent_benchmark.memory import HybridMemory
+from agent_benchmark.memory import HybridMemory, build_frozen_system_manifest
 from agent_benchmark.monitoring import AbortThresholds, evaluate_abort, parse_nvidia_smi_csv
 from agent_benchmark.schemas import BenchmarkConfig, SecretConfig
 from agent_benchmark.storage import BenchmarkStore
@@ -254,7 +256,8 @@ def test_success_evaluator_requires_buy_hold_zero_invalid_and_local_cost():
         }
     }
 
-    assert evaluate_success(run, config)["success"] is True
+    assert evaluate_success(run, config)["beat_buy_hold"] is True
+    assert evaluate_success(run, config)["success"] is False
     run["summary"]["metrics"]["invalid_allocation_count"] = 1
     assert evaluate_success(run, config)["success"] is False
 
@@ -282,11 +285,105 @@ def test_success_evaluator_prefers_2025_test_window():
 
     evaluation = evaluate_success(run, config)
 
-    assert evaluation["success"] is True
+    assert evaluation["success"] is False
     assert evaluation["beat_buy_hold"] is True
     assert evaluation["ai_return"] == pytest.approx(0.12)
     assert evaluation["buy_hold_return"] == pytest.approx(0.10)
     assert evaluation["evaluation_window"]["name"] == "2025_test"
+
+
+def test_causal_replay_cannot_be_promoted_as_frozen_test_success():
+    config = local_gemma_aapl_causal_replay_config()
+    run = {
+        "summary": {
+            "model": config.model,
+            "model_provider": config.model_provider,
+            "no_paid_api_mode": True,
+            "metrics": {"total_return": 0.20, "invalid_allocation_count": 0},
+            "test_metrics": {"total_return": 0.20},
+            "api_usage_estimate": {
+                "local_only": True,
+                "estimated_cost_usd": 0.0,
+                "estimated_cost_display": "$0.00",
+            },
+            "test_buy_hold_comparison": {
+                "benchmarks": [{"id": "single_stock", "total_return": 0.10}]
+            },
+        }
+    }
+
+    evaluation = evaluate_success(run, config)
+
+    assert evaluation["beat_buy_hold"] is True
+    assert evaluation["eligible_as_frozen_test_evidence"] is False
+    assert evaluation["success"] is False
+
+
+def test_frozen_success_requires_every_reported_year_to_beat_buy_hold():
+    config = local_gemma_aapl_online_config(
+        local_model_digest="sha256:model",
+        implementation_commit="a" * 40,
+    )
+    data_snapshot = {
+        "sha256": "sha256:evaluation",
+        "session_count": 630,
+        "session_dates_sha256": "sha256:sessions",
+    }
+    manifest = build_frozen_system_manifest(
+        config,
+        base_content_hash="sha256:training",
+        evaluation_data_snapshot=data_snapshot,
+        git_commit=config.implementation_commit,
+        prompt_contract_sha256="b" * 64,
+        implementation_sha256="c" * 64,
+    )
+    run = {
+        "summary": {
+            "model": config.model,
+            "model_provider": config.model_provider,
+            "no_paid_api_mode": True,
+            "metrics": {"invalid_allocation_count": 0},
+            "test_metrics": {"total_return": 0.30},
+            "api_usage_estimate": {
+                "local_only": True,
+                "estimated_cost_usd": 0.0,
+                "estimated_cost_display": "$0.00",
+            },
+            "test_buy_hold_comparison": {
+                "benchmarks": [{"id": "single_stock", "total_return": 0.20}]
+            },
+            "benchmark_contract": {"evaluation_mode": "frozen_holdout"},
+            "frozen_learning_state_proof": {
+                "unchanged": True,
+                "test_outcomes_used_for_learning": False,
+                "before": {"sha256": "sha256:learning"},
+                "after": {"sha256": "sha256:learning"},
+            },
+            "evaluation_data_snapshot": {
+                "unchanged_during_run": True,
+                "before": data_snapshot,
+                "after": data_snapshot,
+            },
+            "frozen_system_manifest": manifest,
+            "frozen_holdout": {
+                "test_evidence": True,
+                "periods": {
+                    "2024": {"beat_buy_hold": True},
+                    "2025": {"beat_buy_hold": True},
+                    "2026_ytd": {"beat_buy_hold": False},
+                }
+            },
+        }
+    }
+
+    failed = evaluate_success(run, config)
+    run["summary"]["frozen_holdout"]["periods"]["2026_ytd"]["beat_buy_hold"] = True
+    passed = evaluate_success(run, config)
+
+    assert failed["overall_beat_buy_hold"] is True
+    assert failed["all_required_periods_beat_buy_hold"] is False
+    assert failed["success"] is False
+    assert passed["success"] is True
 
 
 def test_monitoring_parser_and_abort_thresholds():

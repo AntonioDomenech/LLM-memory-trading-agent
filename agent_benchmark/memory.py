@@ -23,6 +23,8 @@ _POLICY_FINGERPRINT_FIELDS = (
     "symbol",
     "selected_symbols",
     "model",
+    "local_model_digest",
+    "implementation_commit",
     "fill_timing",
     "historical_price_basis",
     "historical_cadence",
@@ -40,6 +42,10 @@ _POLICY_FINGERPRINT_FIELDS = (
     "opportunity_cost_policy",
     "exposure_critic_enabled",
     "outcome_learning_mode",
+    "evaluation_mode",
+    "selection_cutoff",
+    "fixed_evaluation_cutoff",
+    "online_test_learning",
     "online_learning_horizon_days",
     "online_policy_enabled",
     "online_policy_max_neighbors",
@@ -73,6 +79,55 @@ def build_policy_fingerprint(config: BenchmarkConfig) -> str:
         payload[field] = value
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def build_frozen_system_manifest(
+    config: BenchmarkConfig,
+    *,
+    base_content_hash: str,
+    evaluation_data_snapshot: Mapping[str, Any],
+    git_commit: str,
+    prompt_contract_sha256: str,
+    implementation_sha256: str,
+) -> Dict[str, Any]:
+    """Hash the complete public contract used by a frozen evaluation run."""
+
+    if hasattr(config, "model_dump"):
+        config_payload = config.model_dump()
+    else:  # pragma: no cover - Pydantic v1 compatibility
+        config_payload = config.dict()
+    payload = {
+        "config": config_payload,
+        "policy_fingerprint": build_policy_fingerprint(config),
+        "base_content_hash": str(base_content_hash or ""),
+        "evaluation_data_snapshot": dict(evaluation_data_snapshot or {}),
+        "model": config.model,
+        "local_model_digest": str(getattr(config, "local_model_digest", "") or ""),
+        "git_commit": str(git_commit or ""),
+        "prompt_contract_sha256": str(prompt_contract_sha256 or ""),
+        "implementation_sha256": str(implementation_sha256 or ""),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return {
+        **payload,
+        "frozen_manifest_sha256": f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
+    }
+
+
+def verify_frozen_system_manifest(manifest: Mapping[str, Any]) -> bool:
+    """Verify that a saved manifest hash authenticates its complete payload."""
+
+    payload = {
+        key: value
+        for key, value in dict(manifest or {}).items()
+        if key != "frozen_manifest_sha256"
+    }
+    claimed = str((manifest or {}).get("frozen_manifest_sha256") or "")
+    if not claimed or not payload:
+        return False
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    expected = f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+    return claimed == expected
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -332,6 +387,26 @@ class HybridMemory:
         if self.memory_namespace == LEGACY_MEMORY_NAMESPACE or not self.online_stream_id:
             return None
         return self.store.get_live_state(
+            memory_namespace=self.memory_namespace,
+            policy_fingerprint=self.policy_fingerprint,
+            base_snapshot_id=self.base_snapshot_id,
+            online_stream_id=self.online_stream_id,
+        )
+
+    def incompatible_stream_fingerprints(self) -> List[str]:
+        if self.memory_namespace == LEGACY_MEMORY_NAMESPACE or not self.online_stream_id:
+            return []
+        return self.store.incompatible_online_stream_fingerprints(
+            memory_namespace=self.memory_namespace,
+            policy_fingerprint=self.policy_fingerprint,
+            base_snapshot_id=self.base_snapshot_id,
+            online_stream_id=self.online_stream_id,
+        )
+
+    def stream_artifact_counts(self) -> Dict[str, int]:
+        if self.memory_namespace == LEGACY_MEMORY_NAMESPACE or not self.online_stream_id:
+            return {"pending_experiences": 0, "online_memories": 0}
+        return self.store.online_stream_artifact_counts(
             memory_namespace=self.memory_namespace,
             policy_fingerprint=self.policy_fingerprint,
             base_snapshot_id=self.base_snapshot_id,

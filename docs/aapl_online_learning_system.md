@@ -1,94 +1,79 @@
-# AAPL Chronological Online-Learning System
+# AAPL Frozen-Holdout and Online-Learning System
 
-## Objective and honest success criterion
+## Objective and evidence rule
 
-The system has one economic target: after trading costs, its test-period return must exceed an AAPL buy-and-hold benchmark measured on the same adjusted-price execution contract. If it does not, holding AAPL was the better result for that period.
+The economic target is to beat same-ledger AAPL buy-and-hold after costs without leverage or shorting. The evidence roles are deliberately separate:
 
-This is a research benchmark, not a profit guarantee. A model can beat one historical window through luck or overfitting and then lose money live. Because the 2025 result has already been inspected, it should be treated as an engineering and walk-forward test, not as permanently untouched evidence. Promotion to real capital needs later unseen periods, repeated walk-forward results, and explicit loss limits.
+- `training_diagnostics`: 2000-01-01 through 2023-12-31. Outcomes may be used to discover patterns, select a model, and fit its final pre-test state. These results are not test evidence.
+- `frozen_holdout`: post-2023 evaluation. Current completed market inputs are visible, but model parameters, thresholds, normalization, memories, and lessons cannot change. This is the only retrospective pass/fail score.
+- `causal_online_replay`: starts from the same pre-2024 base, then admits a new lesson only after its outcome matures. It tests operational adaptation but cannot count as the frozen holdout.
+- `live_learning`: the durable paper-trading continuation of the causal replay.
 
-## Architecture
+The repository has already inspected 2024 onward during earlier research. The report records `globally_pristine=false` and a conservative reveal-count lower bound (currently 10). The split prevents a new candidate from training on those outcomes, but it cannot make those dates globally pristine again. Only locked future paper trading can provide genuinely untouched evidence.
 
-### 1. Immutable 2000-2024 case library
+## Training and frozen model
 
-The base memory is generated deterministically from AAPL and market history through 2024. Each case contains only features that were available at its decision timestamp, plus outcome labels that are attached only after their horizon elapsed. Prices and returns use the adjusted historical execution basis so splits and dividends do not create a different contract from the benchmark.
+The base case library is generated deterministically from AAPL and market history through 2023. A case contains close-time features and only those 1/5/20/60-session labels whose outcome date is no later than 2023-12-31. Building it makes no Gemma calls.
 
-Building this library makes no Gemma calls. It replaces the old multi-year daily LLM replay with a reproducible case bank that can be rebuilt and audited quickly. The base snapshot id is `aapl-2000-2024-adjusted-v1`; its first deterministic content hash is registered locally, and a later rebuild with different content is rejected under the same id. Changing warehouse history, features, or execution contract therefore requires a new snapshot id.
+The base snapshot id is `aapl-2000-2023-adjusted-v2`. Its content hash and exact cutoff/provenance metadata are registered locally. Reusing that id with changed content or metadata fails closed. The run also records a system-manifest hash over the public configuration, base content, model digest, prompt source, implementation source, and Git commit.
 
-### 2. Chronological lessons that continue to mature
+`local_gemma_aapl_online_config()` is retained as the primary CLI-compatible preset, but it now means a frozen evaluation:
 
-Every eligible decision creates a pending experience. The experience is not evidence yet. After the configured 20-trading-day horizon, the system computes after-cost counterfactual results for long, cash, and short exposure and promotes the record to a matured structured lesson. The estimator uses the cash-versus-long comparison; the deployed policy cannot select the short counterfactual.
+- `train_end = selection_cutoff = 2023-12-31`
+- `evaluation_mode = frozen_holdout`
+- `online_test_learning = false`
+- no durable online stream
 
-During a 2025 replay, lessons from January can therefore influence later dates only after their outcomes became knowable. December outcomes cannot travel backward into January. The same mechanism continues indefinitely in live operation: new experiences remain pending, mature when their horizon arrives, and join the usable stream. Compact Stage 1 and Stage 2 payloads reserve explicit `recent_online_lessons` slots, so newly matured experience reaches Gemma instead of being truncated behind the larger historical case bank; the same lessons also update the numerical policy.
+The engine snapshots both the estimator and scoped learning memory before and after a frozen run. A changed digest invalidates the run. The queue and maturity functions also reject direct calls from a frozen test.
 
-### 3. Replay isolation and a persistent live stream
+Training does not mean Gemma trades every day from 2000 onward. The affordable implementation builds numerical, labeled historical cases and fits/retrieves from them; Gemma is used only for scheduled test/live decisions. Historical model quality can be reported for diagnosis and selection, but never presented as held-out success.
 
-The base snapshot is reusable, but learned outcomes have two different lifecycles:
+## Separate causal replay and live learning
 
-- Historical replay: `memory_online_stream_id` is blank. The runtime binds the stream to the unique run id, so every replay begins from the same clean pre-2025 base and learns forward within that replay only. A previous replay's 2025 lessons are never preloaded.
-- Live operation: snapshots must use one explicit durable stream id, for example `aapl-live-v1`. That stream survives process restarts and keeps accumulating matured lessons. A policy or feature-schema change must start a new compatible stream instead of silently mixing old lessons into a different policy.
+`local_gemma_aapl_causal_replay_config()` uses a different namespace and enables `online_test_learning`. Every eligible executed decision creates a pending experience. A 20-session outcome becomes a lesson only when its exit price is knowable; it can influence later decisions but never the decision that created it or any earlier one.
 
-This distinction preserves causal testing while still allowing the deployed system to learn forever.
+`local_gemma_aapl_live_config(stream_id=...)` requires one durable stream id. A non-dry live snapshot also requires the exact Ollama model digest and committed implementation identity; both are part of the memory compatibility fingerprint, so changed code or model weights cannot silently reuse the learned state. It restores portfolio and schedule state after restarts, reconciles dividends and splits, and accumulates matured lessons indefinitely. If a crash leaves a pending lesson newer than the saved portfolio—or any learning artifact without portfolio state—the next snapshot fails closed instead of silently restarting from cash. A policy, feature, price-basis, or cost change requires a new stream.
 
-For live snapshots, use `local_gemma_aapl_live_config()` (or set an explicit stable stream id). A blank live stream is rejected. Every later snapshot must reuse that exact id. The live path restores its portfolio, recent decision state, and event re-arm state after process restarts; reconciles dividends and splits; matures due lessons from the local warehouse; and can backfill a missing matured price from the same free Yahoo source used for live quotes. It fails closed if durable portfolio state is malformed and will not silently restart the account from cash. Do not reuse the stream id after changing the policy, feature schema, price basis, or cost assumptions.
+Historical replay fills at the next adjusted open. Live paper execution runs once between 09:30 and 10:00 New York time: Gemma sees only the last completed daily bar, and a separate current-minute quote is fetched after the decision. This is an operational approximation, not a guaranteed broker fill.
 
-The live decision runs once between 09:30 and 10:00 New York time. Gemma sees only the last completed daily bar, and the portfolio shown in its prompt is marked at that completed close. After every Gemma and repair call is finished, the paper executor fetches a separate one-minute quote. It fails closed unless that quote belongs to the current New York session, falls inside the opening window, and is from the current minute. The post-fetch observation timestamp and raw entry price become the pending lesson's entry point; neither is retroactively inserted into the model input.
+## Decision system
 
-This is causal, but it is deliberately described as an operational approximation rather than an exact market-on-open fill. Historical replay fills at the next adjusted open; live paper execution fills at the validated post-decision observation and learns from that actual entry. Before real capital, either connect a broker-supported market-on-open workflow decided before the open or validate the observed opening-delay/slippage contract separately. When a live lesson spans a later split, its stored raw quote is divided by the cumulative split factor and put on the same adjusted basis as its exit before a return is learned.
+The numerical policy compares the current point-in-time state with causally available historical cases and estimates whether cash is likely to outperform AAPL after costs. Gemma receives that support on a weekly schedule and on configured stress events. The gate can block an unsupported cash decision; it never forces leverage or a short.
 
-### 4. Risk-off estimator plus scheduled Gemma decisions
+The action space is:
 
-The structured policy estimates whether cash is likely to outperform AAPL after costs by comparing the current point-in-time state with compatible matured cases. It reports expected active return, uncertainty, effective sample size, evidence strength, and a recommended action. Pending outcomes are excluded, and overlapping outcome windows cannot both count as independent neighbors. The empirical-Bayes frequency and interval are conservative decision support, not a claim of held-out probability calibration. Promotion beyond paper trading requires pre-2025 walk-forward reliability, Brier-score, and interval-coverage reporting.
+- `BUY_ALL`: hold AAPL at no more than 100% exposure.
+- `CASH_ALL`: liquidate AAPL when the frozen/causal evidence permits it.
+- `HOLD`: preserve the current valid position.
 
-Gemma receives this decision support and the auditable case evidence. It is called on a weekly schedule and on configured market-stress events, rather than being asked to reinterpret nearly identical inputs every day. A minimum holding period and two-confirmation hysteresis reduce one-day reversals.
+News is disabled because the local warehouse does not contain a trustworthy point-in-time headline archive. Synthetic GDELT event labels are not shown to Gemma as news.
 
-The numerical gate is deliberately one-sided: strong empirical risk-off evidence gives Gemma permission to choose cash, but never forces a trade. Weak evidence blocks both entering cash and remaining there. Returning from unsupported cash to the long baseline bypasses discretionary hysteresis and also applies on no-Gemma cadence days. This keeps every risk-off move explainable while making AAPL ownership the mechanical default.
+## Verification and run commands
 
-The action space is deliberately small:
-
-- `BUY_ALL`: hold AAPL up to the permitted gross exposure.
-- `CASH_ALL`: liquidate AAPL only when the evidence supports a positive after-cost active advantage for cash.
-- `HOLD`: preserve the current position unless a mechanical gross-exposure correction is required.
-
-Short selling is disabled. News is also disabled in this preset because the local data did not provide reliable point-in-time headlines; synthetic GDELT event labels are not presented as news.
-
-## Configuration contract
-
-Use `local_gemma_aapl_online_config()` for the new system. The older `local_gemma_aapl_config()` remains available under the `legacy` CLI preset for reproducibility.
-
-The online preset uses local Ollama `gemma4:12b`, local embeddings, no paid API, adjusted historical prices, a reset portfolio at the test boundary, structured counterfactual lessons, and the long/cash/hold action contract. It runs one benchmark iteration and never auto-patches itself after seeing the result.
-
-`dry_run=True` may write ordinary run/audit rows, but it does not mature or queue lessons, register a base snapshot, or save the durable live portfolio/schedule state.
-
-## Commands
-
-Run the focused implementation tests (no benchmark or model call):
+Run implementation tests without calling Gemma or opening the holdout:
 
 ```powershell
 python -m pytest tests/test_aapl_online_preset.py tests/test_aapl_online_engine.py tests/test_online_policy.py tests/test_online_memory.py tests/test_deterministic_online_memory.py -q
 ```
 
-Check configuration and local warehouse coverage only. This does not pull or call Gemma and does not start a benchmark:
+Check configuration and warehouse coverage without checking or calling Ollama:
 
 ```powershell
 python -m agent_benchmark.local_gemma_loop --preset aapl-online --preflight-only
 ```
 
-When ready, run a bounded five-day pipeline smoke test. This does run Gemma and the benchmark, so it is intentionally not part of repository verification:
+Do not use the first few holdout days as a smoke test. Frozen mode rejects `--max-test-days`; pipeline smoke testing must use unit tests, synthetic data, or a pre-2024 segment.
+
+After the candidate is selected and committed, run the complete frozen window once:
 
 ```powershell
-python -m agent_benchmark.local_gemma_loop --preset aapl-online --max-test-days 5 --no-pull --no-commit-before-run
+python -m agent_benchmark.local_gemma_loop --preset aapl-online --max-train-days 0 --max-test-days 0 --no-pull
 ```
 
-Run the full 2025 benchmark exactly once after the smoke test passes:
+Run the learning-forward comparison separately:
 
 ```powershell
-python -m agent_benchmark.local_gemma_loop --preset aapl-online --max-train-days 0 --max-test-days 0 --no-pull --no-commit-before-run
+python -m agent_benchmark.local_gemma_loop --preset aapl-causal-replay --max-train-days 0 --max-test-days 0 --no-pull
 ```
 
-If a monitored run is safely interrupted, resume its existing memory stream and checkpoint rather than starting a new replay:
-
-```powershell
-python -m agent_benchmark.local_gemma_loop --resume-run-id <run-id> --no-pull --no-commit-before-run
-```
-
-The report must be rejected as a success unless it beats the same-window AAPL buy-and-hold result after costs, has no invalid allocations, and proves local-only estimated API cost of `$0.00`.
+A causal replay is never eligible for frozen-test success, even if it beats buy-and-hold. A frozen report succeeds only if it beats same-window AAPL buy-and-hold after costs, has no invalid allocations, proves zero paid-API cost, and proves unchanged learning state.

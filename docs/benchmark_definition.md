@@ -72,7 +72,7 @@ Training is where the system builds a historical case library from warehouse
 data. Dates are user-configurable. The default training period is:
 
 - `train_start`: `2000-01-01`
-- `train_end`: `2024-12-31`
+- `train_end`: `2023-12-31`
 
 Training memory is deterministic and shared across models. The system computes
 historical market cases directly from prices, index context, volatility,
@@ -83,7 +83,7 @@ This is the budget benchmark's definition of learning: the model enters the test
 phase with retrieved historical examples, but the expensive daily LLM replay is
 not required.
 
-### 3. Test phase
+### 3. Frozen test phase
 
 The test phase evaluates the model on a future or hidden period. Dates are
 user-configurable. The default test period is:
@@ -91,12 +91,17 @@ user-configurable. The default test period is:
 - `test_start`: `2025-01-01`
 - `test_end`: `2025-12-31`
 
-During the test phase, the model can use:
+During the primary frozen test, the model can use:
 
 - Current point-in-time input data for the decision timestamp.
 - Deterministic memory items generated from the training period.
 - Historical outcomes whose outcome date is known before or equal to the memory
   cutoff.
+
+It cannot add test-period outcomes to training memory, refit parameters, change
+thresholds, or update normalization. A separate `causal_online_replay` may add
+an experience only after its outcome matures, but that replay is operational
+evidence and is not the frozen test score.
 
 The model must not receive future prices, future news, future filings, future
 macro releases, or future outcome labels before they would have been known.
@@ -144,8 +149,8 @@ Every memory item must have at least:
 - `outcome_available_at`
 
 Retrieval must be point-in-time. A decision at time `T` can only retrieve memory
-where `knowledge_timestamp <= T`, and the official 2025 test uses only memory
-created from the 2000-2024 training period.
+where `knowledge_timestamp <= T`, and a frozen post-2023 test uses only memory
+whose labels matured by the 2023-12-31 selection cutoff.
 
 The retrieval system should favor:
 
@@ -254,7 +259,7 @@ The benchmark configuration should include:
 {
   "mode": "single_stock | balanced_50_portfolio",
   "train_start": "2000-01-01",
-  "train_end": "2024-12-31",
+  "train_end": "2023-12-31",
   "test_start": "2025-01-01",
   "test_end": "2025-12-31",
   "live_frequency": "hourly",
@@ -263,12 +268,15 @@ The benchmark configuration should include:
   "max_gross_exposure": 1.0,
   "memory_mode": "deterministic_market_cases",
   "memory_retrieval": "deterministic_similarity",
-  "decision_process": "two_stage_llm"
+  "decision_process": "two_stage_llm",
+  "evaluation_mode": "frozen_holdout",
+  "online_test_learning": false
 }
 ```
 
-Users may change train and test dates. The default benchmark uses 2000-2024 for
-training and 2025 for testing.
+Users may change train and test dates, but a frozen evaluation must start after
+its selection cutoff. The AAPL contract learns through 2023 and begins
+evaluation in 2024; causal online replay is reported separately.
 
 ## Reporting
 

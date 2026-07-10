@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import math
 from collections import Counter
@@ -13,7 +14,11 @@ import pandas as pd
 from .api_usage import estimate_run_api_usage
 from .deterministic_memory import DeterministicMarketMemory
 from .llm_client import call_json_model
-from .local_provider import validate_no_paid_api_mode
+from .local_provider import (
+    resolve_local_model_digest,
+    resolve_repository_identity,
+    validate_no_paid_api_mode,
+)
 from .memory import HybridMemory
 from .news import fetch_news_bundle
 from .online_policy import (
@@ -194,6 +199,8 @@ class BenchmarkEngine:
                         "cases": memory_summary.cases,
                         "train_start": memory_summary.train_start,
                         "train_end": memory_summary.train_end,
+                        "selection_cutoff": config.selection_cutoff,
+                        "evaluation_mode": config.evaluation_mode,
                         "price_basis": config.historical_price_basis,
                     },
                 )
@@ -225,6 +232,16 @@ class BenchmarkEngine:
                     "horizon_days": config.online_learning_horizon_days,
                     "memory_scope": memory.context,
                 },
+            )
+        frozen_learning_state_before = None
+        evaluation_data_before = None
+        if config.evaluation_mode != "legacy":
+            evaluation_data_before = self._evaluation_data_snapshot(config, symbols)
+        if config.evaluation_mode == "frozen_holdout":
+            frozen_learning_state_before = self._learning_state_snapshot(
+                memory,
+                online_estimator,
+                as_of=config.test_end,
             )
 
         phases = [("test", config.test_start, config.test_end, config.max_test_days)] if deterministic else [
@@ -283,14 +300,17 @@ class BenchmarkEngine:
                 if close_prices:
                     book = mark_to_market(book, close_prices)
 
-                model_calls += self._record_due_learning_lessons(memory, config, secrets, run_id, all_decisions, decision_date, dry_run=dry_run)
-                if online_estimator is not None and not dry_run:
+                frozen_test = phase == "test" and config.evaluation_mode == "frozen_holdout"
+                if not frozen_test:
+                    model_calls += self._record_due_learning_lessons(memory, config, secrets, run_id, all_decisions, decision_date, dry_run=dry_run)
+                if online_estimator is not None and not dry_run and not frozen_test:
                     self._mature_due_online_experiences(
                         memory,
                         config,
                         run_id,
                         decision_date,
                         online_estimator,
+                        phase=phase,
                     )
                 bundle = self._build_bundle(config, memory, run_id, phase, decision_date, fill_date, symbols, book)
                 online_snapshot = None
@@ -367,7 +387,9 @@ class BenchmarkEngine:
                     decision_kind = "cadence_hold"
 
                 stage2_output["decision_kind"] = decision_kind
-                stage2_output["learning_eligible"] = decision_kind == "model_decision"
+                stage2_output["learning_eligible"] = bool(
+                    online_snapshot is not None and not frozen_test
+                )
                 stage2_output["_schedule_state"] = schedule
                 fill_prices = self._price_map(symbols, fill_date, field=self._historical_fill_field(config))
                 if not fill_prices:
@@ -395,7 +417,9 @@ class BenchmarkEngine:
                         all_decisions,
                     )
                     stage2_output["decision_kind"] = decision_kind
-                    stage2_output["learning_eligible"] = True
+                    stage2_output["learning_eligible"] = bool(
+                        online_snapshot is not None and not frozen_test
+                    )
                     stage2_output["_schedule_state"] = schedule
                     stage2_output = self._normalize_stage2_output(
                         config,
@@ -428,7 +452,11 @@ class BenchmarkEngine:
                     "execution": execution,
                 }
                 all_decisions.append(decision_record)
-                if online_snapshot is not None and decision_kind == "model_decision" and not dry_run:
+                if (
+                    online_snapshot is not None
+                    and not dry_run
+                    and not frozen_test
+                ):
                     self._queue_online_experience(
                         memory,
                         config,
@@ -513,8 +541,49 @@ class BenchmarkEngine:
 
         summary = self._summary(config, symbols, equity_curve, all_executions, model_calls, dry_run)
         summary = self._attach_api_usage(summary, store, run_id, config)
+        if evaluation_data_before is not None:
+            evaluation_data_after = self._evaluation_data_snapshot(config, symbols)
+            data_unchanged = evaluation_data_before["sha256"] == evaluation_data_after["sha256"]
+            summary["evaluation_data_snapshot"] = {
+                "before": evaluation_data_before,
+                "after": evaluation_data_after,
+                "unchanged_during_run": data_unchanged,
+            }
+            if not data_unchanged:
+                raise RuntimeError("Evaluation data changed during the benchmark run")
+        if frozen_learning_state_before is not None:
+            frozen_learning_state_after = self._learning_state_snapshot(
+                memory,
+                online_estimator,
+                as_of=config.test_end,
+            )
+            unchanged = (
+                frozen_learning_state_before["sha256"]
+                == frozen_learning_state_after["sha256"]
+            )
+            summary["frozen_learning_state_proof"] = {
+                "before": frozen_learning_state_before,
+                "after": frozen_learning_state_after,
+                "unchanged": unchanged,
+                "test_outcomes_used_for_learning": False,
+            }
+            if not unchanged:
+                raise RuntimeError("Frozen holdout mutated model-learning state")
         if memory_summary:
             summary["deterministic_memory"] = memory_summary.__dict__
+            if config.evaluation_mode != "legacy":
+                summary["training_diagnostics"] = {
+                    "window": {
+                        "start_date": config.train_start,
+                        "end_date": config.train_end,
+                    },
+                    "used_for_selection": True,
+                    "updates_allowed": True,
+                    "test_evidence": False,
+                    "role": "pattern_learning_and_internal_validation_only",
+                    "memory_cases": memory_summary.cases,
+                    "base_content_hash": memory_summary.content_hash,
+                }
         store.update_benchmark_run(run_id, status="completed", phase="completed", summary=summary, progress={"percent": 100, "message": "Completed", "model_calls": model_calls}, finished=True)
         return {"summary": summary, "decisions": all_decisions}
 
@@ -657,6 +726,16 @@ class BenchmarkEngine:
         timestamp: datetime | None = None,
     ) -> Dict[str, Any]:
         validate_no_paid_api_mode(config, secrets)
+        if config.evaluation_mode == "live_learning" and not dry_run:
+            if not config.local_model_digest or not config.implementation_commit:
+                raise ValueError(
+                    "Live learning requires exact local_model_digest and implementation_commit"
+                )
+            repository = resolve_repository_identity()
+            if repository["dirty"] or repository["commit"] != config.implementation_commit:
+                raise ValueError("Live implementation identity does not match the current clean Git HEAD")
+            if resolve_local_model_digest(config) != config.local_model_digest:
+                raise ValueError("Live Ollama model digest does not match the durable stream contract")
         if (
             (config.outcome_learning_mode == "counterfactual_online" or config.online_policy_enabled)
             and not config.memory_online_stream_id
@@ -685,7 +764,48 @@ class BenchmarkEngine:
         decision_timestamp = now.isoformat(timespec="seconds")
         decision_date = now.date().isoformat()
         memory = HybridMemory(store, config, secrets, run_id=run_id)
+        incompatible_streams = memory.incompatible_stream_fingerprints()
+        if incompatible_streams:
+            raise RuntimeError(
+                "The durable live stream already contains state from an incompatible "
+                "model/code contract; choose a new stream id or explicitly migrate it."
+            )
         live_state = memory.load_live_state()
+        artifact_counts = memory.stream_artifact_counts()
+        if live_state is None and any(artifact_counts.values()):
+            raise RuntimeError(
+                "The durable live stream contains learning artifacts but no portfolio state; "
+                "refusing to restart from cash after a partial checkpoint."
+            )
+        recent_experiences = memory.recent_experiences(limit=1)
+        if live_state is not None and recent_experiences:
+            latest = recent_experiences[0]
+            entry_timestamp = str(
+                ((latest.get("metadata") or {}).get("entry_timestamp"))
+                or latest.get("decision_timestamp")
+                or ""
+            )
+            last_snapshot_at = str(live_state.get("last_snapshot_at") or "")
+            try:
+                entry_time = pd.Timestamp(entry_timestamp)
+                snapshot_time = pd.Timestamp(last_snapshot_at)
+                entry_time = (
+                    entry_time.tz_localize("UTC")
+                    if entry_time.tzinfo is None
+                    else entry_time.tz_convert("UTC")
+                )
+                snapshot_time = (
+                    snapshot_time.tz_localize("UTC")
+                    if snapshot_time.tzinfo is None
+                    else snapshot_time.tz_convert("UTC")
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("The durable live stream checkpoint timestamps are invalid") from exc
+            if entry_time > snapshot_time:
+                raise RuntimeError(
+                    "The durable live stream has a newer executed experience than its portfolio "
+                    "checkpoint; refusing to replay after a partial write."
+                )
         if (
             not dry_run
             and config.live_frequency == "daily_open"
@@ -737,6 +857,8 @@ class BenchmarkEngine:
                         "cases": live_memory_summary.cases,
                         "train_start": live_memory_summary.train_start,
                         "train_end": live_memory_summary.train_end,
+                        "selection_cutoff": config.selection_cutoff,
+                        "evaluation_mode": config.evaluation_mode,
                         "price_basis": config.historical_price_basis,
                     },
                 )
@@ -753,6 +875,7 @@ class BenchmarkEngine:
                     run_id,
                     decision_timestamp,
                     live_estimator,
+                    phase="live",
                 )
         bundle = self._build_live_bundle(
             config,
@@ -861,7 +984,7 @@ class BenchmarkEngine:
             )
             decision_kind = "cadence_hold"
         stage2_output["decision_kind"] = decision_kind
-        stage2_output["learning_eligible"] = decision_kind == "model_decision"
+        stage2_output["learning_eligible"] = online_snapshot is not None
         stage2_output["_schedule_state"] = schedule
         stage2_output = self._normalize_stage2_output(config, stage2_output, symbols, manager_bundle, book=book, prices=mark_prices)
         if decision_kind == "model_decision":
@@ -939,7 +1062,7 @@ class BenchmarkEngine:
         execution["fill_timestamp"] = fill_timestamp
         execution["repair_attempted"] = bool((stage2_output.get("_allocation_repair") or {}).get("attempted"))
         execution["repair_count"] = int((stage2_output.get("_allocation_repair") or {}).get("attempts") or repair_calls or 0)
-        if online_snapshot is not None and decision_kind == "model_decision" and not dry_run:
+        if online_snapshot is not None and not dry_run:
             self._queue_online_experience(
                 memory,
                 config,
@@ -1263,15 +1386,24 @@ class BenchmarkEngine:
             if getattr(config, "historical_price_basis", "legacy") == "adjusted"
             else "close"
         )
+        configured_symbols = sorted(
+            set(getattr(getattr(config, "data_sources", None), "index_symbols", []) or [])
+        )
+        symbol_filter = ""
+        parameters: List[Any] = [decision_date]
+        if configured_symbols:
+            placeholders = ", ".join(["?"] * len(configured_symbols))
+            symbol_filter = f" AND symbol IN ({placeholders})"
+            parameters.extend(configured_symbols)
         df = self.warehouse.conn.execute(
             f"""
             SELECT date, symbol, {price_column} AS close, return_1d, source
             FROM context_daily
-            WHERE date <= CAST(? AS DATE) AND ohlcv_available = true
+            WHERE date <= CAST(? AS DATE) AND ohlcv_available = true{symbol_filter}
             QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) <= 65
             ORDER BY symbol, date
             """,
-            [decision_date],
+            parameters,
         ).fetchdf()
         if df.empty:
             return []
@@ -1421,6 +1553,8 @@ class BenchmarkEngine:
         return out, quality
 
     def _macro(self, config: BenchmarkConfig, decision_date: str) -> List[Dict[str, Any]]:
+        if not config.data_sources.include_fred_macro:
+            return []
         df = self.warehouse.conn.execute(
             """
             SELECT series_id, label, observation_date, value, source_status
@@ -1877,6 +2011,130 @@ class BenchmarkEngine:
         lessons = memory.retrieve(decision_timestamp=decision_timestamp, query=query, limit=limit)
         return [item for item in lessons if item.get("memory_type") == "diagnostic_lesson"][:limit]
 
+    @staticmethod
+    def _learning_state_snapshot(
+        memory: HybridMemory,
+        estimator: CalibratedOnlineRiskOffEstimator | None,
+        *,
+        as_of: str,
+    ) -> Dict[str, Any]:
+        memories = memory.retrieve(decision_timestamp=as_of, limit=100_000)
+        pending = memory.recent_experiences(limit=100_000)
+        payload = {
+            "estimator_lessons": (
+                [lesson.to_dict() for lesson in estimator.lessons]
+                if estimator is not None
+                else []
+            ),
+            "memory_records": sorted(memories, key=lambda item: (str(item.get("id")), str(item.get("knowledge_timestamp")))),
+            "pending_experiences": sorted(pending, key=lambda item: str(item.get("id"))),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return {
+            "sha256": f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
+            "estimator_lesson_count": len(payload["estimator_lessons"]),
+            "memory_record_count": len(payload["memory_records"]),
+            "pending_experience_count": len(payload["pending_experiences"]),
+        }
+
+    def _evaluation_data_snapshot(
+        self,
+        config: BenchmarkConfig,
+        symbols: List[str],
+    ) -> Dict[str, Any]:
+        """Hash every local point-in-time table used by the historical evaluation."""
+
+        asset_symbols = sorted(set(symbols))
+        lookback_start = (
+            datetime.fromisoformat(config.test_start) - timedelta(days=500)
+        ).date().isoformat()
+        context_symbols = sorted(
+            set(config.data_sources.index_symbols if config.data_sources.include_index_context else [])
+        )
+        tables: Dict[str, pd.DataFrame] = {}
+        if asset_symbols:
+            placeholders = ", ".join(["?"] * len(asset_symbols))
+            tables["asset_daily"] = self.warehouse.conn.execute(
+                f"""
+                SELECT * FROM asset_daily
+                WHERE symbol IN ({placeholders})
+                  AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                ORDER BY date, symbol
+                """,
+                [*asset_symbols, lookback_start, config.test_end],
+            ).fetchdf()
+            tables["sec_facts"] = self.warehouse.conn.execute(
+                f"""
+                SELECT * FROM sec_facts
+                WHERE symbol IN ({placeholders})
+                  AND filed_date <= CAST(? AS DATE)
+                ORDER BY symbol, filed_date, period_end, concept
+                """,
+                [*asset_symbols, config.test_end],
+            ).fetchdf()
+        if context_symbols:
+            placeholders = ", ".join(["?"] * len(context_symbols))
+            tables["context_daily"] = self.warehouse.conn.execute(
+                f"""
+                SELECT * FROM context_daily
+                WHERE symbol IN ({placeholders})
+                  AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                ORDER BY date, symbol
+                """,
+                [*context_symbols, lookback_start, config.test_end],
+            ).fetchdf()
+        if config.data_sources.include_fred_macro:
+            tables["macro_daily"] = self.warehouse.conn.execute(
+                """
+                SELECT * FROM macro_daily
+                WHERE date <= CAST(? AS DATE)
+                ORDER BY date, series_id
+                """,
+                [config.test_end],
+            ).fetchdf()
+        if int(config.max_news_per_symbol or 0) > 0 and asset_symbols:
+            placeholders = ", ".join(["?"] * len(asset_symbols))
+            tables["news_articles"] = self.warehouse.conn.execute(
+                f"""
+                SELECT * FROM news_articles
+                WHERE symbol IN ({placeholders})
+                  AND bucket_start BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                ORDER BY bucket_start, symbol, published_at, article_id
+                """,
+                [*asset_symbols, lookback_start, config.test_end],
+            ).fetchdf()
+        payload: Dict[str, Any] = {}
+        for table_name, frame in sorted(tables.items()):
+            records = json.loads(
+                frame.to_json(
+                    orient="records",
+                    date_format="iso",
+                    double_precision=15,
+                )
+            )
+            payload[table_name] = records
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        asset_frame = tables.get("asset_daily", pd.DataFrame())
+        lookback_dates = (
+            sorted({self._date(value) for value in asset_frame["date"].tolist()})
+            if not asset_frame.empty and "date" in asset_frame
+            else []
+        )
+        dates = [value for value in lookback_dates if config.test_start <= value <= config.test_end]
+        return {
+            "sha256": f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
+            "table_rows": {name: int(len(frame)) for name, frame in sorted(tables.items())},
+            "session_count": len(dates),
+            "first_session": dates[0] if dates else None,
+            "last_session": dates[-1] if dates else None,
+            "session_dates_sha256": f"sha256:{hashlib.sha256(json.dumps(dates, separators=(',', ':')).encode('utf-8')).hexdigest()}",
+            "lookback_session_count": len(lookback_dates),
+            "lookback_session_dates_sha256": f"sha256:{hashlib.sha256(json.dumps(lookback_dates, separators=(',', ':')).encode('utf-8')).hexdigest()}",
+            "lookback_start": lookback_start,
+            "evaluation_start": config.test_start,
+            "evaluation_end": config.test_end,
+        }
+
     def _build_online_estimator(
         self,
         config: BenchmarkConfig,
@@ -1907,9 +2165,21 @@ class BenchmarkEngine:
                 horizon_days=int(config.online_learning_horizon_days),
             )
         )
-        stored = memory.retrieve(
-            decision_timestamp=cutoff or config.test_end,
-            limit=100_000,
+        if config.evaluation_mode != "legacy":
+            late = [
+                lesson
+                for lesson in lessons
+                if str(lesson.knowledge_timestamp)[:10] > str(config.selection_cutoff)[:10]
+            ]
+            if late:
+                raise ValueError("Pre-evaluation estimator contains lessons maturing after selection_cutoff")
+        stored = (
+            []
+            if config.evaluation_mode == "frozen_holdout"
+            else memory.retrieve(
+                decision_timestamp=cutoff or config.test_end,
+                limit=100_000,
+            )
         )
         for item in stored:
             if item.get("memory_type") != "counterfactual_online_lesson":
@@ -1995,7 +2265,11 @@ class BenchmarkEngine:
         run_id: str,
         as_of: str,
         estimator: CalibratedOnlineRiskOffEstimator,
+        *,
+        phase: str | None = None,
     ) -> int:
+        if phase == "test" and config.evaluation_mode == "frozen_holdout":
+            raise RuntimeError("Frozen holdout forbids maturing evaluation experiences")
         if config.outcome_learning_mode != "counterfactual_online":
             return 0
         matured = 0
@@ -2230,6 +2504,8 @@ class BenchmarkEngine:
         stage2_output: Dict[str, Any],
         execution: Dict[str, Any] | None = None,
     ) -> int | None:
+        if phase == "test" and config.evaluation_mode == "frozen_holdout":
+            raise RuntimeError("Frozen holdout forbids queuing evaluation experiences")
         if config.outcome_learning_mode != "counterfactual_online":
             return None
         if phase == "test" and not config.online_test_learning:
@@ -4426,6 +4702,13 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             "equity_curve": equity_curve,
             "benchmark_contract": {
                 "version": config.benchmark_contract_version,
+                "evaluation_mode": config.evaluation_mode,
+                "selection_cutoff": config.selection_cutoff,
+                "fixed_evaluation_cutoff": config.fixed_evaluation_cutoff,
+                "globally_pristine": bool(config.globally_pristine),
+                "historical_holdout_reveal_count_lower_bound": int(
+                    config.historical_holdout_reveal_count_lower_bound
+                ),
                 "historical_price_basis": config.historical_price_basis,
                 "action_space": config.single_stock_action_space,
                 "decision_cadence": config.decision_cadence,
@@ -4479,12 +4762,50 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             )
             if test_comparison.get("benchmarks"):
                 summary["test_buy_hold_comparison"] = test_comparison
+            period_reports = self._continuous_single_stock_period_reports(
+                config,
+                symbols,
+                test_curve,
+            )
+            if config.evaluation_mode == "frozen_holdout":
+                summary["frozen_holdout"] = {
+                    "metrics": test_metrics,
+                    "buy_hold_comparison": test_comparison,
+                    "periods": period_reports,
+                    "used_for_selection": False,
+                    "updates_allowed": False,
+                    "test_evidence": True,
+                    "globally_pristine": bool(config.globally_pristine),
+                }
+                window_name = "frozen_holdout"
+                window_reason = (
+                    "The model, thresholds, and learning memory were frozen at the pre-2024 "
+                    "selection cutoff; evaluation outcomes were not learned."
+                )
+            elif config.evaluation_mode == "causal_online_replay":
+                summary["causal_online_replay"] = {
+                    "metrics": test_metrics,
+                    "buy_hold_comparison": test_comparison,
+                    "periods": period_reports,
+                    "used_for_selection": False,
+                    "updates_allowed": "only after each outcome matures",
+                    "test_evidence": False,
+                    "globally_pristine": False,
+                }
+                window_name = "causal_online_replay"
+                window_reason = (
+                    "This operational replay may learn matured evaluation outcomes and therefore "
+                    "cannot count as the primary frozen holdout."
+                )
+            else:
+                window_name = "legacy_test"
+                window_reason = "Legacy summary with a separate test-phase comparison."
             summary["success_evaluation_window"] = {
-                "name": "2025_test",
+                "name": window_name,
                 "phase": "test",
                 "start_date": test_metrics.get("start_date"),
                 "end_date": test_metrics.get("end_date"),
-                "reason": "The local Gemma AAPL goal trains on historical data through 2024 and judges success only on 2025.",
+                "reason": window_reason,
             }
         summary["metrics"] = metrics
         return summary
@@ -4508,6 +4829,121 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
             "initial_equity": initial,
             "final_equity": final,
             "total_return": final / initial - 1.0 if initial else 0.0,
+        }
+
+    def _continuous_single_stock_period_reports(
+        self,
+        config: BenchmarkConfig,
+        symbols: List[str],
+        equity_curve: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Compare calendar subperiods on one uninterrupted strategy/B&H account."""
+
+        if config.mode != "single_stock" or not symbols or not equity_curve:
+            return {}
+        dated = [
+            {**point, "_date": self._date(point.get("date"))}
+            for point in equity_curve
+        ]
+        start_date = dated[0]["_date"]
+        end_date = dated[-1]["_date"]
+        initial = _safe_float(
+            dated[0].get("phase_start_equity", dated[0].get("equity"))
+        )
+        if initial is None or initial <= 0:
+            return {}
+        benchmark_values = self._continuous_instrument_buy_hold_values(
+            config,
+            symbol=symbols[0],
+            start_date=start_date,
+            end_date=end_date,
+            initial=float(initial),
+        )
+        if not benchmark_values:
+            return {}
+        reports: Dict[str, Any] = {}
+        first_year = int(start_date[:4])
+        last_year = int(end_date[:4])
+        for year in range(first_year, last_year + 1):
+            positions = [
+                index
+                for index, point in enumerate(dated)
+                if int(point["_date"][:4]) == year
+            ]
+            if not positions:
+                continue
+            first = positions[0]
+            last = positions[-1]
+            previous = first - 1
+            strategy_start = (
+                float(initial)
+                if previous < 0
+                else float(dated[previous].get("equity") or 0.0)
+            )
+            benchmark_start = (
+                float(initial)
+                if previous < 0
+                else _safe_float(benchmark_values.get(dated[previous]["_date"]))
+            )
+            strategy_final = _safe_float(dated[last].get("equity"))
+            benchmark_final = _safe_float(benchmark_values.get(dated[last]["_date"]))
+            if not strategy_start or not benchmark_start or strategy_final is None or benchmark_final is None:
+                continue
+            strategy_return = strategy_final / strategy_start - 1.0
+            benchmark_return = benchmark_final / benchmark_start - 1.0
+            name = f"{year}_ytd" if year == last_year and end_date[5:10] != "12-31" else str(year)
+            reports[name] = {
+                "start_date": dated[first]["_date"],
+                "end_date": dated[last]["_date"],
+                "days": len(positions),
+                "accounting": "continuous_account_no_calendar_reset",
+                "strategy_return": strategy_return,
+                "aapl_buy_hold_return": benchmark_return,
+                "excess_return": strategy_return - benchmark_return,
+                "beat_buy_hold": bool(strategy_return > benchmark_return),
+            }
+        return reports
+
+    def _continuous_instrument_buy_hold_values(
+        self,
+        config: BenchmarkConfig,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        initial: float,
+    ) -> Dict[str, float]:
+        price_expression = (
+            "open * adj_close / NULLIF(close, 0)"
+            if config.historical_price_basis == "adjusted"
+            else "adj_close"
+        )
+        frame = self.warehouse.conn.execute(
+            f"""
+            SELECT CAST(date AS VARCHAR) AS date, {price_expression} AS execution_price
+            FROM asset_daily
+            WHERE symbol = ?
+              AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND ohlcv_available = true
+              AND ({price_expression}) IS NOT NULL
+              AND ({price_expression}) > 0
+            ORDER BY date
+            """,
+            [symbol, start_date, end_date],
+        ).fetchdf()
+        if frame.empty:
+            return {}
+        first_price = float(frame.iloc[0]["execution_price"])
+        if config.historical_price_basis == "adjusted":
+            slip = float(config.slippage_bps or 0.0) / 10000.0
+            investable = max(0.0, float(initial) - float(config.commission_per_trade or 0.0))
+            entry_cost = first_price * (1.0 + slip) + float(config.commission_per_share or 0.0)
+            shares = investable / entry_cost if entry_cost > 0 else 0.0
+        else:
+            shares = float(initial) / first_price
+        return {
+            self._date(row["date"]): shares * float(row["execution_price"])
+            for _, row in frame.iterrows()
         }
 
     def _buy_hold_comparison(
