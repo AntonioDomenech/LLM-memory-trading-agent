@@ -13,6 +13,7 @@ from agent_benchmark.deterministic_aapl import CostAssumptions, EvaluationPeriod
 from agent_benchmark.unleveraged_aapl import (
     CONTEXTUAL_EXHAUSTION_V1,
     GAP_DOWN_CASH_V1,
+    SPARSE_DUAL_TREND_EXHAUSTION_V1,
     LongCashSpec,
     assert_final_session_coverage,
     assert_unleveraged_ledger,
@@ -218,6 +219,18 @@ def test_default_contextual_spec_is_binary_and_frozen_before_2024():
     target = build_long_cash_target(frame, CONTEXTUAL_EXHAUSTION_V1).dropna()
     assert set(target.unique()) <= {0.0, 1.0}
     assert CONTEXTUAL_EXHAUSTION_V1.selection_data_cutoff == "2023-12-31"
+
+
+def test_sparse_dual_trend_candidate_is_frozen_binary_rule():
+    spec = SPARSE_DUAL_TREND_EXHAUSTION_V1
+    assert spec.aapl_percentile_lookback == 252
+    assert spec.aapl_percentile == pytest.approx(0.975)
+    assert spec.aapl_trend_sma_days == 63
+    assert spec.aapl_trend_sma_slow_days == 126
+    assert spec.require_spy_negative is False
+    assert spec.require_qqq_negative is False
+    target = build_long_cash_target(context_frame(400), spec).dropna()
+    assert set(target.unique()) <= {0.0, 1.0}
 
 
 def test_promotion_runner_rejects_noncanonical_periods_before_io(tmp_path):
