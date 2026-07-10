@@ -837,7 +837,10 @@ def reserve_holdout_touch(
             touch_count = int(entry["touch_count"])
         reserved_payload = json.dumps(registry, indent=2, sort_keys=True) + "\n"
         _atomic_write_text(registry_path, reserved_payload)
-        reserved_hash = hashlib.sha256(reserved_payload.encode("utf-8")).hexdigest()
+        # Hash the exact bytes written. Path.write_text performs platform newline
+        # translation on Windows, so hashing the pre-write LF string would not
+        # authenticate the resulting CRLF registry file.
+        reserved_hash = file_sha256(registry_path)
         return {
             "touch_count": touch_count,
             "registry_path": str(registry_path.resolve()),

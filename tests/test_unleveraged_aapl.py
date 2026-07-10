@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 from pathlib import Path
 
@@ -260,6 +261,9 @@ def test_holdout_registry_increments_new_candidates_and_reuses_exact_candidate(t
     )
     assert first["touch_count"] == 5
     assert first["new_candidate_reveal"] is True
+    snapshot = tmp_path / "reserved_snapshot.json"
+    snapshot.write_text(first["_reserved_registry_json"], encoding="utf-8")
+    assert first["registry_sha256"] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
     assert repeated["touch_count"] == first["touch_count"]
     assert repeated["new_candidate_reveal"] is False
     assert second["touch_count"] == 6
