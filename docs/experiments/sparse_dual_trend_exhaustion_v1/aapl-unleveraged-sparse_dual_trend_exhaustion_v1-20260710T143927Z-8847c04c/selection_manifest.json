@@ -1,0 +1,54 @@
+{
+  "candidate_specific_selection": {
+    "development_classification": "frozen pre-2024 provisional finalist from a blind 528-candidate search; no candidate passed the preregistered strict win-count gate",
+    "exact_10bps_2004_2023": {
+      "continuous_relative_wealth": 0.977697,
+      "losses": 3,
+      "mean_annual_excess": 0.029011,
+      "median_annual_excess": 0.0,
+      "ties": 10,
+      "wins": 7,
+      "worst_annual_excess": -0.010176
+    },
+    "hybrid_neighbor_candidates": 36,
+    "important_limitation": "This is a provisional finalist, not a pre-2024 gate winner; final-period testing is exploratory retrospective evidence.",
+    "neighbors_with_positive_mean_in_all_folds": 23,
+    "pre_2024_candidates_screened": 528,
+    "selection_reason": "strongest robust sparse neighborhood after pure dual-SMA, vote, and drawdown guard families failed all folds",
+    "strict_gate_passed": false,
+    "warmup_policy": "remain 100% long until the complete 252-session percentile and both trend averages are available; never use a partial lookback"
+  },
+  "frozen_compact_grid_candidates": 36,
+  "important_limitation": "The 1,508-candidate research count is self-attested and has no complete saved table. This manifest was committed after the final years existed and is an auditable retrospective declaration, not cryptographic proof of a pristine holdout.",
+  "manifest_sha256": "7895d8d800877807e1bae317e28f8088dced2f6d1d7abb4b3d575cf50a97a802",
+  "protocol_name": "pre_2024_long_cash_v1",
+  "ranking": [
+    "positive mean excess in every temporal block",
+    "minimum wins of 6/10, 3/5, and 3/5",
+    "positive median annual excess",
+    "no more than 15 cash sessions and 30 orders per year",
+    "maximize weakest block mean, then annual wins, then lower turnover",
+    "require passing adjacent percentile/lookback configurations"
+  ],
+  "research_grid_candidates_screened_self_reported": 1508,
+  "selected_spec": {
+    "aapl_percentile": 0.975,
+    "aapl_percentile_lookback": 252,
+    "aapl_trend_sma_days": 63,
+    "aapl_trend_sma_slow_days": 126,
+    "cash_sessions": 1,
+    "gap_threshold": -0.04,
+    "market_return_lookback": 10,
+    "name": "sparse_dual_trend_exhaustion_v1",
+    "require_qqq_negative": false,
+    "require_spy_negative": false,
+    "rule_type": "dual_trend_exhaustion",
+    "selection_data_cutoff": "2023-12-31"
+  },
+  "selection_data_cutoff": "2023-12-31",
+  "temporal_blocks": [
+    "2004-2013",
+    "2014-2018",
+    "2019-2023"
+  ]
+}
