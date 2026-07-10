@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,7 @@ from agent_benchmark.sec_audit_selection import (
     STRUCTURAL_ROLE,
     select_sec_audit_filings,
 )
-from agent_benchmark.sec_point_in_time import FilingRecord
+from agent_benchmark.sec_point_in_time import FilingRecord, parse_submissions_rows
 
 
 def _record(
@@ -295,6 +296,7 @@ def test_2019_and_2024_are_structural_only_and_metadata_output_is_closed() -> No
                 "is_xbrl",
                 "submitter_cik",
                 "subject_cik",
+                "date_of_filing_date_change",
                 "change_anomaly_flag",
             }
             assert "body" not in slot["filing"]
@@ -364,3 +366,92 @@ def test_parser_record_preserves_derived_submitter_cik_for_selection() -> None:
     assert differing["skipped_already_selected_accessions"] == [
         "0000912057-00-053623"
     ]
+
+
+def test_filing_date_change_is_preserved_and_cannot_be_negated() -> None:
+    record = _record(
+        "changed-date",
+        "S-3",
+        "2010-01-04",
+        "2010-01-04T09:00:00",
+        anomaly=False,
+        dateOfFilingDateChange="2010-01-06",
+    )
+    result = select_sec_audit_filings([record])
+    anomaly = next(
+        slot
+        for slot in result["edge_cases"]
+        if slot["category"] == "first-anomaly"
+    )
+    assert anomaly["status"] == "selected"
+    assert anomaly["filing"]["date_of_filing_date_change"] == "2010-01-06"
+    assert anomaly["filing"]["change_anomaly_flag"] is True
+
+
+def test_filing_records_integrate_every_core_and_edge_selection_role() -> None:
+    records: list[FilingRecord] = []
+    for position, raw in enumerate(_complete_records(), start=1):
+        year = int(raw["filing_year"])
+        prefix = (
+            str(raw["submitter_cik"])
+            if raw["accession"] == "edge-first-different-cik"
+            else "0000320193"
+        )
+        accepted = datetime.fromisoformat(str(raw["acceptance_timestamp"]))
+        records.append(
+            FilingRecord(
+                accession_number=(
+                    f"{prefix}-{year % 100:02d}-{position:06d}"
+                ),
+                acceptance_datetime=accepted.strftime("%Y%m%d%H%M%S"),
+                form=str(raw["form"]),
+                primary_document=f"filing-{position}.htm",
+                items="",
+                filing_date=str(raw["filing_date"]),
+                report_date="",
+                is_xbrl=bool(raw["is_xbrl"]),
+                source_name="CIK0000320193-submissions-001.json",
+                subject_cik=str(raw["subject_cik"]),
+                date_of_filing_date_change=(
+                    "2010-01-05"
+                    if raw["accession"] == "edge-first-anomaly"
+                    else ""
+                ),
+            )
+        )
+
+    columns = {
+        "accessionNumber": [record.accession_number for record in records],
+        "acceptanceDateTime": [record.acceptance_datetime for record in records],
+        "form": [record.form for record in records],
+        "primaryDocument": [record.primary_document for record in records],
+        "items": [record.items for record in records],
+        "filingDate": [record.filing_date for record in records],
+        "reportDate": [record.report_date for record in records],
+        "isXBRL": [int(record.is_xbrl) for record in records],
+        "dateOfFilingDateChange": [
+            record.date_of_filing_date_change for record in records
+        ],
+    }
+    parsed = parse_submissions_rows(
+        {
+            "cik": "320193",
+            "filings": {"recent": columns, "files": []},
+        }
+    )
+    assert all(isinstance(record, FilingRecord) for record in parsed)
+    result = select_sec_audit_filings(parsed)
+    assert result["selected_count"] == 24
+    assert result["gap_count"] == 0
+    assert len(result["core"]) == 18
+    assert all(slot["status"] == "selected" for slot in result["core"])
+    assert all(slot["status"] == "selected" for slot in result["edge_cases"])
+    selected_edges = {slot["category"]: slot for slot in result["edge_cases"]}
+    assert selected_edges["first-xbrl"]["filing"]["is_xbrl"] is True
+    assert selected_edges["first-amendment"]["filing"]["form"].endswith("/A")
+    assert selected_edges["first-differing-submitter-cik"]["filing"][
+        "submitter_cik"
+    ] == "0000000123"
+    assert selected_edges["first-anomaly"]["filing"][
+        "date_of_filing_date_change"
+    ] == "2010-01-05"

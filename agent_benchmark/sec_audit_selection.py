@@ -41,6 +41,7 @@ _FILING_OUTPUT_FIELDS: tuple[str, ...] = (
     "is_xbrl",
     "submitter_cik",
     "subject_cik",
+    "date_of_filing_date_change",
     "change_anomaly_flag",
 )
 
@@ -55,6 +56,7 @@ class FilingMetadata:
     is_xbrl: bool | None
     submitter_cik: str | None
     subject_cik: str | None
+    date_of_filing_date_change: str | None
     change_anomaly_flag: bool | None
 
     def to_dict(self) -> dict[str, Any]:
@@ -98,7 +100,7 @@ def _record_mapping(record: Any) -> Mapping[str, Any]:
         # Preserve derived properties on the parser's immutable FilingRecord;
         # vars() alone omits submitter_cik and would silently disable that
         # frozen edge-case selector.
-        for name in ("submitter_cik", "is_amendment"):
+        for name in ("submitter_cik", "is_amendment", "change_anomaly_flag"):
             if hasattr(record, name):
                 result[name] = getattr(record, name)
         return result
@@ -140,8 +142,21 @@ def _parse_acceptance(value: Any) -> datetime:
     else:
         text_value = _required_text(value, field_name="acceptance_timestamp")
         if re.fullmatch(r"\d{14}", text_value):
-            parsed = datetime.strptime(text_value, "%Y%m%d%H%M%S")
+            try:
+                parsed = datetime.strptime(text_value, "%Y%m%d%H%M%S")
+            except ValueError as exc:
+                raise ValueError(
+                    "acceptance_timestamp has an invalid 14-digit datetime"
+                ) from exc
         else:
+            if not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+                r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?",
+                text_value,
+            ):
+                raise ValueError(
+                    "acceptance_timestamp must be ISO datetime or YYYYMMDDHHMMSS"
+                )
             normalized = text_value[:-1] + "+00:00" if text_value.endswith("Z") else text_value
             try:
                 parsed = datetime.fromisoformat(normalized)
@@ -230,6 +245,17 @@ def _normalize_record(record: Any) -> _NormalizedFiling:
     subject_cik = _canonical_cik(
         _first_value(source, ("subject_cik", "issuer_cik"))
     )
+    change_date_value = _first_value(
+        source,
+        ("date_of_filing_date_change", "dateOfFilingDateChange"),
+    )
+    if change_date_value is None or change_date_value == "":
+        change_date = None
+    else:
+        change_date = _parse_date(
+            change_date_value,
+            field_name="date_of_filing_date_change",
+        ).isoformat()
     anomaly_values = [
         source[name]
         for name in ("change_anomaly_flag", "change_flag", "anomaly_flag")
@@ -243,6 +269,10 @@ def _normalize_record(record: Any) -> _NormalizedFiling:
         ]
         known = [value for value in parsed_flags if value is not None]
         anomaly = any(known) if known else None
+    if change_date is not None:
+        # This field is objective SEC catalogue evidence of a post-acceptance
+        # filing-date change. It cannot be negated by a caller-provided flag.
+        anomaly = True
     metadata = FilingMetadata(
         accession=accession,
         form=form,
@@ -252,6 +282,7 @@ def _normalize_record(record: Any) -> _NormalizedFiling:
         is_xbrl=is_xbrl,
         submitter_cik=submitter_cik,
         subject_cik=subject_cik,
+        date_of_filing_date_change=change_date,
         change_anomaly_flag=anomaly,
     )
     return _NormalizedFiling(metadata=metadata, acceptance_et=acceptance)

@@ -36,7 +36,15 @@ def _columns(*rows: dict) -> dict[str, list]:
         "reportDate",
         "isXBRL",
     }
-    return {name: [row[name] for row in rows] for name in names}
+    if any("dateOfFilingDateChange" in row for row in rows):
+        names.add("dateOfFilingDateChange")
+    return {
+        name: [
+            row.get(name, "") if name == "dateOfFilingDateChange" else row[name]
+            for row in rows
+        ]
+        for name in names
+    }
 
 
 def _row(
@@ -49,8 +57,9 @@ def _row(
     filed: str,
     report: str,
     xbrl: int = 0,
+    date_change: str | None = None,
 ) -> dict:
-    return {
+    result = {
         "accessionNumber": accession,
         "acceptanceDateTime": accepted,
         "form": form,
@@ -60,6 +69,9 @@ def _row(
         "reportDate": report,
         "isXBRL": xbrl,
     }
+    if date_change is not None:
+        result["dateOfFilingDateChange"] = date_change
+    return result
 
 
 def _filing(**overrides: object) -> FilingRecord:
@@ -120,6 +132,7 @@ def test_parse_main_and_historical_submissions_preserves_required_fields() -> No
             filed="2024-11-01",
             report="2024-09-28",
             xbrl=1,
+            date_change="2024-11-04",
         ),
         _row(
             "0000320193-24-000124",
@@ -163,6 +176,8 @@ def test_parse_main_and_historical_submissions_preserves_required_fields() -> No
     assert current.primary_document == "aapl-20240928.htm"
     assert current.items == "1.01,2.02"
     assert current.is_xbrl is True
+    assert current.date_of_filing_date_change == "2024-11-04"
+    assert current.change_anomaly_flag is True
     assert records[2].is_amendment is True
     assert records[2].accession_number != current.accession_number
     assert records[0].submitter_cik == "0000912057"
@@ -187,6 +202,55 @@ def test_submissions_parser_fails_closed_on_misalignment_or_wrong_history() -> N
     valid = {"cik": AAPL_CIK, "filings": {"recent": _columns(row), "files": []}}
     with pytest.raises(SecPointInTimeError, match="payload set"):
         parse_submissions_rows(valid, {"unreferenced.json": _columns(row)})
+
+
+@pytest.mark.parametrize(
+    "accepted",
+    (
+        "",
+        "20241101163001extra",
+        "20241301163001",
+        "2024-11-01",
+        "2024-11-01T16:30:01",
+    ),
+)
+def test_submissions_parser_rejects_ambiguous_or_invalid_acceptance_formats(
+    accepted: str,
+) -> None:
+    row = _row(
+        "0000320193-24-000123",
+        accepted=accepted,
+        form="10-K",
+        primary="aapl.htm",
+        items="",
+        filed="2024-11-01",
+        report="2024-09-28",
+    )
+    main = {"cik": AAPL_CIK, "filings": {"recent": _columns(row), "files": []}}
+    with pytest.raises(SecPointInTimeError, match="acceptanceDateTime"):
+        parse_submissions_rows(main)
+
+
+def test_submissions_parser_accepts_timezone_iso_and_validates_change_date() -> None:
+    row = _row(
+        "0000320193-24-000123",
+        accepted="2024-11-01T20:30:01.000Z",
+        form="10-K",
+        primary="aapl.htm",
+        items="",
+        filed="2024-11-01",
+        report="2024-09-28",
+        date_change="2024-11-04",
+    )
+    main = {"cik": AAPL_CIK, "filings": {"recent": _columns(row), "files": []}}
+    record = parse_submissions_rows(main)[0]
+    assert record.acceptance_datetime == "2024-11-01T20:30:01.000Z"
+    assert record.date_of_filing_date_change == "2024-11-04"
+
+    row["dateOfFilingDateChange"] = "2024-13-04"
+    broken = {"cik": AAPL_CIK, "filings": {"recent": _columns(row), "files": []}}
+    with pytest.raises(SecPointInTimeError, match="dateOfFilingDateChange"):
+        parse_submissions_rows(broken)
 
 
 def test_parse_master_idx_preserves_aapl_and_third_party_accessions() -> None:

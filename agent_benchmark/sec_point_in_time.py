@@ -8,10 +8,11 @@ import math
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 AAPL_CIK = "0000320193"
 MAX_AUDIT_REQUESTS = 100
@@ -26,6 +27,7 @@ _EMAIL_RE = re.compile(
     re.IGNORECASE,
 )
 _PLACEHOLDERS = ("example", "sample company", "placeholder", "change me", "your email")
+_EASTERN = ZoneInfo("America/New_York")
 class SecPointInTimeError(ValueError):
     """SEC audit evidence violated its bounded contract."""
 class SecAuditLimitError(SecPointInTimeError):
@@ -75,6 +77,21 @@ class FilingRecord:
     is_xbrl: bool
     source_name: str
     subject_cik: str = AAPL_CIK
+    date_of_filing_date_change: str = ""
+
+    def __post_init__(self) -> None:
+        if not _ACCESSION_RE.fullmatch(self.accession_number):
+            raise SecPointInTimeError("SEC submission has an invalid accession")
+        if not isinstance(self.acceptance_datetime, str):
+            raise SecPointInTimeError("SEC acceptance datetime must remain text")
+        _parse_submissions_acceptance(self.acceptance_datetime)
+        _validate_iso_date(self.filing_date, "filingDate", allow_empty=False)
+        _validate_iso_date(self.report_date, "reportDate", allow_empty=True)
+        _validate_iso_date(
+            self.date_of_filing_date_change,
+            "dateOfFilingDateChange",
+            allow_empty=True,
+        )
 
     @property
     def submitter_cik(self) -> str:
@@ -83,6 +100,55 @@ class FilingRecord:
     @property
     def is_amendment(self) -> bool:
         return self.form.upper().endswith("/A")
+
+    @property
+    def change_anomaly_flag(self) -> bool:
+        """A preserved SEC filing-date change is objective anomaly evidence."""
+
+        return bool(self.date_of_filing_date_change)
+
+
+def _validate_iso_date(value: str, name: str, *, allow_empty: bool) -> None:
+    if not isinstance(value, str) or (not value and not allow_empty):
+        raise SecPointInTimeError(f"{name} must be a canonical ISO date")
+    if not value and allow_empty:
+        return
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise SecPointInTimeError(f"{name} must be a canonical ISO date") from exc
+    if parsed.date().isoformat() != value:
+        raise SecPointInTimeError(f"{name} must be a canonical ISO date")
+
+
+def _parse_submissions_acceptance(value: str) -> datetime:
+    """Validate SEC's exact SGML digits or timezone-qualified JSON datetime."""
+
+    if re.fullmatch(r"[0-9]{14}", value):
+        try:
+            return datetime.strptime(value, "%Y%m%d%H%M%S").replace(
+                tzinfo=_EASTERN
+            )
+        except ValueError as exc:
+            raise SecPointInTimeError(
+                "acceptanceDateTime is not a valid 14-digit timestamp"
+            ) from exc
+    if "T" not in value:
+        raise SecPointInTimeError(
+            "acceptanceDateTime must be 14 digits or timezone-qualified ISO datetime"
+        )
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise SecPointInTimeError(
+            "acceptanceDateTime must be 14 digits or timezone-qualified ISO datetime"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise SecPointInTimeError(
+            "ISO acceptanceDateTime must contain an explicit timezone"
+        )
+    return parsed
 def _as_bool(value: Any, name: str) -> bool:
     if value in (True, 1, "1"):
         return True
@@ -107,6 +173,15 @@ def _column_rows(columns: Mapping[str, Any], source: str) -> list[FilingRecord]:
         if len(values) != size:
             raise SecPointInTimeError("SEC submissions columns are not row-aligned")
     xbrl = columns.get("isXBRL", [0] * size)
+    filing_date_changes = columns.get("dateOfFilingDateChange", [""] * size)
+    if (
+        not isinstance(filing_date_changes, Sequence)
+        or isinstance(filing_date_changes, (str, bytes))
+        or len(filing_date_changes) != size
+    ):
+        raise SecPointInTimeError(
+            "dateOfFilingDateChange must be an optional row-aligned array"
+        )
     result: list[FilingRecord] = []
     for position in range(size):
         row = {name: columns[name][position] for name in required}
@@ -115,17 +190,25 @@ def _column_rows(columns: Mapping[str, Any], source: str) -> list[FilingRecord]:
         accession = row["accessionNumber"]
         if not _ACCESSION_RE.fullmatch(accession) or not row["form"]:
             raise SecPointInTimeError("SEC submission has an invalid identity")
-        try:
-            datetime.strptime(row["filingDate"], "%Y-%m-%d")
-            if row["reportDate"]:
-                datetime.strptime(row["reportDate"], "%Y-%m-%d")
-        except ValueError as exc:
-            raise SecPointInTimeError("SEC submission has an invalid calendar date") from exc
-        result.append(FilingRecord(
-            accession, row["acceptanceDateTime"], row["form"],
-            row["primaryDocument"], row["items"], row["filingDate"],
-            row["reportDate"], _as_bool(xbrl[position], "isXBRL"), source,
-        ))
+        change_date = filing_date_changes[position]
+        if not isinstance(change_date, str):
+            raise SecPointInTimeError(
+                "dateOfFilingDateChange values must remain strings"
+            )
+        result.append(
+            FilingRecord(
+                accession_number=accession,
+                acceptance_datetime=row["acceptanceDateTime"],
+                form=row["form"],
+                primary_document=row["primaryDocument"],
+                items=row["items"],
+                filing_date=row["filingDate"],
+                report_date=row["reportDate"],
+                is_xbrl=_as_bool(xbrl[position], "isXBRL"),
+                source_name=source,
+                date_of_filing_date_change=change_date,
+            )
+        )
     return result
 def parse_submissions_rows(
     main_payload: Mapping[str, Any],
@@ -162,9 +245,18 @@ def parse_submissions_rows(
     accessions = [row.accession_number for row in rows]
     if len(accessions) != len(set(accessions)):
         raise SecPointInTimeError("duplicate accession across submissions payloads")
-    return tuple(sorted(
-        rows, key=lambda row: (row.filing_date, row.acceptance_datetime, row.accession_number)
-    ))
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                row.filing_date,
+                _parse_submissions_acceptance(row.acceptance_datetime).astimezone(
+                    timezone.utc
+                ),
+                row.accession_number,
+            ),
+        )
+    )
 @dataclass(frozen=True)
 class MasterIndexRecord:
     cik: str
