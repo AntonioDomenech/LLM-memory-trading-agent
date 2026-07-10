@@ -1,0 +1,33 @@
+{
+  "frozen_compact_grid_candidates": 36,
+  "important_limitation": "The 1,508-candidate research count is self-attested and has no complete saved table. This manifest was committed after the final years existed and is an auditable retrospective declaration, not cryptographic proof of a pristine holdout.",
+  "manifest_sha256": "ba1cb164714179b4435c0bea9780ed693001776d501cad3e721a75cb20d28868",
+  "protocol_name": "pre_2024_long_cash_v1",
+  "ranking": [
+    "positive mean excess in every temporal block",
+    "minimum wins of 6/10, 3/5, and 3/5",
+    "positive median annual excess",
+    "no more than 15 cash sessions and 30 orders per year",
+    "maximize weakest block mean, then annual wins, then lower turnover",
+    "require passing adjacent percentile/lookback configurations"
+  ],
+  "research_grid_candidates_screened_self_reported": 1508,
+  "selected_spec": {
+    "aapl_percentile": 0.9,
+    "aapl_percentile_lookback": 126,
+    "cash_sessions": 1,
+    "gap_threshold": -0.04,
+    "market_return_lookback": 10,
+    "name": "exhaustion_or_gap_v1",
+    "require_qqq_negative": true,
+    "require_spy_negative": true,
+    "rule_type": "exhaustion_or_gap",
+    "selection_data_cutoff": "2023-12-31"
+  },
+  "selection_data_cutoff": "2023-12-31",
+  "temporal_blocks": [
+    "2004-2013",
+    "2014-2018",
+    "2019-2023"
+  ]
+}
