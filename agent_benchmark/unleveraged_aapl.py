@@ -93,12 +93,18 @@ class LongCashSpec:
     market_return_lookback: int = 10
     require_spy_negative: bool = True
     require_qqq_negative: bool = True
+    aapl_trend_sma_days: int = 20
     cash_sessions: int = 1
     gap_threshold: float = -0.04
     selection_data_cutoff: str = "2023-12-31"
 
     def validate(self) -> None:
-        supported = {"contextual_exhaustion", "gap_down", "exhaustion_or_gap"}
+        supported = {
+            "contextual_exhaustion",
+            "gap_down",
+            "exhaustion_or_gap",
+            "weak_trend_contextual_exhaustion",
+        }
         if self.rule_type not in supported:
             raise ValueError(f"Unsupported long/cash rule_type: {self.rule_type}")
         if self.aapl_percentile_lookback < 20:
@@ -107,6 +113,8 @@ class LongCashSpec:
             raise ValueError("aapl_percentile must be strictly between 0.5 and 1.0")
         if self.market_return_lookback < 1:
             raise ValueError("market_return_lookback must be positive")
+        if self.aapl_trend_sma_days < 2:
+            raise ValueError("aapl_trend_sma_days must be at least two")
         if self.cash_sessions < 1:
             raise ValueError("cash_sessions must be positive")
         if not -0.5 < self.gap_threshold < 0.0:
@@ -145,9 +153,26 @@ EXHAUSTION_OR_GAP_V1 = LongCashSpec(
     gap_threshold=-0.04,
 )
 
+WEAK_TREND_EXHAUSTION_V1 = LongCashSpec(
+    name="weak_trend_exhaustion_v1",
+    rule_type="weak_trend_contextual_exhaustion",
+    aapl_percentile_lookback=126,
+    aapl_percentile=0.925,
+    market_return_lookback=20,
+    require_spy_negative=True,
+    require_qqq_negative=True,
+    aapl_trend_sma_days=20,
+    cash_sessions=1,
+)
+
 SPECS_BY_NAME = {
     spec.name: spec
-    for spec in (CONTEXTUAL_EXHAUSTION_V1, GAP_DOWN_CASH_V1, EXHAUSTION_OR_GAP_V1)
+    for spec in (
+        CONTEXTUAL_EXHAUSTION_V1,
+        GAP_DOWN_CASH_V1,
+        EXHAUSTION_OR_GAP_V1,
+        WEAK_TREND_EXHAUSTION_V1,
+    )
 }
 
 SELECTION_PROTOCOL = {
@@ -314,6 +339,38 @@ def spec_sha256(spec: LongCashSpec) -> str:
 
 def selection_manifest(spec: LongCashSpec) -> Dict[str, Any]:
     manifest = {**SELECTION_PROTOCOL, "selected_spec": asdict(spec)}
+    if spec.name == WEAK_TREND_EXHAUSTION_V1.name:
+        manifest["candidate_specific_selection"] = {
+            "development_classification": (
+                "adaptive retrospective family proposed after diagnosing the failed 2024 "
+                "contextual-exhaustion result; parameters ranked using 2000-2023 only"
+            ),
+            "pre_2024_candidates_screened": 675,
+            "pre_2024_candidates_passing_gate": 22,
+            "selection_order": (
+                "maximum weakest 2000-2007, 2008-2015, 2016-2023 block mean; "
+                "then winning years, median, mean, and lower event count"
+            ),
+            "exact_5bps_audit": {
+                "winning_years": 16,
+                "years": 24,
+                "mean_annual_excess": 0.0468393759635771,
+                "median_annual_excess": 0.02870602243437231,
+                "worst_annual_excess": -0.033111041549290343,
+                "block_mean_excess": [
+                    0.03247181366415344,
+                    0.06281555631877736,
+                    0.04523075790780052,
+                ],
+            },
+            "exact_10bps_audit": {
+                "winning_years": 16,
+                "mean_annual_excess": 0.04139619329727677,
+                "median_annual_excess": 0.02471865189747824,
+                "worst_annual_excess": -0.03454596454335279,
+            },
+            "full_grid_artifact_available": False,
+        }
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     return {**manifest, "manifest_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
 
@@ -332,6 +389,10 @@ def build_long_cash_target(frame: pd.DataFrame, spec: LongCashSpec) -> pd.Series
     ).quantile(spec.aapl_percentile).shift(1)
     spy_momentum = data["spy_adj_close"].pct_change(spec.market_return_lookback)
     qqq_momentum = data["qqq_adj_close"].pct_change(spec.market_return_lookback)
+    aapl_sma = data["aapl_adj_close"].rolling(
+        spec.aapl_trend_sma_days,
+        min_periods=spec.aapl_trend_sma_days,
+    ).mean()
     exhaustion = intraday_return > percentile
     if spec.require_spy_negative:
         exhaustion &= spy_momentum < 0.0
@@ -348,6 +409,11 @@ def build_long_cash_target(frame: pd.DataFrame, spec: LongCashSpec) -> pd.Series
     elif spec.rule_type == "exhaustion_or_gap":
         trigger = exhaustion | gap_down
         warmup_missing = percentile.isna() | spy_momentum.isna() | qqq_momentum.isna()
+    elif spec.rule_type == "weak_trend_contextual_exhaustion":
+        trigger = exhaustion & (data["aapl_adj_close"] < aapl_sma)
+        warmup_missing = (
+            percentile.isna() | spy_momentum.isna() | qqq_momentum.isna() | aapl_sma.isna()
+        )
     else:  # pragma: no cover - validate is the public guard
         raise AssertionError(f"Unhandled rule type: {spec.rule_type}")
     cash = _rolling_cash_mask(trigger, spec.cash_sessions)

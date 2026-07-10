@@ -13,6 +13,7 @@ from agent_benchmark.deterministic_aapl import CostAssumptions, EvaluationPeriod
 from agent_benchmark.unleveraged_aapl import (
     CONTEXTUAL_EXHAUSTION_V1,
     GAP_DOWN_CASH_V1,
+    WEAK_TREND_EXHAUSTION_V1,
     LongCashSpec,
     assert_final_session_coverage,
     assert_unleveraged_ledger,
@@ -218,6 +219,25 @@ def test_default_contextual_spec_is_binary_and_frozen_before_2024():
     target = build_long_cash_target(frame, CONTEXTUAL_EXHAUSTION_V1).dropna()
     assert set(target.unique()) <= {0.0, 1.0}
     assert CONTEXTUAL_EXHAUSTION_V1.selection_data_cutoff == "2023-12-31"
+
+
+def test_weak_trend_exhaustion_requires_price_below_causal_sma():
+    frame = context_frame(180)
+    decision = 150
+    # Completed market momentum is negative and AAPL closes below its 20-day SMA.
+    frame.iloc[decision - 20 : decision + 1, frame.columns.get_loc("spy_adj_close")] = np.linspace(390, 300, 21)
+    frame.iloc[decision - 20 : decision + 1, frame.columns.get_loc("qqq_adj_close")] = np.linspace(370, 280, 21)
+    frame.iloc[decision, frame.columns.get_loc("aapl_close")] *= 0.90
+    frame.iloc[decision, frame.columns.get_loc("aapl_adj_close")] = frame.iloc[decision]["aapl_close"]
+    frame.iloc[decision, frame.columns.get_loc("aapl_open")] = frame.iloc[decision]["aapl_close"] / 1.10
+    target = build_long_cash_target(frame, WEAK_TREND_EXHAUSTION_V1)
+    assert target.iloc[decision] == 0.0
+    # The same exhaustion event above its SMA must stay invested.
+    frame.iloc[decision, frame.columns.get_loc("aapl_close")] *= 1.30
+    frame.iloc[decision, frame.columns.get_loc("aapl_adj_close")] = frame.iloc[decision]["aapl_close"]
+    frame.iloc[decision, frame.columns.get_loc("aapl_open")] = frame.iloc[decision]["aapl_close"] / 1.10
+    target = build_long_cash_target(frame, WEAK_TREND_EXHAUSTION_V1)
+    assert target.iloc[decision] == 1.0
 
 
 def test_promotion_runner_rejects_noncanonical_periods_before_io(tmp_path):
