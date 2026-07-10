@@ -93,12 +93,29 @@ class LongCashSpec:
     market_return_lookback: int = 10
     require_spy_negative: bool = True
     require_qqq_negative: bool = True
+    bayes_z_cut: float = 1.25
+    bayes_volatility_days: int = 63
+    bayes_qqq_sma_days: int = 100
+    bayes_global_min_samples: int = 200
+    bayes_exact_min_samples: int = 8
+    bayes_marginal_prior_strength: float = 8.0
+    bayes_exact_prior_strength: float = 10.0
+    bayes_probability_gate: float = 0.55
+    bayes_lower_bound_z: float = 0.842
+    bayes_edge_gate: float = 0.001
+    bayes_label_cost: float = 0.0005
+    bayes_learning_start: str = "2001-01-01"
     cash_sessions: int = 1
     gap_threshold: float = -0.04
     selection_data_cutoff: str = "2023-12-31"
 
     def validate(self) -> None:
-        supported = {"contextual_exhaustion", "gap_down", "exhaustion_or_gap"}
+        supported = {
+            "contextual_exhaustion",
+            "gap_down",
+            "exhaustion_or_gap",
+            "hierarchical_empirical_bayes",
+        }
         if self.rule_type not in supported:
             raise ValueError(f"Unsupported long/cash rule_type: {self.rule_type}")
         if self.aapl_percentile_lookback < 20:
@@ -107,6 +124,22 @@ class LongCashSpec:
             raise ValueError("aapl_percentile must be strictly between 0.5 and 1.0")
         if self.market_return_lookback < 1:
             raise ValueError("market_return_lookback must be positive")
+        if self.bayes_z_cut <= 0 or self.bayes_volatility_days < 2:
+            raise ValueError("Bayes state scale parameters must be positive")
+        if self.bayes_qqq_sma_days < 2:
+            raise ValueError("Bayes QQQ SMA lookback must be at least two")
+        if self.bayes_global_min_samples < 1 or self.bayes_exact_min_samples < 1:
+            raise ValueError("Bayes sample gates must be positive")
+        if self.bayes_marginal_prior_strength <= 0 or self.bayes_exact_prior_strength <= 0:
+            raise ValueError("Bayes prior strengths must be positive")
+        if not 0.5 < self.bayes_probability_gate < 1.0:
+            raise ValueError("Bayes probability gate must be between 0.5 and 1")
+        if self.bayes_lower_bound_z <= 0 or self.bayes_edge_gate < 0:
+            raise ValueError("Bayes confidence/edge gates are invalid")
+        if self.bayes_label_cost < 0:
+            raise ValueError("Bayes label cost must be non-negative")
+        if pd.Timestamp(self.bayes_learning_start) >= pd.Timestamp("2024-01-01"):
+            raise ValueError("Bayes learning start must precede the final periods")
         if self.cash_sessions < 1:
             raise ValueError("cash_sessions must be positive")
         if not -0.5 < self.gap_threshold < 0.0:
@@ -145,9 +178,33 @@ EXHAUSTION_OR_GAP_V1 = LongCashSpec(
     gap_threshold=-0.04,
 )
 
+HIERARCHICAL_EMPIRICAL_BAYES_V1 = LongCashSpec(
+    name="hierarchical_empirical_bayes_irrm_h1_v1",
+    rule_type="hierarchical_empirical_bayes",
+    require_spy_negative=False,
+    require_qqq_negative=False,
+    bayes_z_cut=1.25,
+    bayes_volatility_days=63,
+    bayes_qqq_sma_days=100,
+    bayes_global_min_samples=200,
+    bayes_exact_min_samples=8,
+    bayes_marginal_prior_strength=8.0,
+    bayes_exact_prior_strength=10.0,
+    bayes_probability_gate=0.55,
+    bayes_lower_bound_z=0.842,
+    bayes_edge_gate=0.001,
+    bayes_label_cost=0.0005,
+    bayes_learning_start="2001-01-01",
+)
+
 SPECS_BY_NAME = {
     spec.name: spec
-    for spec in (CONTEXTUAL_EXHAUSTION_V1, GAP_DOWN_CASH_V1, EXHAUSTION_OR_GAP_V1)
+    for spec in (
+        CONTEXTUAL_EXHAUSTION_V1,
+        GAP_DOWN_CASH_V1,
+        EXHAUSTION_OR_GAP_V1,
+        HIERARCHICAL_EMPIRICAL_BAYES_V1,
+    )
 }
 
 SELECTION_PROTOCOL = {
@@ -314,6 +371,40 @@ def spec_sha256(spec: LongCashSpec) -> str:
 
 def selection_manifest(spec: LongCashSpec) -> Dict[str, Any]:
     manifest = {**SELECTION_PROTOCOL, "selected_spec": asdict(spec)}
+    if spec.name == HIERARCHICAL_EMPIRICAL_BAYES_V1.name:
+        manifest["candidate_specific_selection"] = {
+            "development_classification": (
+                "genuine chronological predictor frozen by an independent pre-2024-only search; "
+                "all pre-2024 blocks participated in selection"
+            ),
+            "original_frozen_spec_sha256": (
+                "34e82b72d0c2a439e7925ac0be6b1eb4b50fece44d13f04aceae903f06922684"
+            ),
+            "original_pre_2024_input_sha256": (
+                "9f1c53ec327221fc0709a1aa4f9fcfa13c5e79f2a03785bd483d9acc5fa5a7a0"
+            ),
+            "grid_candidates": 384,
+            "grid_runtime_seconds": 50.6,
+            "selection_folds": [
+                "2005-2008",
+                "2009-2012",
+                "2013-2016",
+                "2017-2020",
+                "2021-2023",
+            ],
+            "selection_result": "four positive folds and one tie; seven of nine active years won",
+            "label_maturity": (
+                "close j label uses opens j+1 and j+2 and first enters memory at close j+2"
+            ),
+            "learning_start": (
+                "2001-01-01; this floor existed in the original research code but was omitted "
+                "from its first written specification and was recovered during reproduction"
+            ),
+            "pre_2024_continuous_5bps_relative_wealth": 0.116763,
+            "important_limitation": (
+                "This is selected retrospective evidence, not an untouched pre-2024 confirmation."
+            ),
+        }
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     return {**manifest, "manifest_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
 
@@ -322,9 +413,240 @@ def _rolling_cash_mask(trigger: pd.Series, sessions: int) -> pd.Series:
     return trigger.astype(float).rolling(sessions, min_periods=1).max().fillna(0.0).astype(bool)
 
 
+def _bayes_bucket(value: float, cut: float) -> int:
+    if value <= -cut:
+        return -1
+    if value >= cut:
+        return 1
+    return 0
+
+
+def build_empirical_bayes_forecast(
+    frame: pd.DataFrame,
+    spec: LongCashSpec,
+) -> pd.DataFrame:
+    """Build a strictly chronological next-open loss forecast.
+
+    A lesson created at close j uses the return from open j+1 to open j+2.
+    The loop adds that lesson immediately before predicting at close j+2, when
+    the exit open is already observable. No later label can alter an earlier
+    prediction.
+    """
+
+    spec.validate()
+    if spec.rule_type != "hierarchical_empirical_bayes":
+        raise ValueError("Empirical-Bayes forecast requires its frozen rule type")
+    data = canonical_context_frame(frame)
+    aapl_daily = data["aapl_adj_close"].pct_change()
+    qqq_daily = data["qqq_adj_close"].pct_change()
+    relative_daily = aapl_daily - qqq_daily
+    aapl_vol = aapl_daily.rolling(
+        spec.bayes_volatility_days,
+        min_periods=40,
+    ).std().shift(1)
+    relative_vol = relative_daily.rolling(
+        spec.bayes_volatility_days,
+        min_periods=40,
+    ).std().shift(1)
+    intraday_z = (data["aapl_close"] / data["aapl_open"] - 1.0) / aapl_vol
+    relative_10_z = (
+        data["aapl_adj_close"].pct_change(10) - data["qqq_adj_close"].pct_change(10)
+    ) / (relative_vol * math.sqrt(10.0))
+    relative_20_z = (
+        data["aapl_adj_close"].pct_change(20) - data["qqq_adj_close"].pct_change(20)
+    ) / (relative_vol * math.sqrt(20.0))
+    qqq_sma = data["qqq_adj_close"].rolling(
+        spec.bayes_qqq_sma_days,
+        min_periods=spec.bayes_qqq_sma_days,
+    ).mean()
+    qqq_above_sma = data["qqq_adj_close"] > qqq_sma
+
+    feature_values = np.column_stack(
+        [
+            intraday_z.to_numpy(dtype=float),
+            relative_10_z.to_numpy(dtype=float),
+            relative_20_z.to_numpy(dtype=float),
+        ]
+    )
+    states: list[tuple[int, int, int, int] | None] = []
+    for index, values in enumerate(feature_values):
+        if not np.isfinite(values).all() or pd.isna(qqq_sma.iloc[index]):
+            states.append(None)
+            continue
+        states.append(
+            (
+                _bayes_bucket(float(values[0]), spec.bayes_z_cut),
+                _bayes_bucket(float(values[1]), spec.bayes_z_cut),
+                _bayes_bucket(float(values[2]), spec.bayes_z_cut),
+                int(bool(qqq_above_sma.iloc[index])),
+            )
+        )
+
+    opens = data["aapl_adj_open"].to_numpy(dtype=float)
+    active_outcomes = np.full(len(data), np.nan, dtype=float)
+    cost_factor = (1.0 - spec.bayes_label_cost) / (1.0 + spec.bayes_label_cost)
+    if len(data) >= 3:
+        active_outcomes[:-2] = cost_factor - opens[2:] / opens[1:-1]
+
+    global_n = 0
+    global_successes = 0
+    global_active_sum = 0.0
+    marginal: list[dict[int, list[float]]] = [{}, {}, {}, {}]
+    exact: dict[tuple[int, int, int, int], list[float]] = {}
+    target = np.ones(len(data), dtype=float)
+    posterior = np.full(len(data), np.nan, dtype=float)
+    lower_bound = np.full(len(data), np.nan, dtype=float)
+    expected_active = np.full(len(data), np.nan, dtype=float)
+    exact_samples = np.zeros(len(data), dtype=int)
+    matured_samples = np.zeros(len(data), dtype=int)
+
+    for current in range(len(data)):
+        matured = current - 2
+        if (
+            matured >= 0
+            and data.index[matured] >= pd.Timestamp(spec.bayes_learning_start)
+            and states[matured] is not None
+        ):
+            outcome = float(active_outcomes[matured])
+            if math.isfinite(outcome):
+                success = int(outcome > 0.0)
+                state = states[matured]
+                assert state is not None
+                global_n += 1
+                global_successes += success
+                global_active_sum += outcome
+                for component, value in enumerate(state):
+                    stats = marginal[component].setdefault(value, [0.0, 0.0, 0.0])
+                    stats[0] += 1.0
+                    stats[1] += float(success)
+                    stats[2] += outcome
+                stats = exact.setdefault(state, [0.0, 0.0, 0.0])
+                stats[0] += 1.0
+                stats[1] += float(success)
+                stats[2] += outcome
+
+        matured_samples[current] = global_n
+        state = states[current]
+        if state is None or global_n < spec.bayes_global_min_samples:
+            continue
+        exact_stats = exact.get(state, [0.0, 0.0, 0.0])
+        state_n = int(exact_stats[0])
+        exact_samples[current] = state_n
+        global_p = (global_successes + 1.0) / (global_n + 2.0)
+        global_mean = global_active_sum / global_n
+        marginal_probabilities: list[float] = []
+        marginal_means: list[float] = []
+        for component, value in enumerate(state):
+            component_stats = marginal[component].get(value, [0.0, 0.0, 0.0])
+            component_n, component_successes, component_sum = component_stats
+            marginal_probabilities.append(
+                (component_successes + spec.bayes_marginal_prior_strength * global_p)
+                / (component_n + spec.bayes_marginal_prior_strength)
+            )
+            marginal_means.append(
+                (component_sum + spec.bayes_marginal_prior_strength * global_mean)
+                / (component_n + spec.bayes_marginal_prior_strength)
+            )
+        probability_center = float(np.mean(marginal_probabilities))
+        mean_center = float(np.mean(marginal_means))
+        alpha = exact_stats[1] + spec.bayes_exact_prior_strength * probability_center
+        beta = (
+            exact_stats[0]
+            - exact_stats[1]
+            + spec.bayes_exact_prior_strength * (1.0 - probability_center)
+        )
+        probability = float(alpha / (alpha + beta))
+        variance = float(alpha * beta / ((alpha + beta) ** 2 * (alpha + beta + 1.0)))
+        lower = probability - spec.bayes_lower_bound_z * math.sqrt(max(0.0, variance))
+        edge = float(
+            (exact_stats[2] + spec.bayes_exact_prior_strength * mean_center)
+            / (exact_stats[0] + spec.bayes_exact_prior_strength)
+        )
+        posterior[current] = probability
+        lower_bound[current] = lower
+        expected_active[current] = edge
+        if (
+            state_n >= spec.bayes_exact_min_samples
+            and probability >= spec.bayes_probability_gate
+            and lower > 0.50
+            and edge > spec.bayes_edge_gate
+        ):
+            target[current] = 0.0
+
+    return pd.DataFrame(
+        {
+            "target_exposure": target,
+            "posterior_cash_win_probability": posterior,
+            "posterior_lower_bound": lower_bound,
+            "expected_active_return": expected_active,
+            "exact_state_matured_samples": exact_samples,
+            "global_matured_samples": matured_samples,
+            "realized_cash_active_return": active_outcomes,
+        },
+        index=data.index,
+    )
+
+
+def empirical_bayes_predictive_diagnostics(
+    frame: pd.DataFrame,
+    spec: LongCashSpec,
+) -> Dict[str, Any]:
+    forecast = build_empirical_bayes_forecast(frame, spec)
+    result: Dict[str, Any] = {}
+    periods = {
+        "pre_2024": ("2000-01-01", "2023-12-31"),
+        "2024": ("2024-01-01", "2024-12-31"),
+        "2025": ("2025-01-01", "2025-12-31"),
+        "2026_ytd": ("2026-01-01", "2026-07-09"),
+    }
+    for name, (start, end) in periods.items():
+        section = forecast.loc[start:end]
+        eligible = section.dropna(
+            subset=["posterior_cash_win_probability", "realized_cash_active_return"]
+        )
+        actions = section.loc[
+            (section["target_exposure"] == 0.0)
+            & section["realized_cash_active_return"].notna()
+        ]
+        actual = (eligible["realized_cash_active_return"] > 0.0).astype(float)
+        probabilities = eligible["posterior_cash_win_probability"].astype(float)
+        result[name] = {
+            "eligible_predictions": int(len(eligible)),
+            "brier_score": float(((probabilities - actual) ** 2).mean())
+            if len(eligible)
+            else None,
+            "cash_signals": int(len(actions)),
+            "cash_signal_win_rate": float(
+                (actions["realized_cash_active_return"] > 0.0).mean()
+            )
+            if len(actions)
+            else None,
+            "mean_realized_active_return_when_cash": float(
+                actions["realized_cash_active_return"].mean()
+            )
+            if len(actions)
+            else None,
+            "sum_realized_active_return_when_cash": float(
+                actions["realized_cash_active_return"].sum()
+            )
+            if len(actions)
+            else 0.0,
+        }
+    result["causal_contract"] = {
+        "prediction_time": "completed close t",
+        "predicted_interval": "adjusted open t+1 to adjusted open t+2",
+        "label_first_available": "open t+2; added before close t+2 decision",
+        "future_labels_used": False,
+        "continues_learning_in_final_periods": True,
+    }
+    return result
+
+
 def build_long_cash_target(frame: pd.DataFrame, spec: LongCashSpec) -> pd.Series:
     spec.validate()
     data = canonical_context_frame(frame)
+    if spec.rule_type == "hierarchical_empirical_bayes":
+        return build_empirical_bayes_forecast(data, spec)["target_exposure"]
     intraday_return = data["aapl_close"] / data["aapl_open"] - 1.0
     percentile = intraday_return.rolling(
         spec.aapl_percentile_lookback,
@@ -992,6 +1314,11 @@ def run_unleveraged_experiment(
     if candidate_hash != candidate_hash_at_start:
         integrity_errors.append("candidate_hash_changed_during_run")
     manifest = selection_manifest(spec)
+    predictive_diagnostics = (
+        empirical_bayes_predictive_diagnostics(frame, spec)
+        if spec.rule_type == "hierarchical_empirical_bayes"
+        else None
+    )
     report = {
         "run_id": run_id,
         "created_at_utc": created_at.isoformat(),
@@ -1040,6 +1367,7 @@ def run_unleveraged_experiment(
             ),
         },
         "bear_market_diagnostics": bear_diagnostics,
+        "predictive_diagnostics": predictive_diagnostics,
         "scenarios": scenarios,
         "promotion": {
             "base_success": base_success,

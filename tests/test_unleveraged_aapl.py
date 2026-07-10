@@ -13,10 +13,12 @@ from agent_benchmark.deterministic_aapl import CostAssumptions, EvaluationPeriod
 from agent_benchmark.unleveraged_aapl import (
     CONTEXTUAL_EXHAUSTION_V1,
     GAP_DOWN_CASH_V1,
+    HIERARCHICAL_EMPIRICAL_BAYES_V1,
     LongCashSpec,
     assert_final_session_coverage,
     assert_unleveraged_ledger,
     build_long_cash_target,
+    build_empirical_bayes_forecast,
     canonical_context_frame,
     context_snapshot_authenticity,
     evaluate_continuous_account,
@@ -218,6 +220,53 @@ def test_default_contextual_spec_is_binary_and_frozen_before_2024():
     target = build_long_cash_target(frame, CONTEXTUAL_EXHAUSTION_V1).dropna()
     assert set(target.unique()) <= {0.0, 1.0}
     assert CONTEXTUAL_EXHAUSTION_V1.selection_data_cutoff == "2023-12-31"
+
+
+def test_empirical_bayes_candidate_is_binary_and_defaults_long_during_training():
+    frame = context_frame(500)
+    forecast = build_empirical_bayes_forecast(frame, HIERARCHICAL_EMPIRICAL_BAYES_V1)
+    assert set(forecast["target_exposure"].unique()) <= {0.0, 1.0}
+    assert (forecast["target_exposure"].iloc[:200] == 1.0).all()
+    cost = HIERARCHICAL_EMPIRICAL_BAYES_V1.bayes_label_cost
+    opens = canonical_context_frame(frame)["aapl_adj_open"]
+    expected = (1.0 - cost) / (1.0 + cost) - opens.iloc[2] / opens.iloc[1]
+    assert forecast["realized_cash_active_return"].iloc[0] == pytest.approx(expected)
+
+
+def test_empirical_bayes_predictions_do_not_change_when_later_future_is_modified():
+    rng = np.random.default_rng(17)
+    frame = context_frame(700)
+    shocks = np.exp(np.cumsum(rng.normal(0.0, 0.015, len(frame))))
+    for column in ("aapl_open", "aapl_close", "aapl_adj_close"):
+        frame[column] = frame[column].to_numpy() * shocks
+    frame["qqq_adj_close"] = frame["qqq_adj_close"].to_numpy() * np.exp(
+        np.cumsum(rng.normal(0.0, 0.01, len(frame)))
+    )
+    original = build_empirical_bayes_forecast(frame, HIERARCHICAL_EMPIRICAL_BAYES_V1)
+    changed = frame.copy()
+    changed.iloc[550:, changed.columns.get_loc("aapl_open")] *= 1.7
+    changed.iloc[550:, changed.columns.get_loc("aapl_close")] *= 1.7
+    changed.iloc[550:, changed.columns.get_loc("aapl_adj_close")] *= 1.7
+    changed.iloc[550:, changed.columns.get_loc("qqq_adj_close")] *= 0.6
+    replay = build_empirical_bayes_forecast(changed, HIERARCHICAL_EMPIRICAL_BAYES_V1)
+    predictive_columns = [
+        column for column in original.columns if column != "realized_cash_active_return"
+    ]
+    pd.testing.assert_frame_equal(
+        original.loc[original.index[:550], predictive_columns],
+        replay.loc[replay.index[:550], predictive_columns],
+    )
+
+
+def test_empirical_bayes_spec_matches_frozen_pre_2024_selection():
+    spec = HIERARCHICAL_EMPIRICAL_BAYES_V1
+    assert spec.bayes_z_cut == pytest.approx(1.25)
+    assert spec.bayes_probability_gate == pytest.approx(0.55)
+    assert spec.bayes_exact_min_samples == 8
+    assert spec.bayes_marginal_prior_strength == pytest.approx(8.0)
+    assert spec.bayes_exact_prior_strength == pytest.approx(10.0)
+    assert spec.bayes_edge_gate == pytest.approx(0.001)
+    assert spec.bayes_learning_start == "2001-01-01"
 
 
 def test_promotion_runner_rejects_noncanonical_periods_before_io(tmp_path):
