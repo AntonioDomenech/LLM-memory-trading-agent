@@ -153,6 +153,16 @@ def build_preflight_report(
             "historical_holdout_reveal_count_lower_bound": int(
                 getattr(config, "historical_holdout_reveal_count_lower_bound", 0) or 0
             ),
+            "historical_prompt_blinding": bool(
+                getattr(config, "historical_prompt_blinding", False)
+            ),
+            "historical_prompt_blinding_contract": getattr(
+                config, "historical_prompt_blinding_contract", ""
+            ),
+            "model_training_data_cutoff": getattr(config, "model_training_data_cutoff", ""),
+            "historical_decision_authority": getattr(
+                config, "historical_decision_authority", "llm"
+            ),
             "historical_price_basis": getattr(config, "historical_price_basis", "legacy"),
             "action_space": config.single_stock_action_space,
             "online_test_learning": bool(getattr(config, "online_test_learning", False)),
@@ -177,6 +187,21 @@ def build_preflight_report(
                         f"{config.test_start} through {config.test_end} is {config.evaluation_mode}."
                     ),
                     "test_outcomes_used_for_learning": bool(config.online_test_learning),
+                },
+            )
+            _add_check(
+                report,
+                {
+                    "id": "parametric_lookahead_guard",
+                    "status": "pass" if config.historical_prompt_blinding else "fail",
+                    "message": (
+                        "Historical LLM prompts are identity/date blinded and raw identifying amounts are removed."
+                        if config.historical_prompt_blinding
+                        else "Historical LLM prompts can expose facts memorized during model pretraining."
+                    ),
+                    "model_training_data_cutoff": config.model_training_data_cutoff,
+                    "blinding_contract": config.historical_prompt_blinding_contract,
+                    "decision_authority": config.historical_decision_authority,
                 },
             )
         if config.no_paid_api_mode:
@@ -211,9 +236,28 @@ def build_preflight_report(
     if int(config.max_test_days or 0) > 0:
         trading_dates = trading_dates[: int(config.max_test_days)]
     test_days = len(trading_dates)
-    stage1_chunks = math.ceil(len(symbols) / max(1, int(config.stage1_chunk_size or 1)))
-    exposure_critic_calls = 1 if config.mode == "single_stock" and config.exposure_critic_enabled and config.single_stock_action_space not in {"trinary_all_in", "long_cash_hold"} else 0
-    decision_calls_per_day = stage1_chunks + 1 + exposure_critic_calls
+    quantitative_historical_authority = bool(
+        config.evaluation_mode in {"frozen_holdout", "causal_online_replay"}
+        and config.historical_decision_authority == "precutoff_quantitative_policy"
+    )
+    stage1_chunks = (
+        0
+        if quantitative_historical_authority
+        else math.ceil(len(symbols) / max(1, int(config.stage1_chunk_size or 1)))
+    )
+    exposure_critic_calls = (
+        1
+        if not quantitative_historical_authority
+        and config.mode == "single_stock"
+        and config.exposure_critic_enabled
+        and config.single_stock_action_space not in {"trinary_all_in", "long_cash_hold"}
+        else 0
+    )
+    decision_calls_per_day = (
+        0
+        if quantitative_historical_authority
+        else stage1_chunks + 1 + exposure_critic_calls
+    )
     cadence = getattr(config, "decision_cadence", "daily")
     if cadence == "weekly_event":
         scheduled_decision_days = len(
@@ -227,11 +271,16 @@ def build_preflight_report(
     report["estimate"] = {
         "test_trading_days": test_days,
         "decision_calls_per_day": decision_calls_per_day,
+        "historical_decision_authority": config.historical_decision_authority,
         "decision_cadence": cadence,
         "scheduled_decision_days": scheduled_decision_days,
         "estimated_model_calls": scheduled_decision_days * decision_calls_per_day,
         "estimated_model_calls_upper_bound": test_days * decision_calls_per_day,
-        "event_trigger_calls_in_estimate": "included_only_in_upper_bound",
+        "event_trigger_calls_in_estimate": (
+            "not_applicable_no_historical_llm_authority"
+            if quantitative_historical_authority
+            else "included_only_in_upper_bound"
+        ),
         "stage1_chunks_per_day": stage1_chunks,
         "exposure_critic_calls_per_day": exposure_critic_calls,
         "llm_reflection_cadence": config.llm_reflection_cadence,

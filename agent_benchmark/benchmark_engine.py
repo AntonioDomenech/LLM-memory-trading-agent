@@ -93,9 +93,25 @@ class BenchmarkEngine:
         symbols = self._symbols(config)
         train_pairs = self._trading_pairs(config.train_start, config.train_end, config.max_train_days)
         test_pairs = self._trading_pairs(config.test_start, config.test_end, config.max_test_days)
-        chunks_per_day = math.ceil(len(symbols) / max(1, config.stage1_chunk_size))
-        critic_calls_per_day = 1 if self._should_run_exposure_critic(config) else 0
-        calls_per_day = chunks_per_day + 1 + critic_calls_per_day
+        quantitative_historical_authority = bool(
+            config.evaluation_mode in {"frozen_holdout", "causal_online_replay"}
+            and config.historical_decision_authority == "precutoff_quantitative_policy"
+        )
+        chunks_per_day = (
+            0
+            if quantitative_historical_authority
+            else math.ceil(len(symbols) / max(1, config.stage1_chunk_size))
+        )
+        critic_calls_per_day = (
+            0
+            if quantitative_historical_authority
+            else (1 if self._should_run_exposure_critic(config) else 0)
+        )
+        calls_per_day = (
+            0
+            if quantitative_historical_authority
+            else chunks_per_day + 1 + critic_calls_per_day
+        )
         deterministic = config.memory_mode == "deterministic_market_cases"
         decision_pairs = test_pairs if deterministic else train_pairs + test_pairs
         if config.decision_cadence == "weekly_event":
@@ -115,6 +131,7 @@ class BenchmarkEngine:
             "train_days": len(train_pairs),
             "test_days": len(test_pairs),
             "deterministic_memory_days": len(train_pairs) if deterministic else 0,
+            "historical_decision_authority": config.historical_decision_authority,
             "stage1_chunks_per_day": chunks_per_day,
             "decision_calls_per_day": calls_per_day,
             "exposure_critic_calls_per_day": critic_calls_per_day,
@@ -323,7 +340,35 @@ class BenchmarkEngine:
                 schedule = self._decision_schedule(config, phase, bundle, all_decisions)
                 stage1_outputs = []
                 manager_bundle = self._stage2_bundle(bundle, config)
-                if schedule["call_model"]:
+                historical_quantitative = bool(
+                    phase == "test"
+                    and config.evaluation_mode in {"frozen_holdout", "causal_online_replay"}
+                    and config.historical_decision_authority
+                    == "precutoff_quantitative_policy"
+                )
+                if historical_quantitative:
+                    if schedule["call_model"]:
+                        stage2_output = self._quantitative_policy_output(
+                            config,
+                            symbols,
+                            manager_bundle,
+                            schedule,
+                        )
+                        decision_kind = "precutoff_quantitative_policy"
+                    else:
+                        stage2_output = self._cadence_hold_output(symbols, manager_bundle, schedule)
+                        decision_kind = "cadence_hold"
+                    stage2_output = self._apply_online_policy_gate(
+                        config, stage2_output, manager_bundle
+                    )
+                    stage2_output = self._apply_action_hysteresis(
+                        config,
+                        phase,
+                        stage2_output,
+                        manager_bundle,
+                        all_decisions,
+                    )
+                elif schedule["call_model"]:
                     for chunk in _chunks(symbols, config.stage1_chunk_size):
                         chunk_bundle = self._stage1_bundle(bundle, chunk)
                         system, user = build_stage1_prompt(chunk_bundle, chunk)
@@ -687,7 +732,10 @@ class BenchmarkEngine:
         calls = 0
         for item in run.get("decisions") or []:
             output = item.get("output") or {}
-            if output.get("_api_status") not in {"dry_run", "missing_key", "cadence_hold"}:
+            # Persisted mechanical decisions (cadence holds and the frozen
+            # quantitative policy) are not model calls.  Successful model
+            # responses are always marked ``ok`` by call_json_model.
+            if output.get("_api_status") == "ok":
                 calls += 1
         if not hasattr(store, "_connect"):
             return calls
@@ -2679,6 +2727,61 @@ class BenchmarkEngine:
                 "schedule": schedule,
                 "requested_action": "HOLD",
                 "executed_action": "HOLD",
+            }
+        )
+        return output
+
+    def _quantitative_policy_output(
+        self,
+        config: BenchmarkConfig,
+        symbols: List[str],
+        manager_bundle: Dict[str, Any],
+        schedule: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Translate the frozen pre-cutoff estimator into a long/cash action.
+
+        Gemma cannot own a 2024 historical decision because its own pretraining
+        includes 2024 facts.  This path uses only the manifest-bound estimator
+        fitted from lessons that matured by the configured selection cutoff.
+        """
+
+        output = self._stage2_fallback(symbols, manager_bundle)
+        symbol = symbols[0] if symbols else config.symbol
+        current = _safe_float(
+            (manager_bundle.get("current_position_weights") or {}).get(symbol)
+        ) or 0.0
+        support = manager_bundle.get("online_policy") or {}
+        recommendation = str(support.get("recommended_action") or "HOLD").upper()
+        if recommendation == "CASH_ALL":
+            action = "CASH_ALL"
+        elif current <= 0.05:
+            action = "BUY_ALL"
+        else:
+            action = "HOLD"
+        output.update(
+            {
+                "action": action,
+                "requested_action": action,
+                "expected_holding_days": int(config.online_learning_horizon_days),
+                "horizon_days": int(config.online_learning_horizon_days),
+                "confidence": float(_safe_float(support.get("confidence")) or 0.0),
+                "expected_return_bps": round(
+                    -10_000.0 * float(_safe_float(support.get("expected_active_return")) or 0.0),
+                    4,
+                ),
+                "rebalance_reason": "manifest_bound_precutoff_quantitative_policy",
+                "portfolio_thesis": "Use only the pre-cutoff long/cash estimator; Gemma has no historical decision authority.",
+                "major_risks": ["Historical statistical relationships may not persist."],
+                "uncertainty": ["No post-cutoff outcome is available to this policy."],
+                "cash_drag_justification": "Cash requires the estimator's conservative after-cost risk-off recommendation.",
+                "why_not_buy_hold": "Only a confident positive after-cost cash edge can interrupt the long baseline.",
+                "stage1_alignment": "veto",
+                "stage1_veto_reason": "No historical LLM recommendation is admissible.",
+                "input_evidence_refs": ["online_policy"],
+                "data_quality_warnings_used": [],
+                "historical_decision_authority": "precutoff_quantitative_policy",
+                "_api_status": "quantitative_policy",
+                "schedule": schedule,
             }
         )
         return output
@@ -4709,6 +4812,10 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                 "historical_holdout_reveal_count_lower_bound": int(
                     config.historical_holdout_reveal_count_lower_bound
                 ),
+                "historical_prompt_blinding": bool(config.historical_prompt_blinding),
+                "historical_prompt_blinding_contract": config.historical_prompt_blinding_contract,
+                "model_training_data_cutoff": config.model_training_data_cutoff,
+                "historical_decision_authority": config.historical_decision_authority,
                 "historical_price_basis": config.historical_price_basis,
                 "action_space": config.single_stock_action_space,
                 "decision_cadence": config.decision_cadence,
@@ -4776,6 +4883,10 @@ or improve them. Return only valid compact JSON with the same Stage 2 schema.
                     "updates_allowed": False,
                     "test_evidence": True,
                     "globally_pristine": bool(config.globally_pristine),
+                    "historical_prompt_blinding": bool(config.historical_prompt_blinding),
+                    "historical_prompt_blinding_contract": config.historical_prompt_blinding_contract,
+                    "model_training_data_cutoff": config.model_training_data_cutoff,
+                    "historical_decision_authority": config.historical_decision_authority,
                 }
                 window_name = "frozen_holdout"
                 window_reason = (

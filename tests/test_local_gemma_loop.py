@@ -6,6 +6,7 @@ import pytest
 
 from agent_benchmark.api_usage import estimate_run_api_usage
 from agent_benchmark.benchmark_engine import BenchmarkEngine
+from agent_benchmark.historical_blinding import HISTORICAL_BLINDING_CONTRACT
 from agent_benchmark.llm_client import call_json_model
 from agent_benchmark.local_gemma_loop import (
     ALLOWLISTED_PATCH_CATEGORIES,
@@ -338,11 +339,13 @@ def test_frozen_success_requires_every_reported_year_to_beat_buy_hold():
         implementation_sha256="c" * 64,
     )
     run = {
+        "decisions": [],
         "summary": {
             "model": config.model,
             "model_provider": config.model_provider,
             "no_paid_api_mode": True,
-            "metrics": {"invalid_allocation_count": 0},
+            "model_calls": 0,
+            "metrics": {"invalid_allocation_count": 0, "repair_count": 0},
             "test_metrics": {"total_return": 0.30},
             "api_usage_estimate": {
                 "local_only": True,
@@ -352,7 +355,10 @@ def test_frozen_success_requires_every_reported_year_to_beat_buy_hold():
             "test_buy_hold_comparison": {
                 "benchmarks": [{"id": "single_stock", "total_return": 0.20}]
             },
-            "benchmark_contract": {"evaluation_mode": "frozen_holdout"},
+            "benchmark_contract": {
+                "evaluation_mode": "frozen_holdout",
+                "historical_decision_authority": "precutoff_quantitative_policy",
+            },
             "frozen_learning_state_proof": {
                 "unchanged": True,
                 "test_outcomes_used_for_learning": False,
@@ -379,11 +385,22 @@ def test_frozen_success_requires_every_reported_year_to_beat_buy_hold():
     failed = evaluate_success(run, config)
     run["summary"]["frozen_holdout"]["periods"]["2026_ytd"]["beat_buy_hold"] = True
     passed = evaluate_success(run, config)
+    run["decisions"].append(
+        {"phase": "test", "stage": "stage1", "output": {"_api_status": "ok"}}
+    )
+    run["summary"]["model_calls"] = 1
+    llm_influenced = evaluate_success(run, config)
 
     assert failed["overall_beat_buy_hold"] is True
     assert failed["all_required_periods_beat_buy_hold"] is False
     assert failed["success"] is False
     assert passed["success"] is True
+    assert passed["eligible_as_frozen_test_evidence"] is True
+    assert passed["eligible_as_pristine_test_evidence"] is False
+    assert passed["evidence_scope"] == "candidate_specific_frozen_not_globally_pristine"
+    assert passed["historical_holdout_reveal_count_lower_bound"] >= 10
+    assert llm_influenced["frozen_certification_checks"]["no_historical_llm_market_inference"] is False
+    assert llm_influenced["success"] is False
 
 
 def test_monitoring_parser_and_abort_thresholds():

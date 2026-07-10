@@ -19,6 +19,7 @@ from .benchmark_engine import BenchmarkEngine
 from .config_store import DATA_DIR
 from .llm_client import call_json_model
 from .memory import build_frozen_system_manifest, verify_frozen_system_manifest
+from .historical_blinding import HISTORICAL_BLINDING_CONTRACT
 from .local_provider import (
     LOCAL_OLLAMA_MODEL,
     local_gemma_aapl_config,
@@ -141,6 +142,15 @@ def run_local_json_smoke(config: BenchmarkConfig, secrets: SecretConfig) -> Dict
     return result
 
 
+def _requires_local_model_smoke(config: BenchmarkConfig) -> bool:
+    """Return whether this run gives the local LLM any decision authority."""
+
+    return not (
+        config.evaluation_mode in {"frozen_holdout", "causal_online_replay"}
+        and config.historical_decision_authority == "precutoff_quantitative_policy"
+    )
+
+
 def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, Any]:
     summary = run.get("summary") or {}
     metrics = summary.get("metrics") or {}
@@ -180,6 +190,12 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
     data_after = data_proof.get("after") or {}
     manifest = summary.get("frozen_system_manifest") or {}
     manifest_config = manifest.get("config") or {}
+    historical_model_calls = [
+        item
+        for item in (run.get("decisions") or [])
+        if item.get("phase") == "test"
+        and (item.get("output") or {}).get("_api_status") == "ok"
+    ]
     frozen_certification_checks = {
         "learning_state_unchanged": bool(
             learning_proof.get("unchanged")
@@ -211,6 +227,28 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
             manifest.get("prompt_contract_sha256")
             and manifest.get("implementation_sha256")
         ),
+        "parametric_lookahead_guard_bound": bool(
+            config.historical_prompt_blinding
+            and bool(config.model_training_data_cutoff)
+            and config.historical_prompt_blinding_contract == HISTORICAL_BLINDING_CONTRACT
+            and manifest_config.get("historical_prompt_blinding") is True
+            and manifest_config.get("historical_prompt_blinding_contract")
+            == HISTORICAL_BLINDING_CONTRACT
+            and manifest_config.get("model_training_data_cutoff")
+            == config.model_training_data_cutoff
+        ),
+        "cutoff_safe_decision_authority": bool(
+            config.historical_decision_authority == "precutoff_quantitative_policy"
+            and (summary.get("benchmark_contract") or {}).get(
+                "historical_decision_authority"
+            )
+            == "precutoff_quantitative_policy"
+        ),
+        "no_historical_llm_market_inference": bool(
+            not historical_model_calls
+            and int(summary.get("model_calls") or 0) == 0
+        ),
+        "no_allocation_repairs": int(metrics.get("repair_count") or 0) == 0,
         "report_role_is_frozen": bool(
             (summary.get("benchmark_contract") or {}).get("evaluation_mode")
             == "frozen_holdout"
@@ -222,6 +260,20 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
         and all(frozen_certification_checks.values())
     )
     evidence_eligible = frozen_certified
+    pristine_test_evidence = bool(
+        frozen_certified
+        and config.globally_pristine
+        and int(config.historical_holdout_reveal_count_lower_bound or 0) == 0
+    )
+    evidence_scope = (
+        "prospective_pristine"
+        if pristine_test_evidence
+        else (
+            "candidate_specific_frozen_not_globally_pristine"
+            if frozen_certified
+            else "not_certified"
+        )
+    )
     return {
         "success": bool(beat_buy_hold and invalid == 0 and local_only and evidence_eligible),
         "beat_buy_hold": beat_buy_hold,
@@ -238,6 +290,12 @@ def evaluate_success(run: Dict[str, Any], config: BenchmarkConfig) -> Dict[str, 
         "estimated_cost_usd": usage.get("estimated_cost_usd"),
         "evaluation_mode": config.evaluation_mode,
         "eligible_as_frozen_test_evidence": evidence_eligible,
+        "eligible_as_pristine_test_evidence": pristine_test_evidence,
+        "evidence_scope": evidence_scope,
+        "globally_pristine": bool(config.globally_pristine),
+        "historical_holdout_reveal_count_lower_bound": int(
+            config.historical_holdout_reveal_count_lower_bound or 0
+        ),
         "frozen_certified": frozen_certified,
         "frozen_certification_checks": frozen_certification_checks,
         "api_cost_display": usage.get("estimated_cost_display"),
@@ -397,6 +455,8 @@ def run_iteration(
         implementation_paths = (
             Path(__file__).with_name("benchmark_engine.py"),
             Path(__file__).with_name("deterministic_memory.py"),
+            Path(__file__).with_name("historical_blinding.py"),
+            Path(__file__).with_name("llm_client.py"),
             Path(__file__).with_name("online_policy.py"),
         )
         prompt_hash = hashlib.sha256(prompt_path.read_bytes()).hexdigest()
@@ -549,7 +609,14 @@ def run_loop(
     config_payload = model_to_dict(config)
     config_payload["local_model_digest"] = observed_digest
     config = BenchmarkConfig(**config_payload)
-    smoke = run_local_json_smoke(config, secrets)
+    smoke = (
+        run_local_json_smoke(config, secrets)
+        if _requires_local_model_smoke(config)
+        else {
+            "status": "skipped",
+            "reason": "no_historical_llm_decision_authority",
+        }
+    )
     reports: List[Dict[str, Any]] = []
     first_iteration = 1
     if resume_run_id:

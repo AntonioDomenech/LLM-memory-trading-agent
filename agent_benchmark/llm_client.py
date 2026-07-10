@@ -11,6 +11,12 @@ import requests
 
 from .api_usage import attach_response_usage_metadata
 from .config_store import DATA_DIR
+from .historical_blinding import (
+    HISTORICAL_BLINDING_CONTRACT,
+    blind_historical_prompt,
+    restore_historical_output,
+    should_blind_historical_prompt,
+)
 from .local_provider import is_local_model_run, local_auth_headers, model_base_url, validate_no_paid_api_mode
 from .schemas import BenchmarkConfig, SecretConfig
 
@@ -267,6 +273,7 @@ def _ollama_schema_for_namespace(config: BenchmarkConfig, namespace: str) -> Dic
                     "type": "array",
                     "items": {
                         "type": "object",
+                        "additionalProperties": False,
                         "properties": {
                             "symbol": {"type": "string"},
                             "stance": {"type": "string", "enum": ["bullish", "bearish", "neutral", "uncertain"]},
@@ -430,6 +437,12 @@ def call_json_model(
         fallback["_api_status"] = "dry_run"
         return fallback
 
+    blinding = None
+    if should_blind_historical_prompt(config):
+        blinding = blind_historical_prompt(config, system, user)
+        system = blinding.system
+        user = blinding.user
+
     local_run = is_local_model_run(config, secrets)
     if not secrets.openai_api_key and not local_run:
         fallback.setdefault("_raw_text", "")
@@ -442,9 +455,18 @@ def call_json_model(
         path = _named_cache_path(cache_namespace, f"{config.model}\n{system}\n{user}")
         if path.exists():
             cached = json.loads(path.read_text(encoding="utf-8"))
-            cached["_api_cache_hit"] = True
-            cached.setdefault("_api_status", "ok")
-            return cached
+            guard = cached.get("_historical_prompt_blinding") or {}
+            current_guard = blinding.metadata() if blinding is not None else {}
+            if blinding is None or (
+                guard.get("applied") is True
+                and guard.get("contract_version") == HISTORICAL_BLINDING_CONTRACT
+                and guard.get("sanitized_prompt_sha256")
+                == current_guard.get("sanitized_prompt_sha256")
+                and guard.get("alias_map_sha256") == current_guard.get("alias_map_sha256")
+            ):
+                cached["_api_cache_hit"] = True
+                cached.setdefault("_api_status", "ok")
+                return cached
 
     parse_errors: List[str] = []
     request_key = f"{config.model}\n{system}\n{user}"
@@ -475,6 +497,11 @@ def call_json_model(
         text = _extract_output_text(response_data)
         try:
             decision = _extract_json(text)
+            if blinding is not None:
+                decision = restore_historical_output(decision, blinding.aliases_to_real)
+                guard = blinding.metadata()
+                guard["raw_response_sha256"] = f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+                decision["_historical_prompt_blinding"] = guard
             decision["_raw_text"] = text
             decision["_api_status"] = "ok"
             attach_response_usage_metadata(decision, response_data)
@@ -512,16 +539,20 @@ def call_json_model(
                 active_user = user
             else:
                 active_system = f"{system}\nReturn exactly one valid JSON object. Do not include markdown, prose, or trailing text."
-                active_user = json.dumps(
-                    {
-                        "task": "Repair the previous response for the same benchmark request. Return only valid JSON.",
-                        "parser_error": error,
-                        "previous_response": text[:2000],
-                        "original_request": user,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                repair_payload = {
+                    "task": "Repair the previous response for the same benchmark request. Return only valid JSON.",
+                    "parser_error": (
+                        "historical_output_validation_failed"
+                        if blinding is not None
+                        else error
+                    ),
+                    "original_request": user,
+                }
+                if blinding is None:
+                    repair_payload["previous_response"] = text[:2000]
+                else:
+                    repair_payload["previous_response"] = "Omitted by historical look-ahead guard."
+                active_user = json.dumps(repair_payload, sort_keys=True, default=str)
 
     raise ValueError(f"Model response JSON parsing failed after {len(parse_errors)} attempts: {'; '.join(parse_errors)}")
 

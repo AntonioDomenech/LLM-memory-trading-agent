@@ -122,6 +122,15 @@ class BenchmarkConfig(BaseModel):
     fixed_evaluation_cutoff: str = ""
     globally_pristine: bool = False
     historical_holdout_reveal_count_lower_bound: int = Field(default=0, ge=0)
+    # Historical LLM prompts must be blinded when a model's own pretraining can
+    # overlap the evaluation dates.  This is separate from warehouse look-ahead.
+    historical_prompt_blinding: bool = False
+    historical_prompt_blinding_contract: str = ""
+    model_training_data_cutoff: str = ""
+    historical_decision_authority: Literal[
+        "llm",
+        "precutoff_quantitative_policy",
+    ] = "llm"
     online_test_learning: bool = False
     reset_book_at_test_start: bool = False
     benchmark_contract_version: str = "legacy"

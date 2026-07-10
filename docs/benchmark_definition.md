@@ -152,6 +152,13 @@ Retrieval must be point-in-time. A decision at time `T` can only retrieve memory
 where `knowledge_timestamp <= T`, and a frozen post-2023 test uses only memory
 whose labels matured by the 2023-12-31 selection cutoff.
 
+For a historical LLM test, point-in-time retrieval is necessary but not sufficient.
+If the base model's own training corpus overlaps the evaluation window, exact
+issuer identities, calendar dates, raw prices, and raw financial-statement amounts
+must be blinded before inference. The parsed response may be mapped back to engine
+identifiers only after generation. The applied blinding contract and model training
+cutoff must be recorded in the immutable run manifest.
+
 The retrieval system should favor:
 
 - Similar portfolio states.
@@ -260,8 +267,8 @@ The benchmark configuration should include:
   "mode": "single_stock | balanced_50_portfolio",
   "train_start": "2000-01-01",
   "train_end": "2023-12-31",
-  "test_start": "2025-01-01",
-  "test_end": "2025-12-31",
+  "test_start": "2024-01-01",
+  "test_end": "2026-07-09",
   "live_frequency": "hourly",
   "initial_cash": 1000.0,
   "allow_short": true,
@@ -270,6 +277,10 @@ The benchmark configuration should include:
   "memory_retrieval": "deterministic_similarity",
   "decision_process": "two_stage_llm",
   "evaluation_mode": "frozen_holdout",
+  "historical_prompt_blinding": true,
+  "historical_prompt_blinding_contract": "identity_relative_time_scale_free_v2",
+  "model_training_data_cutoff": "2025-01-31",
+  "historical_decision_authority": "precutoff_quantitative_policy",
   "online_test_learning": false
 }
 ```

@@ -26,7 +26,29 @@ The base snapshot id is `aapl-2000-2023-adjusted-v2`. Its content hash and exact
 
 The engine snapshots both the estimator and scoped learning memory before and after a frozen run. A changed digest invalidates the run. The queue and maturity functions also reject direct calls from a frozen test.
 
-Training does not mean Gemma trades every day from 2000 onward. The affordable implementation builds numerical, labeled historical cases and fits/retrieves from them; Gemma is used only for scheduled test/live decisions. Historical model quality can be reported for diagnosis and selection, but never presented as held-out success.
+Training does not mean Gemma trades every day from 2000 onward. The affordable implementation builds numerical, labeled historical cases and fits/retrieves from them. Historical model quality can be reported for diagnosis and selection, but never presented as held-out success.
+
+Development inside 2000-2023 uses chronological walk-forward splits: fit on the past, predict the next development block, inspect the result, and only then advance. Those predictions help select or reject a pattern, but they remain practice evidence because we are allowed to tune from them. After the design is fixed, it may be refit on all causally mature information through 2023 and then frozen. The 44.6% pre-2024 cash-call figure from the rejected predecessor is therefore not part of the test score; it was a development warning that the apparent pattern was weak.
+
+During the frozen 2024-onward exam, the policy may observe information that would have been available by each decision date, including earlier prices within 2024. It may not fit, recalibrate, change thresholds, add outcome lessons, or use any later result. Causal replay is reported separately because it deliberately learns an outcome after that outcome matures, which is useful for simulating an everlasting live system but is not the same fixed-model test.
+
+## Gemma's own knowledge cutoff
+
+Warehouse chronology is not the only possible source of future leakage. The installed `gemma4:12b` model was pretrained on data through January 2025, according to Google's Gemma 4 model card. An ordinary prompt containing `AAPL`, `Apple`, an exact 2024 date, and recognizable prices could therefore invite the model to recall the historical outcome from its weights.
+
+Prompt blinding alone cannot prove that a high-dimensional market vector was not recognized from pretraining. Therefore Gemma has **no decision authority and receives no market prompt in frozen or causal historical replay**. Those trades must come from the manifest-bound `precutoff_quantitative_policy`, fitted only from outcomes that matured by the selection cutoff. Gemma becomes decisional only in genuine live operation after its January 2025 knowledge cutoff.
+
+As defense in depth for any explicitly diagnostic historical call, the harness uses `historical_prompt_blinding=true` and the versioned `identity_relative_time_scale_free_v2` contract. Immediately before such a model call, the exact prompt is transformed as follows:
+
+- AAPL, Apple, and context ticker identities become stable pseudonyms such as `ASSET_1`, `MARKET_1`, and `SENTIMENT_1`.
+- Exact calendar dates become offsets relative to an undisclosed `T0`.
+- Only explicitly allowlisted scale-free numerical fields survive. Raw prices, volumes, share counts, cash/equity amounts, unknown numeric fields, free-text numbers, and raw SEC statement amounts are removed.
+- Scale-free returns, volatility, drawdowns, moving-average distances, ranks, probabilities, portfolio weights, and matured pre-cutoff outcomes remain.
+- Parsed pseudonymous output is mapped back to engine symbols only after generation; the raw response remains pseudonymous for audit.
+
+Frozen certification requires zero historical market-decision calls to Gemma, zero allocation repairs, the cutoff-safe quantitative authority, the declared model cutoff, and the current blinding contract. Historical LLM caches and news text are forbidden. This removes Gemma's parametric memory from the retrospective trading result; it still does not make the already inspected 2024 onward period globally pristine. Locked future paper trading remains the strongest evidence.
+
+Source: [Google Gemma 4 model card - Training Dataset](https://huggingface.co/google/gemma-4-12B#training-dataset).
 
 ## Separate causal replay and live learning
 
@@ -38,7 +60,7 @@ Historical replay fills at the next adjusted open. Live paper execution runs onc
 
 ## Decision system
 
-The numerical policy compares the current point-in-time state with causally available historical cases and estimates whether cash is likely to outperform AAPL after costs. Gemma receives that support on a weekly schedule and on configured stress events. The gate can block an unsupported cash decision; it never forces leverage or a short.
+The numerical policy compares the current point-in-time state with causally available historical cases and estimates whether cash is likely to outperform AAPL after costs. In frozen and causal historical replay, that policy alone owns the weekly/stress-event action. In live operation, Gemma receives the same support and can propose an action; the gate can block unsupported cash, leverage, or a short.
 
 The action space is:
 

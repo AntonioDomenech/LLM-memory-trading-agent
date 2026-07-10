@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_benchmark import local_gemma_loop, quality
+from agent_benchmark.benchmark_engine import BenchmarkEngine
 from agent_benchmark.local_provider import (
     local_gemma_aapl_config,
     local_gemma_aapl_causal_replay_config,
@@ -74,6 +75,24 @@ def test_frozen_contract_rejects_overlap_learning_and_partial_holdout():
             local_gemma_aapl_online_config(max_test_days=5),
             secrets,
         )
+    with pytest.raises(ValueError, match="requires deterministic_market_cases"):
+        validate_no_paid_api_mode(
+            local_gemma_aapl_online_config(memory_mode="model_specific_cases_and_lessons"),
+            secrets,
+        )
+
+
+def test_resume_call_count_excludes_quantitative_and_cadence_decisions():
+    engine = object.__new__(BenchmarkEngine)
+    run = {
+        "decisions": [
+            {"output": {"_api_status": "quantitative_policy"}},
+            {"output": {"_api_status": "cadence_hold"}},
+            {"output": {"_api_status": "ok"}},
+        ]
+    }
+
+    assert engine._resume_model_call_count(object(), "run-a", run) == 1
 
 
 def test_legacy_preset_remains_available_unchanged():
@@ -134,10 +153,15 @@ def test_preflight_only_never_checks_or_calls_ollama(monkeypatch):
     assert result["smoke"] == "not_run"
 
 
-def test_online_loop_runs_once_and_never_auto_patches(monkeypatch):
+@pytest.mark.parametrize("preset", ["aapl-online", "aapl-causal-replay"])
+def test_historical_quantitative_loop_runs_once_without_model_smoke_or_auto_patch(monkeypatch, preset):
     monkeypatch.setattr(local_gemma_loop, "BenchmarkStore", lambda: object())
     monkeypatch.setattr(local_gemma_loop, "ensure_ollama_model", lambda *args, **kwargs: {"status": "present"})
-    monkeypatch.setattr(local_gemma_loop, "run_local_json_smoke", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(
+        local_gemma_loop,
+        "run_local_json_smoke",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("historical Gemma smoke must not run")),
+    )
     calls = []
 
     def fake_iteration(**kwargs):
@@ -151,10 +175,47 @@ def test_online_loop_runs_once_and_never_auto_patches(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("online preset must not auto-patch")),
     )
 
-    result = local_gemma_loop.run_loop(max_iterations=9, preset="aapl-online")
+    result = local_gemma_loop.run_loop(max_iterations=9, preset=preset)
 
     assert result["status"] == "target_not_met"
+    assert result["smoke"] == {
+        "status": "skipped",
+        "reason": "no_historical_llm_decision_authority",
+    }
     assert calls == [1]
+
+
+def test_live_learning_still_requires_local_model_smoke():
+    assert local_gemma_loop._requires_local_model_smoke(local_gemma_aapl_live_config()) is True
+
+
+def test_live_loop_still_runs_local_model_smoke(monkeypatch):
+    live_config = local_gemma_aapl_live_config()
+    monkeypatch.setattr(local_gemma_loop, "_config_for_preset", lambda preset: live_config)
+    monkeypatch.setattr(local_gemma_loop, "BenchmarkStore", lambda: object())
+    monkeypatch.setattr(
+        local_gemma_loop,
+        "ensure_ollama_model",
+        lambda *args, **kwargs: {"status": "present", "digest": "sha256:live"},
+    )
+    smoke_calls = []
+
+    def fake_smoke(config, secrets):
+        smoke_calls.append(config.evaluation_mode)
+        return {"ok": True}
+
+    monkeypatch.setattr(local_gemma_loop, "run_local_json_smoke", fake_smoke)
+    monkeypatch.setattr(
+        local_gemma_loop,
+        "run_iteration",
+        lambda **kwargs: {"evaluation": {"success": False}, "diagnostics": {}},
+    )
+
+    result = local_gemma_loop.run_loop(max_iterations=1, preset="aapl-live")
+
+    assert result["status"] == "target_not_met"
+    assert result["smoke"] == {"ok": True}
+    assert smoke_calls == ["live_learning"]
 
 
 def test_frozen_resume_rejects_a_changed_ollama_digest(monkeypatch):
@@ -207,6 +268,32 @@ def test_preflight_estimate_accounts_for_weekly_base_cadence(monkeypatch):
     assert config.run_preset in quality.OFFICIAL_PRESETS
     assert report["estimate"]["decision_cadence"] == "weekly_event"
     assert report["estimate"]["scheduled_decision_days"] == 2
-    assert report["estimate"]["estimated_model_calls"] == 4
-    assert report["estimate"]["estimated_model_calls_upper_bound"] == 8
+    assert report["estimate"]["decision_calls_per_day"] == 0
+    assert report["estimate"]["estimated_model_calls"] == 0
+    assert report["estimate"]["estimated_model_calls_upper_bound"] == 0
+    assert report["estimate"]["historical_decision_authority"] == "precutoff_quantitative_policy"
+    assert report["estimate"]["event_trigger_calls_in_estimate"] == "not_applicable_no_historical_llm_authority"
     assert report["estimate"]["online_lessons_require_model_calls"] is False
+
+
+def test_engine_estimate_reports_zero_historical_calls_but_not_live(monkeypatch):
+    engine = object.__new__(BenchmarkEngine)
+    pairs = [
+        {"decision_date": "2025-01-03", "fill_date": "2025-01-06"},
+        {"decision_date": "2025-01-06", "fill_date": "2025-01-07"},
+    ]
+    monkeypatch.setattr(engine, "_symbols", lambda config: ["AAPL"])
+    monkeypatch.setattr(engine, "_trading_pairs", lambda *args, **kwargs: pairs)
+    monkeypatch.setattr(engine, "_should_run_exposure_critic", lambda config: False)
+
+    frozen = engine.estimate(local_gemma_aapl_online_config())
+    replay = engine.estimate(local_gemma_aapl_causal_replay_config())
+    live = engine.estimate(local_gemma_aapl_live_config())
+
+    for historical in (frozen, replay):
+        assert historical["decision_calls_per_day"] == 0
+        assert historical["estimated_decision_calls"] == 0
+        assert historical["estimated_decision_calls_upper_bound"] == 0
+        assert historical["estimated_lesson_calls_upper_bound"] == 0
+    assert live["decision_calls_per_day"] == 2
+    assert live["estimated_decision_calls"] == 4
