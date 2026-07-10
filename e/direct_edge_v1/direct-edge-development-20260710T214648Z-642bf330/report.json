@@ -1,0 +1,262 @@
+{
+  "artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\direct_edge_v1\\direct-edge-development-20260710T214648Z-642bf330",
+  "candidate_count": 8,
+  "candidate_results_sha256": "sha256:72094af0532cf4c1bbe693635ca8f614fcfbe9597c1786248c3b0125e8eeb94a",
+  "contract_version": "aapl-direct-edge-development-v1",
+  "created_at_utc": "2026-07-10T21:46:48.928633+00:00",
+  "development_pass": false,
+  "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+  "physical_data_end": "2018-12-31",
+  "post_2018_market_data_accessed": false,
+  "refit": {
+    "performed": false,
+    "reason": "no_development_candidate_passed"
+  },
+  "reproducibility": {
+    "api_cost_display": "$0.00",
+    "completed_before_seal_within_limit": true,
+    "estimated_external_cost_usd": 0.0,
+    "model_calls": 0,
+    "runtime_limit_seconds": 3600.0,
+    "runtime_seconds_before_seal": 16.879951299983077
+  },
+  "run_id": "direct-edge-development-20260710T214648Z-642bf330",
+  "selected_candidate_id": null,
+  "selection_manifest": {
+    "candidate_family": [
+      {
+        "candidate_id": "price_only_p50_e0",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0,
+        "gate_id": "p50_e0",
+        "model_family": "price_only",
+        "probability_gate": 0.5,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "price_only_p55_e0",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0,
+        "gate_id": "p55_e0",
+        "model_family": "price_only",
+        "probability_gate": 0.55,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "price_only_p50_e25",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0025,
+        "gate_id": "p50_e25",
+        "model_family": "price_only",
+        "probability_gate": 0.5,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "price_only_p55_e25",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0025,
+        "gate_id": "p55_e25",
+        "model_family": "price_only",
+        "probability_gate": 0.55,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "market_sentiment_p50_e0",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0,
+        "gate_id": "p50_e0",
+        "model_family": "market_sentiment",
+        "probability_gate": 0.5,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "market_sentiment_p55_e0",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0,
+        "gate_id": "p55_e0",
+        "model_family": "market_sentiment",
+        "probability_gate": 0.55,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "market_sentiment_p50_e25",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0025,
+        "gate_id": "p50_e25",
+        "model_family": "market_sentiment",
+        "probability_gate": 0.5,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      },
+      {
+        "candidate_id": "market_sentiment_p55_e25",
+        "cash_decision_rows": 5,
+        "expected_edge_gate_10bps": 0.0025,
+        "gate_id": "p55_e25",
+        "model_family": "market_sentiment",
+        "probability_gate": 0.55,
+        "trigger": "cash_win_probability >= probability_gate and expected_cash_active_log_edge_10bps >= expected_edge_gate_10bps"
+      }
+    ],
+    "candidate_results_sha256": "sha256:72094af0532cf4c1bbe693635ca8f614fcfbe9597c1786248c3b0125e8eeb94a",
+    "contract_version": "aapl-direct-edge-development-v1",
+    "cost_scenarios_bps": {
+      "base_5bps": 5.0,
+      "stress_10bps": 10.0
+    },
+    "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+    "execution": {
+      "actions": [
+        "LONG_100_PERCENT",
+        "CASH_100_PERCENT"
+      ],
+      "asset": "AAPL",
+      "cash_interest_rate": 0.0,
+      "decision_information_cutoff": "completed close t",
+      "fill": "next adjusted AAPL open",
+      "leverage": false,
+      "maximum_target_exposure": 1.0,
+      "shorting": false
+    },
+    "gam_config": {
+      "basis_scale_floor": 1e-06,
+      "edge_clip_lower": -0.2,
+      "edge_clip_upper": 0.2,
+      "hinge_knot": 1.0,
+      "huber_delta": 1.5,
+      "huber_max_iterations": 50,
+      "huber_tolerance": 1e-10,
+      "logistic_max_iterations": 50,
+      "logistic_tolerance": 1e-10,
+      "newton_line_search_max_steps": 50,
+      "raw_mad_multiplier": 1.4826,
+      "raw_scale_floor": 1e-06,
+      "raw_z_clip": 4.0,
+      "ridge_lambdas": [
+        0.001,
+        0.01,
+        0.1
+      ],
+      "target_mad_multiplier": 1.4826,
+      "target_scale_floor": 1e-06
+    },
+    "later_stage_lock": {
+      "candidate_grid_may_change_after_this_run": false,
+      "features_may_change_after_this_run": false,
+      "gam_configuration_may_change_after_this_run": false,
+      "only_selected_candidate_may_advance": true,
+      "thresholds_may_change_after_this_run": false
+    },
+    "manifest_sha256": "sha256:995420f9e462e5d648d16e71ff5562634cd279a0e6dd634ecbaa9e62f276edc6",
+    "market_sentiment_selection_requirement": "on identical sentiment-ready rows: strictly better Brier, strictly lower edge MAE, strictly higher total active edge, and no worse weakest fold at 5 and 10 bps",
+    "payload_sha256": {
+      "buy_hold_base_5bps.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+      "buy_hold_stress_10bps.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+      "candidate_results.json": "sha256:20e490b6d406317c2b49b20f7062a4cddbec25ef9e2d8d542126e9b3aab53bf4",
+      "candidate_targets_2005_2018.csv": "sha256:2f0f0d6a502060e03be6f1ac5b4290e4b215e95ae45058ddd7052ca81333ee74",
+      "common_market_sentiment_p50_e0_base_5bps_strategy.csv": "sha256:14b21260e6d24a877a0f81e90b8eccc047d3a561c7303a40b5f3fad13778b4ce",
+      "common_market_sentiment_p50_e0_stress_10bps_strategy.csv": "sha256:87fbc499f7e0c38cc8cd0857e73c158f7d428624c12077fcc7b53413fbc89d57",
+      "common_market_sentiment_p50_e25_base_5bps_strategy.csv": "sha256:ef8ded529b27a0bbba631208f5270e62cc58acd2db564cff7d230bb6b9170212",
+      "common_market_sentiment_p50_e25_stress_10bps_strategy.csv": "sha256:52dcb787c91562e7812dfa03c9e943cba0b09f77120a2adb58bdaf5da153d28a",
+      "common_market_sentiment_p55_e0_base_5bps_strategy.csv": "sha256:13936a5c05825db221e8fc10c37e16d2177331dd50977da43c4d1618e57d9aee",
+      "common_market_sentiment_p55_e0_stress_10bps_strategy.csv": "sha256:274e3839ac1c55b8d3974da903040bf229ae8960c88fd36489c8bffe1d4b56a5",
+      "common_market_sentiment_p55_e25_base_5bps_strategy.csv": "sha256:05929d277e071fcba6c9e49cd306a4695bb1cec37603f38c54a0effc597b2380",
+      "common_market_sentiment_p55_e25_stress_10bps_strategy.csv": "sha256:e9dcf4975a6014a29d1cb066792c2438a7abd3da7831f06ec154e3c5b794527d",
+      "common_price_only_p50_e0_base_5bps_strategy.csv": "sha256:e82e0f8ee94ee3695051dc659b23cc14ec709b00796f31211ac78063323c798b",
+      "common_price_only_p50_e0_stress_10bps_strategy.csv": "sha256:c116089a2aec9a851864dbac26ccbed85026cc7c36d9dac2f0aba9f3cddd89f6",
+      "common_price_only_p50_e25_base_5bps_strategy.csv": "sha256:afce7e645a2b511a5114ddc445170029a76a925d976aed9c0d7c0ef21b9a1028",
+      "common_price_only_p50_e25_stress_10bps_strategy.csv": "sha256:46b2c5bd3b3382797b8203b0bd2b0fcbcb00575deddb41dd62dee7d8b8536b90",
+      "common_price_only_p55_e0_base_5bps_strategy.csv": "sha256:3bab586bb0f263d7ac6c3ee4b7e332e3e8e94238ba79efbb6f9769574e03ee0f",
+      "common_price_only_p55_e0_stress_10bps_strategy.csv": "sha256:e75eb4b39ce375e381a30e84dd4f7b61b952d1049ace7a9adc05dafe8f1ac4e3",
+      "common_price_only_p55_e25_base_5bps_strategy.csv": "sha256:25c9b37543b8e1e116c139212ebca82882617989d8688fd7057d6f9a9c606349",
+      "common_price_only_p55_e25_stress_10bps_strategy.csv": "sha256:52b9359c710a665f48169768b7557db040257ec83c3afb1864714690e3569e47",
+      "development_context_through_2018.csv": "sha256:90ffce0f0756cda451b501a0ca8fa4b3b7d94d5a03cc2200c48babde6f3640c8",
+      "development_prices_through_2018.csv": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+      "feature_provenance.json": "sha256:9cfef30e966e3a2c00a8c49fbd6d367d268f38f962c35deb69a263818b5efd9f",
+      "input_provenance.json": "sha256:2538e522a0b4b3a60ff16092d44d33da7827fd805610a45315513a023c5aa56a",
+      "market_sentiment_p50_e0_base_5bps_strategy.csv": "sha256:09c908265157f25dec708ad64dcb0739ad6705115cd255b9e306c65b10df5975",
+      "market_sentiment_p50_e0_stress_10bps_strategy.csv": "sha256:eb474d9370fd90a136a6949e1115f065e4e28d4b90c7a6d85bb8ab54e55e9d22",
+      "market_sentiment_p50_e25_base_5bps_strategy.csv": "sha256:328f6aafd41f15fc7b749a1f24342e7d894c2318b7176ce96991a132b9343e55",
+      "market_sentiment_p50_e25_stress_10bps_strategy.csv": "sha256:a92c5009b3e5a623b88446f775c4cb51babbc89c1bc3583ac281990b1ef0e291",
+      "market_sentiment_p55_e0_base_5bps_strategy.csv": "sha256:a7c7f504d264d5de80abaaa0cc0cd9afd492d34bc445581f20f12f03ba597c9d",
+      "market_sentiment_p55_e0_stress_10bps_strategy.csv": "sha256:fa6a15f9d1dc8855285486c6116b8131cb7fab3c71388d414b720e2d729863e9",
+      "market_sentiment_p55_e25_base_5bps_strategy.csv": "sha256:979f8278a34e35b34c7e891d7ae72f5ba64d58f5bec4536b18e0a3931ae2481c",
+      "market_sentiment_p55_e25_stress_10bps_strategy.csv": "sha256:24ec58f165fa10a623ee3000b1caedcdf2f4fc6064ae7cc1c4ad49bf48e5d507",
+      "oof_predictions_2005_2018.csv": "sha256:a1bb5efcb1be81aaf0ce004f1052e10423d32a45f132ba86376d4989740222f6",
+      "price_only_p50_e0_base_5bps_strategy.csv": "sha256:c8d7d5102818a62bbc02a7501895c3eee9ed798548887bcc4af96d47b1e6798d",
+      "price_only_p50_e0_stress_10bps_strategy.csv": "sha256:8ce455df4a2889aae872086f3dab29cd5b7c8252f0d94a0a957754845e033eef",
+      "price_only_p50_e25_base_5bps_strategy.csv": "sha256:57ef750f5f7c88d24582477be57004598f765c6dcb38a6b149d2f3e5b319d20a",
+      "price_only_p50_e25_stress_10bps_strategy.csv": "sha256:ec56117a61d863998a0ff3b815a51d4645e3e82aedd95be281033c280d71ee5c",
+      "price_only_p55_e0_base_5bps_strategy.csv": "sha256:2eec264a6d40dd9a24472a5ceb441df78b411573a00628f4aefc2ed622d9e05f",
+      "price_only_p55_e0_stress_10bps_strategy.csv": "sha256:c1cbe19d5108e61834f50f7f8b6bd4f28eae3522e5b9184cbc6e2647a1e32c26",
+      "price_only_p55_e25_base_5bps_strategy.csv": "sha256:f5310251eb74cbff8b22aec27093c5244dc2f3a2a7d0d9525633aa6a51493b59",
+      "price_only_p55_e25_stress_10bps_strategy.csv": "sha256:62f4687d9936821bc35475fde7e679bd406a804f1ea942b6740fce82f742f667"
+    },
+    "physical_data_end": "2018-12-31",
+    "post_2018_market_data_access_allowed": false,
+    "post_2018_market_data_accessed": false,
+    "refit": {
+      "performed": false,
+      "reason": "no_development_candidate_passed"
+    },
+    "selected_candidate_id": null,
+    "selection_tie_break": [
+      "highest 10bps minimum-fold active-log edge",
+      "highest 10bps total active-log edge",
+      "fewest 10bps cash episodes",
+      "lexical candidate id"
+    ],
+    "source_exclusion_audits": {
+      "macro": {
+        "decision": "excluded before candidate construction",
+        "finding": "macro placeholders are present and vintage/revision timing is unsafe",
+        "included": false,
+        "review_scope": "available macro_daily design and stored fields"
+      },
+      "news": {
+        "decision": "excluded before candidate construction",
+        "finding": "news event data and publication/availability timing are unsafe",
+        "included": false,
+        "review_scope": "available news event rows and timestamps"
+      }
+    },
+    "stage": "development",
+    "walk_forward_folds": [
+      {
+        "first_year": 2005,
+        "fold_id": "2005-2006",
+        "last_year": 2006
+      },
+      {
+        "first_year": 2007,
+        "fold_id": "2007-2008",
+        "last_year": 2008
+      },
+      {
+        "first_year": 2009,
+        "fold_id": "2009-2010",
+        "last_year": 2010
+      },
+      {
+        "first_year": 2011,
+        "fold_id": "2011-2012",
+        "last_year": 2012
+      },
+      {
+        "first_year": 2013,
+        "fold_id": "2013-2014",
+        "last_year": 2014
+      },
+      {
+        "first_year": 2015,
+        "fold_id": "2015-2016",
+        "last_year": 2016
+      },
+      {
+        "first_year": 2017,
+        "fold_id": "2017-2018",
+        "last_year": 2018
+      }
+    ]
+  },
+  "stage": "development"
+}

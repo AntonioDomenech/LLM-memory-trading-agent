@@ -1,0 +1,70 @@
+{
+  "context_alignment": "exact AAPL session date; no forward fill, interpolation, or zero imputation",
+  "decision_timestamp": "after completed close t",
+  "excluded_sources": {
+    "macro": {
+      "decision": "excluded before candidate construction",
+      "finding": "macro placeholders are present and vintage/revision timing is unsafe",
+      "included": false,
+      "review_scope": "available macro_daily design and stored fields"
+    },
+    "news": {
+      "decision": "excluded before candidate construction",
+      "finding": "news event data and publication/availability timing are unsafe",
+      "included": false,
+      "review_scope": "available news event rows and timestamps"
+    }
+  },
+  "execution_timestamp": "next adjusted AAPL open t+1",
+  "label_maturity": "adjusted AAPL open t+6",
+  "market_sentiment_features": [
+    "spy_lr_5",
+    "spy_drawdown_60",
+    "qqq_drawdown_60",
+    "iwm_lr_5",
+    "iwm_lr_20",
+    "iwm_lr_60",
+    "iwm_rv_20",
+    "qqq_minus_iwm_lr_20",
+    "vix_log_level",
+    "vix_lr_5",
+    "vix_lr_20",
+    "vix_z_252",
+    "tnx_level",
+    "tnx_delta_5",
+    "tnx_delta_20"
+  ],
+  "market_sentiment_raw_context": [
+    "iwm_adj_close",
+    "vix_close",
+    "tnx_close"
+  ],
+  "price_features": [
+    "aapl_lr_1",
+    "aapl_lr_5",
+    "aapl_lr_20",
+    "aapl_lr_60",
+    "aapl_lr_252",
+    "aapl_intraday_lr",
+    "aapl_gap_lr",
+    "aapl_rv_20",
+    "aapl_rv_60",
+    "aapl_downside_rv_20",
+    "aapl_drawdown_60",
+    "aapl_drawdown_252",
+    "aapl_sma_distance_20",
+    "aapl_sma_distance_200",
+    "qqq_lr_5",
+    "qqq_lr_20",
+    "qqq_lr_60",
+    "spy_lr_20",
+    "spy_lr_60",
+    "aapl_minus_qqq_lr_5",
+    "aapl_minus_qqq_lr_20",
+    "qqq_minus_spy_lr_20",
+    "qqq_rv_20",
+    "spy_rv_20"
+  ],
+  "sentiment_missing_policy": "exact price-only fallback",
+  "training_policy": "fixed purged expanding folds; each outcome matured strictly before its fold"
+}
