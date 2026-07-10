@@ -1,0 +1,23 @@
+{
+  ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+  "aapl_only_p55_e5_base_5bps_strategy.csv": "00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+  "aapl_only_p55_e5_stress_10bps_strategy.csv": "de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+  "aapl_only_p60_e5_base_5bps_strategy.csv": "00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+  "aapl_only_p60_e5_stress_10bps_strategy.csv": "de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+  "buy_hold_base_5bps.csv": "00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+  "buy_hold_stress_10bps.csv": "de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+  "candidate_results.json": "95eab9e10daaa5479467872ea9639c557ba8701457c788e679ecfd81f94e4e01",
+  "candidate_targets_2005_2018.csv": "8e02205894bdfbff468d19ff260f3a6cce12182a5d6ccb01bb737943a893913e",
+  "development_context_through_2018.csv": "a7a46ff6396d86c69e79b8a13faba88e15490d0ac93f3353e6ecc17085459249",
+  "development_prices_through_2018.csv": "6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+  "feature_provenance.json": "806eaa7a245f5935f265fb939514827d5f086ec141cbccc0f1aec2cfd6449180",
+  "input_provenance.json": "583485c6fa27413c174a4ef98100389de3cd4eafe94b89b911e1f1bfe79d7297",
+  "oof_hmm_states.json": "0ce1dc10aaa15532e3b69f5ef4cf179e470276197693aead1a5f801d860e29d0",
+  "oof_predictions_2005_2018.csv": "20420f81889c28042dbcbbea2cc0c9f8a9b7f924b92daab0b978e959a333cecb",
+  "regime_consensus_p55_e5_base_5bps_strategy.csv": "00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+  "regime_consensus_p55_e5_stress_10bps_strategy.csv": "de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+  "regime_consensus_p60_e5_base_5bps_strategy.csv": "00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+  "regime_consensus_p60_e5_stress_10bps_strategy.csv": "de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+  "report.json": "38231f1951ef549adb4edaabbe1d3dc59d967fb04c29d55bbac169727883ada9",
+  "selection_manifest.json": "f8a5c385b75541f7313449d7eb7cf151dd281dc78df992e69e19097ae5bbef76"
+}

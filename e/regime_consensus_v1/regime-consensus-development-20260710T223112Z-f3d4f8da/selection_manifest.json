@@ -1,0 +1,148 @@
+{
+  "candidate_family": [
+    {
+      "candidate_id": "p55_e5",
+      "cash_decision_rows": 1,
+      "expected_edge_gate_10bps": 0.0005,
+      "model_variant": "regime_consensus",
+      "probability_gate": 0.55,
+      "required_head_votes": 2
+    },
+    {
+      "candidate_id": "p60_e5",
+      "cash_decision_rows": 1,
+      "expected_edge_gate_10bps": 0.0005,
+      "model_variant": "regime_consensus",
+      "probability_gate": 0.6,
+      "required_head_votes": 2
+    }
+  ],
+  "candidate_results_sha256": "sha256:c40067c4c9e61a791caf57131b3c7be013eab93402fc0a59c17d2440ceac0e35",
+  "contract_version": "aapl-one-session-regime-consensus-development-v1",
+  "cost_scenarios_bps": {
+    "base_5bps": 5.0,
+    "stress_10bps": 10.0
+  },
+  "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+  "execution": {
+    "actions": [
+      "LONG_100_PERCENT",
+      "CASH_100_PERCENT"
+    ],
+    "asset": "AAPL",
+    "cash_interest_rate": 0.0,
+    "decision_information_cutoff": "completed close t",
+    "fill": "next adjusted AAPL open",
+    "leverage": false,
+    "maximum_target_exposure": 1.0,
+    "shorting": false
+  },
+  "hmm_fit_count": 21,
+  "later_stage_lock": {
+    "candidate_grid_may_change_after_this_run": false,
+    "features_may_change_after_this_run": false,
+    "hmm_configuration_may_change_after_this_run": false,
+    "only_selected_candidate_may_advance": true,
+    "thresholds_may_change_after_this_run": false
+  },
+  "manifest_sha256": "sha256:9d35b58fa5c2511746c33d091a364729e10bb7ef79f1d0dd0f3cf224be47d049",
+  "model_variants": [
+    "regime_consensus",
+    "aapl_only"
+  ],
+  "payload_sha256": {
+    "aapl_only_p55_e5_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+    "aapl_only_p55_e5_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+    "aapl_only_p60_e5_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+    "aapl_only_p60_e5_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+    "buy_hold_base_5bps.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+    "buy_hold_stress_10bps.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+    "candidate_results.json": "sha256:95eab9e10daaa5479467872ea9639c557ba8701457c788e679ecfd81f94e4e01",
+    "candidate_targets_2005_2018.csv": "sha256:8e02205894bdfbff468d19ff260f3a6cce12182a5d6ccb01bb737943a893913e",
+    "development_context_through_2018.csv": "sha256:a7a46ff6396d86c69e79b8a13faba88e15490d0ac93f3353e6ecc17085459249",
+    "development_prices_through_2018.csv": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+    "feature_provenance.json": "sha256:806eaa7a245f5935f265fb939514827d5f086ec141cbccc0f1aec2cfd6449180",
+    "input_provenance.json": "sha256:583485c6fa27413c174a4ef98100389de3cd4eafe94b89b911e1f1bfe79d7297",
+    "oof_hmm_states.json": "sha256:0ce1dc10aaa15532e3b69f5ef4cf179e470276197693aead1a5f801d860e29d0",
+    "oof_predictions_2005_2018.csv": "sha256:20420f81889c28042dbcbbea2cc0c9f8a9b7f924b92daab0b978e959a333cecb",
+    "regime_consensus_p55_e5_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+    "regime_consensus_p55_e5_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26",
+    "regime_consensus_p60_e5_base_5bps_strategy.csv": "sha256:00c1ea5fc302e6694e1296eeb1a3268db5db70270697c4bf1c8bb0beca671969",
+    "regime_consensus_p60_e5_stress_10bps_strategy.csv": "sha256:de2686fe1ef12040e0089aa590d4d0676760627dde73a5a260fd52a6538d5a26"
+  },
+  "physical_data_end": "2018-12-31",
+  "post_2018_market_data_access_allowed": false,
+  "post_2018_market_data_accessed": false,
+  "refit": {
+    "performed": false,
+    "reason": "no_development_candidate_passed"
+  },
+  "selected_candidate_id": null,
+  "selection_tie_break": [
+    "highest 10bps minimum-fold active-log edge",
+    "highest 10bps total active-log edge",
+    "highest 10bps Brier relative improvement",
+    "fewest 10bps cash days",
+    "lexical candidate id"
+  ],
+  "source_exclusion_audits": {
+    "cftc": {
+      "decision": "no CFTC value enters a feature, fit, prediction, or gate",
+      "finding": "weekly positioning is not part of the frozen one-session hypothesis",
+      "included": false
+    },
+    "macro": {
+      "decision": "excluded before feature and candidate construction",
+      "finding": "stored macro values are placeholders and vintage timing is unsafe",
+      "included": false
+    },
+    "news": {
+      "decision": "excluded before feature and candidate construction",
+      "finding": "available event rows lack safe publication-availability timing",
+      "included": false
+    },
+    "tnx": {
+      "decision": "TNX is excluded by the public query and canonical input",
+      "finding": "the frozen three heads do not contain an interest-rate input",
+      "included": false
+    }
+  },
+  "stage": "development",
+  "walk_forward_folds": [
+    {
+      "first_entry_year": 2005,
+      "fold_id": "2005-2006",
+      "last_entry_year": 2006
+    },
+    {
+      "first_entry_year": 2007,
+      "fold_id": "2007-2008",
+      "last_entry_year": 2008
+    },
+    {
+      "first_entry_year": 2009,
+      "fold_id": "2009-2010",
+      "last_entry_year": 2010
+    },
+    {
+      "first_entry_year": 2011,
+      "fold_id": "2011-2012",
+      "last_entry_year": 2012
+    },
+    {
+      "first_entry_year": 2013,
+      "fold_id": "2013-2014",
+      "last_entry_year": 2014
+    },
+    {
+      "first_entry_year": 2015,
+      "fold_id": "2015-2016",
+      "last_entry_year": 2016
+    },
+    {
+      "first_entry_year": 2017,
+      "fold_id": "2017-2018",
+      "last_entry_year": 2018
+    }
+  ]
+}

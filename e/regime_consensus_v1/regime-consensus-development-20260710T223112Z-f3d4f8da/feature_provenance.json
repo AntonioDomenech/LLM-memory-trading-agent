@@ -1,0 +1,70 @@
+{
+  "cash_horizon": "one open-to-open session",
+  "context_alignment": "exact AAPL session date; no fill or interpolation",
+  "decision_timestamp": "after completed close t",
+  "excluded_sources": {
+    "cftc": {
+      "decision": "no CFTC value enters a feature, fit, prediction, or gate",
+      "finding": "weekly positioning is not part of the frozen one-session hypothesis",
+      "included": false
+    },
+    "macro": {
+      "decision": "excluded before feature and candidate construction",
+      "finding": "stored macro values are placeholders and vintage timing is unsafe",
+      "included": false
+    },
+    "news": {
+      "decision": "excluded before feature and candidate construction",
+      "finding": "available event rows lack safe publication-availability timing",
+      "included": false
+    },
+    "tnx": {
+      "decision": "TNX is excluded by the public query and canonical input",
+      "finding": "the frozen three heads do not contain an interest-rate input",
+      "included": false
+    }
+  },
+  "execution_timestamp": "adjusted AAPL open t+1",
+  "feature_columns": [
+    "aapl_lr_5",
+    "aapl_lr_20",
+    "aapl_drawdown_60",
+    "aapl_downside_rv_20",
+    "qqq_lr_20",
+    "qqq_lr_60",
+    "iwm_lr_20",
+    "spy_lr_20",
+    "vix_z_252",
+    "vix_lr_5",
+    "qqq_minus_iwm_lr_20",
+    "qqq_rv_20"
+  ],
+  "head_feature_columns": [
+    [
+      "aapl_lr_5",
+      "aapl_lr_20",
+      "aapl_drawdown_60",
+      "aapl_downside_rv_20"
+    ],
+    [
+      "qqq_lr_20",
+      "qqq_lr_60",
+      "iwm_lr_20",
+      "spy_lr_20"
+    ],
+    [
+      "vix_z_252",
+      "vix_lr_5",
+      "qqq_minus_iwm_lr_20",
+      "qqq_rv_20"
+    ]
+  ],
+  "head_names": [
+    "aapl_state",
+    "market_state",
+    "sentiment_state"
+  ],
+  "label_maturity": "adjusted AAPL open t+2",
+  "missing_policy": "all three heads must be ready; otherwise LONG",
+  "training_policy": "seven fixed purged expanding folds; labels mature strictly before each fold"
+}

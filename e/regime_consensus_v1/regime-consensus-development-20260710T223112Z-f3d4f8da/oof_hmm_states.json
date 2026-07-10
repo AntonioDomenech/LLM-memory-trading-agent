@@ -1,0 +1,3404 @@
+[
+  {
+    "canonical_state_sha256": "fd337c6f229b783a22563630d871aac3d697c7adc47c30b4e2cc83fc96d9283d",
+    "fold_id": "2005-2006",
+    "head_name": "aapl_state",
+    "model_sha256": "e22fe7c9403e4db97a2775aeb35bf321429ea4914e10831e58e82f8ee189ed14",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "ccedbed559d2ac6c2f1c49d7fd2783099580bc56e58d6b21828721782184a4c9",
+          "edge_target_sha256": "2b0d7e3c0e519b1a1582a15dce436024e49853a4709bcdf73d760bc905127968",
+          "maximum_label_maturity_date": "2004-12-30",
+          "training_dates_sha256": "2c63c3e9b1d8e5b2f4763c6f641694e6964f2e6f033b9dd1b4bd7feff72cf6c1",
+          "training_end_date": "2004-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5550485255334p-1",
+              "0x1.555f6f5b55998p-2"
+            ],
+            "means": [
+              [
+                "0x1.8d4cd464824f4p-3",
+                "0x1.d206f5b0917ecp-2",
+                "0x1.e022b4da27a9ep-3",
+                "-0x1.2db91e741825bp-3"
+              ],
+              [
+                "-0x1.375b2c310453cp-1",
+                "-0x1.48c6d7fc952b9p+0",
+                "-0x1.5a8ea22d85f06p+1",
+                "0x1.ff5da90fb0847p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.fff588d442aacp-1",
+              "0x1.4ee577aaa7cd5p-14"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.fb2511973e061p-1",
+                "0x1.36bb9a307e7aap-7"
+              ],
+              [
+                "0x1.9270a2125f643p-6",
+                "0x1.f36c7aef6d04ep-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.f367a5360b7c4p-1",
+                "0x1.6d7d19fd04152p-1",
+                "0x1.2907a1b078a00p-2",
+                "0x1.19da900e4e1fep-1"
+              ],
+              [
+                "0x1.165358fc144b2p+1",
+                "0x1.33101d2e688fdp+1",
+                "0x1.7d9c884efa2bfp+1",
+                "0x1.59e7c7690433cp+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.ae802703cf6b6p+9",
+              "0x1.4dffb1f8612a2p+8"
+            ],
+            "global_edge": "-0x1.ffbdae1731c79p-10",
+            "global_probability": "0x1.e0c678319e0c6p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 561,
+            "sample_count": 1195,
+            "state_edges": [
+              "-0x1.9c7e53e12f121p-9",
+              "0x1.6bc1841e4bb13p-11"
+            ],
+            "state_probabilities": [
+              "0x1.ce727df17ba3cp-2",
+              "0x1.049b86cb2d672p-1"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.a37343f9578dap-9",
+              "0x1.108280fea540bp-7",
+              "-0x1.6580a9a9c57c8p-4",
+              "0x1.1e9679b901156p-2"
+            ],
+            "raw_scales": [
+              "0x1.e64706dfe3b29p-5",
+              "0x1.f11acc71ea98bp-4",
+              "0x1.7f587a47bd919p-4",
+              "0x1.ec4f4520b279dp-4"
+            ]
+          }
+        },
+        "parameters_sha256": "533ca0f8ab05f478072dd937425f49f1080a147d701427de026a0d4f4e790685",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 1197,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.b1447638723e6p+9",
+            "0x1.4a77138f1b841p+8"
+          ],
+          "final_log_likelihood": "-0x1.97c25cb992720p+12",
+          "final_regularized_objective": "-0x1.986303d488228p+12",
+          "iterations": 16,
+          "row_count": 1256,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "e22fe7c9403e4db97a2775aeb35bf321429ea4914e10831e58e82f8ee189ed14"
+    }
+  },
+  {
+    "canonical_state_sha256": "806cb9fc7452b82b790660d45648de1cdca5e432d803768486ce88bb0e5e0216",
+    "fold_id": "2005-2006",
+    "head_name": "market_state",
+    "model_sha256": "5c3a3ca1fac7b7af6a9ba43cef9aefae7f24361d71d8ccb6966dd1e333ab04c9",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "d38a0f3e922e331b2565a561cb8e98700f99ecdcaa6172bf872b078f0f856a0f",
+          "edge_target_sha256": "1deca540c51973e35a0b5144a4068e73bdc0ff37ea23adb96b16d8bb0c2824c9",
+          "maximum_label_maturity_date": "2004-12-30",
+          "training_dates_sha256": "2c63c3e9b1d8e5b2f4763c6f641694e6964f2e6f033b9dd1b4bd7feff72cf6c1",
+          "training_end_date": "2004-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.555551a72c215p-1",
+              "0x1.55555cb1a7bd7p-2"
+            ],
+            "means": [
+              [
+                "0x1.2c86423fbeb78p-1",
+                "0x1.40d9cc67313c1p-2",
+                "0x1.15cdd74c6ce24p-1",
+                "0x1.2902cbd251a1ap-1"
+              ],
+              [
+                "-0x1.271564435ccaap+0",
+                "-0x1.68e90236135c9p-1",
+                "-0x1.04738cdb8179fp+0",
+                "-0x1.2007da5c28744p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffe449b0e4cabp-1",
+              "0x1.bb64f1b35549ep-13"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f1752ea6f8731p-1",
+                "0x1.d15a2b20f19f0p-6"
+              ],
+              [
+                "0x1.31480a53bc200p-5",
+                "0x1.eceb7f5ac43e0p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.b871ce11083aep-2",
+                "0x1.f9938eb740386p-2",
+                "0x1.2dc4efd2bfd1fp-2",
+                "0x1.a7e50942832d9p-2"
+              ],
+              [
+                "0x1.92439eb4cbf6dp-1",
+                "0x1.7f84501fda991p-1",
+                "0x1.5111956b0898bp-1",
+                "0x1.879f17323a570p-1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.434df9999877ap+9",
+              "0x1.e5640ccccf114p+8"
+            ],
+            "global_edge": "-0x1.1bbe1666e5060p-9",
+            "global_probability": "0x1.d75d75d75d75dp-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 521,
+            "sample_count": 1132,
+            "state_edges": [
+              "-0x1.aa78ad3e519b4p-9",
+              "-0x1.96d2a6e608a5bp-11"
+            ],
+            "state_probabilities": [
+              "0x1.d534c1d0a1f38p-2",
+              "0x1.d9fad6d28f187p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.bae1a54994ac0p-12",
+              "-0x1.6c199eba1c80ep-6",
+              "0x1.a7477b834daa6p-7",
+              "0x1.3c1251efbca15p-8"
+            ],
+            "raw_scales": [
+              "0x1.636e238a0fc1ep-4",
+              "0x1.7d641ffe7b3a7p-3",
+              "0x1.efe78f07b3eeep-5",
+              "0x1.7462ca1a86a9bp-5"
+            ]
+          }
+        },
+        "parameters_sha256": "2ab8baf61f2cf20a64bf99d1ba7090278c6c296054f99ebb4aa8ab554386da81",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 1134,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.4262e19800afap+9",
+            "0x1.e93a3ccffea0ep+8"
+          ],
+          "final_log_likelihood": "-0x1.3e0c4af53b95cp+12",
+          "final_regularized_objective": "-0x1.3e9751076162ep+12",
+          "iterations": 11,
+          "row_count": 1256,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "5c3a3ca1fac7b7af6a9ba43cef9aefae7f24361d71d8ccb6966dd1e333ab04c9"
+    }
+  },
+  {
+    "canonical_state_sha256": "5970e00627b1adcdc1d05f5065bc47e5618d0a860bd77d8bfca501e23170d7fc",
+    "fold_id": "2005-2006",
+    "head_name": "sentiment_state",
+    "model_sha256": "2862ada3d7310f8aeb74d26728d97960b9283c602eaece3d7021782838493683",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "dd8d01d7dfb8aa82a5647c2a4a2a5f8b3a66da4419a282c77ba176d818884df1",
+          "edge_target_sha256": "17ce26e1398637b5e4cfc02a88ae9031faf5775bc096d4b0e70e12c936765f31",
+          "maximum_label_maturity_date": "2004-12-30",
+          "training_dates_sha256": "2c63c3e9b1d8e5b2f4763c6f641694e6964f2e6f033b9dd1b4bd7feff72cf6c1",
+          "training_end_date": "2004-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.3c5b35b76769bp-1",
+                "-0x1.e4b96d82dd7e3p-5",
+                "0x1.38bc7af2bf9dep-4",
+                "-0x1.7c62a36fd87ebp-1"
+              ],
+              [
+                "0x1.502feb4b3efc7p-1",
+                "0x1.1a3e463a920aep-3",
+                "-0x1.85656567d8df3p-2",
+                "0x1.732ec9f9ce2e8p-1"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.fff8d0ed5a99ep-1",
+              "0x1.cbc4a95986592p-15"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.faed9782b9af5p-1",
+                "0x1.449a1f51942cdp-7"
+              ],
+              [
+                "0x1.0ce4af84acbd8p-7",
+                "0x1.fbcc6d41ed4d1p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.44899ca4f66e9p-3",
+                "0x1.804c6a38a03aep-1",
+                "0x1.9f9e975b1b065p-3",
+                "0x1.0c995de372e9cp-4"
+              ],
+              [
+                "0x1.40ab8c8c85029p-1",
+                "0x1.7bc06371ec6e5p+0",
+                "0x1.20075dd4b23a6p+2",
+                "0x1.ba347de0451a9p-1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.898eef2d415e0p+8",
+              "0x1.303888695f513p+9"
+            ],
+            "global_edge": "-0x1.c6aaf44a18321p-9",
+            "global_probability": "0x1.cbfbeb9a020a3p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 450,
+            "sample_count": 1002,
+            "state_edges": [
+              "-0x1.5924af4abc06ep-8",
+              "-0x1.228437f862072p-9"
+            ],
+            "state_probabilities": [
+              "0x1.a8fb4d4a99624p-2",
+              "0x1.e43906ca12cd3p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.1d1bbe9155a06p-1",
+              "-0x1.41fbd9b96a122p-7",
+              "-0x1.34668423076e7p-7",
+              "0x1.4604cce6b2716p-2"
+            ],
+            "raw_scales": [
+              "0x1.459db8fc85feep+0",
+              "0x1.7e67cecfc8788p-4",
+              "0x1.296a9cdaeffb7p-5",
+              "0x1.52bea9b22569bp-3"
+            ]
+          }
+        },
+        "parameters_sha256": "a5f36927ef3cbd89556ce9072bba8f9b111805371f3cec05c33020308acc3087",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 1004,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.8fa78937b7bdep+8",
+            "0x1.2e2c3b642420ap+9"
+          ],
+          "final_log_likelihood": "-0x1.2e2cb3c889456p+12",
+          "final_regularized_objective": "-0x1.2edce735096a4p+12",
+          "iterations": 11,
+          "row_count": 1256,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "2862ada3d7310f8aeb74d26728d97960b9283c602eaece3d7021782838493683"
+    }
+  },
+  {
+    "canonical_state_sha256": "d6691184811dccc6153cc61f9cac8eed29104d337789253f3927f2710d5056e7",
+    "fold_id": "2007-2008",
+    "head_name": "aapl_state",
+    "model_sha256": "a1c6fc5ee931f22496cfd358ad2a4e53a5e2976e89d3d3354462519adf49ecda",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "416ed21391732f37fb99f17c7a902fef9689206786c18436dc7c1c83fdc78dea",
+          "edge_target_sha256": "ab5d39c54f2f3f099cdd1f3782f089776b22cc3dd2725c76279ccd776df68880",
+          "maximum_label_maturity_date": "2006-12-28",
+          "training_dates_sha256": "a110a9a01c16662a9bcdb463e231eeb557106dd22bdd37a4825c7bbd79023ede",
+          "training_end_date": "2006-12-28",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.4c36e95c38c77p-1",
+              "0x1.67922d478e713p-2"
+            ],
+            "means": [
+              [
+                "0x1.ea65caa6ce9f3p-3",
+                "0x1.f61e297427934p-2",
+                "0x1.6faec8cd76899p-2",
+                "-0x1.9db331147cf67p-2"
+              ],
+              [
+                "-0x1.e10f62886b80ep-2",
+                "-0x1.d3b62c0727d16p-1",
+                "-0x1.cca272cd1e8c2p+0",
+                "0x1.7ba5182933c00p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.3edb50bcf49bdp-1",
+              "0x1.82495e8616c87p-2"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f7128e9b9c485p-1",
+                "0x1.1dae2c8c76f5dp-6"
+              ],
+              [
+                "0x1.af1aafd94458cp-6",
+                "0x1.f2872a8135dd3p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.bd0fddd99d852p-1",
+                "0x1.059e0099fdb86p-1",
+                "0x1.66314aeb5f00ap-3",
+                "0x1.aa06f59496b36p-2"
+              ],
+              [
+                "0x1.c0ce0a3026908p+0",
+                "0x1.9fb46be552024p+0",
+                "0x1.522f2bd15068cp+1",
+                "0x1.2da544ff15758p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.0285716591b3cp+10",
+              "0x1.4bf51d34dc982p+9"
+            ],
+            "global_edge": "-0x1.47b3513129146p-9",
+            "global_probability": "0x1.d06a039d36d07p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 770,
+            "sample_count": 1698,
+            "state_edges": [
+              "-0x1.bac6a240e0055p-9",
+              "-0x1.39b9d0016cf8ep-10"
+            ],
+            "state_probabilities": [
+              "0x1.ba2d7222007a3p-2",
+              "0x1.f14d22a5567efp-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.95290a45a3c32p-8",
+              "0x1.79c31f39402eap-6",
+              "-0x1.3d549e4a32fb8p-4",
+              "0x1.0e89696494186p-2"
+            ],
+            "raw_scales": [
+              "0x1.d7ba3dafd57dfp-5",
+              "0x1.fdec8513c1f1fp-4",
+              "0x1.7a47815bebf28p-4",
+              "0x1.c2e57a19f7bf8p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "61d645158a9db4f9dccd042f5cc74f22dc9e7f512eac535d4bcb42fac18f4654",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 1700,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.01c560d9cb42dp+10",
+            "0x1.4e753e4c697a4p+9"
+          ],
+          "final_log_likelihood": "-0x1.18305bcbb5279p+13",
+          "final_regularized_objective": "-0x1.187b74f0bb597p+13",
+          "iterations": 30,
+          "row_count": 1759,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "a1c6fc5ee931f22496cfd358ad2a4e53a5e2976e89d3d3354462519adf49ecda"
+    }
+  },
+  {
+    "canonical_state_sha256": "accabaee3e6c006d670b12ecf79644827f34405e91cc69797214ed088c43e092",
+    "fold_id": "2007-2008",
+    "head_name": "market_state",
+    "model_sha256": "2120d0f65dd08bfdb595c681a684262a8219ee6d92798ee3af435a3e649042df",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "8aa0d2df04efa22deb221b312ef3815c5833cf8214243ba1fd0358326d810030",
+          "edge_target_sha256": "80ba54aa0c56467033b384e9be7847d8c9a21b1de37e531724a9f1c74a792bf5",
+          "maximum_label_maturity_date": "2006-12-28",
+          "training_dates_sha256": "a110a9a01c16662a9bcdb463e231eeb557106dd22bdd37a4825c7bbd79023ede",
+          "training_end_date": "2006-12-28",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.55553ecb0c021p-1",
+              "0x1.55558269e7fbdp-2"
+            ],
+            "means": [
+              [
+                "0x1.2aec1023c144cp-1",
+                "0x1.3914a776b80bfp-2",
+                "0x1.fa88dd7a0acf1p-2",
+                "0x1.113a6cdde3bcfp-1"
+              ],
+              [
+                "-0x1.4b7a0daf54096p+0",
+                "-0x1.074a40a937e87p+0",
+                "-0x1.2b0c1ac1ab648p+0",
+                "-0x1.570cd150eec71p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffa6d400e7815p-1",
+              "0x1.64affc61fabdap-11"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f3a02bb33f68bp-1",
+                "0x1.8bfa899812ea2p-6"
+              ],
+              [
+                "0x1.36f2a6c5e00f1p-5",
+                "0x1.ec90d593a1ff1p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.2cd8ae5dc10a8p-1",
+                "0x1.86cd34ce7f26ep-1",
+                "0x1.6915a7376ef3ep-2",
+                "0x1.0c4680a38b23bp-1"
+              ],
+              [
+                "0x1.320b8e4837c1bp+0",
+                "0x1.6e3f42c634e9dp+0",
+                "0x1.82b391350a843p-1",
+                "0x1.1f444d0b0473fp+0"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.f664c046c3763p+9",
+              "0x1.3b1b3fb93c898p+9"
+            ],
+            "global_edge": "-0x1.5dc3fc84c37bep-9",
+            "global_probability": "0x1.c94406e181545p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 730,
+            "sample_count": 1635,
+            "state_edges": [
+              "-0x1.cbc79c8f9024ap-9",
+              "-0x1.6ea2c4f8a18a4p-10"
+            ],
+            "state_probabilities": [
+              "0x1.c272494b3573cp-2",
+              "0x1.d36ee5176a0ebp-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.cbc96e1470d78p-11",
+              "0x0.0p+0",
+              "0x1.cc3b95073a83bp-7",
+              "0x1.fd3177cbf90ffp-8"
+            ],
+            "raw_scales": [
+              "0x1.12c0f25f56601p-4",
+              "0x1.024cd983f0379p-3",
+              "0x1.a72346d560d00p-5",
+              "0x1.22b4e812b6ea0p-5"
+            ]
+          }
+        },
+        "parameters_sha256": "ff3ca422496f1b53fe7df44d53c44a0ae45317a71cf488dc7900fe05e5ad2e76",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 1637,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.f4f316fa784ffp+9",
+            "0x1.3d8ce90587afdp+9"
+          ],
+          "final_log_likelihood": "-0x1.04600822b9dd1p+13",
+          "final_regularized_objective": "-0x1.04a68af3cbceep+13",
+          "iterations": 11,
+          "row_count": 1759,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "2120d0f65dd08bfdb595c681a684262a8219ee6d92798ee3af435a3e649042df"
+    }
+  },
+  {
+    "canonical_state_sha256": "bca76f0f5f60c7aa523cfc3a71d44eef0285b622214016905fb2c35316889c7a",
+    "fold_id": "2007-2008",
+    "head_name": "sentiment_state",
+    "model_sha256": "910f274ed8a4c814a541f4e960f21e854efa416c0aa21cdac9116919b69f2dc2",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "42b458058a5a13d9d4d0958d1f701c6fdec55b3bbc326ff78684a95dc3f60543",
+          "edge_target_sha256": "7c58b1996cb2c6cf99be3e2a50a1b82b60ff2059d13e3dca5da0974503622bbc",
+          "maximum_label_maturity_date": "2006-12-28",
+          "training_dates_sha256": "a110a9a01c16662a9bcdb463e231eeb557106dd22bdd37a4825c7bbd79023ede",
+          "training_end_date": "2006-12-28",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.79adda695a737p-2",
+                "-0x1.12adbe5d3ff91p-6",
+                "0x1.80e2423f241bfp-5",
+                "-0x1.80156e7143ceap-2"
+              ],
+              [
+                "0x1.c5aff0aaec17ap-1",
+                "0x1.043be0eb7f735p-3",
+                "-0x1.f7bf8fd142316p-2",
+                "0x1.a2eb436d97955p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffeb7c6a62524p-1",
+              "0x1.483959dadbb89p-13"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.fcaec41fb71f2p-1",
+                "0x1.a89df02470703p-8"
+              ],
+              [
+                "0x1.3aa921234502cp-7",
+                "0x1.fb155b7b72ebfp-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.a8dcaa57b6bdap-2",
+                "0x1.aac4afb2afaeep-1",
+                "0x1.bf1666baaf762p-2",
+                "0x1.1da86f2622c3cp-3"
+              ],
+              [
+                "0x1.fd4b465bfa515p-1",
+                "0x1.bd36b828a582fp+0",
+                "0x1.5b1c9ad1d39c7p+2",
+                "0x1.d486044176e78p+0"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.9d75978e3b6a3p+9",
+              "0x1.530a6871c495cp+9"
+            ],
+            "global_edge": "-0x1.d5446e08536e9p-9",
+            "global_probability": "0x1.c077975b8fe22p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 659,
+            "sample_count": 1505,
+            "state_edges": [
+              "-0x1.2c8760eb9efecp-8",
+              "-0x1.38446034938e9p-9"
+            ],
+            "state_probabilities": [
+              "0x1.a4cf44fc81367p-2",
+              "0x1.e1407c2494aa2p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.1fbe41e4a5829p-1",
+              "-0x1.e810e361a301ep-8",
+              "-0x1.ab223c6f59ff8p-8",
+              "0x1.b0b539d933633p-3"
+            ],
+            "raw_scales": [
+              "0x1.202078d02e396p+0",
+              "0x1.78b4b4ea006aep-4",
+              "0x1.fe12b1f0aa62fp-6",
+              "0x1.f7858766ca0e3p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "16ecbb289b6ad2c83097aeee95d5d326ef2e3b1b8eb1114073ec0e6ef55ee66e",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 1507,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.a3a0278a3b379p+9",
+            "0x1.4ddfd875c4c79p+9"
+          ],
+          "final_log_likelihood": "-0x1.efac5dab27499p+12",
+          "final_regularized_objective": "-0x1.f060ae6093dd0p+12",
+          "iterations": 47,
+          "row_count": 1759,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "910f274ed8a4c814a541f4e960f21e854efa416c0aa21cdac9116919b69f2dc2"
+    }
+  },
+  {
+    "canonical_state_sha256": "9e3a927ae3e6fc6f0d59161425ade10da0466c4d894519a0362a85414391d057",
+    "fold_id": "2009-2010",
+    "head_name": "aapl_state",
+    "model_sha256": "8d33ce92516153dbc398c56e8da0708588c465a330bd9edf0ec0c80154da9749",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "a4b1c21ca35a9e1c7d8761eb8ae32771f75ed4ef99513231e0f5e6305d66c4d6",
+          "edge_target_sha256": "fe92fa6af00b862c01f9efca7368dbf2dc5259704ed7bd2af4da290936c2530b",
+          "maximum_label_maturity_date": "2008-12-30",
+          "training_dates_sha256": "e223c0c7e58201aa6a4bd8837bd7a6eb0eb21e470ee47f46673ee66894cb5b4a",
+          "training_end_date": "2008-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5508e6d55ac1fp-1",
+              "0x1.55ee32554a7c1p-2"
+            ],
+            "means": [
+              [
+                "0x1.cd847558b5fc1p-3",
+                "0x1.c394fb3a0516dp-2",
+                "0x1.3fd7c3cfedef2p-2",
+                "-0x1.5cb2adf4fbec1p-2"
+              ],
+              [
+                "-0x1.366d205afe86ep-1",
+                "-0x1.1c4d49be61d02p+0",
+                "-0x1.0847e98b80341p+1",
+                "0x1.a7a5ddef93e3bp+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.97b24bc6af23ap-17",
+              "0x1.fffe684db4395p-1"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f68a128fcaa20p-1",
+                "0x1.2ebdae06abc0fp-6"
+              ],
+              [
+                "0x1.15eeeea166dc3p-5",
+                "0x1.eea11115e9924p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.abc5693ab3f6ep-1",
+                "0x1.fdcd3ece1538cp-2",
+                "0x1.99de866fe141dp-3",
+                "0x1.f3854e2f81219p-2"
+              ],
+              [
+                "0x1.d88920eb08301p+0",
+                "0x1.9626843f44172p+0",
+                "0x1.33a6f496ca2d0p+1",
+                "0x1.43c6de47e86b4p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.688dbcaa8200dp+10",
+              "0x1.7be486aafc000p+9"
+            ],
+            "global_edge": "-0x1.3dcfd6bbc025bp-9",
+            "global_probability": "0x1.c7c83f2fdad4dp-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 980,
+            "sample_count": 2202,
+            "state_edges": [
+              "-0x1.a466452e34d25p-9",
+              "-0x1.0b98c0df637b7p-10"
+            ],
+            "state_probabilities": [
+              "0x1.b4166d40a5d95p-2",
+              "0x1.eafa62a69b8afp-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.b0a3dd2502692p-8",
+              "0x1.86a1ca2f164eep-6",
+              "-0x1.40768edd43624p-4",
+              "0x1.0e67922c82fcep-2"
+            ],
+            "raw_scales": [
+              "0x1.d8dd9243eda06p-5",
+              "0x1.01bb698924e9dp-3",
+              "0x1.86a42b75f87e9p-4",
+              "0x1.d59aeb9328771p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "05ca9301306a13faaff3c46eb7970cfd59377cdb34cc78171cf9339b1f0d86b4",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 2204,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.69c3accf2e2f6p+10",
+            "0x1.7a78a661a39f7p+9"
+          ],
+          "final_log_likelihood": "-0x1.6640c15e182abp+13",
+          "final_regularized_objective": "-0x1.6689e7c6f9bd3p+13",
+          "iterations": 39,
+          "row_count": 2263,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "8d33ce92516153dbc398c56e8da0708588c465a330bd9edf0ec0c80154da9749"
+    }
+  },
+  {
+    "canonical_state_sha256": "b53a33db9e9b42ef326576568ea6a7479c4dc07234ab63ccf99f4923a3df144d",
+    "fold_id": "2009-2010",
+    "head_name": "market_state",
+    "model_sha256": "db174c3cdc97e50ece8d08fb707cc3429ea020122c01ca94f24a0a2c4f37b6d5",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "bfae9ee9ca65b3c9e4e3a467593133aa77baf8308d5ce9269df0d2c6b710dc5e",
+          "edge_target_sha256": "7963f46058d9f46993739d8f5cd0b00a31fb993682dbe528971254e863e7c9be",
+          "maximum_label_maturity_date": "2008-12-30",
+          "training_dates_sha256": "e223c0c7e58201aa6a4bd8837bd7a6eb0eb21e470ee47f46673ee66894cb5b4a",
+          "training_end_date": "2008-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5ef117f4b2ca0p-2",
+              "0x1.50877405a69b0p-1"
+            ],
+            "means": [
+              [
+                "0x1.e66cc7ec0096bp-2",
+                "0x1.c2f9b964e9825p-2",
+                "0x1.cd37ef2d56d2bp-2",
+                "0x1.bb806f5dabc5bp-2"
+              ],
+              [
+                "-0x1.0240d881b8853p+0",
+                "-0x1.3e12477c5a662p+0",
+                "-0x1.01e5437d517a4p+0",
+                "-0x1.1f538e0b3c44ap+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.02b55bf59f7fdp-16",
+              "0x1.fffdfa954814cp-1"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f4123a09c6f5cp-1",
+                "0x1.7db8bec721483p-6"
+              ],
+              [
+                "0x1.ed368cbb1e616p-6",
+                "0x1.f0964b9a270d0p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.566eeab7fdb99p-2",
+                "0x1.aac24ab5dacc5p-2",
+                "0x1.4de7f822d80abp-2",
+                "0x1.47d82dbef44f0p-2"
+              ],
+              [
+                "0x1.03e5894c41e55p+1",
+                "0x1.ac2c5bb85843ep+0",
+                "0x1.b602bc7089515p+0",
+                "0x1.155bbe9b84766p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.2d29f5f8d3fc4p+10",
+              "0x1.d32c140e5808bp+9"
+            ],
+            "global_edge": "-0x1.4e62fc52ad27cp-9",
+            "global_probability": "0x1.c21005bd479f6p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 940,
+            "sample_count": 2139,
+            "state_edges": [
+              "-0x1.1ca2ce4f70bbfp-8",
+              "-0x1.30f0903d075a7p-12"
+            ],
+            "state_probabilities": [
+              "0x1.a7e689bd22e2bp-2",
+              "0x1.e2f1240255081p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.00f87f1cf7edfp-10",
+              "0x1.1ba23f3b1671ep-8",
+              "0x1.474637d53ae38p-7",
+              "0x1.9079cdee346d7p-8"
+            ],
+            "raw_scales": [
+              "0x1.10c51670fec4ep-4",
+              "0x1.e33e35ab49112p-4",
+              "0x1.a837096e18354p-5",
+              "0x1.32a7743449e2fp-5"
+            ]
+          }
+        },
+        "parameters_sha256": "a9705c6004994ee90bc69753d9fea99e20307ea2ed0b1e53c53084c96b2ce39c",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 2141,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.2de9023b7d49dp+10",
+            "0x1.d2adfb89056bfp+9"
+          ],
+          "final_log_likelihood": "-0x1.5734ba5427206p+13",
+          "final_regularized_objective": "-0x1.577cead2bb923p+13",
+          "iterations": 12,
+          "row_count": 2263,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "db174c3cdc97e50ece8d08fb707cc3429ea020122c01ca94f24a0a2c4f37b6d5"
+    }
+  },
+  {
+    "canonical_state_sha256": "1e02e94d382ae9b961cfa1f3bb7c7cc8566b5a21c324f6aee1f2ac3ef828b2e8",
+    "fold_id": "2009-2010",
+    "head_name": "sentiment_state",
+    "model_sha256": "76bd6baff6fc31c25b322a2cbae1a9220d113a4e541006f86a3a68a0c737735b",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "d1afa04bca53df14bde267bdc277a56829f489c539f7309b1a29e28e3d825f74",
+          "edge_target_sha256": "df9df11b84df7c433815f008e6844b7913afd81c2f7b0fe53880437ffe078622",
+          "maximum_label_maturity_date": "2008-12-30",
+          "training_dates_sha256": "e223c0c7e58201aa6a4bd8837bd7a6eb0eb21e470ee47f46673ee66894cb5b4a",
+          "training_end_date": "2008-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.aa76aa334f79dp-2",
+                "-0x1.8f9d2dd24d762p-6",
+                "-0x1.f27f75835353cp-6",
+                "-0x1.a305001d784d5p-2"
+              ],
+              [
+                "0x1.95a30ed68ea58p-1",
+                "0x1.436127c413200p-3",
+                "-0x1.28600a5630112p-2",
+                "0x1.711d7086f6ddfp+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.1d9762884ceb3p-23",
+              "0x1.fffffb89a275ep-1"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.fb4477275b343p-1",
+                "0x1.2ee2362932f20p-7"
+              ],
+              [
+                "0x1.42d3b9e61cab1p-7",
+                "0x1.faf4b118678d6p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.5b39ec31e5629p-2",
+                "0x1.8b71e5df14b89p-1",
+                "0x1.f54d7b01b0146p-2",
+                "0x1.33cd5e5d65452p-3"
+              ],
+              [
+                "0x1.abb5afa2902b2p-1",
+                "0x1.fc8d4ffdbf3fcp+0",
+                "0x1.169fb9f3b277cp+2",
+                "0x1.1897f03d0edfbp+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.009bd573ae926p+10",
+              "0x1.eb485518a2db5p+9"
+            ],
+            "global_edge": "-0x1.a6e9e93d4509ap-9",
+            "global_probability": "0x1.bb00e41f0fa87p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 869,
+            "sample_count": 2009,
+            "state_edges": [
+              "-0x1.1a244256b1693p-8",
+              "-0x1.13d0b7c2a80cfp-9"
+            ],
+            "state_probabilities": [
+              "0x1.9f3353981f2fep-2",
+              "0x1.d7ce416729fdfp-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.fe8899d5df5bep-3",
+              "-0x1.528d23491c94dp-8",
+              "-0x1.c31f292833ad0p-9",
+              "0x1.b52243c0a2245p-3"
+            ],
+            "raw_scales": [
+              "0x1.5ba14f89ab4bbp+0",
+              "0x1.91439b57b62fbp-4",
+              "0x1.03e73ce7cc61fp-5",
+              "0x1.e6d3d7381ac91p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "e2dbbb0c368e6767be29a3fdba4a5713b88eb19f2d0a8e8635d35bb912bd6087",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 2011,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.034e73664c827p+10",
+            "0x1.e6e3193366fbbp+9"
+          ],
+          "final_log_likelihood": "-0x1.511e0613b7af4p+13",
+          "final_regularized_objective": "-0x1.517541645d482p+13",
+          "iterations": 16,
+          "row_count": 2263,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "76bd6baff6fc31c25b322a2cbae1a9220d113a4e541006f86a3a68a0c737735b"
+    }
+  },
+  {
+    "canonical_state_sha256": "962844d3bb56a35f9a607c40dcb64455bb6b5981ba43f4dde35425755d6b5a3f",
+    "fold_id": "2011-2012",
+    "head_name": "aapl_state",
+    "model_sha256": "779ef6e6fa01101f64f56c978e6b74d7407a70efe5ece3d2f0187253a9a5cd21",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "b0059248508eabd10b0c45da768db97814ffa193657542e52daacd014ce88c6b",
+          "edge_target_sha256": "0c02a2e6eb879ff73c7ee2f4cf359924b27cb3fa3af284dcdd769c249c372647",
+          "maximum_label_maturity_date": "2010-12-30",
+          "training_dates_sha256": "a2aabb5b8e32ed8b11c8ad9689fb860018295f6109350e2825571f0f92b2cea9",
+          "training_end_date": "2010-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.06f65459f953bp-1",
+              "0x1.f213574c0d58bp-2"
+            ],
+            "means": [
+              [
+                "0x1.ecc695f17ebedp-3",
+                "0x1.b7e4dbffc0456p-2",
+                "0x1.717e3e00bd739p-2",
+                "-0x1.c5f3e07dbe5dfp-2"
+              ],
+              [
+                "-0x1.09320d3d47298p-1",
+                "-0x1.003340c8d0e33p+0",
+                "-0x1.e8a34ef1ddb44p+0",
+                "0x1.73d3dc268bc85p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffd860d9d7fd2p-1",
+              "0x1.3cf9314016c6bp-12"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f5605f6c84502p-1",
+                "0x1.53f4126f75fa8p-6"
+              ],
+              [
+                "0x1.0c4ba5583c046p-5",
+                "0x1.ef3b45aa7c3fbp-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.685a25a0c8e73p-1",
+                "0x1.03be2c4d89114p-1",
+                "0x1.380edd44651c5p-3",
+                "0x1.926997d7500a9p-2"
+              ],
+              [
+                "0x1.e70d0302d1ca1p+0",
+                "0x1.ba292bb3bd5b3p+0",
+                "0x1.49a9887df5f3fp+1",
+                "0x1.1574070441334p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.9896ffff3fe37p+10",
+              "0x1.0be90000c01d1p+10"
+            ],
+            "global_edge": "-0x1.731e558cc1354p-9",
+            "global_probability": "0x1.bd11c5c4410a3p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1176,
+            "sample_count": 2706,
+            "state_edges": [
+              "-0x1.c79a4cc3a40fbp-9",
+              "-0x1.ec1da916a9cf0p-10"
+            ],
+            "state_probabilities": [
+              "0x1.a9174dfc9ea90p-2",
+              "0x1.da8761f9a0784p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.08e084e2c3162p-7",
+              "0x1.19ccedf816a3ep-5",
+              "-0x1.090bd3afa36bcp-4",
+              "0x1.f7303006ece43p-3"
+            ],
+            "raw_scales": [
+              "0x1.c37af9b91214dp-5",
+              "0x1.cc5f604e1b7f4p-4",
+              "0x1.57167255f457ep-4",
+              "0x1.d8163412878bep-4"
+            ]
+          }
+        },
+        "parameters_sha256": "a38884daf65df7c71653e0f0f493980755a8fc97ad82da32d69392c29cf246bf",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 2708,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.9cba4b9b28603p+10",
+            "0x1.0845b464d79f9p+10"
+          ],
+          "final_log_likelihood": "-0x1.b4bc3a796e269p+13",
+          "final_regularized_objective": "-0x1.b503d914438dep+13",
+          "iterations": 31,
+          "row_count": 2767,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "779ef6e6fa01101f64f56c978e6b74d7407a70efe5ece3d2f0187253a9a5cd21"
+    }
+  },
+  {
+    "canonical_state_sha256": "008bf4627266a03a99e66f407366b7a97d2068e8e58c69965b8fd5abde33a882",
+    "fold_id": "2011-2012",
+    "head_name": "market_state",
+    "model_sha256": "e0f7c079a732efb61b013a749885e4d21bc1645d58f8dad6180e26f8fd0e3069",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "81a6e642dc26cf4cc964248c7c3af1194b2dde74d31cc10349c7cdb7edd32501",
+          "edge_target_sha256": "845784f1770f08a9d6c41178c4750de5a3bd309da15ed9016a9a4ba3ba8ef753",
+          "maximum_label_maturity_date": "2010-12-30",
+          "training_dates_sha256": "a2aabb5b8e32ed8b11c8ad9689fb860018295f6109350e2825571f0f92b2cea9",
+          "training_end_date": "2010-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.59f6c06070b5bp-2",
+              "0x1.53049fcfc7a53p-1"
+            ],
+            "means": [
+              [
+                "0x1.d5e348a9cc41ap-2",
+                "0x1.ae7d582f397a7p-2",
+                "0x1.bc06ecded4164p-2",
+                "0x1.bba3f8da8e4dap-2"
+              ],
+              [
+                "-0x1.09391339305d0p+0",
+                "-0x1.28d24d46ab24bp+0",
+                "-0x1.f4a96f37321e8p-1",
+                "-0x1.11ab53dfc9579p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.fff862065e1a9p-1",
+              "0x1.e77e68795eed2p-15"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f3a86dd3af2d0p-1",
+                "0x1.8af2458a1a5eap-6"
+              ],
+              [
+                "0x1.10c27c8f92a4dp-5",
+                "0x1.eef3d83706d5ap-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.527ef3bba8a76p-2",
+                "0x1.a028ae170ba28p-2",
+                "0x1.643213524ae5cp-2",
+                "0x1.4a9a7ab168822p-2"
+              ],
+              [
+                "0x1.11efbf26da81bp+1",
+                "0x1.a049d1d227e41p+0",
+                "0x1.b9cee9752c22ap+0",
+                "0x1.0f425187e75fdp+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.7a9b1ec2a58bfp+10",
+              "0x1.1a24e13d5a74dp+10"
+            ],
+            "global_edge": "-0x1.81cda16b3122fp-9",
+            "global_probability": "0x1.b82f3b547e98cp-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1136,
+            "sample_count": 2643,
+            "state_edges": [
+              "-0x1.1664cea17f01bp-8",
+              "-0x1.423d2cb5e3548p-10"
+            ],
+            "state_probabilities": [
+              "0x1.a1f5786fb71aep-2",
+              "0x1.d545feae94e17p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.efa3b42b99765p-8",
+              "0x1.2ebc155cbbcc7p-6",
+              "0x1.bca556f20a8d9p-7",
+              "0x1.1ec54fc9bf98ap-7"
+            ],
+            "raw_scales": [
+              "0x1.030222b1493eap-4",
+              "0x1.e61612d0b25d1p-4",
+              "0x1.c5a7d7d535bfdp-5",
+              "0x1.4ab116b2af562p-5"
+            ]
+          }
+        },
+        "parameters_sha256": "66425423f8b1d9e7a1484855691a94a0cb55a47066bdd6b4ae7d12ae9ab4e7c6",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 2645,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.7b9ba1725727fp+10",
+            "0x1.19a45e8da8d8fp+10"
+          ],
+          "final_log_likelihood": "-0x1.a68ae3d6d4ccdp+13",
+          "final_regularized_objective": "-0x1.a6d2388b4af46p+13",
+          "iterations": 14,
+          "row_count": 2767,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "e0f7c079a732efb61b013a749885e4d21bc1645d58f8dad6180e26f8fd0e3069"
+    }
+  },
+  {
+    "canonical_state_sha256": "ad4a874752636e6596b3a7819e370e6fc63fc10955e9b57429e38d3335ed7fe6",
+    "fold_id": "2011-2012",
+    "head_name": "sentiment_state",
+    "model_sha256": "e6bd5cc4d66a0eddbe2411a039f8d59fe6b12781b29491d106f4d4e07799569b",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "55920e32505af7c00f8a3e4bdcdcb1b537d96e8d226e0aeed131308438b4ed06",
+          "edge_target_sha256": "f5df4818115768e37d3bad7c0ae29f2898640af7c81d190b049a2600d4933842",
+          "maximum_label_maturity_date": "2010-12-30",
+          "training_dates_sha256": "a2aabb5b8e32ed8b11c8ad9689fb860018295f6109350e2825571f0f92b2cea9",
+          "training_end_date": "2010-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.9360e07c228b5p-2",
+                "-0x1.c83730d07c984p-8",
+                "-0x1.ae1ef33f9cc1fp-6",
+                "-0x1.977a5c3264138p-2"
+              ],
+              [
+                "0x1.bd2177cf60b1cp-1",
+                "0x1.6e3865d4a70e0p-3",
+                "-0x1.5967e1aebfdf0p-3",
+                "0x1.894fb672f296ap+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ff93fd973a80bp-1",
+              "0x1.b009a315fd5c3p-11"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.fc2f7a5c67310p-1",
+                "0x1.e842d1cc677ffp-8"
+              ],
+              [
+                "0x1.53f7f43b79447p-7",
+                "0x1.fab0202f121afp-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.47a9ae780d37ap-2",
+                "0x1.b3a4576e0e85ap-1",
+                "0x1.0cc9a3a160abcp-1",
+                "0x1.6c59c71f77961p-3"
+              ],
+              [
+                "0x1.96e8c205334c2p-1",
+                "0x1.fdfcc75fbbeb2p+0",
+                "0x1.1247c61beb5cbp+2",
+                "0x1.23b5ab8b09175p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.5988df863ccb4p+10",
+              "0x1.1ab72079c3350p+10"
+            ],
+            "global_edge": "-0x1.cb3c431836d5fp-9",
+            "global_probability": "0x1.b207884bbb30cp-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1065,
+            "sample_count": 2513,
+            "state_edges": [
+              "-0x1.1c28c360a84ecp-8",
+              "-0x1.47e21fe037c4bp-9"
+            ],
+            "state_probabilities": [
+              "0x1.97faa548acd05p-2",
+              "0x1.d1456c28595c2p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.44a86aff7f748p-2",
+              "-0x1.14a4830caaf65p-7",
+              "-0x1.96fd92575a790p-9",
+              "0x1.adeac8aa1046dp-3"
+            ],
+            "raw_scales": [
+              "0x1.53e93d419bd3dp+0",
+              "0x1.992c4c9f120a7p-4",
+              "0x1.009714ffbf215p-5",
+              "0x1.c115bed2cb6e4p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "eb9ec88dc2382f78741aea76b23f2854c2dc15c80f31e6f90ccbc820843ee011",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 2515,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.604b7d91f2c80p+10",
+            "0x1.1474826e0d37dp+10"
+          ],
+          "final_log_likelihood": "-0x1.9f5cc5f3f5daap+13",
+          "final_regularized_objective": "-0x1.9fb543d9d1c23p+13",
+          "iterations": 16,
+          "row_count": 2767,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "e6bd5cc4d66a0eddbe2411a039f8d59fe6b12781b29491d106f4d4e07799569b"
+    }
+  },
+  {
+    "canonical_state_sha256": "45fc2c296ba25a3e6348f5f76f2544547d6e5db52e6b5e483b021b411846e480",
+    "fold_id": "2013-2014",
+    "head_name": "aapl_state",
+    "model_sha256": "647ca3ccc25ea31d7111beb1b59d57e8f0a9fd060395cc0c2634ea0ec4ec1fee",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "eeb75e0c7cc8782375e130c667146ba63fdc7da2e807e7747662a50f4be65d58",
+          "edge_target_sha256": "263fc3ed64c6b0e6092b64526e555a3119c5f64d3f8190df32a11e6b8984933d",
+          "maximum_label_maturity_date": "2012-12-28",
+          "training_dates_sha256": "85e2bd779a53e888971650232db4a9c56c0f05d6f8316dd4dcc49294d494d840",
+          "training_end_date": "2012-12-28",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.6117991e5c8f9p-2",
+              "0x1.4f743370d1b83p-1"
+            ],
+            "means": [
+              [
+                "0x1.babb710144d5ap-3",
+                "0x1.a74a89857460cp-2",
+                "0x1.5c48fc20c257ap-2",
+                "-0x1.befe8be341fb8p-2"
+              ],
+              [
+                "-0x1.03eed3c4c2fe3p-1",
+                "-0x1.e154884553a0ap-1",
+                "-0x1.f0c459e712579p+0",
+                "0x1.6f8c716367dcbp+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.919e984b46c36p-38",
+              "0x1.fffffffff3731p-1"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f644b7c55000cp-1",
+                "0x1.37690755ffe85p-6"
+              ],
+              [
+                "0x1.06cfe832381fep-5",
+                "0x1.ef93017cdc7e0p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.6280e3c89c8cdp-1",
+                "0x1.15bab58dc274fp-1",
+                "0x1.61e24a4aaa55ap-3",
+                "0x1.6d850ff815b41p-2"
+              ],
+              [
+                "0x1.083894299604ap+1",
+                "0x1.da02562b91f5cp+0",
+                "0x1.578dc01c6566dp+1",
+                "0x1.01227524a3e51p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.f4d064cd282e4p+10",
+              "0x1.2d2f9b32d7d1cp+10"
+            ],
+            "global_edge": "-0x1.74ccc40b64b40p-9",
+            "global_probability": "0x1.ba7512fb0e321p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1386,
+            "sample_count": 3208,
+            "state_edges": [
+              "-0x1.c440a7735141bp-9",
+              "-0x1.e97172ebe115bp-10"
+            ],
+            "state_probabilities": [
+              "0x1.a5545fde1883fp-2",
+              "0x1.dc68a5644b9a8p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.fb62923f81cd4p-8",
+              "0x1.e6c6ce8b780ecp-6",
+              "-0x1.f1acd24e7e910p-5",
+              "0x1.db4310a2b1a1ap-3"
+            ],
+            "raw_scales": [
+              "0x1.a953e3e007897p-5",
+              "0x1.b12f2d5525858p-4",
+              "0x1.3dadc3b8e48e2p-4",
+              "0x1.db9f3c5df57f7p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "c54e4f2d20f5fb1dce4f96a049fa684ad98e2da0d7735b579fe04eef7ad56412",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 3210,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.f856063b039c2p+10",
+            "0x1.2a29f9c4fc63dp+10"
+          ],
+          "final_log_likelihood": "-0x1.01c5e481ab356p+14",
+          "final_regularized_objective": "-0x1.01ea7d133b500p+14",
+          "iterations": 28,
+          "row_count": 3269,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "647ca3ccc25ea31d7111beb1b59d57e8f0a9fd060395cc0c2634ea0ec4ec1fee"
+    }
+  },
+  {
+    "canonical_state_sha256": "561aa016bdb73925f83eff92dbc14e46e0742460f2dc09553a0265f157bbc3f0",
+    "fold_id": "2013-2014",
+    "head_name": "market_state",
+    "model_sha256": "2b29d0e169f615230a8a1b073e6b16424565c55f17aeb32f09a9e62207e6b4b1",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "f0bee942b0a909e6119c11482b4d5a16dd1b96e6273c9fede3559be9afd19f6f",
+          "edge_target_sha256": "3132f8796b57d5869d2a6dfde53c5fd0d2e2077daa1a12538841bec062ed6204",
+          "maximum_label_maturity_date": "2012-12-28",
+          "training_dates_sha256": "85e2bd779a53e888971650232db4a9c56c0f05d6f8316dd4dcc49294d494d840",
+          "training_end_date": "2012-12-28",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.57f37eb3b8b3bp-2",
+              "0x1.540640a623a63p-1"
+            ],
+            "means": [
+              [
+                "0x1.cd3b687b72cc8p-2",
+                "0x1.a8f81a53bbf56p-2",
+                "0x1.b70b623a1c056p-2",
+                "0x1.b6e707b960a6ep-2"
+              ],
+              [
+                "-0x1.122105755228ap+0",
+                "-0x1.2729c3bd3b759p+0",
+                "-0x1.01b3e104f5ff9p+0",
+                "-0x1.2093dc65e0a42p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.dea2da79a5f3bp-1",
+              "0x1.0ae92c32d0628p-4"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f302154d98048p-1",
+                "0x1.9fbd564cff700p-6"
+              ],
+              [
+                "0x1.3173a9bd16526p-5",
+                "0x1.ece8c5642e9aep-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.53daa24fe4520p-2",
+                "0x1.e1411a9db6f4bp-2",
+                "0x1.705891b577a56p-2",
+                "0x1.4b758f97cd747p-2"
+              ],
+              [
+                "0x1.0e8433c645329p+1",
+                "0x1.d4651582f4b90p+0",
+                "0x1.b56cbd3f05d82p+0",
+                "0x1.096fde0ae4a7fp+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.d0def9bc0573fp+10",
+              "0x1.41610643fa8bcp+10"
+            ],
+            "global_edge": "-0x1.812ca1a6d6671p-9",
+            "global_probability": "0x1.b64ca11153b4dp-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1346,
+            "sample_count": 3145,
+            "state_edges": [
+              "-0x1.0a29739b37dcdp-8",
+              "-0x1.6221ebf377e20p-10"
+            ],
+            "state_probabilities": [
+              "0x1.9eafdf81b1ab4p-2",
+              "0x1.d79644cdf6d29p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.1972ce9b7f8e0p-7",
+              "0x1.3efaa98dc6b17p-6",
+              "0x1.a6d1d0b6ab8ffp-7",
+              "0x1.3d9f340175c4bp-7"
+            ],
+            "raw_scales": [
+              "0x1.ef018af9b215ap-5",
+              "0x1.bd99db262c567p-4",
+              "0x1.bf45128eb74d8p-5",
+              "0x1.4321f69457a18p-5"
+            ]
+          }
+        },
+        "parameters_sha256": "39fb9f739ab6035052255dd23bbdc2d6832c50f619d3e1c8659c02f74d91c1fd",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 3147,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.d0d38f8c6ac5fp+10",
+            "0x1.41ec7073953a3p+10"
+          ],
+          "final_log_likelihood": "-0x1.f8ac6f91a6fb4p+13",
+          "final_regularized_objective": "-0x1.f8f2b0ec1a41cp+13",
+          "iterations": 12,
+          "row_count": 3269,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "2b29d0e169f615230a8a1b073e6b16424565c55f17aeb32f09a9e62207e6b4b1"
+    }
+  },
+  {
+    "canonical_state_sha256": "ec12ae3f0cd5d42d783d276086acf88e4cdfb79d12f17f88ddee5bbc587a7c7c",
+    "fold_id": "2013-2014",
+    "head_name": "sentiment_state",
+    "model_sha256": "d1ddaf3ff91b3cf5b3703b7932defc4924679e4a1cd2c684539f88043354cbb5",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "48ab75227cd4e5b24fd951a9690f92b223ea03d4e5514d541fe797d426b785ea",
+          "edge_target_sha256": "07a26e584ef5a830ed45f71415f1b35d60b902418b6590c6c4ce0d219d54948e",
+          "maximum_label_maturity_date": "2012-12-28",
+          "training_dates_sha256": "85e2bd779a53e888971650232db4a9c56c0f05d6f8316dd4dcc49294d494d840",
+          "training_end_date": "2012-12-28",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.7d577e20d8d71p-2",
+                "-0x1.5429c7fe2ed0cp-7",
+                "-0x1.9345de7f8c0ddp-8",
+                "-0x1.8730ab4006965p-2"
+              ],
+              [
+                "0x1.0b7ee4f6027f9p+0",
+                "0x1.57002d250fbabp-3",
+                "-0x1.d2458b186af10p-4",
+                "0x1.b023452855e1cp+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.0815a73b4d877p-5",
+              "0x1.ef7ea58c4b279p-1"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.fbedaef4ece9dp-1",
+                "0x1.049442c4c58d0p-7"
+              ],
+              [
+                "0x1.783bee36fe85ap-7",
+                "0x1.fa1f10472405ep-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.40b3ef72be9ecp-2",
+                "0x1.c0e9c3e580ec8p-1",
+                "0x1.1ff5d4f34eb00p-1",
+                "0x1.a592dcee562bdp-3"
+              ],
+              [
+                "0x1.dfb8cdfacf147p-1",
+                "0x1.f6477f9437fabp+0",
+                "0x1.0ebeb802b80c8p+2",
+                "0x1.431b36251af5ap+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.b52cde953ba63p+10",
+              "0x1.3c93216ac45a2p+10"
+            ],
+            "global_edge": "-0x1.be5a5555d01bap-9",
+            "global_probability": "0x1.b11650f3047f4p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1275,
+            "sample_count": 3015,
+            "state_edges": [
+              "-0x1.0ca929099c42dp-8",
+              "-0x1.4344014b66139p-9"
+            ],
+            "state_probabilities": [
+              "0x1.9bed2448c3d98p-2",
+              "0x1.cd9a92b1848cap-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.8147607b5ac16p-2",
+              "-0x1.d2c03c01a1100p-8",
+              "-0x1.5c515ecf7deb0p-9",
+              "0x1.9977f30000e16p-3"
+            ],
+            "raw_scales": [
+              "0x1.3bc30f88c48e1p+0",
+              "0x1.a88f5263afa98p-4",
+              "0x1.f8299d15fe50fp-6",
+              "0x1.96575917dcd8fp-4"
+            ]
+          }
+        },
+        "parameters_sha256": "a4a1708c85e16e397f460ae016e1d93d5a1bf0020326b39bba3691d7fa710837",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 3017,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.bd5635140138ap+10",
+            "0x1.34e9caebfec78p+10"
+          ],
+          "final_log_likelihood": "-0x1.f43ef31432cd4p+13",
+          "final_regularized_objective": "-0x1.f4962c7ef676bp+13",
+          "iterations": 30,
+          "row_count": 3269,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "d1ddaf3ff91b3cf5b3703b7932defc4924679e4a1cd2c684539f88043354cbb5"
+    }
+  },
+  {
+    "canonical_state_sha256": "28be9e20401e94b76ce4fe18899ec51dbf9053551f6cefca86ad530e05407f28",
+    "fold_id": "2015-2016",
+    "head_name": "aapl_state",
+    "model_sha256": "54fc87316aff9116f33000740e56a5ac041d152fafd8489fcd6fe2acc632832a",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "5a052477e42a9754627d1939104bd0fb661d87b8a5bc4f2348a7196d753917ef",
+          "edge_target_sha256": "a05a25b3c864dce9ea3c6622507b1784d86ad1351fc950172176a03ff9bc2639",
+          "maximum_label_maturity_date": "2014-12-30",
+          "training_dates_sha256": "3aff95eab6005a602792ea4cb928bfbfdd0f71194f18df484db5c5ee3a629ee4",
+          "training_end_date": "2014-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5713975867f24p-2",
+              "0x1.54763453cc06dp-1"
+            ],
+            "means": [
+              [
+                "0x1.d3b2f0aa7fac7p-3",
+                "0x1.bdbccfeabbe3fp-2",
+                "0x1.5df832b7357e5p-2",
+                "-0x1.a4537bc737b9fp-2"
+              ],
+              [
+                "-0x1.0cb7bbde39bcap-1",
+                "-0x1.d3b6f98d76ed1p-1",
+                "-0x1.f54902e487d27p+0",
+                "0x1.6fe12b738510fp+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffcbeacc2dbe9p-1",
+              "0x1.a0a99e920b9d5p-12"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f5ac0f7e8a3dfp-1",
+                "0x1.4a7e102eb8421p-6"
+              ],
+              [
+                "0x1.165443f441e92p-5",
+                "0x1.ee9abbc0bbe16p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.6438d0f32eb4ep-1",
+                "0x1.258e4b8f21110p-1",
+                "0x1.569287f9d6051p-3",
+                "0x1.5a5b0dc352de7p-2"
+              ],
+              [
+                "0x1.129a671b55bd8p+1",
+                "0x1.e30d1aca1a6ccp+0",
+                "0x1.5af5a4a40bb90p+1",
+                "0x1.e9f059620bc57p+0"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.1d692d1297bd1p+11",
+              "0x1.652da5dad0850p+10"
+            ],
+            "global_edge": "-0x1.771046c27a5e3p-9",
+            "global_probability": "0x1.b7362d7e23913p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1592,
+            "sample_count": 3712,
+            "state_edges": [
+              "-0x1.b61adcf2cd53ap-9",
+              "-0x1.14c7faa60def5p-9"
+            ],
+            "state_probabilities": [
+              "0x1.a1e203a6bb1a6p-2",
+              "0x1.d85e468767945p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.f83ec7f57ee0dp-8",
+              "0x1.be4efa5859c6ap-6",
+              "-0x1.cbcb1afbee778p-5",
+              "0x1.b81b7a51f5b36p-3"
+            ],
+            "raw_scales": [
+              "0x1.8f16c76458268p-5",
+              "0x1.92388d076a44ep-4",
+              "0x1.28004976febe1p-4",
+              "0x1.d97a766d93ad0p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "4711ca0f64bbafca3ff16dbbd019f681d96e7461dc742abed3fb825998ef3b52",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 3714,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.213ec9689ac4bp+11",
+            "0x1.5e026d2eca773p+10"
+          ],
+          "final_log_likelihood": "-0x1.2b6066b365318p+14",
+          "final_regularized_objective": "-0x1.2b84a6082aefcp+14",
+          "iterations": 28,
+          "row_count": 3773,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "54fc87316aff9116f33000740e56a5ac041d152fafd8489fcd6fe2acc632832a"
+    }
+  },
+  {
+    "canonical_state_sha256": "2dce2bccd7873e95242b5791ffb1c3a8a96b83ff3130a06261ac666ba4561dc3",
+    "fold_id": "2015-2016",
+    "head_name": "market_state",
+    "model_sha256": "c534a6757a2b3c9db494de89850c22d49c732bb5e555bf64fdb7ccbe74427260",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "801ae40fc20a9dee1167e2ebd32ba309b388350e76d38061ca72ee558018ad5a",
+          "edge_target_sha256": "16d031b793000b190cea18d86d39ecf76e04ea9ae639b4b0ac60aeb1dd27c460",
+          "maximum_label_maturity_date": "2014-12-30",
+          "training_dates_sha256": "3aff95eab6005a602792ea4cb928bfbfdd0f71194f18df484db5c5ee3a629ee4",
+          "training_end_date": "2014-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5560265ebbd25p-2",
+              "0x1.554fecd0a216dp-1"
+            ],
+            "means": [
+              [
+                "0x1.95ec58cf02873p-2",
+                "0x1.656ad196cda0dp-2",
+                "0x1.83a5b7e8c5985p-2",
+                "0x1.8bc272108e062p-2"
+              ],
+              [
+                "-0x1.3a1e6d180678cp+0",
+                "-0x1.66a15aeb64cb0p+0",
+                "-0x1.0def28974f160p+0",
+                "-0x1.3854877ccd75cp+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffe1319903a68p-1",
+              "0x1.ece66fc5984f8p-13"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f417839929a7ap-1",
+                "0x1.7d0f8cdacb0b2p-6"
+              ],
+              [
+                "0x1.4747a9d4ca415p-5",
+                "0x1.eb8b8562b35bfp-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.803be26db9643p-2",
+                "0x1.0d45700927677p-1",
+                "0x1.a14b53424a458p-2",
+                "0x1.71104cae4e4a4p-2"
+              ],
+              [
+                "0x1.493f47f16d1fcp+1",
+                "0x1.366e1989c4849p+1",
+                "0x1.ce3ce1d61b539p+0",
+                "0x1.219cd594e88a9p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.1e08d6f61aa63p+11",
+              "0x1.542e5213cab3cp+10"
+            ],
+            "global_edge": "-0x1.81c49a02a6939p-9",
+            "global_probability": "0x1.b39255f6e27b0p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1552,
+            "sample_count": 3649,
+            "state_edges": [
+              "-0x1.f12798167324fp-9",
+              "-0x1.974d7489595aap-10"
+            ],
+            "state_probabilities": [
+              "0x1.9eff215e77d22p-2",
+              "0x1.d51b66ef0d509p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.94a1500305a0fp-7",
+              "0x1.0192b8b11aa2bp-5",
+              "0x1.c462253fd4bc1p-7",
+              "0x1.73d554c8fd812p-7"
+            ],
+            "raw_scales": [
+              "0x1.b8a88923b070bp-5",
+              "0x1.7fde8da0a7c02p-4",
+              "0x1.ab165aa0fb093p-5",
+              "0x1.2e526c5234dc2p-5"
+            ]
+          }
+        },
+        "parameters_sha256": "ae41508d27bb7f814e8b34083f87d0aadd52f20cad5b1bd856a74203509b6ee8",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 3651,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.1eb7d11cb9e05p+11",
+            "0x1.53505dc68c3f3p+10"
+          ],
+          "final_log_likelihood": "-0x1.2c6c1cba890e9p+14",
+          "final_regularized_objective": "-0x1.2c8f56d327e46p+14",
+          "iterations": 16,
+          "row_count": 3773,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "c534a6757a2b3c9db494de89850c22d49c732bb5e555bf64fdb7ccbe74427260"
+    }
+  },
+  {
+    "canonical_state_sha256": "d36849d06ce435cd5fc1a70d99d475ccd1635daf45439c87d953a9048b60e4b4",
+    "fold_id": "2015-2016",
+    "head_name": "sentiment_state",
+    "model_sha256": "5865ca2e472380235dee250c9ca5b5666fe3c78adfe4a578fba54927dc01b02f",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "64cf6bda2dd292a1c5a5ceb8eddc13c24c8a8432a104e168132f9ee53ef6231b",
+          "edge_target_sha256": "f089e7bff18f776015222ec7cb686494f4caa4167f411670dcd3a4fdb7715990",
+          "maximum_label_maturity_date": "2014-12-30",
+          "training_dates_sha256": "3aff95eab6005a602792ea4cb928bfbfdd0f71194f18df484db5c5ee3a629ee4",
+          "training_end_date": "2014-12-30",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.4ed99968cd8a6p-2",
+                "-0x1.572a8c7202be3p-6",
+                "0x1.d8a450bf251c4p-10",
+                "-0x1.5154f74d4beb9p-2"
+              ],
+              [
+                "0x1.1e3c0590ac0d3p+0",
+                "0x1.8f5a89df34511p-3",
+                "-0x1.b9ffb696dd85bp-4",
+                "0x1.f759d54102ee7p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.a8258ea84aa94p-2",
+              "0x1.2bed38abdaab6p-1"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.fb9e1d0aeba4bp-1",
+                "0x1.1878bd4516d57p-7"
+              ],
+              [
+                "0x1.e858338dd73d3p-7",
+                "0x1.f85e9f31c8a31p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.76caacd03cbe0p-2",
+                "0x1.d33f60bde3971p-1",
+                "0x1.36652ee81bfb2p-1",
+                "0x1.212d1ebeb05e3p-2"
+              ],
+              [
+                "0x1.fe329825984b6p-1",
+                "0x1.0d73f0bb8792cp+1",
+                "0x1.10f55e27943c3p+2",
+                "0x1.841e2f1826f22p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.10846b2ef6c35p+11",
+              "0x1.4eb729a2127a4p+10"
+            ],
+            "global_edge": "-0x1.b634cf36417fbp-9",
+            "global_probability": "0x1.af013c6b50a1bp-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1481,
+            "sample_count": 3519,
+            "state_edges": [
+              "-0x1.f703fc13453b1p-9",
+              "-0x1.4f81140f1f418p-9"
+            ],
+            "state_probabilities": [
+              "0x1.9cdf61b233bf7p-2",
+              "0x1.cba046c549850p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.98a2ce8cc6b18p-2",
+              "-0x1.d2c03c01a1100p-8",
+              "-0x1.cb0ed1011c322p-10",
+              "0x1.75d992795da84p-3"
+            ],
+            "raw_scales": [
+              "0x1.33b47489e2cadp+0",
+              "0x1.af9e65f7d1d97p-4",
+              "0x1.eb8cbade9959fp-6",
+              "0x1.63d0fac0a8cd4p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "fd0d34dcfefafa5fde97adcf6273de32a72baecf12b0149b524ff23414d1f34a",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 3521,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.15884a1f6b832p+11",
+            "0x1.452f6bc128f96p+10"
+          ],
+          "final_log_likelihood": "-0x1.2a90033ad84dfp+14",
+          "final_regularized_objective": "-0x1.2aba5e6c5ebd2p+14",
+          "iterations": 19,
+          "row_count": 3773,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "5865ca2e472380235dee250c9ca5b5666fe3c78adfe4a578fba54927dc01b02f"
+    }
+  },
+  {
+    "canonical_state_sha256": "fefee94efbfca042373c8506eb468c0a61f7fb2fcd6ee899ba605d28faad0185",
+    "fold_id": "2017-2018",
+    "head_name": "aapl_state",
+    "model_sha256": "40d4bd57df4e0e07000cdcf2b4dbd0b3cfe6af8b4128daab5f1700a824f3d08d",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "aapl_lr_5",
+          "aapl_lr_20",
+          "aapl_drawdown_60",
+          "aapl_downside_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "d5584a28b641b11e627f185217da3719457674753fcfb32aae98a11bb94b6698",
+          "edge_target_sha256": "8a94e9ebe6e716dbbd63de6f91b7564e2c875d50c277814f686e55f060443ecf",
+          "maximum_label_maturity_date": "2016-12-29",
+          "training_dates_sha256": "d25b0aee8c9d131416035eab5e42e7afc6a108c11c8a7109c0acef1b40800354",
+          "training_end_date": "2016-12-29",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "aapl_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.557d647561d94p-2",
+              "0x1.55414dc54f136p-1"
+            ],
+            "means": [
+              [
+                "0x1.e4aa786d16506p-3",
+                "0x1.d9dd4ae3a3fdep-2",
+                "0x1.6247b0492b6d0p-2",
+                "-0x1.9125e96d34abap-2"
+              ],
+              [
+                "-0x1.f0c612c00fb0ep-2",
+                "-0x1.b5dcddaec032cp-1",
+                "-0x1.d59e872c4cc73p+0",
+                "0x1.6cd597f454543p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.fff0d8dc422e6p-1",
+              "0x1.e4e477ba34d74p-14"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f5df8690b0a71p-1",
+                "0x1.440f2de9eb1f8p-6"
+              ],
+              [
+                "0x1.035514868dce3p-5",
+                "0x1.efcaaeb797232p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.74fb3a9a6b7c6p-1",
+                "0x1.302c949aac4a7p-1",
+                "0x1.5ad52b6319e9cp-3",
+                "0x1.3487aa4ac5477p-2"
+              ],
+              [
+                "0x1.1a002c2e2cff5p+1",
+                "0x1.e37f6ccdb75edp+0",
+                "0x1.4a6d94e96c046p+1",
+                "0x1.da3a60b2f9041p+0"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.3e46ebedb810dp+11",
+              "0x1.a17228248fdefp+10"
+            ],
+            "global_edge": "-0x1.6b888e4755c31p-9",
+            "global_probability": "0x1.b632bd1dfb633p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1804,
+            "sample_count": 4216,
+            "state_edges": [
+              "-0x1.a479c7e366ec1p-9",
+              "-0x1.1664650e9cd07p-9"
+            ],
+            "state_probabilities": [
+              "0x1.a38c8d36c09f5p-2",
+              "0x1.d1ffd94683eabp-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.aafb0cd25d091p-8",
+              "0x1.73671f8e7f20cp-6",
+              "-0x1.c90863022c740p-5",
+              "0x1.9e641d7754bd0p-3"
+            ],
+            "raw_scales": [
+              "0x1.77e94b0d2486cp-5",
+              "0x1.7eb477972622cp-4",
+              "0x1.230aae049cb8ep-4",
+              "0x1.cd55777f23a04p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "ed9e8d60c88e99daf32fd835eb90065b48726fc8c235ac10a2b7d35f532ef515",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 4218,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.424bf790109bap+11",
+            "0x1.99e810dfdec5ep+10"
+          ],
+          "final_log_likelihood": "-0x1.554bcaaeace8ap+14",
+          "final_regularized_objective": "-0x1.55705a91cd93bp+14",
+          "iterations": 26,
+          "row_count": 4277,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "40d4bd57df4e0e07000cdcf2b4dbd0b3cfe6af8b4128daab5f1700a824f3d08d"
+    }
+  },
+  {
+    "canonical_state_sha256": "554d4dccce7fa4f3e6e41ef5ccc573f8dace25bac5118074f318fd28b42e7578",
+    "fold_id": "2017-2018",
+    "head_name": "market_state",
+    "model_sha256": "54d7a034959b34bdb24adce2002b51e154a832b436d11d4decf2114e610edf3e",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "qqq_lr_20",
+          "qqq_lr_60",
+          "iwm_lr_20",
+          "spy_lr_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "11a6e2902fdab45e7bacb2c72d4c0a0637e23b2a02078e7a90715a6ca976b13b",
+          "edge_target_sha256": "b41c9f6bf66e4623ce3c3a76d4d3a27dcd1bf44149137585029ddd4b2f9423c3",
+          "maximum_label_maturity_date": "2016-12-29",
+          "training_dates_sha256": "d25b0aee8c9d131416035eab5e42e7afc6a108c11c8a7109c0acef1b40800354",
+          "training_end_date": "2016-12-29",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "market_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5564afb705659p-2",
+              "0x1.554da8247d4d4p-1"
+            ],
+            "means": [
+              [
+                "0x1.86587963a2a2fp-2",
+                "0x1.54cd1a6051a54p-2",
+                "0x1.67eacfabfdf11p-2",
+                "0x1.7dc759c9cdaeep-2"
+              ],
+              [
+                "-0x1.48c54cbcfec6cp+0",
+                "-0x1.78d9f4002d8e2p+0",
+                "-0x1.1caf39b4b24bap+0",
+                "-0x1.43e2a1d1303a2p+0"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffe982a09f152p-1",
+              "0x1.67d5f60eada37p-13"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.f4c36c03c92d3p-1",
+                "0x1.67927f86da5a1p-6"
+              ],
+              [
+                "0x1.5dc44fba3713dp-5",
+                "0x1.ea23bb045c8ecp-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.ad995dfc2c1ebp-2",
+                "0x1.286502ee8e9dfp-1",
+                "0x1.ced4adbb668eap-2",
+                "0x1.a4cddbf4d54dcp-2"
+              ],
+              [
+                "0x1.57a25b029a6b8p+1",
+                "0x1.5b7204b3a2c7bp+1",
+                "0x1.d5302179dc8cap+0",
+                "0x1.2804bd11c35b5p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.54fa276708144p+11",
+              "0x1.644bb131efd78p+10"
+            ],
+            "global_edge": "-0x1.74c38b2671728p-9",
+            "global_probability": "0x1.b2fbfec48b3e9p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1764,
+            "sample_count": 4153,
+            "state_edges": [
+              "-0x1.d124f52ac7d14p-9",
+              "-0x1.92f71241c9419p-10"
+            ],
+            "state_probabilities": [
+              "0x1.a324b69fc307bp-2",
+              "0x1.d040f9c3ddb50p-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "0x1.7ad1de7d271e6p-7",
+              "0x1.ee3acff4985dap-6",
+              "0x1.bb150c5f1250ep-7",
+              "0x1.586d9ee6822dap-7"
+            ],
+            "raw_scales": [
+              "0x1.a3181ec874cafp-5",
+              "0x1.630256f031a4bp-4",
+              "0x1.9ee2fabec778cp-5",
+              "0x1.240c166914e27p-5"
+            ]
+          }
+        },
+        "parameters_sha256": "3b33582ed7e55cff9bb8ffc253503dfae5daf271ed3cd3d41b94f9030ae1787b",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "training": {
+          "complete_emission_count": 4155,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.556558015827fp+11",
+            "0x1.63f54ffd4faf4p+10"
+          ],
+          "final_log_likelihood": "-0x1.5aed1e27e1a46p+14",
+          "final_regularized_objective": "-0x1.5b105767f3941p+14",
+          "iterations": 16,
+          "row_count": 4277,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "54d7a034959b34bdb24adce2002b51e154a832b436d11d4decf2114e610edf3e"
+    }
+  },
+  {
+    "canonical_state_sha256": "32753bfc4f7051701da5502cb5bcbdf2e28f6159948a09c0bf8a44291c2c31a1",
+    "fold_id": "2017-2018",
+    "head_name": "sentiment_state",
+    "model_sha256": "72a82f7ab818d2be38990544ef4adb43babae80b2d7478944e2d8a781d124464",
+    "state": {
+      "payload": {
+        "config": {
+          "max_iterations": 100,
+          "min_complete_emissions": 500,
+          "min_effective_occupancy": "0x1.9000000000000p+5",
+          "min_iterations": 5,
+          "n_states": 2,
+          "outcome_prior": "0x1.9000000000000p+6",
+          "pi_additive": [
+            "0x1.0000000000000p+0",
+            "0x1.0000000000000p+0"
+          ],
+          "raw_mad_multiplier": "0x1.7b8bac710cb29p+0",
+          "raw_scale_floor": "0x1.0c6f7a0b5ed8dp-20",
+          "raw_z_clip": "0x1.8000000000000p+2",
+          "relative_tolerance": "0x1.b7cdfd9d7bdbbp-34",
+          "transition_additive": [
+            [
+              "0x1.4000000000000p+2",
+              "0x1.0000000000000p+0"
+            ],
+            [
+              "0x1.0000000000000p+0",
+              "0x1.4000000000000p+2"
+            ]
+          ],
+          "variance_floor": "0x1.47ae147ae147bp-9"
+        },
+        "feature_names": [
+          "vix_z_252",
+          "vix_lr_5",
+          "qqq_minus_iwm_lr_20",
+          "qqq_rv_20"
+        ],
+        "fit_metadata": {
+          "binary_target_sha256": "a0f2d7661995551f3109f7c1d349baa2b54061623b9b901146cab8ee0fc7fce5",
+          "edge_target_sha256": "5d53293e734f512485ed17068c0dfc490cce0d07ea4a6cd272e43815afd3b1f4",
+          "maximum_label_maturity_date": "2016-12-29",
+          "training_dates_sha256": "d25b0aee8c9d131416035eab5e42e7afc6a108c11c8a7109c0acef1b40800354",
+          "training_end_date": "2016-12-29",
+          "training_start_date": "1999-12-31"
+        },
+        "head_name": "sentiment_state",
+        "model_type": "aapl_regime_consensus_two_state_gaussian_hmm",
+        "parameters": {
+          "hmm": {
+            "initial_probabilities": [
+              "0x1.5555555555555p-2",
+              "0x1.5555555555555p-1"
+            ],
+            "means": [
+              [
+                "-0x1.4829c5068c8ccp-2",
+                "-0x1.a594d8170569ap-6",
+                "0x1.178d936369aefp-6",
+                "-0x1.39beaf7e42949p-2"
+              ],
+              [
+                "0x1.234e53336bbd9p+0",
+                "0x1.c0cbf204a907bp-3",
+                "-0x1.2dab9b156ffecp-3",
+                "0x1.0449b8eb7e404p+1"
+              ]
+            ],
+            "training_terminal_state_probability": [
+              "0x1.ffd79e2c8d591p-1",
+              "0x1.430e9b95377dfp-12"
+            ],
+            "transition_matrix": [
+              [
+                "0x1.faa4d851c8861p-1",
+                "0x1.56c9eb8dde7c4p-7"
+              ],
+              [
+                "0x1.369b4c7ca4192p-6",
+                "0x1.f64b259c1adf3p-1"
+              ]
+            ],
+            "variances": [
+              [
+                "0x1.809804b4f7265p-2",
+                "0x1.d515beec0a2b1p-1",
+                "0x1.4d150534c4b82p-1",
+                "0x1.524b0c5d73e24p-2"
+              ],
+              [
+                "0x1.09b0dd799cd77p+0",
+                "0x1.1b7d922805e5ep+1",
+                "0x1.028f3befaac6ep+2",
+                "0x1.adefde8922f90p+1"
+              ]
+            ]
+          },
+          "outcome_head": {
+            "effective_occupancy": [
+              "0x1.3a158263a77f4p+11",
+              "0x1.7994fb38b0ff1p+10"
+            ],
+            "global_edge": "-0x1.a2366545e9c10p-9",
+            "global_probability": "0x1.aef86e69f6349p-2",
+            "minimum_effective_occupancy": "0x1.9000000000000p+5",
+            "model_type": "aapl_regime_consensus_outcome_head",
+            "outcome_prior": "0x1.9000000000000p+6",
+            "positive_count": 1693,
+            "sample_count": 4023,
+            "state_edges": [
+              "-0x1.ccb6f144d8500p-9",
+              "-0x1.5d4147e95f955p-9"
+            ],
+            "state_probabilities": [
+              "0x1.a0f4340d7abb7p-2",
+              "0x1.c59c61134127fp-2"
+            ],
+            "state_schema_version": 1
+          },
+          "preprocessing": {
+            "raw_medians": [
+              "-0x1.7e9e3555eb428p-2",
+              "-0x1.0cea7bf03b6bfp-7",
+              "-0x1.6069ea3e68e80p-10",
+              "0x1.673307ee929c2p-3"
+            ],
+            "raw_scales": [
+              "0x1.2c59d6047ace2p+0",
+              "0x1.bf6558f1fc4c2p-4",
+              "0x1.e6dc64f5920ffp-6",
+              "0x1.4218d8eeea7a0p-4"
+            ]
+          }
+        },
+        "parameters_sha256": "4a44786a84a14766e1bdefb15f65bebbfec02a3c66775f598818638412800910",
+        "state_schema_version": 1,
+        "stress_orientations": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "training": {
+          "complete_emission_count": 4025,
+          "converged": true,
+          "effective_occupancy": [
+            "0x1.403bd23a3c88dp+11",
+            "0x1.6dc85b8b86edep+10"
+          ],
+          "final_log_likelihood": "-0x1.5b6ea124b160bp+14",
+          "final_regularized_objective": "-0x1.5b97576646f34p+14",
+          "iterations": 20,
+          "row_count": 4277,
+          "sequence_count": 1,
+          "terminal_contiguous": true
+        }
+      },
+      "payload_sha256": "72a82f7ab818d2be38990544ef4adb43babae80b2d7478944e2d8a781d124464"
+    }
+  }
+]
