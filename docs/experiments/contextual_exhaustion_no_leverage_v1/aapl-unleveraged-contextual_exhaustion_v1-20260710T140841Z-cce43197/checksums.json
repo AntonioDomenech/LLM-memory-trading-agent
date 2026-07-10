@@ -1,0 +1,17 @@
+{
+  "daily_base_5bps_2024.csv": "5b915d0b7c30d5f5a7cff35dfb3dc4796a5e42c5e0fe9546669e93d9edad33c8",
+  "daily_base_5bps_2025.csv": "29b95275499065ce339078dd052068145f592ff00cb8dc1d63ee462d24c8d977",
+  "daily_base_5bps_2026_ytd.csv": "8cf6b99b5b544009e95b5da90a1542a7720185ba966d07101237565c9a5cd080",
+  "daily_base_5bps_continuous.csv": "2e4caba0899341567b9e81bb468f52eaa12de90200fce4b1f171b5e56dfe1e9d",
+  "daily_severe_20bps_2024.csv": "c14d9f3f3d7dd8a5f9fcddd97944d866a7cd964c24e8b7b3567f4bfde910b2ce",
+  "daily_severe_20bps_2025.csv": "c9595f51d625ac5e4c4acb5482af7cda8fbc2b473fe9e9e5c8cc52da136bf409",
+  "daily_severe_20bps_2026_ytd.csv": "d2d311038ba3d3f64c2371c57f544cb5c3ad24d2312925cf2729b9fdf498f2c4",
+  "daily_severe_20bps_continuous.csv": "381cf779d75afbb781cd29395160a9c05d0ceff9526ee241993f013d97787a22",
+  "daily_stress_10bps_2024.csv": "da57b57b022b97eb311207d4503b40688b79ddb945533577bf1b2299da801ba8",
+  "daily_stress_10bps_2025.csv": "c8806b018a50e6542ce3f0fe7e02589752348d524f61427b709a2a672fa8bc5e",
+  "daily_stress_10bps_2026_ytd.csv": "10608192a61e50baf2de3fe0cf73ae372ebdb4d58d51d572f7635e3fe5224d13",
+  "daily_stress_10bps_continuous.csv": "2e7059bd4c5f475666b5758b1f4e574059ac45e231b55b05e8d035d3a9070e8f",
+  "market_snapshot.csv": "c2e2eb85f5d647ea0018734291ec28b33d8b486baa109a9a2a1e25a4f053d925",
+  "report.json": "fca21b4ea231aa8268a9410af2717b8d54012f1412417f0c8405b9a2a3a5b2e6",
+  "selection_manifest.json": "7f897a735f35a647c821685cea9c29e549eff45095c582a44b7dc6045241d951"
+}
