@@ -1,0 +1,59 @@
+{
+  "attempt": 1,
+  "branch": "codex/aapl-cftc-cot-sentiment-v1",
+  "code_commit": "f60d5de218ec211aa8394e4573e0d31a1aaeacdf",
+  "command": "python -m agent_benchmark.cftc_cot_experiment development --output-dir e/cftc_cot_v1",
+  "completed_at_utc": "2026-07-10T17:37:55.221Z",
+  "exit_code": 1,
+  "failure_stage": "pre_scoring_data_contract",
+  "runtime_seconds": 4.4,
+  "physical_data_boundary": {
+    "cftc_start": "1997-09-16",
+    "cftc_end": "2018-12-31",
+    "price_warmup_start": "1999-12-31",
+    "price_end": "2018-12-31",
+    "confirmation_2019_2023_accessed": false,
+    "post_2023_accessed": false
+  },
+  "error": "CFTC response failed required coverage: incomplete_contract:1170E1",
+  "official_count_diagnostic": {
+    "payload_rows": 2838,
+    "official_count_rows": 2838,
+    "count_match": true,
+    "contracts": {
+      "1170E1": {
+        "coverage_ratio": 0.9442231075697212,
+        "end_lag_days": 0,
+        "expected_weekly_rows_approx": 753,
+        "first_report_date": "2004-07-27",
+        "first_report_lag_days": 0,
+        "last_report_date": "2018-12-31",
+        "maximum_gap_days": 168,
+        "rows": 711
+      },
+      "13874A": {
+        "coverage_ratio": 0.9963996399639964,
+        "end_lag_days": 0,
+        "expected_weekly_rows_approx": 1111,
+        "first_report_date": "1997-09-16",
+        "first_report_lag_days": 0,
+        "last_report_date": "2018-12-31",
+        "maximum_gap_days": 25,
+        "rows": 1107
+      },
+      "209742": {
+        "coverage_ratio": 1.000981354268891,
+        "end_lag_days": 0,
+        "expected_weekly_rows_approx": 1019,
+        "first_report_date": "1999-06-22",
+        "first_report_lag_days": 0,
+        "last_report_date": "2018-12-31",
+        "maximum_gap_days": 11,
+        "rows": 1020
+      }
+    }
+  },
+  "strategy_scoring_started": false,
+  "selected_variant_id": null,
+  "resolution": "Replace the generic weekly-coverage assumption with fixed market-specific structural availability checks. Exact payload completeness remains enforced by the separate official count query; stale or absent VIX observations remain neutral/long."
+}

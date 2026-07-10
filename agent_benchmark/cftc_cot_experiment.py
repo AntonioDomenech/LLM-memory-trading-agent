@@ -92,6 +92,17 @@ CFTC_TO_POLICY_MARKET = {
     "1170E1": "VIX",
 }
 
+# The official Legacy dataset is exact-count verified separately.  These
+# market-specific checks describe structural availability, not transport
+# completeness: early VIX reporting legitimately contains long gaps when the
+# market was below CFTC reporting thresholds, while the two index contracts
+# are nearly weekly.  Stale/missing observations always neutralize the signal.
+COT_STRUCTURAL_COVERAGE_CONTRACT: Mapping[str, Mapping[str, float | int]] = {
+    "13874A": {"minimum_coverage_ratio": 0.99, "maximum_gap_days": 28},
+    "209742": {"minimum_coverage_ratio": 0.99, "maximum_gap_days": 14},
+    "1170E1": {"minimum_coverage_ratio": 0.94, "maximum_gap_days": 175},
+}
+
 DEVELOPMENT_FOLDS: tuple[tuple[str, str, str], ...] = (
     ("2004_2007", "2004-07-27", "2007-12-31"),
     ("2008_2011", "2008-01-01", "2011-12-31"),
@@ -516,6 +527,7 @@ def audit_cot_response_coverage(
         for code in SUPPORTED_CONTRACT_CODES
     }
     for code in SUPPORTED_CONTRACT_CODES:
+        structural_contract = COT_STRUCTURAL_COVERAGE_CONTRACT[code]
         market_start = max(start, COT_MARKETS_BY_CODE[code].first_report_date)
         dates = sorted(date_sets[code])
         expected_weeks = ((end - market_start).days // 7) + 1
@@ -531,8 +543,8 @@ def audit_cot_response_coverage(
         passed = bool(
             first_lag <= 14
             and end_lag <= 21
-            and maximum_gap <= 28
-            and coverage_ratio >= 0.95
+            and maximum_gap <= structural_contract["maximum_gap_days"]
+            and coverage_ratio >= structural_contract["minimum_coverage_ratio"]
         )
         if not passed:
             failures.append(f"incomplete_contract:{code}")
@@ -545,6 +557,7 @@ def audit_cot_response_coverage(
             "first_report_lag_days": first_lag,
             "end_coverage_lag_days": end_lag,
             "maximum_internal_gap_days": maximum_gap,
+            "structural_coverage_contract": dict(structural_contract),
             "passed": passed,
         }
     complete_dates = set.intersection(*(date_sets[code] for code in SUPPORTED_CONTRACT_CODES))

@@ -44,6 +44,16 @@ The payload must contain exactly that many rows; both raw responses and their
 exact query URLs are sealed, so scattered or common missing weeks cannot hide
 inside a percentage-based coverage tolerance.
 
+Structural availability is checked separately from download completeness. The
+two index contracts must remain at least 99% weekly, with maximum gaps of 28
+days for E-mini S&P and 14 days for Nasdaq. The official early VIX series is
+sparser (711 of roughly 753 pre-2019 weeks, including a 168-day 2008-09 gap),
+so its frozen floor is 94% with a maximum 175-day gap. This does not fill or
+invent observations: after 14 stale days the policy is forced back to long
+AAPL. The first attempted run stopped before scoring under the former generic
+95%/28-day assumption; its immutable diagnostic is saved under
+`e/cftc_cot_v1/development-attempt-1-data-contract-failure/`.
+
 The price snapshot includes 1999-12-31 solely as the causal pre-fill warm-up;
 the simulated account and scored outcomes begin on the first 2000 trading
 session. Complete VIX

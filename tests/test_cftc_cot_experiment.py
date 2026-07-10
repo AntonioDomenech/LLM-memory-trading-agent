@@ -20,6 +20,7 @@ from agent_benchmark.cftc_cot import (
 )
 from agent_benchmark.cftc_cot_experiment import (
     CONFIRMATION_END,
+    COT_STRUCTURAL_COVERAGE_CONTRACT,
     CFTCExperimentError,
     DEVELOPMENT_END,
     DEVELOPMENT_GATES,
@@ -384,6 +385,43 @@ def test_cftc_coverage_fails_closed_on_sparse_or_missing_contract_history():
             expected_end=DEVELOPMENT_END,
         )
 
+
+def test_cftc_coverage_accepts_official_early_vix_structural_gaps():
+    all_dates = [
+        value.date()
+        for value in pd.date_range("2004-07-27", "2018-12-31", freq="7D")
+    ]
+    # The official pre-2019 VIX series has 711 rows, about 94.4% weekly
+    # coverage, and a longest 168-day gap. Reproduce that structural shape
+    # while keeping the other two contracts weekly.
+    omitted_indexes = set(range(100, 123)) | {200 + 20 * index for index in range(19)}
+    vix_dates = [value for index, value in enumerate(all_dates) if index not in omitted_indexes]
+    assert len(all_dates) == 753
+    assert len(vix_dates) == 711
+    records = [
+        _cot_record(code, report_date)
+        for code, dates in (
+            ("13874A", all_dates),
+            ("209742", all_dates),
+            ("1170E1", vix_dates),
+        )
+        for report_date in dates
+    ]
+
+    audit = audit_cot_response_coverage(
+        records,
+        expected_start="2004-07-27",
+        expected_end="2018-12-31",
+    )
+
+    assert audit["passed"] is True
+    vix = audit["contracts"]["1170E1"]
+    assert vix["coverage_ratio"] == pytest.approx(711 / 753)
+    assert vix["maximum_internal_gap_days"] == 168
+    assert vix["structural_coverage_contract"] == dict(
+        COT_STRUCTURAL_COVERAGE_CONTRACT["1170E1"]
+    )
+
     offset_records: list[COTRecord] = []
     first = date(2020, 1, 7)
     for index in range(12):
@@ -403,17 +441,17 @@ def test_cftc_coverage_fails_closed_on_sparse_or_missing_contract_history():
 def test_official_count_proof_catches_omissions_that_heuristic_coverage_misses(
     omission_pattern,
 ):
-    reports = [date(2020, 1, 7) + timedelta(days=7 * index) for index in range(52)]
+    reports = [date(2014, 1, 7) + timedelta(days=7 * index) for index in range(260)]
     all_records = [
         _cot_record(code, report)
         for report in reports
         for code in ("13874A", "209742", "1170E1")
     ]
     if omission_pattern == "common_week":
-        missing = {(code, reports[20]) for code in ("13874A", "209742", "1170E1")}
+        missing = {(code, reports[100]) for code in ("13874A", "209742", "1170E1")}
     else:
         missing = {
-            (code, reports[20 + index])
+            (code, reports[100 + index])
             for index, code in enumerate(("13874A", "209742", "1170E1"))
         }
     incomplete = [
@@ -422,24 +460,25 @@ def test_official_count_proof_catches_omissions_that_heuristic_coverage_misses(
         if (item.contract_code, item.report_date) not in missing
     ]
 
-    # The old 95%/gap/alignment heuristic accepts both patterns.
+    # Even the stricter structural checks accept one row missing from a
+    # five-year response; the exact independent count proof must not.
     assert audit_cot_response_coverage(
         incomplete,
-        expected_start="2020-01-01",
-        expected_end="2020-12-31",
+        expected_start="2014-01-01",
+        expected_end="2018-12-31",
     )["passed"] is True
 
     download = _bounded_cot_download(
         incomplete,
-        start="2020-01-01",
-        end="2020-12-31",
+        start="2014-01-01",
+        end="2018-12-31",
         official_row_count=len(all_records),
     )
     with pytest.raises(CFTCExperimentError, match="does not match.*official"):
         _parse_bounded_download(
             download,
-            expected_start="2020-01-01",
-            expected_end="2020-12-31",
+            expected_start="2014-01-01",
+            expected_end="2018-12-31",
         )
 
 
