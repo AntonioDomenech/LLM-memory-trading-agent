@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import agent_benchmark.direct_edge_gam as direct_edge_gam
 from agent_benchmark.direct_edge_gam import (
     ANCHOR_FEATURE_NAMES,
     DirectEdgeGAM,
@@ -160,6 +161,36 @@ def test_both_solvers_converge_with_frozen_limits():
     assert all(0 <= head["iterations"] <= 50 for head in model.huber_heads)
 
 
+@pytest.mark.parametrize(
+    ("solver_name", "error_pattern"),
+    (
+        ("_fit_logistic_head", "Logistic GAM solver did not converge"),
+        ("_fit_huber_head", "Huber GAM solver did not converge"),
+    ),
+)
+def test_fit_rejects_any_nonconverged_head(
+    monkeypatch,
+    solver_name: str,
+    error_pattern: str,
+) -> None:
+    features, binary, edge, names = _synthetic_data(120)
+    original = getattr(direct_edge_gam, solver_name)
+
+    def nonconverged(*args, **kwargs):
+        coefficients, iterations, _ = original(*args, **kwargs)
+        return coefficients, iterations, False
+
+    monkeypatch.setattr(direct_edge_gam, solver_name, nonconverged)
+    with pytest.raises(RuntimeError, match=error_pattern):
+        DirectEdgeGAM().fit(
+            features,
+            binary,
+            edge,
+            feature_names=names,
+            fit_metadata=_metadata(),
+        )
+
+
 def test_predictions_are_bounded_and_learn_the_synthetic_signal():
     model, features, binary, edge = _fit_synthetic()
     components = model.predict_components(features)
@@ -272,6 +303,27 @@ def test_checksum_schema_and_semantic_tampering_are_rejected():
     with pytest.raises(ValueError, match="Invalid payload keys"):
         DirectEdgeGAM.from_state(schema_tamper)
 
+    convergence_tamper = copy.deepcopy(state)
+    convergence_tamper["payload"]["parameters"]["heads"]["huber"][0][
+        "converged"
+    ] = False
+    convergence_tamper["payload"]["parameters_sha256"] = _canonical_hash(
+        convergence_tamper["payload"]["parameters"]
+    )
+    convergence_tamper["payload_sha256"] = _canonical_hash(
+        convergence_tamper["payload"]
+    )
+    with pytest.raises(ValueError, match="did not converge"):
+        DirectEdgeGAM.from_state(convergence_tamper)
+
+
+def test_fitted_semantic_validation_rejects_nonconverged_head() -> None:
+    model, _, _, _ = _fit_synthetic()
+    model.logistic_heads[0]["converged"] = False
+
+    with pytest.raises(ValueError, match="non-converged ensemble head"):
+        model._validate_fitted_semantics()
+
 
 def test_nonfinite_inputs_bad_metadata_and_wrong_schemas_fail_closed():
     features, binary, edge, names = _synthetic_data(120)
@@ -329,4 +381,3 @@ def test_implementation_uses_only_the_local_numeric_stack():
     ).read_text(encoding="utf-8").lower()
     forbidden = (("sk" + "learn"), ("sci" + "py"))
     assert not any(name in source for name in forbidden)
-

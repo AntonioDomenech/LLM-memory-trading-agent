@@ -19,12 +19,38 @@ from agent_benchmark.direct_edge_scoring import (
 NEGATIVE_BUY_HOLD_YEARS = (2008, 2011, 2015, 2018)
 
 
+def _add_execution_proof(ledger: pd.DataFrame, *, cost_bps: float = 10.0) -> pd.DataFrame:
+    result = ledger.copy()
+    shares = result["shares"].to_numpy(dtype=float)
+    delta = np.diff(np.r_[0.0, shares])
+    reference = np.full(len(result), 100.0, dtype=float)
+    rate = cost_bps / 10_000.0
+    fill = reference.copy()
+    fill[delta > 1e-12] *= 1.0 + rate
+    fill[delta < -1e-12] *= 1.0 - rate
+    slippage = np.abs(delta) * np.abs(fill - reference)
+    daily_return = result["daily_return"].to_numpy(dtype=float)
+    equity = 1000.0 * np.cumprod(1.0 + daily_return)
+    result["signed_share_delta"] = delta
+    result["reference_price"] = reference
+    result["fill_price"] = fill
+    result["slippage"] = slippage
+    result["fees"] = np.zeros(len(result), dtype=float)
+    result["trade_executed"] = np.abs(delta) > 1e-12
+    result["equity"] = equity
+    result["equity_before_fill"] = np.r_[1000.0, equity[:-1]]
+    return result
+
+
 def _synthetic_inputs() -> tuple[object, ...]:
     dates = pd.bdate_range("2005-01-03", "2018-12-31")
     count = len(dates)
-    executed_target = np.ones(count, dtype=float)
+    oof_cash_target = np.zeros(count, dtype=float)
+    oof_cash_block_start = np.zeros(count, dtype=float)
     for start in range(100, 2100, 100):
-        executed_target[start : start + 3] = 0.0
+        oof_cash_target[start : start + 5] = 1.0
+        oof_cash_block_start[start] = 1.0
+    executed_target = 1.0 - oof_cash_target
     executed_cash = executed_target == 0.0
     entered = executed_cash & ~np.r_[False, executed_cash[:-1]]
     exited = ~executed_cash & np.r_[False, executed_cash[:-1]]
@@ -34,9 +60,10 @@ def _synthetic_inputs() -> tuple[object, ...]:
         benchmark_log[dates.year == year] = -0.0002
     benchmark_return = np.expm1(benchmark_log)
     strategy_return = np.expm1(benchmark_log + 0.0001)
-    strategy = pd.DataFrame(
+    strategy = _add_execution_proof(pd.DataFrame(
         {
             "fill_date": dates.date.astype(str),
+            "decision_date": dates.date.astype(str),
             "target_exposure": executed_target,
             "new_exposure_after_fill": executed_target,
             "holding_exposure_for_return": executed_target,
@@ -46,8 +73,8 @@ def _synthetic_inputs() -> tuple[object, ...]:
             "trade_executed": entered | exited,
             "daily_return": strategy_return,
         }
-    )
-    buy_hold = pd.DataFrame(
+    ))
+    buy_hold = _add_execution_proof(pd.DataFrame(
         {
             "fill_date": dates.date.astype(str),
             "target_exposure": np.ones(count),
@@ -59,7 +86,7 @@ def _synthetic_inputs() -> tuple[object, ...]:
             "trade_executed": np.r_[True, np.zeros(count - 1, dtype=bool)],
             "daily_return": benchmark_return,
         }
-    )
+    ))
 
     positions = np.arange(count)
     actual_edge = np.where(positions % 4 == 0, 0.01, -0.005)
@@ -68,9 +95,6 @@ def _synthetic_inputs() -> tuple[object, ...]:
     baseline_probability = np.full(count, 0.5)
     predicted_edge = actual_edge + 0.0005
     baseline_edge = np.zeros(count)
-    oof_cash_target = np.zeros(count, dtype=float)
-    for start in range(100, 2100, 100):
-        oof_cash_target[start : start + 5] = 1.0
     return (
         strategy,
         buy_hold,
@@ -82,11 +106,27 @@ def _synthetic_inputs() -> tuple[object, ...]:
         actual_edge,
         baseline_edge,
         oof_cash_target,
+        oof_cash_block_start,
+        dates,
     )
 
 
 def _score(inputs: tuple[object, ...]) -> dict[str, object]:
     return score_direct_edge_metrics(*inputs, cost_bps=10.0)
+
+
+def _bind_strategy_to_oof_cash(inputs: list[object]) -> None:
+    cash_target = np.asarray(inputs[9], dtype=float)
+    executed_target = 1.0 - cash_target
+    strategy = inputs[0].copy()
+    strategy["target_exposure"] = executed_target
+    strategy["new_exposure_after_fill"] = executed_target
+    strategy["holding_exposure_for_return"] = executed_target
+    strategy["cash"] = np.where(cash_target == 1.0, 1000.0, 0.0)
+    strategy["shares"] = np.where(cash_target == 1.0, 0.0, 10.0)
+    strategy = _add_execution_proof(strategy)
+    inputs[0] = strategy
+    inputs[2] = executed_target
 
 
 def test_passing_wrapper_preserves_base_gates_and_adds_direct_metrics() -> None:
@@ -166,6 +206,10 @@ def test_episode_start_mean_and_win_rate_use_only_episode_start_edges() -> None:
     inputs[6] = actual + 0.0005
     inputs[7] = actual
     inputs[9] = cash_target
+    block_start = np.zeros(len(actual), dtype=float)
+    block_start[list(starts)] = 1.0
+    inputs[10] = block_start
+    _bind_strategy_to_oof_cash(inputs)
 
     metrics = _score(tuple(inputs))
     gates = apply_direct_edge_gates(metrics)
@@ -192,9 +236,13 @@ def test_trailing_immature_labels_are_allowed_but_internal_gaps_are_rejected() -
     label[-6:] = np.nan
     actual[-6:] = np.nan
     cash_target[-3:] = 1.0
+    block_start = np.asarray(inputs[10], dtype=float).copy()
+    block_start[-3] = 1.0
     inputs[4] = label
     inputs[7] = actual
     inputs[9] = cash_target
+    inputs[10] = block_start
+    _bind_strategy_to_oof_cash(inputs)
 
     metrics = _score(tuple(inputs))
     assert metrics["unmatured_trailing_oof_rows"] == 6
@@ -243,6 +291,61 @@ def test_alignment_nonfinite_binary_consistency_and_base_fail_closed() -> None:
     with pytest.raises(DirectEdgeScoringError, match="strict no-leverage"):
         _score(tuple(inputs))
 
+    inputs = list(_synthetic_inputs())
+    mismatched_cash = np.asarray(inputs[9], dtype=float).copy()
+    mismatched_cash[10:15] = 1.0
+    mismatched_start = np.asarray(inputs[10], dtype=float).copy()
+    mismatched_start[10] = 1.0
+    inputs[9] = mismatched_cash
+    inputs[10] = mismatched_start
+    with pytest.raises(DirectEdgeScoringError, match="does not match the executed"):
+        _score(tuple(inputs))
+
+
+def test_adjacent_cash_blocks_are_scored_as_two_predictions() -> None:
+    inputs = list(_synthetic_inputs())
+    cash = np.zeros_like(np.asarray(inputs[9], dtype=float))
+    starts = np.zeros_like(cash)
+    cash[20:30] = 1.0
+    starts[[20, 25]] = 1.0
+    actual = np.asarray(inputs[7], dtype=float).copy()
+    actual[[20, 25]] = [0.01, -0.005]
+    label = (actual > 0.0).astype(float)
+    inputs[3] = np.where(label == 1.0, 0.9, 0.1)
+    inputs[4] = label
+    inputs[6] = actual + 0.0005
+    inputs[7] = actual
+    inputs[9] = cash
+    inputs[10] = starts
+    _bind_strategy_to_oof_cash(inputs)
+
+    metrics = _score(tuple(inputs))
+
+    assert metrics["oof_cash_episode_starts"] == 2
+    assert metrics["oof_cash_block_starts"] == 2
+    assert metrics["episode_start_realized_edge_wins_10bps"] == 1
+    assert metrics["episode_start_realized_edge_win_rate_10bps"] == 0.5
+
+
+def test_cash_block_starts_and_declared_cost_are_fail_closed() -> None:
+    inputs = list(_synthetic_inputs())
+    missing_start = np.asarray(inputs[10], dtype=float).copy()
+    missing_start[100] = 0.0
+    inputs[10] = missing_start
+    with pytest.raises(DirectEdgeScoringError, match="not exactly reconstructed"):
+        _score(tuple(inputs))
+
+    inputs = _synthetic_inputs()
+    with pytest.raises(DirectEdgeScoringError, match="declared cost_bps"):
+        score_direct_edge_metrics(*inputs, cost_bps=5.0)
+
+    corrupted = list(_synthetic_inputs())
+    strategy = corrupted[0].copy()
+    strategy.loc[0, "daily_return"] += 0.001
+    corrupted[0] = strategy
+    with pytest.raises(DirectEdgeScoringError, match="reconcile to equity"):
+        _score(tuple(corrupted))
+
 
 def test_direct_wrapper_cannot_pass_when_any_base_gate_fails() -> None:
     passing = _score(_synthetic_inputs())
@@ -261,4 +364,3 @@ def test_direct_wrapper_cannot_pass_when_any_base_gate_fails() -> None:
         is True
     )
     assert gates["passed"] is False
-

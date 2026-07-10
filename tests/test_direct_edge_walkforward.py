@@ -257,8 +257,13 @@ def test_missing_price_means_long_and_all_candidate_ids_are_exact(
     for family in walkforward.MODEL_FAMILIES:
         for candidate_id in expected_ids:
             column = walkforward.candidate_cash_target_column(family, candidate_id)
+            start_column = walkforward.candidate_cash_block_start_column(
+                family, candidate_id
+            )
             assert predictions.loc[first, column] == 0
+            assert predictions.loc[first, start_column] == 0
             assert predictions[column].dtype == np.int8
+            assert predictions[start_column].dtype == np.int8
 
 
 def test_failed_sentiment_fit_routes_the_whole_fold_to_price(fake_model) -> None:
@@ -287,9 +292,25 @@ def test_failed_sentiment_fit_routes_the_whole_fold_to_price(fake_model) -> None
 
 
 def test_cash_state_is_continuous_and_non_overlapping() -> None:
-    assert walkforward.five_session_cash_target(
-        [True, True, False, True, False, True, False, False, False, True, False]
-    ).tolist() == [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+    triggers = [
+        True,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        False,
+        False,
+        True,
+        False,
+    ]
+    target, starts = walkforward.five_session_cash_policy(triggers)
+    assert target.tolist() == [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+    assert starts.tolist() == [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]
+    np.testing.assert_array_equal(
+        walkforward.five_session_cash_target(triggers), target
+    )
     assert walkforward.five_session_cash_target(
         [False, None, pd.NA, True, False, False, False, False]
     ).tolist() == [0, 0, 0, 1, 1, 1, 1, 1]
@@ -317,6 +338,23 @@ def test_outputs_hashes_targets_and_diagnostics_are_deterministic(
             "market_sentiment_model_sha256",
         ]
     ).all()
+
+
+def test_walkforward_exports_exact_sentiment_readiness_for_common_support(
+    synthetic_predictions,
+) -> None:
+    from agent_benchmark.direct_edge_experiment import _common_support_mask
+
+    frame, predictions, _ = synthetic_predictions
+    expected = frame.loc[predictions.index, "sentiment_features_ready"].astype(bool)
+    pd.testing.assert_series_equal(
+        predictions["sentiment_features_ready"],
+        expected.rename("sentiment_features_ready"),
+        check_exact=True,
+    )
+    support = _common_support_mask(predictions)
+    assert support.shape == (len(predictions),)
+    assert support.dtype == bool
 
 
 def test_post_2018_decisions_are_refused(fake_model) -> None:

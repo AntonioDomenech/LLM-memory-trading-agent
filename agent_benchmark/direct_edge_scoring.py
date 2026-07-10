@@ -30,6 +30,11 @@ DIRECT_EDGE_GATES: Mapping[str, float] = {
     "minimum_episode_start_realized_edge_win_rate_exclusive": 0.50,
 }
 
+_CASH_BLOCK_ROWS = 5
+_TRADE_TOLERANCE = 1e-12
+_NUMERIC_ABSOLUTE_TOLERANCE = 1e-10
+_NUMERIC_RELATIVE_TOLERANCE = 1e-12
+
 
 class DirectEdgeScoringError(DownsideScoringError):
     """Raised when direct-edge predictive inputs violate their contract."""
@@ -84,6 +89,264 @@ def _mature_suffix_mask(values: np.ndarray, *, name: str) -> np.ndarray:
     return mature
 
 
+def _bind_oof_cash_to_executed_ledger(
+    strategy: pd.DataFrame,
+    oof_cash_target: np.ndarray,
+    oof_decision_dates: Sequence[object],
+) -> dict[str, int | bool]:
+    """Prove that prediction-side CASH signals are the executed strategy.
+
+    The final OOF decision can fall after the last fill in a bounded period.
+    Such unmatched decisions are allowed only as one chronological trailing
+    suffix after the ledger's final decision; every overlapping decision must
+    equal ``1 - target_exposure`` exactly.
+    """
+
+    if "decision_date" not in strategy.columns:
+        raise DirectEdgeScoringError(
+            "strategy ledger lacks decision_date for OOF target binding"
+        )
+    try:
+        oof_dates = pd.DatetimeIndex(pd.to_datetime(oof_decision_dates, errors="raise"))
+        ledger_dates = pd.DatetimeIndex(
+            pd.to_datetime(strategy["decision_date"], errors="raise")
+        )
+    except (TypeError, ValueError) as exc:
+        raise DirectEdgeScoringError(
+            "OOF and ledger decision dates must be valid dates"
+        ) from exc
+    if oof_dates.tz is not None or ledger_dates.tz is not None:
+        raise DirectEdgeScoringError("OOF and ledger decision dates must be timezone-naive")
+    oof_dates = oof_dates.normalize()
+    ledger_dates = ledger_dates.normalize()
+    if len(oof_dates) != len(oof_cash_target):
+        raise DirectEdgeScoringError(
+            "oof_decision_dates must align with oof_cash_target"
+        )
+    if (
+        oof_dates.has_duplicates
+        or not oof_dates.is_monotonic_increasing
+        or ledger_dates.has_duplicates
+        or not ledger_dates.is_monotonic_increasing
+    ):
+        raise DirectEdgeScoringError(
+            "OOF and ledger decision dates must be unique and chronological"
+        )
+
+    ledger_target = _strict_binary(
+        strategy["target_exposure"].to_numpy(),
+        name="strategy ledger target_exposure",
+    )
+    executed_cash_by_date = {
+        timestamp: 1.0 - float(target)
+        for timestamp, target in zip(ledger_dates, ledger_target, strict=True)
+    }
+    matched = np.asarray(
+        [timestamp in executed_cash_by_date for timestamp in oof_dates],
+        dtype=bool,
+    )
+    if not matched.any():
+        raise DirectEdgeScoringError(
+            "No OOF decision date overlaps the executed strategy ledger"
+        )
+    missing_positions = np.flatnonzero(~matched)
+    if len(missing_positions):
+        first_missing = int(missing_positions[0])
+        if matched[first_missing:].any() or not bool(
+            (oof_dates[~matched] > ledger_dates.max()).all()
+        ):
+            raise DirectEdgeScoringError(
+                "Unmatched OOF decisions are allowed only as a trailing suffix "
+                "after the final executed ledger decision"
+            )
+    expected = np.asarray(
+        [executed_cash_by_date[timestamp] for timestamp in oof_dates[matched]],
+        dtype=float,
+    )
+    if not np.array_equal(oof_cash_target[matched], expected):
+        raise DirectEdgeScoringError(
+            "OOF CASH target does not match the executed strategy by decision date"
+        )
+    return {
+        "oof_executed_decision_matches": int(matched.sum()),
+        "oof_unexecuted_trailing_decisions": int((~matched).sum()),
+        "oof_cash_target_bound_to_executed_ledger": True,
+    }
+
+
+def _bind_ledger_cost_bps(
+    ledger: pd.DataFrame,
+    *,
+    name: str,
+    cost_bps: float,
+) -> dict[str, Any]:
+    """Verify the caller's cost label against fills, slippage, and returns."""
+
+    if isinstance(cost_bps, bool):
+        raise DirectEdgeScoringError("cost_bps must be a finite number")
+    try:
+        bps = float(cost_bps)
+    except (TypeError, ValueError) as exc:
+        raise DirectEdgeScoringError("cost_bps must be a finite number") from exc
+    if not math.isfinite(bps) or bps < 0.0 or bps >= 10_000.0:
+        raise DirectEdgeScoringError(
+            "cost_bps must be finite and lie in [0, 10,000)"
+        )
+
+    required = {
+        "signed_share_delta",
+        "reference_price",
+        "fill_price",
+        "slippage",
+        "fees",
+        "trade_executed",
+        "shares",
+        "equity",
+        "equity_before_fill",
+        "daily_return",
+    }
+    missing = sorted(required.difference(ledger.columns))
+    if missing:
+        raise DirectEdgeScoringError(
+            f"{name} ledger lacks exact cost proof columns: {missing}"
+        )
+
+    numeric: dict[str, np.ndarray] = {}
+    for column in sorted(required.difference({"trade_executed"})):
+        try:
+            values = pd.to_numeric(ledger[column], errors="raise").to_numpy(
+                dtype=float
+            )
+        except (TypeError, ValueError) as exc:
+            raise DirectEdgeScoringError(
+                f"{name} ledger {column} must be numeric"
+            ) from exc
+        if not np.isfinite(values).all():
+            raise DirectEdgeScoringError(
+                f"{name} ledger {column} must be finite"
+            )
+        numeric[column] = values
+
+    reference = numeric["reference_price"]
+    fill = numeric["fill_price"]
+    delta = numeric["signed_share_delta"]
+    if (reference <= 0.0).any() or (fill <= 0.0).any():
+        raise DirectEdgeScoringError(
+            f"{name} ledger contains a non-positive execution price"
+        )
+    trade = np.abs(delta) > _TRADE_TOLERANCE
+    raw_trade = ledger["trade_executed"].to_numpy()
+    if any(not isinstance(value, (bool, np.bool_)) for value in raw_trade):
+        raise DirectEdgeScoringError(
+            f"{name} ledger trade_executed must contain booleans"
+        )
+    if not np.array_equal(raw_trade.astype(bool), trade):
+        raise DirectEdgeScoringError(
+            f"{name} ledger trade_executed does not match signed_share_delta"
+        )
+
+    rate = bps / 10_000.0
+    expected_fill = reference.copy()
+    expected_fill[delta > _TRADE_TOLERANCE] = (
+        reference[delta > _TRADE_TOLERANCE] * (1.0 + rate)
+    )
+    expected_fill[delta < -_TRADE_TOLERANCE] = (
+        reference[delta < -_TRADE_TOLERANCE] * (1.0 - rate)
+    )
+    if not np.allclose(
+        fill,
+        expected_fill,
+        rtol=_NUMERIC_RELATIVE_TOLERANCE,
+        atol=_NUMERIC_ABSOLUTE_TOLERANCE,
+    ):
+        raise DirectEdgeScoringError(
+            f"{name} ledger fill prices do not prove the declared cost_bps"
+        )
+    expected_slippage = np.abs(delta) * np.abs(expected_fill - reference)
+    if not np.allclose(
+        numeric["slippage"],
+        expected_slippage,
+        rtol=_NUMERIC_RELATIVE_TOLERANCE,
+        atol=_NUMERIC_ABSOLUTE_TOLERANCE,
+    ):
+        raise DirectEdgeScoringError(
+            f"{name} ledger slippage does not match fills and share deltas"
+        )
+    if not np.allclose(
+        numeric["fees"],
+        0.0,
+        rtol=0.0,
+        atol=_NUMERIC_ABSOLUTE_TOLERANCE,
+    ):
+        raise DirectEdgeScoringError(
+            f"{name} ledger must use the declared zero-commission contract"
+        )
+
+    expected_delta = np.diff(np.r_[0.0, numeric["shares"]])
+    if not np.allclose(
+        delta,
+        expected_delta,
+        rtol=_NUMERIC_RELATIVE_TOLERANCE,
+        atol=_NUMERIC_ABSOLUTE_TOLERANCE,
+    ):
+        raise DirectEdgeScoringError(
+            f"{name} ledger share deltas do not reconcile to holdings"
+        )
+
+    equity = numeric["equity"]
+    if (equity <= 0.0).any() or numeric["equity_before_fill"][0] <= 0.0:
+        raise DirectEdgeScoringError(
+            f"{name} ledger contains non-positive equity"
+        )
+    expected_return = np.empty(len(equity), dtype=float)
+    expected_return[0] = equity[0] / numeric["equity_before_fill"][0] - 1.0
+    expected_return[1:] = equity[1:] / equity[:-1] - 1.0
+    if not np.allclose(
+        numeric["daily_return"],
+        expected_return,
+        rtol=_NUMERIC_RELATIVE_TOLERANCE,
+        atol=_NUMERIC_ABSOLUTE_TOLERANCE,
+    ):
+        raise DirectEdgeScoringError(
+            f"{name} ledger daily_return does not reconcile to equity"
+        )
+
+    return {
+        "declared_cost_bps": bps,
+        "cost_bps_bound_to_fills": True,
+        "zero_commission_proof": True,
+        "trade_rows": int(trade.sum()),
+        "total_verified_slippage": float(numeric["slippage"].sum()),
+        "daily_returns_reconciled_to_equity": True,
+    }
+
+
+def _validate_cash_block_starts(
+    cash_target: np.ndarray,
+    cash_block_start: Sequence[float],
+) -> np.ndarray:
+    starts = _strict_binary(cash_block_start, name="oof_cash_block_start")
+    if len(starts) != len(cash_target):
+        raise DirectEdgeScoringError(
+            "oof_cash_block_start must align with oof_cash_target"
+        )
+    rebuilt = np.zeros(len(cash_target), dtype=float)
+    active_until = 0
+    for position in np.flatnonzero(starts == 1.0):
+        position = int(position)
+        if position < active_until:
+            raise DirectEdgeScoringError(
+                "OOF CASH block starts cannot overlap an active five-row block"
+            )
+        active_until = min(position + _CASH_BLOCK_ROWS, len(rebuilt))
+        rebuilt[position:active_until] = 1.0
+    if not np.array_equal(rebuilt, cash_target):
+        raise DirectEdgeScoringError(
+            "OOF CASH target is not exactly reconstructed by its five-row block starts"
+        )
+    return starts
+
+
 def _predictive_metrics(
     cash_win_probability: Sequence[float],
     cash_win_label: Sequence[float],
@@ -92,6 +355,7 @@ def _predictive_metrics(
     actual_edge_10bps: Sequence[float],
     causal_training_mean_edge: Sequence[float],
     oof_cash_target: Sequence[float],
+    oof_cash_block_start: Sequence[float],
 ) -> dict[str, Any]:
     probability = _finite_probability(
         cash_win_probability,
@@ -112,6 +376,10 @@ def _predictive_metrics(
         name="causal_training_mean_edge",
     )
     cash_target = _strict_binary(oof_cash_target, name="oof_cash_target")
+    block_start = _validate_cash_block_starts(
+        cash_target,
+        oof_cash_block_start,
+    )
 
     lengths = {
         len(probability),
@@ -121,6 +389,7 @@ def _predictive_metrics(
         len(actual),
         len(baseline_edge),
         len(cash_target),
+        len(block_start),
     }
     if len(lengths) != 1:
         raise DirectEdgeScoringError(
@@ -156,7 +425,7 @@ def _predictive_metrics(
     )
 
     cash = cash_target == 1.0
-    episode_start = cash & ~np.r_[False, cash[:-1]]
+    episode_start = block_start == 1.0
     mature_episode_start = episode_start & edge_mature
     episode_edges = actual[mature_episode_start]
     episode_mean = float(np.mean(episode_edges)) if len(episode_edges) else None
@@ -181,6 +450,7 @@ def _predictive_metrics(
         "expected_edge_mae_relative_improvement": relative_improvement,
         "oof_cash_days": int(cash.sum()),
         "oof_cash_episode_starts": int(episode_start.sum()),
+        "oof_cash_block_starts": int(episode_start.sum()),
         "mature_oof_cash_episode_starts": int(mature_episode_start.sum()),
         "unmatured_oof_cash_episode_starts": int(
             (episode_start & ~edge_mature).sum()
@@ -189,6 +459,7 @@ def _predictive_metrics(
         "episode_start_realized_edge_wins_10bps": episode_wins,
         "episode_start_realized_edge_win_rate_10bps": episode_win_rate,
         "exact_binary_oof_cash_target": True,
+        "exact_five_row_cash_block_reconstruction": True,
         "exact_binary_edge_label_consistency": True,
     }
 
@@ -204,6 +475,8 @@ def score_direct_edge_metrics(
     actual_edge_10bps: Sequence[float],
     causal_training_mean_edge: Sequence[float],
     oof_cash_target: Sequence[float],
+    oof_cash_block_start: Sequence[float],
+    oof_decision_dates: Sequence[object],
     *,
     cost_bps: float,
 ) -> dict[str, Any]:
@@ -237,10 +510,32 @@ def score_direct_edge_metrics(
         actual_edge_10bps,
         causal_training_mean_edge,
         oof_cash_target,
+        oof_cash_block_start,
     )
+    cash = _strict_binary(oof_cash_target, name="oof_cash_target")
+    execution_binding = _bind_oof_cash_to_executed_ledger(
+        strategy,
+        cash,
+        oof_decision_dates,
+    )
+    cost_binding = {
+        "strategy": _bind_ledger_cost_bps(
+            strategy,
+            name="strategy",
+            cost_bps=cost_bps,
+        ),
+        "buy_hold": _bind_ledger_cost_bps(
+            buy_hold,
+            name="buy_hold",
+            cost_bps=cost_bps,
+        ),
+    }
     metrics["underlying_scoring_contract"] = metrics["scoring_contract"]
     metrics["scoring_contract"] = "aapl-direct-cash-edge-development-v1"
     metrics.update(predictive)
+    metrics.update(execution_binding)
+    metrics["exact_cost_binding"] = cost_binding
+    metrics["cost_bps_bound_to_both_ledgers"] = True
     try:
         json.dumps(metrics, sort_keys=True, allow_nan=False)
     except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
@@ -283,6 +578,15 @@ def apply_direct_edge_gates(metrics: Mapping[str, Any]) -> dict[str, Any]:
         "exact_binary_edge_label_consistency": bool(
             metrics.get("exact_binary_edge_label_consistency")
         ),
+        "oof_cash_target_bound_to_executed_ledger": bool(
+            metrics.get("oof_cash_target_bound_to_executed_ledger")
+        ),
+        "exact_five_row_cash_block_reconstruction": bool(
+            metrics.get("exact_five_row_cash_block_reconstruction")
+        ),
+        "cost_bps_bound_to_both_ledgers": bool(
+            metrics.get("cost_bps_bound_to_both_ledgers")
+        ),
     }
     checks = {
         **{name: bool(value) for name, value in base["checks"].items()},
@@ -312,6 +616,8 @@ def evaluate_direct_edge_development(
     actual_edge_10bps: Sequence[float],
     causal_training_mean_edge: Sequence[float],
     oof_cash_target: Sequence[float],
+    oof_cash_block_start: Sequence[float],
+    oof_decision_dates: Sequence[object],
     *,
     cost_bps: float,
 ) -> dict[str, Any]:
@@ -328,6 +634,8 @@ def evaluate_direct_edge_development(
         actual_edge_10bps,
         causal_training_mean_edge,
         oof_cash_target,
+        oof_cash_block_start,
+        oof_decision_dates,
         cost_bps=cost_bps,
     )
     result = {"metrics": metrics, "gates": apply_direct_edge_gates(metrics)}

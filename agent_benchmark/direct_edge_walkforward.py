@@ -81,10 +81,23 @@ def candidate_cash_target_column(model_family: str, candidate_id: str) -> str:
     return f"cash_target_{model_family}_{candidate_id}"
 
 
-def five_session_cash_target(
+def candidate_cash_block_start_column(model_family: str, candidate_id: str) -> str:
+    if model_family not in MODEL_FAMILIES:
+        raise ValueError(f"Unknown direct-edge model family: {model_family!r}")
+    if candidate_id not in {item.candidate_id for item in DIRECT_EDGE_CANDIDATES}:
+        raise ValueError(f"Unknown frozen direct-edge candidate: {candidate_id!r}")
+    return f"cash_block_start_{model_family}_{candidate_id}"
+
+
+def five_session_cash_policy(
     triggers: Sequence[object] | pd.Series | np.ndarray,
-) -> np.ndarray:
-    """Turn entry triggers into one continuous non-overlapping CASH state."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the CASH state and every accepted fixed-block start.
+
+    A trigger that arrives while a block is active is ignored.  A trigger on
+    the first row after a block is accepted, so two five-row blocks can be
+    adjacent while remaining separately auditable predictions.
+    """
 
     raw = np.asarray(triggers, dtype=object)
     if raw.ndim != 1:
@@ -103,14 +116,24 @@ def five_session_cash_target(
         normalized[position] = bool(value)
 
     target = np.zeros(len(raw), dtype=np.int8)
+    block_start = np.zeros(len(raw), dtype=np.int8)
     remaining = 0
     for position, trigger in enumerate(normalized):
         if remaining == 0 and trigger:
             remaining = CASH_EPISODE_DECISION_ROWS
+            block_start[position] = 1
         if remaining:
             target[position] = 1
             remaining -= 1
-    return target
+    return target, block_start
+
+
+def five_session_cash_target(
+    triggers: Sequence[object] | pd.Series | np.ndarray,
+) -> np.ndarray:
+    """Turn entry triggers into one continuous non-overlapping CASH state."""
+
+    return five_session_cash_policy(triggers)[0]
 
 
 def _canonical_frame(feature_label_frame: pd.DataFrame) -> pd.DataFrame:
@@ -441,6 +464,12 @@ def _predict_fold(frame: pd.DataFrame, fold: WalkForwardFold) -> pd.DataFrame:
         )
 
     output["price_features_ready"] = price_ready
+    # Preserve the raw point-in-time availability flag separately from the
+    # effective fallback prediction.  The experiment runner needs this exact
+    # column to form the paired sentiment-ready ablation population.
+    output["sentiment_features_ready"] = fill[
+        "sentiment_features_ready"
+    ].to_numpy(dtype=bool)
     for name in DIRECT_EDGE_LABEL_COLUMNS:
         if name in fill.columns:
             output[name] = fill[name]
@@ -470,9 +499,13 @@ def build_pre2019_direct_edge_predictions(
                 & (probability >= candidate.probability_gate)
                 & (edge >= candidate.expected_edge_gate)
             )
+            cash_target, block_start = five_session_cash_policy(trigger)
             output[
                 candidate_cash_target_column(family, candidate.candidate_id)
-            ] = five_session_cash_target(trigger)
+            ] = cash_target
+            output[
+                candidate_cash_block_start_column(family, candidate.candidate_id)
+            ] = block_start
     return output
 
 
@@ -485,6 +518,8 @@ __all__ = [
     "DirectEdgeCandidate",
     "WalkForwardFold",
     "build_pre2019_direct_edge_predictions",
+    "candidate_cash_block_start_column",
     "candidate_cash_target_column",
+    "five_session_cash_policy",
     "five_session_cash_target",
 ]

@@ -510,6 +510,11 @@ class DirectEdgeGAM:
             coefficients, iterations, converged = _fit_logistic_head(
                 design, binary, ridge_lambda, self.config
             )
+            if not converged:
+                raise RuntimeError(
+                    "Logistic GAM solver did not converge for "
+                    f"ridge_lambda={ridge_lambda}"
+                )
             logistic_heads.append(
                 {
                     "ridge_lambda": float(ridge_lambda),
@@ -521,6 +526,11 @@ class DirectEdgeGAM:
             coefficients, iterations, converged = _fit_huber_head(
                 design, standardized_edge, ridge_lambda, self.config
             )
+            if not converged:
+                raise RuntimeError(
+                    "Huber GAM solver did not converge for "
+                    f"ridge_lambda={ridge_lambda}"
+                )
             huber_heads.append(
                 {
                     "ridge_lambda": float(ridge_lambda),
@@ -836,6 +846,8 @@ class DirectEdgeGAM:
                 converged = raw_head["converged"]
                 if not isinstance(converged, bool):
                     raise ValueError(f"{location} converged flag must be boolean")
+                if not converged:
+                    raise ValueError(f"{location}[{index}] did not converge")
                 decoded.append(
                     {
                         "ridge_lambda": ridge_lambda,
@@ -914,6 +926,8 @@ class DirectEdgeGAM:
             for head, expected_lambda in zip(group, self.config.ridge_lambdas):
                 if float(head["ridge_lambda"]).hex() != float(expected_lambda).hex():
                     raise ValueError("Fitted GAM ensemble lambda order is invalid")
+                if head.get("converged") is not True:
+                    raise ValueError("Fitted GAM contains a non-converged ensemble head")
                 coefficients = np.asarray(head["coefficients"], dtype=float)
                 if coefficients.shape != (dimension,) or not np.isfinite(coefficients).all():
                     raise ValueError("Fitted GAM coefficients are invalid")
