@@ -1,0 +1,156 @@
+{
+  "boundary_audit": {
+    "cftc_later_availability_rows_excluded": 0,
+    "cftc_records_available_by_2018_end": 2824,
+    "cftc_supplied_records": 2824,
+    "price_first_date": "1999-12-31",
+    "price_last_date": "2018-12-31",
+    "price_rows": 4780
+  },
+  "contract_version": "aapl-downside-ensemble-development-v1",
+  "physical_data_end": "2018-12-31",
+  "post_2018_market_data_accessed": false,
+  "source": {
+    "cftc_clean_records": 2824,
+    "cftc_coverage_audit": {
+      "complete_release_alignment_ratio": 1.0,
+      "complete_three_market_report_dates": 711,
+      "contracts": {
+        "1170E1": {
+          "coverage_ratio": 0.9442231075697212,
+          "end_coverage_lag_days": 0,
+          "expected_weekly_rows_approx": 753,
+          "first_report_date": "2004-07-27",
+          "first_report_lag_days": 0,
+          "last_report_date": "2018-12-31",
+          "maximum_internal_gap_days": 168,
+          "passed": true,
+          "rows": 711,
+          "structural_coverage_contract": {
+            "maximum_gap_days": 175,
+            "minimum_coverage_ratio": 0.94
+          }
+        },
+        "13874A": {
+          "coverage_ratio": 0.9963996399639964,
+          "end_coverage_lag_days": 0,
+          "expected_weekly_rows_approx": 1111,
+          "first_report_date": "1997-09-16",
+          "first_report_lag_days": 0,
+          "last_report_date": "2018-12-31",
+          "maximum_internal_gap_days": 25,
+          "passed": true,
+          "rows": 1107,
+          "structural_coverage_contract": {
+            "maximum_gap_days": 28,
+            "minimum_coverage_ratio": 0.99
+          }
+        },
+        "209742": {
+          "coverage_ratio": 1.000981354268891,
+          "end_coverage_lag_days": 0,
+          "expected_weekly_rows_approx": 1019,
+          "first_report_date": "1999-06-22",
+          "first_report_lag_days": 0,
+          "last_report_date": "2018-12-31",
+          "maximum_internal_gap_days": 11,
+          "passed": true,
+          "rows": 1020,
+          "structural_coverage_contract": {
+            "maximum_gap_days": 14,
+            "minimum_coverage_ratio": 0.99
+          }
+        }
+      },
+      "expected_end": "2018-12-31",
+      "expected_start": "1997-09-16",
+      "failures": [],
+      "official_row_count_proof": {
+        "count_response_sha256": "sha256:b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+        "official_rows": 2838,
+        "passed": true,
+        "payload_rows": 2838
+      },
+      "passed": true
+    },
+    "cftc_later_availability_rows_excluded": 0,
+    "cftc_records_available_by_2018_end": 2824,
+    "source_artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\cftc_cot_v1\\cftc-cot-development-20260710T175155Z-9ad7307f",
+    "source_artifact_git_commit": "a71cf0fcc942ce06e0fc72dc011c32849b188136",
+    "source_checksums": {
+      ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+      "cftc_exclusions.json": "f67a720cbca6c64217ea060b11ed790c09c19a974123ee8cc168c590e5ca503b",
+      "cftc_retrieval_metadata.json": "aeefda780abcffc5f817fcc7993e24dc3527c0f105f1fd02fc1f369c40be8e43",
+      "cot_26w_z075_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+      "cot_26w_z075_base_5bps_strategy.csv": "f9e4ec5353d53e9a9687f5fbcda4e1af2f1b0dd175f88852355778d89afe6182",
+      "cot_26w_z075_policy_decisions.csv": "8a5a1962a0b2b6b9f08b013f20ee44f0826d74143d6ff8e1ddf49c1ccf961e2f",
+      "cot_26w_z075_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+      "cot_26w_z075_stress_10bps_strategy.csv": "4af392c97b512d49b8efd4e7a57ed60f7926ae0e0c9c2cfaef7882fd57fd6a2d",
+      "cot_26w_z125_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+      "cot_26w_z125_base_5bps_strategy.csv": "53d25c8b6e03ec1fffe7dfec984aa17d2ef3c6af3d4d67c780234795afee5a68",
+      "cot_26w_z125_policy_decisions.csv": "3dd3a733cae0294abbbdadd88e861b50a6a8078b78e8033e9345d31df3784d58",
+      "cot_26w_z125_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+      "cot_26w_z125_stress_10bps_strategy.csv": "b2aa7cf6c4ca4ca48ae10dea086c24dfecbac66fef2108592aadc7fd410981f1",
+      "cot_52w_z075_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+      "cot_52w_z075_base_5bps_strategy.csv": "67311c7dee99490bc0687e9651cf116fdb3683b3cc138a7802d8d719dceb461f",
+      "cot_52w_z075_policy_decisions.csv": "664397a3bd22b40559da71cd3ccab18272b29a52d96a932589dfa9053c4133f2",
+      "cot_52w_z075_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+      "cot_52w_z075_stress_10bps_strategy.csv": "d7328d02b5325e1964432d13002850a7fe18ecc2ec5c1e6ab0853aa6635c1846",
+      "cot_52w_z125_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+      "cot_52w_z125_base_5bps_strategy.csv": "df1c832651f29ea9e9b2658b64651070cc221a6efa7b105b4e334ce382f53eac",
+      "cot_52w_z125_policy_decisions.csv": "5efe855a82ac7d6b38ad2c02e882d20fee759eb39df6a0c71f909ff459677ae6",
+      "cot_52w_z125_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+      "cot_52w_z125_stress_10bps_strategy.csv": "0dbe8fb07933778903452732b304517f7054f8762d3938967069dfe8b88bec76",
+      "development_cftc_official_count_proof_through_2018.csv": "b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+      "development_cftc_raw_through_2018.csv": "dd73770d94c96f18b93b59e8b3ee82fedda2fde3c20c8e182e8e4d53bdbad2a5",
+      "development_prices_through_2018.csv": "6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+      "report.json": "25a2fc28ba617ebba5ee615e5bd5d02969cff3c7a68865e1605488efd6f2684a",
+      "selection_manifest.json": "b05600c44d0c3f8e33bff99f6bd70b3d2594faca7dc6704085915ff2c7b04927"
+    },
+    "source_checksums_sha256": "sha256:243f471d3d08e027b6417ad98c57766b6c0b44ff988b1b9d390a3cdc1e2a4e6c",
+    "source_manifest_sha256": "sha256:b05600c44d0c3f8e33bff99f6bd70b3d2594faca7dc6704085915ff2c7b04927",
+    "source_report_run_id": "cftc-cot-development-20260710T175155Z-9ad7307f",
+    "source_type": "checksum_verified_cftc_development_artifact"
+  },
+  "source_identity": {
+    "git": {
+      "branch": "codex/aapl-frozen-downside-ensemble-v1",
+      "commit": "a71cf0fcc942ce06e0fc72dc011c32849b188136",
+      "dirty": false,
+      "status": ""
+    },
+    "repository": {
+      "repo_root": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent",
+      "tracked_source_files": [
+        ".gitattributes",
+        "agent_benchmark/cftc_cot.py",
+        "agent_benchmark/cftc_cot_policy.py",
+        "agent_benchmark/cftc_cot_experiment.py",
+        "agent_benchmark/deterministic_aapl.py",
+        "agent_benchmark/downside_features.py",
+        "agent_benchmark/downside_forest.py",
+        "agent_benchmark/downside_walkforward.py",
+        "agent_benchmark/downside_scoring.py",
+        "agent_benchmark/downside_ensemble_experiment.py",
+        "agent_benchmark/unleveraged_aapl.py",
+        "docs/downside_ensemble_experiment.md",
+        "requirements.txt"
+      ]
+    },
+    "source_hashes": {
+      ".gitattributes": "cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440",
+      "agent_benchmark/cftc_cot.py": "7609e5f5be098bbe476c1d4f7427505160eece52cf6384b03488c6f601a3d1a0",
+      "agent_benchmark/cftc_cot_experiment.py": "9b35230dcad7b91d1ad997aec5193f7fd6880363d18b1ec4ba94ba0cb444cf92",
+      "agent_benchmark/cftc_cot_policy.py": "adfe29068ae5957a1f3558c4792251ddeb904ca49dc934a2d8dd0c56cf33216c",
+      "agent_benchmark/deterministic_aapl.py": "6a2297d298792766da7d7ed9a86c4c86d5dfa7749bb071d39136fd3b6e5ca15e",
+      "agent_benchmark/downside_ensemble_experiment.py": "8d4ce06913af805c9cb72234049e9a7beb576d0266a334a1c958fea885ab7d9c",
+      "agent_benchmark/downside_features.py": "1c3fdf3f1772c4dfd0ef544354212f38c4874702f5e9323c2ff5b92fb0d3c5d1",
+      "agent_benchmark/downside_forest.py": "e3856864846832b21eeca9dc661d30d7421fb9269a05dd47e214a48c1eea3bf8",
+      "agent_benchmark/downside_scoring.py": "244f64ab42388bd7f572a9b795d4f9eea12a39be22e413f33b035b7cbb253177",
+      "agent_benchmark/downside_walkforward.py": "b7c02297598f0d316d0f83b629be68021531dc6f8da5c8b0baa517d4cca94d01",
+      "agent_benchmark/unleveraged_aapl.py": "a7adb4aaee6f66419d8a9b23da4a9ef958a38dfa6b24ded94f0148785d5380f9",
+      "docs/downside_ensemble_experiment.md": "60f3491a7ba61dd50763249fc0fac943303f5604ce8f68a8e8680db212761566",
+      "requirements.txt": "6f8ab2b499653f57e9b72d57c6802d6b69f2966720f618f2ea560bf0bade55dc"
+    }
+  }
+}

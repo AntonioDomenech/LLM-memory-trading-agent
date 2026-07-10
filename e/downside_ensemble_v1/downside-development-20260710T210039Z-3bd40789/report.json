@@ -1,0 +1,273 @@
+{
+  "artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\downside_ensemble_v1\\downside-development-20260710T210039Z-3bd40789",
+  "candidate_count": 8,
+  "candidate_results_sha256": "sha256:b758c1082c66b9197bcc72526656b036392c28d6145155cecd4c74eb73e1ad3c",
+  "contract_version": "aapl-downside-ensemble-development-v1",
+  "created_at_utc": "2026-07-10T21:00:39.179909+00:00",
+  "development_pass": false,
+  "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+  "physical_data_end": "2018-12-31",
+  "post_2018_market_data_accessed": false,
+  "refit": {
+    "performed": false,
+    "reason": "no_development_candidate_passed"
+  },
+  "rejected_absolute_trigger_preflight": {
+    "diagnosis": [
+      "predicted mean-return floor remained above the rejected -0.005 gate",
+      "maximum downside probability was approximately 0.26",
+      "absolute probabilities were not comparable across changing fold prevalences"
+    ],
+    "evidence_stage": "pre2019_structural_development_preflight",
+    "observed_result": "zero_cash_targets_for_all_eight_candidates",
+    "permitted_response": "replace the nonfunctional trigger before sealing with fixed causal relative-risk multiples; do not inspect any later period",
+    "rejected_absolute_probability_gates": [
+      0.25,
+      0.3,
+      0.35,
+      0.4
+    ],
+    "rejected_predicted_mean_log_return_gate": -0.005
+  },
+  "reproducibility": {
+    "api_cost_display": "$0.00",
+    "completed_before_seal_within_limit": true,
+    "estimated_external_cost_usd": 0.0,
+    "model_calls": 0,
+    "runtime_limit_seconds": 3600.0,
+    "runtime_seconds_before_seal": 11.523821100010537
+  },
+  "run_id": "downside-development-20260710T210039Z-3bd40789",
+  "selected_candidate_id": null,
+  "selection_manifest": {
+    "candidate_family": [
+      {
+        "candidate_id": "price_only_r110",
+        "cash_decision_rows": 5,
+        "model_family": "price_only",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.1,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_only_r120",
+        "cash_decision_rows": 5,
+        "model_family": "price_only",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.2,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_only_r130",
+        "cash_decision_rows": 5,
+        "model_family": "price_only",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.3,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_only_r140",
+        "cash_decision_rows": 5,
+        "model_family": "price_only",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.4,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_cftc_r110",
+        "cash_decision_rows": 5,
+        "model_family": "price_cftc",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.1,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_cftc_r120",
+        "cash_decision_rows": 5,
+        "model_family": "price_cftc",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.2,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_cftc_r130",
+        "cash_decision_rows": 5,
+        "model_family": "price_cftc",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.3,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      },
+      {
+        "candidate_id": "price_cftc_r140",
+        "cash_decision_rows": 5,
+        "model_family": "price_cftc",
+        "predicted_mean_return_role": "diagnostic_only_not_a_trading_gate",
+        "risk_multiple_gate": 1.4,
+        "trigger": "downside_probability >= risk_multiple_gate * causal_fold_training_prevalence"
+      }
+    ],
+    "candidate_results_sha256": "sha256:b758c1082c66b9197bcc72526656b036392c28d6145155cecd4c74eb73e1ad3c",
+    "contract_version": "aapl-downside-ensemble-development-v1",
+    "cost_scenarios_bps": {
+      "base_5bps": 5.0,
+      "stress_10bps": 10.0
+    },
+    "evidence_classification": "chronological_internal_development_and_selection_not_unseen_test_evidence",
+    "execution": {
+      "actions": [
+        "LONG_100_PERCENT",
+        "CASH_100_PERCENT"
+      ],
+      "asset": "AAPL",
+      "cash_interest_rate": 0.0,
+      "decision_information_cutoff": "completed close t",
+      "fill": "next adjusted AAPL open",
+      "leverage": false,
+      "maximum_target_exposure": 1.0,
+      "shorting": false
+    },
+    "forest_config": {
+      "block_length": 20,
+      "bootstrap_fraction": 0.75,
+      "clipped_return_lower": -0.15,
+      "clipped_return_upper": 0.15,
+      "features_per_node": 4,
+      "label_log_return_cutoff": -0.04082199452025513,
+      "max_depth": 2,
+      "min_samples_leaf": 64,
+      "min_weighted_gini_gain": 1e-06,
+      "prior_strength": 24.0,
+      "seed": 1729,
+      "split_quantiles": [
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        0.9
+      ],
+      "tree_count": 31
+    },
+    "later_stage_lock": {
+      "candidate_grid_may_change_after_this_run": false,
+      "features_may_change_after_this_run": false,
+      "forest_configuration_may_change_after_this_run": false,
+      "only_selected_candidate_may_advance": true,
+      "thresholds_may_change_after_this_run": false
+    },
+    "manifest_sha256": "sha256:d2492e79d6621182407ba40cf76c9b82125cc3041b8e4874e2ad1446ccfbcd1e",
+    "payload_sha256": {
+      "buy_hold_base_5bps.csv": "sha256:6ba9f8de0b2d183de341a1abb8bad104decde90930a92895c97a329d2e59d7b0",
+      "buy_hold_stress_10bps.csv": "sha256:30c6741211816af4695402e988592cde393301ed509910d7cc48481fd2a3ceb0",
+      "candidate_results.json": "sha256:1682aac5ab9f0343f3e875406a3009b80faea1d392f6f0f131d63b3577e259f8",
+      "candidate_targets_2005_2018.csv": "sha256:1f91f633b8d661505b4e811f2997ed75710e627a2c47ac2ef996f4b6d7f8d172",
+      "common_price_cftc_r110_base_5bps_strategy.csv": "sha256:404bc7f741289f64ee3747afc4728cd2d89621463f3603392cedbd4059bc51b3",
+      "common_price_cftc_r110_stress_10bps_strategy.csv": "sha256:4fe7a9dec31fa550844b2860634011ac982692da789e8b4f192647447746b401",
+      "common_price_cftc_r120_base_5bps_strategy.csv": "sha256:8595bfb79eacfd78e5da42dc3b6169fa1e07503c74308091ed31eace1d96c56b",
+      "common_price_cftc_r120_stress_10bps_strategy.csv": "sha256:e788813d054d4fc2e5ea05530febbc8acf90fac819f8511e7d1cb7c26b226f31",
+      "common_price_cftc_r130_base_5bps_strategy.csv": "sha256:1aad443bddecd146fffdfa3cb7ccc3d3580cc6fb16b1448ac29ddb3d040ec814",
+      "common_price_cftc_r130_stress_10bps_strategy.csv": "sha256:4cd7181672e26f751df9c62493690b2c9195da49012918a5477bb0583d11654d",
+      "common_price_cftc_r140_base_5bps_strategy.csv": "sha256:cf5045ede5463e7847baec85f207ee3176141b523174678b1ac1feabf4cf5fc4",
+      "common_price_cftc_r140_stress_10bps_strategy.csv": "sha256:6c276d1b148e34e5e29ef79b109abafa6d6a246aa50908be454d824b19f10aeb",
+      "common_price_only_r110_base_5bps_strategy.csv": "sha256:bb06a5d71cd46b42b85c163db663d720762d178d1832e3f306684bc705f7368c",
+      "common_price_only_r110_stress_10bps_strategy.csv": "sha256:fd14937f0f85a2c22f5094342521185a394e023396fd2238e4fbf1e2b4973afd",
+      "common_price_only_r120_base_5bps_strategy.csv": "sha256:bb3d75a992429b302bbe59e90d7941e6e08ae329e358c45035ac72bc425ae270",
+      "common_price_only_r120_stress_10bps_strategy.csv": "sha256:e88e351fdac133ae280c8e9c95eb2ea894a2e88263c9123922301c7c0a9f7e80",
+      "common_price_only_r130_base_5bps_strategy.csv": "sha256:1ed770385967df6aae62b9951ecf99071dfdcf2c8b8d45c6f8947bc8312d738e",
+      "common_price_only_r130_stress_10bps_strategy.csv": "sha256:c60e263ea734596e1494f76d080165739853b0fc31d090ec46e62f9d62bd3e08",
+      "common_price_only_r140_base_5bps_strategy.csv": "sha256:f3672ac5038679b8d2d0fd9d35a50830776f6d90a62188440204d8adbd02b697",
+      "common_price_only_r140_stress_10bps_strategy.csv": "sha256:e7f7072f42b41b0437b9a0a3718aa80b77046558e873f574cabfe522a34b66e1",
+      "development_cftc_records_available_through_2018.csv": "sha256:58a34e7251bc01abc9d774a15c9cc0b982fe256b7ab66052cc262df5465e83c8",
+      "development_prices_through_2018.csv": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+      "input_provenance.json": "sha256:e96594fa88e974fcdc9cb4129ae21d38fe2fd22cad40d79b38c14a19d793bcc0",
+      "oof_predictions_2005_2018.csv": "sha256:a03605443fbbc70452afe8f98cc11f935b8fe02fd0f2154ee1fe59c30e48fb2a",
+      "price_cftc_r110_base_5bps_strategy.csv": "sha256:fea05ce3cc8e039a1f1f7f95d39c5591b13e2f9a81a1a37ed85e57225a6a46ad",
+      "price_cftc_r110_stress_10bps_strategy.csv": "sha256:35cf16cc7821698502879c81c21f9b0a9875a556044941124d918950e70b13ca",
+      "price_cftc_r120_base_5bps_strategy.csv": "sha256:cd4110e84ca019765f625a8ac24d67d7abcc292f7cc433be23b8709209497f5b",
+      "price_cftc_r120_stress_10bps_strategy.csv": "sha256:8baaaa70e1d93b04cfc518156e35ce58ef8271f1f94149436d334d7d2cd295dc",
+      "price_cftc_r130_base_5bps_strategy.csv": "sha256:c38b49f6a6499dd331b40cca6de2b7379ee4c8691d99268c863d0c351623acc6",
+      "price_cftc_r130_stress_10bps_strategy.csv": "sha256:c1b1a90779c5a374565c09114fd2114fa107403dae5c486de0d95b6e0007f81d",
+      "price_cftc_r140_base_5bps_strategy.csv": "sha256:cf5045ede5463e7847baec85f207ee3176141b523174678b1ac1feabf4cf5fc4",
+      "price_cftc_r140_stress_10bps_strategy.csv": "sha256:6c276d1b148e34e5e29ef79b109abafa6d6a246aa50908be454d824b19f10aeb",
+      "price_only_r110_base_5bps_strategy.csv": "sha256:bd516103258999d2224f4b1ce9acb8f5b0936c4473d5cb62997aeba40471af03",
+      "price_only_r110_stress_10bps_strategy.csv": "sha256:4d2887c04be0bcfc77335ce6f7fd444ee74aaae8eb5dfe63d73cf045c3ecab18",
+      "price_only_r120_base_5bps_strategy.csv": "sha256:26fd274e2057fdfa33f783efff494caf9880742e773be804dc543475feb885b2",
+      "price_only_r120_stress_10bps_strategy.csv": "sha256:58ec10145f64e2e7335745d55578728a5e38a2653b6b6bb3029ee753cb6c3847",
+      "price_only_r130_base_5bps_strategy.csv": "sha256:9eb2ec1d3a7310ca32e385287d5215d937c96d7ca11cfb5a4570e660feae557d",
+      "price_only_r130_stress_10bps_strategy.csv": "sha256:54135d67b901c37b73b231aa3efa613c7da82e9930c419ba316283574e96a152",
+      "price_only_r140_base_5bps_strategy.csv": "sha256:f3672ac5038679b8d2d0fd9d35a50830776f6d90a62188440204d8adbd02b697",
+      "price_only_r140_stress_10bps_strategy.csv": "sha256:e7f7072f42b41b0437b9a0a3718aa80b77046558e873f574cabfe522a34b66e1"
+    },
+    "physical_data_end": "2018-12-31",
+    "post_2018_market_data_access_allowed": false,
+    "post_2018_market_data_accessed": false,
+    "refit": {
+      "performed": false,
+      "reason": "no_development_candidate_passed"
+    },
+    "rejected_absolute_trigger_preflight": {
+      "diagnosis": [
+        "predicted mean-return floor remained above the rejected -0.005 gate",
+        "maximum downside probability was approximately 0.26",
+        "absolute probabilities were not comparable across changing fold prevalences"
+      ],
+      "evidence_stage": "pre2019_structural_development_preflight",
+      "observed_result": "zero_cash_targets_for_all_eight_candidates",
+      "permitted_response": "replace the nonfunctional trigger before sealing with fixed causal relative-risk multiples; do not inspect any later period",
+      "rejected_absolute_probability_gates": [
+        0.25,
+        0.3,
+        0.35,
+        0.4
+      ],
+      "rejected_predicted_mean_log_return_gate": -0.005
+    },
+    "selected_candidate_id": null,
+    "selection_tie_break": [
+      "highest 10bps minimum fold active-log edge",
+      "highest 10bps total active-log edge",
+      "highest causal Brier improvement",
+      "fewer 10bps cash days",
+      "price-only before price+CFTC",
+      "lexical candidate id"
+    ],
+    "stage": "development",
+    "walk_forward_folds": [
+      {
+        "first_year": 2005,
+        "fold_id": "2005-2006",
+        "last_year": 2006
+      },
+      {
+        "first_year": 2007,
+        "fold_id": "2007-2008",
+        "last_year": 2008
+      },
+      {
+        "first_year": 2009,
+        "fold_id": "2009-2010",
+        "last_year": 2010
+      },
+      {
+        "first_year": 2011,
+        "fold_id": "2011-2012",
+        "last_year": 2012
+      },
+      {
+        "first_year": 2013,
+        "fold_id": "2013-2014",
+        "last_year": 2014
+      },
+      {
+        "first_year": 2015,
+        "fold_id": "2015-2016",
+        "last_year": 2016
+      },
+      {
+        "first_year": 2017,
+        "fold_id": "2017-2018",
+        "last_year": 2018
+      }
+    ]
+  },
+  "stage": "development"
+}
