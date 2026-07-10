@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "candidate_hash": "85c6a66e5aceaa4270bfb50f8eea38c7c71279ac2de39b45eb434c6fd99e0908",
+      "data_sha256": "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1",
+      "git_commit": "1b3ecd6c8d1639f9751933bbc81a2a9fcfc96adb",
+      "registered_at_utc": "2026-07-10T14:21:50.214079+00:00",
+      "strategy_name": "exhaustion_or_gap_v1",
+      "touch_count": 5
+    },
+    {
+      "candidate_hash": "3ff207600ccfe24f9ae6ab65cff08d2f1b80cb8eef3953382a20829664213334",
+      "data_sha256": "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1",
+      "git_commit": "75b773dd08c38debd26aeaf525c4b86e2beb13d8",
+      "registered_at_utc": "2026-07-10T14:24:34.079228+00:00",
+      "strategy_name": "exhaustion_or_gap_v1",
+      "touch_count": 6
+    },
+    {
+      "candidate_hash": "49650400347112a40ffe46dd309818b719c86140c9456ee15407964b89359aa3",
+      "data_sha256": "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1",
+      "git_commit": "78e68b349d0c9e15d5d4b916a2ee1109a7f3abc8",
+      "registered_at_utc": "2026-07-10T14:33:47.162577+00:00",
+      "strategy_name": "weak_trend_exhaustion_v1",
+      "touch_count": 7
+    },
+    {
+      "candidate_hash": "8ada96fba54b9a90cd176a3962605478aa3aecfad51f9fe3428e9c843278267e",
+      "data_sha256": "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1",
+      "git_commit": "9b6857eaa719739901e93dba1ba988e390cb55fb",
+      "registered_at_utc": "2026-07-10T14:38:43.183171+00:00",
+      "strategy_name": "sparse_dual_trend_exhaustion_v1",
+      "touch_count": 8
+    },
+    {
+      "candidate_hash": "a6b0f869ac34e8345d25d58f62f568334cec4a33efc2183addd9a3030b8bbebb",
+      "data_sha256": "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1",
+      "git_commit": "15549e2d1acdff246e8cca33d5b543d037f4169e",
+      "registered_at_utc": "2026-07-10T14:39:27.402528+00:00",
+      "strategy_name": "sparse_dual_trend_exhaustion_v1",
+      "touch_count": 9
+    },
+    {
+      "candidate_hash": "2796b55294e748f4fcb562c1faa6bcd377c2f267defb4645bd47cf71ec75c32a",
+      "data_sha256": "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1",
+      "git_commit": "32b7aa98807615b487261d3ea947f291d511744c",
+      "registered_at_utc": "2026-07-10T14:56:36.938141+00:00",
+      "strategy_name": "hierarchical_empirical_bayes_irrm_h1_v1",
+      "touch_count": 10
+    }
+  ],
+  "known_final_reveals_before_registry": 4,
+  "schema_version": 1
+}

@@ -1,0 +1,64 @@
+{
+  "candidate_specific_selection": {
+    "development_classification": "genuine chronological predictor frozen by an independent pre-2024-only search; all pre-2024 blocks participated in selection",
+    "grid_candidates": 384,
+    "grid_runtime_seconds": 50.6,
+    "important_limitation": "This is selected retrospective evidence, not an untouched pre-2024 confirmation.",
+    "label_maturity": "close j label uses opens j+1 and j+2 and first enters memory at close j+2",
+    "learning_start": "2001-01-01; this floor existed in the original research code but was omitted from its first written specification and was recovered during reproduction",
+    "original_frozen_spec_sha256": "34e82b72d0c2a439e7925ac0be6b1eb4b50fece44d13f04aceae903f06922684",
+    "original_pre_2024_input_sha256": "9f1c53ec327221fc0709a1aa4f9fcfa13c5e79f2a03785bd483d9acc5fa5a7a0",
+    "pre_2024_continuous_5bps_relative_wealth": 0.116763,
+    "selection_folds": [
+      "2005-2008",
+      "2009-2012",
+      "2013-2016",
+      "2017-2020",
+      "2021-2023"
+    ],
+    "selection_result": "four positive folds and one tie; seven of nine active years won"
+  },
+  "frozen_compact_grid_candidates": 36,
+  "important_limitation": "The 1,508-candidate research count is self-attested and has no complete saved table. This manifest was committed after the final years existed and is an auditable retrospective declaration, not cryptographic proof of a pristine holdout.",
+  "manifest_sha256": "649543b34830056930a15d711bb4231d76a387d288f062389c0661b87944688b",
+  "protocol_name": "pre_2024_long_cash_v1",
+  "ranking": [
+    "positive mean excess in every temporal block",
+    "minimum wins of 6/10, 3/5, and 3/5",
+    "positive median annual excess",
+    "no more than 15 cash sessions and 30 orders per year",
+    "maximize weakest block mean, then annual wins, then lower turnover",
+    "require passing adjacent percentile/lookback configurations"
+  ],
+  "research_grid_candidates_screened_self_reported": 1508,
+  "selected_spec": {
+    "aapl_percentile": 0.9,
+    "aapl_percentile_lookback": 126,
+    "bayes_edge_gate": 0.001,
+    "bayes_exact_min_samples": 8,
+    "bayes_exact_prior_strength": 10.0,
+    "bayes_global_min_samples": 200,
+    "bayes_label_cost": 0.0005,
+    "bayes_learning_start": "2001-01-01",
+    "bayes_lower_bound_z": 0.842,
+    "bayes_marginal_prior_strength": 8.0,
+    "bayes_probability_gate": 0.55,
+    "bayes_qqq_sma_days": 100,
+    "bayes_volatility_days": 63,
+    "bayes_z_cut": 1.25,
+    "cash_sessions": 1,
+    "gap_threshold": -0.04,
+    "market_return_lookback": 10,
+    "name": "hierarchical_empirical_bayes_irrm_h1_v1",
+    "require_qqq_negative": false,
+    "require_spy_negative": false,
+    "rule_type": "hierarchical_empirical_bayes",
+    "selection_data_cutoff": "2023-12-31"
+  },
+  "selection_data_cutoff": "2023-12-31",
+  "temporal_blocks": [
+    "2004-2013",
+    "2014-2018",
+    "2019-2023"
+  ]
+}
