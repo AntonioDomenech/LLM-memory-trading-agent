@@ -1,0 +1,59 @@
+{
+  "candidate_specific_selection": {
+    "development_classification": "adaptive retrospective family proposed after diagnosing the failed 2024 contextual-exhaustion result; parameters ranked using 2000-2023 only",
+    "exact_10bps_audit": {
+      "mean_annual_excess": 0.04139619329727677,
+      "median_annual_excess": 0.02471865189747824,
+      "winning_years": 16,
+      "worst_annual_excess": -0.03454596454335279
+    },
+    "exact_5bps_audit": {
+      "block_mean_excess": [
+        0.03247181366415344,
+        0.06281555631877736,
+        0.04523075790780052
+      ],
+      "mean_annual_excess": 0.0468393759635771,
+      "median_annual_excess": 0.02870602243437231,
+      "winning_years": 16,
+      "worst_annual_excess": -0.03311104154929034,
+      "years": 24
+    },
+    "full_grid_artifact_available": false,
+    "pre_2024_candidates_passing_gate": 22,
+    "pre_2024_candidates_screened": 675,
+    "selection_order": "maximum weakest 2000-2007, 2008-2015, 2016-2023 block mean; then winning years, median, mean, and lower event count"
+  },
+  "frozen_compact_grid_candidates": 36,
+  "important_limitation": "The 1,508-candidate research count is self-attested and has no complete saved table. This manifest was committed after the final years existed and is an auditable retrospective declaration, not cryptographic proof of a pristine holdout.",
+  "manifest_sha256": "77be5a3e11dc68203cb14cf8ac7df62194b58d5dc6266a2cc69f364ae79e7d56",
+  "protocol_name": "pre_2024_long_cash_v1",
+  "ranking": [
+    "positive mean excess in every temporal block",
+    "minimum wins of 6/10, 3/5, and 3/5",
+    "positive median annual excess",
+    "no more than 15 cash sessions and 30 orders per year",
+    "maximize weakest block mean, then annual wins, then lower turnover",
+    "require passing adjacent percentile/lookback configurations"
+  ],
+  "research_grid_candidates_screened_self_reported": 1508,
+  "selected_spec": {
+    "aapl_percentile": 0.925,
+    "aapl_percentile_lookback": 126,
+    "aapl_trend_sma_days": 20,
+    "cash_sessions": 1,
+    "gap_threshold": -0.04,
+    "market_return_lookback": 20,
+    "name": "weak_trend_exhaustion_v1",
+    "require_qqq_negative": true,
+    "require_spy_negative": true,
+    "rule_type": "weak_trend_contextual_exhaustion",
+    "selection_data_cutoff": "2023-12-31"
+  },
+  "selection_data_cutoff": "2023-12-31",
+  "temporal_blocks": [
+    "2004-2013",
+    "2014-2018",
+    "2019-2023"
+  ]
+}
