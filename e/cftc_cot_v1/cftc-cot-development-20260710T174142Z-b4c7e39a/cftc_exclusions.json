@@ -1,0 +1,114 @@
+[
+  {
+    "anomaly_id": "cftc-vix-corrections-2009",
+    "contract_code": "1170E1",
+    "reason": "CFTC corrected VIX large-trader reporting errors after publication.",
+    "report_date": "2009-11-17",
+    "source_id": "0911171170E1F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-vix-corrections-2009",
+    "contract_code": "1170E1",
+    "reason": "CFTC corrected VIX large-trader reporting errors after publication.",
+    "report_date": "2009-11-24",
+    "source_id": "0911241170E1F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-vix-corrections-2009",
+    "contract_code": "1170E1",
+    "reason": "CFTC corrected VIX large-trader reporting errors after publication.",
+    "report_date": "2009-12-01",
+    "source_id": "0912011170E1F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-nasdaq-clearing-adjustment-2011-06-21",
+    "contract_code": "209742",
+    "reason": "CFTC adjusted Nasdaq-100 mini open interest after a clearing-system problem.",
+    "report_date": "2011-06-21",
+    "source_id": "110621209742F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-vix-sandy-stale-positions-2012-10-30",
+    "contract_code": "1170E1",
+    "reason": "The dated VIX report actually reflected positions from 2012-10-26.",
+    "report_date": "2012-10-30",
+    "source_id": "1210301170E1F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-account-reclassification-2012-11-27",
+    "contract_code": "1170E1",
+    "reason": "CFTC republished reports after account transfers were initially misclassified.",
+    "report_date": "2012-11-27",
+    "source_id": "1211271170E1F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-account-reclassification-2012-11-27",
+    "contract_code": "13874A",
+    "reason": "CFTC republished reports after account transfers were initially misclassified.",
+    "report_date": "2012-11-27",
+    "source_id": "12112713874AF",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-account-reclassification-2012-11-27",
+    "contract_code": "209742",
+    "reason": "CFTC republished reports after account transfers were initially misclassified.",
+    "report_date": "2012-11-27",
+    "source_id": "121127209742F",
+    "source_url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalSpecialAnnouncements/index.htm"
+  },
+  {
+    "anomaly_id": "cftc-appropriations-lapse-2018-2019",
+    "contract_code": "1170E1",
+    "reason": "Weekly COT publication was suspended and later released out of schedule.",
+    "report_date": "2018-12-24",
+    "source_id": "1812241170E1F",
+    "source_url": "https://www.cftc.gov/PressRoom/PressReleases/7864-19"
+  },
+  {
+    "anomaly_id": "cftc-appropriations-lapse-2018-2019",
+    "contract_code": "13874A",
+    "reason": "Weekly COT publication was suspended and later released out of schedule.",
+    "report_date": "2018-12-24",
+    "source_id": "18122413874AF",
+    "source_url": "https://www.cftc.gov/PressRoom/PressReleases/7864-19"
+  },
+  {
+    "anomaly_id": "cftc-appropriations-lapse-2018-2019",
+    "contract_code": "209742",
+    "reason": "Weekly COT publication was suspended and later released out of schedule.",
+    "report_date": "2018-12-24",
+    "source_id": "181224209742F",
+    "source_url": "https://www.cftc.gov/PressRoom/PressReleases/7864-19"
+  },
+  {
+    "anomaly_id": "cftc-appropriations-lapse-2018-2019",
+    "contract_code": "1170E1",
+    "reason": "Weekly COT publication was suspended and later released out of schedule.",
+    "report_date": "2018-12-31",
+    "source_id": "1812311170E1F",
+    "source_url": "https://www.cftc.gov/PressRoom/PressReleases/7864-19"
+  },
+  {
+    "anomaly_id": "cftc-appropriations-lapse-2018-2019",
+    "contract_code": "13874A",
+    "reason": "Weekly COT publication was suspended and later released out of schedule.",
+    "report_date": "2018-12-31",
+    "source_id": "18123113874AF",
+    "source_url": "https://www.cftc.gov/PressRoom/PressReleases/7864-19"
+  },
+  {
+    "anomaly_id": "cftc-appropriations-lapse-2018-2019",
+    "contract_code": "209742",
+    "reason": "Weekly COT publication was suspended and later released out of schedule.",
+    "report_date": "2018-12-31",
+    "source_id": "181231209742F",
+    "source_url": "https://www.cftc.gov/PressRoom/PressReleases/7864-19"
+  }
+]

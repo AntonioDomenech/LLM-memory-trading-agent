@@ -22,6 +22,7 @@ from agent_benchmark.cftc_cot_experiment import (
     CONFIRMATION_END,
     COT_STRUCTURAL_COVERAGE_CONTRACT,
     CFTCExperimentError,
+    ACTIVE_EDGE_WIN_TOLERANCE,
     DEVELOPMENT_END,
     DEVELOPMENT_GATES,
     DEVELOPMENT_PRICE_START,
@@ -31,6 +32,7 @@ from agent_benchmark.cftc_cot_experiment import (
     _confirmation_completion_path,
     _finish_confirmation_access,
     _initialize_byte_exact_artifact_directory,
+    _month_end_rolling_win_rate,
     _parse_bounded_download,
     _verify_complete_artifact_directory,
     _write_checksums,
@@ -658,6 +660,17 @@ def test_development_gate_rejects_economically_immaterial_epsilon():
     gate = apply_stage_gates(metrics, stage="development")
     assert gate["checks"]["material_total_active_log_edge"] is False
     assert gate["passed"] is False
+
+
+def test_win_rates_do_not_count_floating_point_dust():
+    index = pd.bdate_range("2010-01-01", periods=800)
+    dust = pd.Series(0.0, index=index)
+    dust.iloc[100] = ACTIVE_EDGE_WIN_TOLERANCE / 10.0
+
+    win_rate, observations = _month_end_rolling_win_rate(dust, 252)
+
+    assert observations > 0
+    assert win_rate == 0.0
 
 
 def test_selection_uses_only_passing_variants_and_the_frozen_tie_break():

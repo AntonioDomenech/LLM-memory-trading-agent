@@ -85,6 +85,7 @@ CONFIRMATION_END = "2023-12-31"
 BASE_COST_BPS = 5.0
 STRESS_COST_BPS = 10.0
 INITIAL_CASH = 1000.0
+ACTIVE_EDGE_WIN_TOLERANCE = 1e-12
 
 CFTC_TO_POLICY_MARKET = {
     "13874A": "SP500",
@@ -136,6 +137,7 @@ CONFIRMATION_GATES: Mapping[str, float | int] = {
 }
 
 SOURCE_FILES = (
+    ".gitattributes",
     "agent_benchmark/cftc_cot.py",
     "agent_benchmark/cftc_cot_policy.py",
     "agent_benchmark/cftc_cot_experiment.py",
@@ -680,7 +682,7 @@ def _month_end_rolling_win_rate(active_log: pd.Series, sessions: int) -> tuple[f
     month_end = rolling.groupby(rolling.index.to_period("M")).tail(1).dropna()
     if month_end.empty:
         return None, 0
-    return float((month_end > 0.0).mean()), int(len(month_end))
+    return float((month_end > ACTIVE_EDGE_WIN_TOLERANCE).mean()), int(len(month_end))
 
 
 def _annual_active_edges(
@@ -738,7 +740,7 @@ def _absolute_return_diagnostics(
                 "strategy_return": strategy_return,
                 "aapl_buy_hold_return": benchmark_return,
                 "excess_return": strategy_return - benchmark_return,
-                "beat_buy_hold": strategy_return > benchmark_return,
+                "beat_buy_hold": strategy_return - benchmark_return > ACTIVE_EDGE_WIN_TOLERANCE,
             }
 
     windows = (
@@ -764,7 +766,7 @@ def _absolute_return_diagnostics(
             "strategy_return": strategy_return,
             "aapl_buy_hold_return": benchmark_return,
             "excess_return": strategy_return - benchmark_return,
-            "beat_buy_hold": strategy_return > benchmark_return,
+            "beat_buy_hold": strategy_return - benchmark_return > ACTIVE_EDGE_WIN_TOLERANCE,
         }
     return {
         "annual_strategy_returns": annual_strategy,
@@ -797,7 +799,7 @@ def score_continuous_ledgers(
         active_log, first_year=first_year, last_year=last_year
     )
     annual_values = np.asarray(list(annual.values()), dtype=float)
-    positive_annual = annual_values[annual_values > 0.0]
+    positive_annual = annual_values[annual_values > ACTIVE_EDGE_WIN_TOLERANCE]
     total_active_log = float(active_log.sum())
     best_year = float(annual_values.max()) if len(annual_values) else 0.0
     leave_best_year_out = total_active_log - best_year
@@ -824,6 +826,7 @@ def score_continuous_ledgers(
 
     return {
         "stage": stage,
+        "active_edge_win_tolerance": ACTIVE_EDGE_WIN_TOLERANCE,
         "sessions": int(len(active_log)),
         "total_active_log_edge": total_active_log,
         "relative_wealth_vs_buy_hold": float(math.expm1(total_active_log)),
@@ -832,13 +835,17 @@ def score_continuous_ledgers(
         "rolling_756_session_month_end_win_rate": rolling_756,
         "rolling_756_session_month_end_observations": rolling_756_n,
         "annual_active_log_edges": annual,
-        "annual_win_rate": float(np.mean(annual_values > 0.0)),
+        "annual_win_rate": float(
+            np.mean(annual_values > ACTIVE_EDGE_WIN_TOLERANCE)
+        ),
         "median_annual_active_log_edge": float(np.median(annual_values)),
         "best_annual_active_log_edge": best_year,
         "active_log_edge_without_best_year": leave_best_year_out,
         "largest_positive_year_share": largest_positive_share,
         "fold_active_log_edges": fold_edges,
-        "positive_folds": int(sum(value > 0.0 for value in fold_edges.values())),
+        "positive_folds": int(
+            sum(value > ACTIVE_EDGE_WIN_TOLERANCE for value in fold_edges.values())
+        ),
         "minimum_fold_active_log_edge": float(min(fold_edges.values())),
         "cash_days": int(cash.sum()),
         "cash_episodes": int(cash_episodes.sum()),
@@ -1720,7 +1727,7 @@ def _load_development_seal(
     ):
         raise CFTCExperimentError("Development Git commit is not an ancestor of confirmation")
     price_frame = _assert_stage_frame_bounds(
-        pd.read_csv(io.BytesIO(price_bytes)),
+        pd.read_csv(io.BytesIO(price_bytes), float_precision="round_trip"),
         start=DEVELOPMENT_PRICE_START,
         end=DEVELOPMENT_END,
         stage="development_replay",

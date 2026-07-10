@@ -120,7 +120,10 @@ account:
 
 Absolute returns and behavior in negative AAPL years, the 2008 crisis, Q4 2018,
 the COVID crash, and 2022 are saved as diagnostics. They cannot compensate for
-a failed gate.
+a failed gate. Annual, fold, and rolling windows require active-log edge greater
+than `1e-12` to count as wins, preventing floating-point dust from inflating
+win rates. Committed price CSVs are replayed with round-trip float parsing so
+their ledgers reproduce byte-for-byte.
 
 ## Commands
 
