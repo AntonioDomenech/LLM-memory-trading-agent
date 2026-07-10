@@ -11,7 +11,7 @@ from agent_benchmark.downside_features import (
 )
 from agent_benchmark.downside_walkforward import (
     MODEL_FAMILIES,
-    PROBABILITY_GATES,
+    RISK_MULTIPLE_GATES,
     WALK_FORWARD_FOLDS,
     build_pre2019_walkforward_predictions,
     candidate_cash_target_column,
@@ -178,6 +178,34 @@ def test_explicit_cftc_fallback_is_exact_price_identity(synthetic_run) -> None:
     )
 
 
+def test_insufficient_early_cftc_training_falls_back_without_weakening_model() -> None:
+    frame = _synthetic_feature_label_frame()
+    early = frame.index < pd.Timestamp("2005-01-03")
+    frame.loc[early, list(CFTC_FEATURE_COLUMNS)] = np.nan
+    frame.loc[early, "cftc_price_only_fallback"] = True
+
+    predictions = build_pre2019_walkforward_predictions(frame)
+    first_fold = predictions.loc[predictions["fold_id"] == "2005-2006"]
+
+    assert (first_fold["price_cftc_model_status"] == (
+        "insufficient_training_price_fallback"
+    )).all()
+    assert first_fold["price_cftc_model_sha256"].isna().all()
+    assert first_fold["price_cftc_used_fallback"].all()
+    assert (
+        first_fold["price_cftc_fallback_reason"]
+        == "insufficient_fold_training"
+    ).all()
+    np.testing.assert_array_equal(
+        first_fold["price_cftc_downside_probability"].to_numpy(),
+        first_fold["price_only_downside_probability"].to_numpy(),
+    )
+    np.testing.assert_array_equal(
+        first_fold["price_cftc_effective_baseline_downside_probability"].to_numpy(),
+        first_fold["price_only_baseline_downside_probability"].to_numpy(),
+    )
+
+
 def test_missing_values_are_never_treated_as_zero(synthetic_run) -> None:
     _, predictions, _ = synthetic_run
     first_2005 = predictions.index[predictions.index.year == 2005][0]
@@ -190,7 +218,7 @@ def test_missing_values_are_never_treated_as_zero(synthetic_run) -> None:
     assert pd.isna(
         predictions.loc[first_2005, "price_cftc_downside_probability"]
     )
-    for gate in PROBABILITY_GATES:
+    for gate in RISK_MULTIPLE_GATES:
         assert predictions.loc[
             first_2005, candidate_cash_target_column("price_cftc", gate)
         ] == 0
@@ -240,7 +268,7 @@ def test_outputs_and_model_hashes_are_deterministic(synthetic_run) -> None:
     assert first.index.max().year == 2018
     for family in MODEL_FAMILIES:
         assert first[f"{family}_model_sha256"].str.fullmatch(r"[0-9a-f]{64}").all()
-        for gate in PROBABILITY_GATES:
+        for gate in RISK_MULTIPLE_GATES:
             target = first[candidate_cash_target_column(family, gate)]
             assert target.dtype == np.int8
             assert set(target.unique()).issubset({0, 1})

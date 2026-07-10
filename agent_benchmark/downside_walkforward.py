@@ -14,6 +14,7 @@ ready are not imputed and cannot trigger CASH.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Final, Sequence
 
@@ -25,12 +26,14 @@ from .downside_features import (
     PRICE_FEATURE_COLUMNS,
     chronological_training_mask,
 )
-from .downside_forest import DownsideForest
+from .downside_forest import DownsideForest, ForestConfig, LABEL_LOG_RETURN_CUTOFF
 
 
 DEVELOPMENT_LAST_DECISION: Final[pd.Timestamp] = pd.Timestamp("2018-12-31")
-PROBABILITY_GATES: Final[tuple[float, ...]] = (0.25, 0.30, 0.35, 0.40)
-PREDICTED_MEAN_RETURN_GATE: Final[float] = -0.005
+# Absolute probabilities are not comparable across expanding folds with
+# different historical crash prevalence.  Each gate is instead a fixed
+# multiple of the causal training prevalence stored by that fold's model.
+RISK_MULTIPLE_GATES: Final[tuple[float, ...]] = (1.10, 1.20, 1.30, 1.40)
 CASH_EPISODE_DECISION_ROWS: Final[int] = 5
 MODEL_FAMILIES: Final[tuple[str, str]] = ("price_only", "price_cftc")
 
@@ -65,15 +68,15 @@ _REQUIRED_COLUMNS: Final[frozenset[str]] = frozenset(
 )
 
 
-def candidate_cash_target_column(model_family: str, probability_gate: float) -> str:
+def candidate_cash_target_column(model_family: str, risk_multiple: float) -> str:
     """Return the stable column name for one of the eight frozen candidates."""
 
     if model_family not in MODEL_FAMILIES:
         raise ValueError(f"Unknown model family: {model_family!r}")
-    gate = float(probability_gate)
-    if not any(gate == expected for expected in PROBABILITY_GATES):
-        raise ValueError(f"Probability gate is not frozen: {probability_gate!r}")
-    return f"cash_target_{model_family}_p{int(round(gate * 100)):02d}"
+    gate = float(risk_multiple)
+    if not any(gate == expected for expected in RISK_MULTIPLE_GATES):
+        raise ValueError(f"Risk-multiple gate is not frozen: {risk_multiple!r}")
+    return f"cash_target_{model_family}_r{int(round(gate * 100)):03d}"
 
 
 def five_session_cash_target(
@@ -167,7 +170,7 @@ def _fit_fold_model(
     first_decision: pd.Timestamp,
     fold: WalkForwardFold,
     model_family: str,
-) -> tuple[DownsideForest, pd.DataFrame]:
+) -> tuple[DownsideForest | None, pd.DataFrame]:
     require_cftc = model_family == "price_cftc"
     mask = chronological_training_mask(
         frame,
@@ -193,6 +196,16 @@ def _fit_fold_model(
         "downside-walkforward-v1|"
         f"{model_family}|{fold.fold_id}|strictly-before-{first_decision.date().isoformat()}"
     )
+    minimum_bootstrap_rows = 2 * ForestConfig().min_samples_leaf
+    bootstrap_rows = int(
+        math.ceil(len(training) * ForestConfig().bootstrap_fraction)
+    )
+    if require_cftc and bootstrap_rows < minimum_bootstrap_rows:
+        # Early VIX/CFTC history can legitimately be too sparse for the fixed
+        # forest.  The augmented policy then becomes the exact price policy
+        # for the whole fold.  Never weaken min_samples_leaf or manufacture
+        # sentiment values merely to force a fit.
+        return None, training
     try:
         model = DownsideForest().fit(
             training.loc[:, list(feature_names)],
@@ -210,20 +223,36 @@ def _training_metadata(
     output: pd.DataFrame,
     *,
     prefix: str,
-    model: DownsideForest,
+    model: DownsideForest | None,
     training: pd.DataFrame,
 ) -> None:
     maturity = pd.to_datetime(training["label_maturity_date"], errors="raise")
-    output[f"{prefix}_model_sha256"] = model.model_sha256
+    output[f"{prefix}_model_status"] = (
+        "fitted" if model is not None else "insufficient_training_price_fallback"
+    )
+    output[f"{prefix}_model_sha256"] = (
+        model.model_sha256 if model is not None else None
+    )
     output[f"{prefix}_training_count"] = int(len(training))
-    output[f"{prefix}_training_positive_count"] = int(model.training_positive_count)
+    output[f"{prefix}_training_positive_count"] = (
+        int(model.training_positive_count)
+        if model is not None
+        else int(
+            (
+                pd.to_numeric(
+                    training["aapl_forward_log_return_5"], errors="raise"
+                ).to_numpy(dtype=float)
+                <= LABEL_LOG_RETURN_CUTOFF
+            ).sum()
+        )
+    )
     output[f"{prefix}_training_max_decision_date"] = training.index.max()
     output[f"{prefix}_training_max_label_maturity_date"] = maturity.max()
-    output[f"{prefix}_baseline_downside_probability"] = float(
-        model.global_prevalence
+    output[f"{prefix}_baseline_downside_probability"] = (
+        float(model.global_prevalence) if model is not None else np.nan
     )
-    output[f"{prefix}_baseline_mean_clipped_return"] = float(
-        model.global_mean_clipped_return
+    output[f"{prefix}_baseline_mean_clipped_return"] = (
+        float(model.global_mean_clipped_return) if model is not None else np.nan
     )
 
 
@@ -277,21 +306,34 @@ def _predict_fold(
         price_probability[price_ready] = components["downside_probability"]
         price_mean[price_ready] = components["mean_clipped_return"]
 
-    fallback = fill["cftc_price_only_fallback"].to_numpy(dtype=bool)
+    data_fallback = fill["cftc_price_only_fallback"].to_numpy(dtype=bool)
     cftc_finite = _finite_rows(fill, CFTC_FEATURE_COLUMNS)
-    augmented_ready = price_ready & ~fallback & cftc_finite
     augmented_probability = np.full(len(fill), np.nan, dtype=float)
     augmented_mean = np.full(len(fill), np.nan, dtype=float)
-    if augmented_ready.any():
-        augmented_columns = PRICE_FEATURE_COLUMNS + CFTC_FEATURE_COLUMNS
-        components = cftc_model.predict_components(
-            fill.loc[augmented_ready, list(augmented_columns)]
+    if cftc_model is None:
+        effective_fallback = np.ones(len(fill), dtype=bool)
+        identity_fallback = price_ready
+        fallback_reason = np.full(
+            len(fill), "insufficient_fold_training", dtype=object
         )
-        augmented_probability[augmented_ready] = components["downside_probability"]
-        augmented_mean[augmented_ready] = components["mean_clipped_return"]
+    else:
+        effective_fallback = data_fallback.copy()
+        identity_fallback = price_ready & data_fallback
+        fallback_reason = np.where(
+            data_fallback, "cftc_data_unavailable", "none"
+        ).astype(object)
+        augmented_ready = price_ready & ~data_fallback & cftc_finite
+        if augmented_ready.any():
+            augmented_columns = PRICE_FEATURE_COLUMNS + CFTC_FEATURE_COLUMNS
+            components = cftc_model.predict_components(
+                fill.loc[augmented_ready, list(augmented_columns)]
+            )
+            augmented_probability[augmented_ready] = components[
+                "downside_probability"
+            ]
+            augmented_mean[augmented_ready] = components["mean_clipped_return"]
 
-    # Explicit fallback is an identity operation, never zero/mean imputation.
-    identity_fallback = price_ready & fallback
+    # Every fallback is an identity operation, never zero/mean imputation.
     augmented_probability[identity_fallback] = price_probability[identity_fallback]
     augmented_mean[identity_fallback] = price_mean[identity_fallback]
 
@@ -299,7 +341,13 @@ def _predict_fold(
         len(fill), float(price_model.global_prevalence), dtype=float
     )
     augmented_baseline = np.full(
-        len(fill), float(cftc_model.global_prevalence), dtype=float
+        len(fill),
+        (
+            float(cftc_model.global_prevalence)
+            if cftc_model is not None
+            else float(price_model.global_prevalence)
+        ),
+        dtype=float,
     )
     # The predictive baseline must follow the same causal route as the
     # effective prediction.  On an explicit CFTC fallback row the augmented
@@ -316,7 +364,9 @@ def _predict_fold(
     output["price_cftc_effective_baseline_downside_probability"] = (
         effective_augmented_baseline
     )
-    output["price_cftc_used_fallback"] = fallback
+    output["price_cftc_used_fallback"] = effective_fallback
+    output["price_cftc_fallback_reason"] = fallback_reason
+    output["cftc_data_price_only_fallback"] = data_fallback
     output["price_features_ready"] = price_ready
     output["cftc_features_finite"] = cftc_finite
 
@@ -353,14 +403,22 @@ def build_pre2019_walkforward_predictions(
 
     for family in MODEL_FAMILIES:
         probability = output[f"{family}_downside_probability"].to_numpy(dtype=float)
-        mean_return = output[
-            f"{family}_predicted_mean_clipped_return"
-        ].to_numpy(dtype=float)
-        finite = np.isfinite(probability) & np.isfinite(mean_return)
-        for gate in PROBABILITY_GATES:
-            trigger = finite & (probability >= gate) & (
-                mean_return <= PREDICTED_MEAN_RETURN_GATE
-            )
+        baseline_column = (
+            "price_only_baseline_downside_probability"
+            if family == "price_only"
+            else "price_cftc_effective_baseline_downside_probability"
+        )
+        baseline = output[baseline_column].to_numpy(dtype=float)
+        finite = (
+            np.isfinite(probability)
+            & np.isfinite(baseline)
+            & (baseline > 0.0)
+        )
+        risk_multiple = np.full(len(output), np.nan, dtype=float)
+        risk_multiple[finite] = probability[finite] / baseline[finite]
+        output[f"{family}_downside_risk_multiple"] = risk_multiple
+        for gate in RISK_MULTIPLE_GATES:
+            trigger = finite & (risk_multiple >= gate)
             output[candidate_cash_target_column(family, gate)] = (
                 five_session_cash_target(trigger)
             )
@@ -371,8 +429,7 @@ __all__ = [
     "CASH_EPISODE_DECISION_ROWS",
     "DEVELOPMENT_LAST_DECISION",
     "MODEL_FAMILIES",
-    "PREDICTED_MEAN_RETURN_GATE",
-    "PROBABILITY_GATES",
+    "RISK_MULTIPLE_GATES",
     "WALK_FORWARD_FOLDS",
     "WalkForwardFold",
     "build_pre2019_walkforward_predictions",
