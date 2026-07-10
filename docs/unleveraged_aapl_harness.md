@@ -30,7 +30,8 @@ each new candidate hash; exact reproducibility reruns retain the same index.
 The registry begins with a documented floor of four known pre-registry reveal
 batches and is copied into every immutable run directory. This improves
 auditability but, like all local metadata, cannot prove that it was never
-deleted outside the runner.
+deleted outside the runner. Registry updates hold an interprocess lock, and
+each report receives the exact registry bytes reserved for that candidate.
 
 Each candidate also receives a downside-behavior audit: every full 2000–2023
 calendar year in which the same-ledger AAPL buy-and-hold account lost money,
@@ -82,6 +83,12 @@ session even if the cache still reaches the required final date. The supplied
 repository root must be the actual repository containing both executing source
 files, and both must be Git-tracked; an unrelated clean repository cannot be
 used to launder dirty strategy code.
+
+Dates alone do not authenticate prices. Capital promotion therefore also
+requires the full content hash of the known fresh Yahoo snapshot downloaded on
+2026-07-10. An alternative or later revised snapshot remains usable for a
+diagnostic run but cannot promote capital until it is independently reviewed
+and its hash is committed explicitly.
 
 ## Commands
 

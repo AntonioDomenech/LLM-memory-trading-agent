@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import subprocess
 import time
 import uuid
@@ -53,6 +54,13 @@ FINAL_SESSION_COVERAGE = {
     "last_session": "2026-07-09",
     "observations": 6875,
     "date_sequence_sha256": "b88df14b4ec60534ace68645ee19c8a0b7d03d0c2c1829a3ad48f8a0a24c9299",
+}
+
+APPROVED_CONTEXT_DATA_SHA256 = {
+    "0c460bde5bbca9b237f8ce14d276d86d709264fff88bb4fc0c9da48ba7fc3de1": (
+        "Fresh Yahoo Finance AAPL/SPY/QQQ snapshot downloaded 2026-07-10; "
+        "1999-03-10 through 2026-07-09"
+    )
 }
 
 # Four known outcome-reveal batches preceded the append-only local registry:
@@ -286,6 +294,17 @@ def assert_final_session_coverage(frame: pd.DataFrame) -> Dict[str, Any]:
             "Market data does not match the complete required AAPL/SPY/QQQ session sequence"
         )
     return {"passed": True, **observed}
+
+
+def context_snapshot_authenticity(frame: pd.DataFrame) -> Dict[str, Any]:
+    observed_hash = context_data_sha256(frame)
+    description = APPROVED_CONTEXT_DATA_SHA256.get(observed_hash)
+    return {
+        "passed": description is not None,
+        "observed_sha256": observed_hash,
+        "approved_description": description,
+        "approved_sha256": sorted(APPROVED_CONTEXT_DATA_SHA256),
+    }
 
 
 def spec_sha256(spec: LongCashSpec) -> str:
@@ -766,49 +785,73 @@ def reserve_holdout_touch(
     git_commit: str | None,
 ) -> Dict[str, Any]:
     registry_path.parent.mkdir(parents=True, exist_ok=True)
-    if registry_path.exists():
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    else:
-        registry = {
-            "schema_version": 1,
-            "known_final_reveals_before_registry": KNOWN_FINAL_REVEALS_BEFORE_REGISTRY,
-            "entries": [],
-        }
-    if registry.get("known_final_reveals_before_registry") != KNOWN_FINAL_REVEALS_BEFORE_REGISTRY:
-        raise ValueError("Holdout registry baseline is inconsistent with this implementation")
-    entries = registry.get("entries")
-    if not isinstance(entries, list):
-        raise ValueError("Holdout registry entries must be a list")
-    for entry in entries:
-        if entry.get("candidate_hash") == candidate_hash:
-            return {
-                "touch_count": int(entry["touch_count"]),
-                "registry_path": str(registry_path.resolve()),
-                "registry_sha256": file_sha256(registry_path),
-                "new_candidate_reveal": False,
-                "entry": entry,
+    lock_path = registry_path.with_suffix(registry_path.suffix + ".lock")
+    deadline = time.monotonic() + 30.0
+    lock_fd: int | None = None
+    while lock_fd is None:
+        try:
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(lock_fd, f"pid={os.getpid()}\n".encode("ascii"))
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > 600.0:
+                    lock_path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Timed out acquiring the holdout registry lock")
+            time.sleep(0.05)
+    try:
+        if registry_path.exists():
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        else:
+            registry = {
+                "schema_version": 1,
+                "known_final_reveals_before_registry": KNOWN_FINAL_REVEALS_BEFORE_REGISTRY,
+                "entries": [],
             }
-    touch_count = KNOWN_FINAL_REVEALS_BEFORE_REGISTRY + len(entries) + 1
-    entry = {
-        "touch_count": touch_count,
-        "candidate_hash": candidate_hash,
-        "strategy_name": strategy_name,
-        "data_sha256": data_hash,
-        "git_commit": git_commit,
-        "registered_at_utc": datetime.now(timezone.utc).isoformat(),
-    }
-    entries.append(entry)
-    _atomic_write_text(
-        registry_path,
-        json.dumps(registry, indent=2, sort_keys=True) + "\n",
-    )
-    return {
-        "touch_count": touch_count,
-        "registry_path": str(registry_path.resolve()),
-        "registry_sha256": file_sha256(registry_path),
-        "new_candidate_reveal": True,
-        "entry": entry,
-    }
+        if registry.get("known_final_reveals_before_registry") != KNOWN_FINAL_REVEALS_BEFORE_REGISTRY:
+            raise ValueError("Holdout registry baseline is inconsistent with this implementation")
+        entries = registry.get("entries")
+        if not isinstance(entries, list):
+            raise ValueError("Holdout registry entries must be a list")
+        existing = next(
+            (entry for entry in entries if entry.get("candidate_hash") == candidate_hash),
+            None,
+        )
+        new_candidate_reveal = existing is None
+        if existing is None:
+            touch_count = KNOWN_FINAL_REVEALS_BEFORE_REGISTRY + len(entries) + 1
+            entry = {
+                "touch_count": touch_count,
+                "candidate_hash": candidate_hash,
+                "strategy_name": strategy_name,
+                "data_sha256": data_hash,
+                "git_commit": git_commit,
+                "registered_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            entries.append(entry)
+        else:
+            entry = existing
+            touch_count = int(entry["touch_count"])
+        reserved_payload = json.dumps(registry, indent=2, sort_keys=True) + "\n"
+        _atomic_write_text(registry_path, reserved_payload)
+        reserved_hash = hashlib.sha256(reserved_payload.encode("utf-8")).hexdigest()
+        return {
+            "touch_count": touch_count,
+            "registry_path": str(registry_path.resolve()),
+            "registry_sha256": reserved_hash,
+            "new_candidate_reveal": new_candidate_reveal,
+            "entry": entry,
+            "_reserved_registry_json": reserved_payload,
+        }
+    finally:
+        os.close(lock_fd)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def run_unleveraged_experiment(
@@ -846,6 +889,7 @@ def run_unleveraged_experiment(
     )
     session_coverage = assert_final_session_coverage(frame)
     data_hash = context_data_sha256(frame)
+    data_authenticity = context_snapshot_authenticity(frame)
     candidate_hash_at_start = hashlib.sha256(
         f"{spec_sha256(spec)}:{implementation_hash_at_start}:{ledger_dependency_hash_at_start}:{data_hash}".encode(
             "utf-8"
@@ -858,6 +902,7 @@ def run_unleveraged_experiment(
         data_hash=data_hash,
         git_commit=git_state.get("commit"),
     )
+    reserved_registry_json = str(holdout_touch.pop("_reserved_registry_json"))
     base_costs = CostAssumptions(slippage_bps=5.0, annual_margin_rate=0.0)
     scenarios_costs = {
         "base_5bps": base_costs,
@@ -913,6 +958,8 @@ def run_unleveraged_experiment(
         integrity_errors.append("dirty_or_unverifiable_git_worktree_at_run_start")
     if context_data_sha256(pd.read_csv(snapshot_path)) != data_hash:
         integrity_errors.append("saved_market_snapshot_hash_mismatch")
+    if not data_authenticity["passed"]:
+        integrity_errors.append("unapproved_market_price_snapshot")
     if elapsed > 3600.0:
         integrity_errors.append("runtime_exceeded_3600_seconds")
     base = scenarios["base_5bps"]
@@ -961,6 +1008,7 @@ def run_unleveraged_experiment(
             "last_observation": canonical_context_frame(frame).index.max().date().isoformat(),
             "observations": int(len(frame)),
             "session_coverage_proof": session_coverage,
+            "price_snapshot_authenticity": data_authenticity,
         },
         "execution_contract": {
             "asset": "AAPL only",
@@ -1022,10 +1070,9 @@ def run_unleveraged_experiment(
     )
     report["reproducibility"]["selection_manifest_sha256"] = file_sha256(manifest_path)
     registry_snapshot_path = run_dir / "holdout_registry_snapshot.json"
-    registry_source_path = Path(holdout_touch["registry_path"])
     _atomic_write_text(
         registry_snapshot_path,
-        registry_source_path.read_text(encoding="utf-8"),
+        reserved_registry_json,
     )
     report["reproducibility"]["holdout_registry_snapshot_sha256"] = file_sha256(
         registry_snapshot_path

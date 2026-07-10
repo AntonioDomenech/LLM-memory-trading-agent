@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +17,7 @@ from agent_benchmark.unleveraged_aapl import (
     assert_unleveraged_ledger,
     build_long_cash_target,
     canonical_context_frame,
+    context_snapshot_authenticity,
     evaluate_continuous_account,
     evaluate_fresh_periods,
     reserve_holdout_touch,
@@ -269,3 +272,30 @@ def test_session_sequence_hash_detects_missing_interior_row():
     assert session_dates_sha256(missing) != full_hash
     with pytest.raises(ValueError, match="complete required"):
         assert_final_session_coverage(missing)
+
+
+def test_unapproved_price_snapshot_cannot_authenticate():
+    frame = context_frame()
+    proof = context_snapshot_authenticity(frame)
+    assert proof["passed"] is False
+    assert proof["approved_description"] is None
+
+
+def test_holdout_registry_serializes_concurrent_candidates(tmp_path):
+    registry = tmp_path / "registry.json"
+
+    def reserve(index: int):
+        return reserve_holdout_touch(
+            registry,
+            candidate_hash=f"{index:064x}",
+            strategy_name=f"candidate_{index}",
+            data_hash="d" * 64,
+            git_commit="c" * 40,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(reserve, range(8)))
+    assert sorted(item["touch_count"] for item in results) == list(range(5, 13))
+    saved = json.loads(registry.read_text(encoding="utf-8"))
+    assert len(saved["entries"]) == 8
+    assert len({entry["candidate_hash"] for entry in saved["entries"]}) == 8
