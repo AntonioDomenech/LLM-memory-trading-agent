@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,13 +11,17 @@ from agent_benchmark.unleveraged_aapl import (
     CONTEXTUAL_EXHAUSTION_V1,
     GAP_DOWN_CASH_V1,
     LongCashSpec,
+    assert_final_session_coverage,
     assert_unleveraged_ledger,
     build_long_cash_target,
     canonical_context_frame,
     evaluate_continuous_account,
     evaluate_fresh_periods,
+    reserve_holdout_touch,
+    session_dates_sha256,
     simulate_unleveraged_period,
     run_unleveraged_experiment,
+    validate_source_repository,
 )
 
 
@@ -221,13 +227,45 @@ def test_promotion_runner_rejects_noncanonical_periods_before_io(tmp_path):
         )
 
 
-@pytest.mark.parametrize("touch_count", [0, -1, True, 1.5])
-def test_promotion_runner_rejects_invalid_holdout_touch_count(tmp_path, touch_count):
-    with pytest.raises(ValueError, match="at least one"):
-        run_unleveraged_experiment(
-            repo_root=tmp_path,
-            output_dir=tmp_path / "runs",
-            cache_path=tmp_path / "cache.csv",
-            spec=GAP_DOWN_CASH_V1,
-            final_holdout_touch_count=touch_count,
-        )
+def test_source_repository_rejects_unrelated_repo_root(tmp_path):
+    with pytest.raises(ValueError, match="actual Git repository"):
+        validate_source_repository(tmp_path, [Path(__file__).resolve()])
+
+
+def test_holdout_registry_increments_new_candidates_and_reuses_exact_candidate(tmp_path):
+    registry = tmp_path / "registry.json"
+    first = reserve_holdout_touch(
+        registry,
+        candidate_hash="a" * 64,
+        strategy_name="one",
+        data_hash="d" * 64,
+        git_commit="c" * 40,
+    )
+    repeated = reserve_holdout_touch(
+        registry,
+        candidate_hash="a" * 64,
+        strategy_name="one",
+        data_hash="d" * 64,
+        git_commit="c" * 40,
+    )
+    second = reserve_holdout_touch(
+        registry,
+        candidate_hash="b" * 64,
+        strategy_name="two",
+        data_hash="d" * 64,
+        git_commit="c" * 40,
+    )
+    assert first["touch_count"] == 5
+    assert first["new_candidate_reveal"] is True
+    assert repeated["touch_count"] == first["touch_count"]
+    assert repeated["new_candidate_reveal"] is False
+    assert second["touch_count"] == 6
+
+
+def test_session_sequence_hash_detects_missing_interior_row():
+    frame = context_frame()
+    full_hash = session_dates_sha256(frame)
+    missing = frame.drop(frame.index[150])
+    assert session_dates_sha256(missing) != full_hash
+    with pytest.raises(ValueError, match="complete required"):
+        assert_final_session_coverage(missing)

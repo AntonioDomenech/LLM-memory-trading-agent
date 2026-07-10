@@ -45,6 +45,21 @@ FINAL_PERIODS = (
     EvaluationPeriod("2026_ytd", "2026-01-01", "2026-07-09"),
 )
 
+# A date-only hash is stable across later price/dividend revisions and detects
+# an omitted interior session even when a corrupted cache reaches the required
+# final date.
+FINAL_SESSION_COVERAGE = {
+    "first_session": "1999-03-10",
+    "last_session": "2026-07-09",
+    "observations": 6875,
+    "date_sequence_sha256": "b88df14b4ec60534ace68645ee19c8a0b7d03d0c2c1829a3ad48f8a0a24c9299",
+}
+
+# Four known outcome-reveal batches preceded the append-only local registry:
+# the no-leverage trend replay, the frozen exhaustion-finalist batch,
+# contextual exhaustion, and gap-down cash.
+KNOWN_FINAL_REVEALS_BEFORE_REGISTRY = 4
+
 BEAR_STRESS_PERIODS = (
     EvaluationPeriod("dotcom_2000_2002", "2000-01-01", "2002-12-31"),
     EvaluationPeriod("global_financial_crisis_2008", "2008-01-01", "2008-12-31"),
@@ -250,6 +265,27 @@ def context_data_sha256(frame: pd.DataFrame) -> str:
         lineterminator="\n",
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def session_dates_sha256(frame: pd.DataFrame) -> str:
+    dates = canonical_context_frame(frame).index
+    payload = "".join(f"{value.date().isoformat()}\n" for value in dates)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def assert_final_session_coverage(frame: pd.DataFrame) -> Dict[str, Any]:
+    data = canonical_context_frame(frame)
+    observed = {
+        "first_session": data.index.min().date().isoformat(),
+        "last_session": data.index.max().date().isoformat(),
+        "observations": int(len(data)),
+        "date_sequence_sha256": session_dates_sha256(data),
+    }
+    if observed != FINAL_SESSION_COVERAGE:
+        raise ValueError(
+            "Market data does not match the complete required AAPL/SPY/QQQ session sequence"
+        )
+    return {"passed": True, **observed}
 
 
 def spec_sha256(spec: LongCashSpec) -> str:
@@ -689,6 +725,92 @@ def _git_state(repo_root: Path) -> Dict[str, Any]:
         return {"commit": None, "branch": None, "dirty": None, "error": str(exc)}
 
 
+def validate_source_repository(repo_root: Path, source_paths: Sequence[Path]) -> Dict[str, Any]:
+    requested = repo_root.resolve()
+    completed = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=source_paths[0].resolve().parent,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    actual = Path(completed.stdout.strip()).resolve()
+    if requested != actual:
+        raise ValueError(
+            "repo_root must be the actual Git repository containing the executing source"
+        )
+    tracked: list[str] = []
+    for source in source_paths:
+        resolved = source.resolve()
+        try:
+            relative = resolved.relative_to(actual)
+        except ValueError as exc:
+            raise ValueError("Executing source is outside repo_root") from exc
+        subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", relative.as_posix()],
+            cwd=actual,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        tracked.append(relative.as_posix())
+    return {"repo_root": str(actual), "tracked_source_files": tracked}
+
+
+def reserve_holdout_touch(
+    registry_path: Path,
+    *,
+    candidate_hash: str,
+    strategy_name: str,
+    data_hash: str,
+    git_commit: str | None,
+) -> Dict[str, Any]:
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    if registry_path.exists():
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    else:
+        registry = {
+            "schema_version": 1,
+            "known_final_reveals_before_registry": KNOWN_FINAL_REVEALS_BEFORE_REGISTRY,
+            "entries": [],
+        }
+    if registry.get("known_final_reveals_before_registry") != KNOWN_FINAL_REVEALS_BEFORE_REGISTRY:
+        raise ValueError("Holdout registry baseline is inconsistent with this implementation")
+    entries = registry.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError("Holdout registry entries must be a list")
+    for entry in entries:
+        if entry.get("candidate_hash") == candidate_hash:
+            return {
+                "touch_count": int(entry["touch_count"]),
+                "registry_path": str(registry_path.resolve()),
+                "registry_sha256": file_sha256(registry_path),
+                "new_candidate_reveal": False,
+                "entry": entry,
+            }
+    touch_count = KNOWN_FINAL_REVEALS_BEFORE_REGISTRY + len(entries) + 1
+    entry = {
+        "touch_count": touch_count,
+        "candidate_hash": candidate_hash,
+        "strategy_name": strategy_name,
+        "data_sha256": data_hash,
+        "git_commit": git_commit,
+        "registered_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    entries.append(entry)
+    _atomic_write_text(
+        registry_path,
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+    )
+    return {
+        "touch_count": touch_count,
+        "registry_path": str(registry_path.resolve()),
+        "registry_sha256": file_sha256(registry_path),
+        "new_candidate_reveal": True,
+        "entry": entry,
+    }
+
+
 def run_unleveraged_experiment(
     *,
     repo_root: Path,
@@ -699,7 +821,6 @@ def run_unleveraged_experiment(
     data_start: str = "1999-01-01",
     data_end: str = "2026-07-09",
     periods: Sequence[EvaluationPeriod] = FINAL_PERIODS,
-    final_holdout_touch_count: int = 1,
     selection_notes: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     started = time.perf_counter()
@@ -709,15 +830,12 @@ def run_unleveraged_experiment(
         raise ValueError(
             "Promotion runs require the exact ordered 2024, 2025, and 2026-YTD periods"
         )
-    if (
-        isinstance(final_holdout_touch_count, bool)
-        or not isinstance(final_holdout_touch_count, int)
-        or final_holdout_touch_count < 1
-    ):
-        raise ValueError("final_holdout_touch_count must be an integer of at least one")
-    git_state = _git_state(repo_root)
     implementation_path = Path(__file__).resolve()
     ledger_dependency_path = Path(simulate_period.__code__.co_filename).resolve()
+    source_repository = validate_source_repository(
+        repo_root, (implementation_path, ledger_dependency_path)
+    )
+    git_state = _git_state(repo_root)
     implementation_hash_at_start = file_sha256(implementation_path)
     ledger_dependency_hash_at_start = file_sha256(ledger_dependency_path)
     frame, origin = load_or_download_context_frame(
@@ -726,9 +844,20 @@ def run_unleveraged_experiment(
         end_inclusive=data_end,
         refresh=refresh_data,
     )
-    if canonical_context_frame(frame).index.max() < pd.Timestamp(periods[-1].end):
-        raise ValueError("Market snapshot does not cover the complete requested final period")
+    session_coverage = assert_final_session_coverage(frame)
     data_hash = context_data_sha256(frame)
+    candidate_hash_at_start = hashlib.sha256(
+        f"{spec_sha256(spec)}:{implementation_hash_at_start}:{ledger_dependency_hash_at_start}:{data_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    holdout_touch = reserve_holdout_touch(
+        repo_root.resolve() / "data" / "unleveraged_aapl" / "holdout_registry.json",
+        candidate_hash=candidate_hash_at_start,
+        strategy_name=spec.name,
+        data_hash=data_hash,
+        git_commit=git_state.get("commit"),
+    )
     base_costs = CostAssumptions(slippage_bps=5.0, annual_margin_rate=0.0)
     scenarios_costs = {
         "base_5bps": base_costs,
@@ -810,6 +939,8 @@ def run_unleveraged_experiment(
             "utf-8"
         )
     ).hexdigest()
+    if candidate_hash != candidate_hash_at_start:
+        integrity_errors.append("candidate_hash_changed_during_run")
     manifest = selection_manifest(spec)
     report = {
         "run_id": run_id,
@@ -829,6 +960,7 @@ def run_unleveraged_experiment(
             "first_observation": canonical_context_frame(frame).index.min().date().isoformat(),
             "last_observation": canonical_context_frame(frame).index.max().date().isoformat(),
             "observations": int(len(frame)),
+            "session_coverage_proof": session_coverage,
         },
         "execution_contract": {
             "asset": "AAPL only",
@@ -845,7 +977,8 @@ def run_unleveraged_experiment(
         },
         "selection": {
             "selection_data_cutoff": spec.selection_data_cutoff,
-            "final_holdout_touch_count": int(final_holdout_touch_count),
+            "final_holdout_touch_count": int(holdout_touch["touch_count"]),
+            "holdout_touch_registry": holdout_touch,
             "frozen_manifest": manifest,
             "provenance_classification": "self_attested_retrospective_manifest",
             "notes": dict(selection_notes or {}),
@@ -867,6 +1000,7 @@ def run_unleveraged_experiment(
         "reproducibility": {
             "git": git_state,
             "git_at_end": git_state_end,
+            "source_repository": source_repository,
             "model": None,
             "model_calls": 0,
             "estimated_external_cost_usd": 0.0,
@@ -887,6 +1021,15 @@ def run_unleveraged_experiment(
         json.dumps(manifest, indent=2, sort_keys=True, default=_json_default) + "\n",
     )
     report["reproducibility"]["selection_manifest_sha256"] = file_sha256(manifest_path)
+    registry_snapshot_path = run_dir / "holdout_registry_snapshot.json"
+    registry_source_path = Path(holdout_touch["registry_path"])
+    _atomic_write_text(
+        registry_snapshot_path,
+        registry_source_path.read_text(encoding="utf-8"),
+    )
+    report["reproducibility"]["holdout_registry_snapshot_sha256"] = file_sha256(
+        registry_snapshot_path
+    )
     _atomic_write_text(
         report_path,
         json.dumps(report, indent=2, sort_keys=True, default=_json_default) + "\n",
@@ -913,6 +1056,7 @@ def run_unleveraged_experiment(
     checksums = {
         **report["reproducibility"]["artifact_sha256"],
         "selection_manifest.json": file_sha256(manifest_path),
+        "holdout_registry_snapshot.json": file_sha256(registry_snapshot_path),
         "report.json": file_sha256(report_path),
     }
     _atomic_write_text(
@@ -937,7 +1081,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/unleveraged_aapl/runs"),
     )
     parser.add_argument("--refresh-data", action="store_true")
-    parser.add_argument("--holdout-touch-count", type=int, default=1)
     return parser
 
 
@@ -949,7 +1092,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         cache_path=args.cache_path.resolve(),
         spec=SPECS_BY_NAME[args.strategy],
         refresh_data=args.refresh_data,
-        final_holdout_touch_count=args.holdout_touch_count,
     )
     summary = {
         "run_id": report["run_id"],

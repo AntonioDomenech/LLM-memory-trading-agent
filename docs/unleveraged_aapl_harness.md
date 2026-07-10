@@ -25,6 +25,12 @@ Rules are selected using data ending no later than 2023-12-31. The requested
 final audit is then run without modifying the rule on fresh-start 2024, 2025,
 and 2026-YTD accounts, plus one continuous account spanning all three periods.
 The report records how many times final-period outcomes have been examined.
+An ignored append-only local registry automatically assigns the reveal index to
+each new candidate hash; exact reproducibility reruns retain the same index.
+The registry begins with a documented floor of four known pre-registry reveal
+batches and is copied into every immutable run directory. This improves
+auditability but, like all local metadata, cannot prove that it was never
+deleted outside the runner.
 
 Each candidate also receives a downside-behavior audit: every full 2000–2023
 calendar year in which the same-ledger AAPL buy-and-hold account lost money,
@@ -69,6 +75,13 @@ The frozen search manifest is explicitly labeled self-attested: the exploratory
 did not change during a particular run; it does not prove the original search
 history or create a pristine holdout. Reports also hash every ledger CSV, the
 selection manifest, and the final report via a separate `checksums.json` file.
+
+Promotion also requires the exact 6,875-session joint AAPL/SPY/QQQ date
+sequence through 2026-07-09. Its date-only hash detects an omitted interior
+session even if the cache still reaches the required final date. The supplied
+repository root must be the actual repository containing both executing source
+files, and both must be Git-tracked; an unrelated clean repository cannot be
+used to launder dirty strategy code.
 
 ## Commands
 
