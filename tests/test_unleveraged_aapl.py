@@ -229,8 +229,9 @@ def test_sparse_dual_trend_candidate_is_frozen_binary_rule():
     assert spec.aapl_trend_sma_slow_days == 126
     assert spec.require_spy_negative is False
     assert spec.require_qqq_negative is False
-    target = build_long_cash_target(context_frame(400), spec).dropna()
+    target = build_long_cash_target(context_frame(400), spec)
     assert set(target.unique()) <= {0.0, 1.0}
+    assert (target.iloc[:252] == 1.0).all()
 
 
 def test_promotion_runner_rejects_noncanonical_periods_before_io(tmp_path):

@@ -367,6 +367,10 @@ def selection_manifest(spec: LongCashSpec) -> Dict[str, Any]:
                 "This is a provisional finalist, not a pre-2024 gate winner; final-period "
                 "testing is exploratory retrospective evidence."
             ),
+            "warmup_policy": (
+                "remain 100% long until the complete 252-session percentile and both "
+                "trend averages are available; never use a partial lookback"
+            ),
         }
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     return {**manifest, "manifest_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
@@ -419,7 +423,13 @@ def build_long_cash_target(frame: pd.DataFrame, spec: LongCashSpec) -> pd.Series
         raise AssertionError(f"Unhandled rule type: {spec.rule_type}")
     cash = _rolling_cash_mask(trigger, spec.cash_sessions)
     target = pd.Series(np.where(cash, 0.0, 1.0), index=data.index, dtype=float)
-    target.loc[warmup_missing] = np.nan
+    if spec.rule_type == "dual_trend_exhaustion":
+        # A deployable long/cash guard begins as buy-and-hold and only enables
+        # timing once every frozen lookback is complete. This is causal and
+        # avoids silently substituting a shorter percentile during 1999/2000.
+        target.loc[warmup_missing] = 1.0
+    else:
+        target.loc[warmup_missing] = np.nan
     return target.rename("target_exposure")
 
 
