@@ -1,0 +1,103 @@
+{
+  "candidate_family": [
+    {
+      "lookback_releases": 26,
+      "variant_id": "cot_26w_z075",
+      "z_threshold": 0.75
+    },
+    {
+      "lookback_releases": 26,
+      "variant_id": "cot_26w_z125",
+      "z_threshold": 1.25
+    },
+    {
+      "lookback_releases": 52,
+      "variant_id": "cot_52w_z075",
+      "z_threshold": 0.75
+    },
+    {
+      "lookback_releases": 52,
+      "variant_id": "cot_52w_z125",
+      "z_threshold": 1.25
+    }
+  ],
+  "cftc_anomaly_calendar_sha256": "sha256:c32b33fc78f8948f0e62cce6fb332da853896e74f1363613c9931b3bdfb0edf0",
+  "cftc_count_proof_sha256": "sha256:b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+  "cftc_raw_sha256": "sha256:dd73770d94c96f18b93b59e8b3ee82fedda2fde3c20c8e182e8e4d53bdbad2a5",
+  "cftc_retrieval_metadata_sha256": "sha256:abb01845ca2a42e506fbd4ef318a9b754cac98c2cda82436fc94067d515c55d0",
+  "confirmation_gates": {
+    "maximum_cash_day_rate": 0.2,
+    "minimum_2022_active_log_edge": 0.0001,
+    "minimum_252_session_month_end_win_rate": 0.6,
+    "minimum_annual_win_rate": 0.6,
+    "minimum_cash_days": 10,
+    "minimum_cash_episodes": 4,
+    "minimum_median_annual_active_log_edge": 0.0005,
+    "minimum_total_active_log_edge": 0.01
+  },
+  "contract_version": "aapl-cftc-cot-sentiment-v1",
+  "development_gates": {
+    "maximum_cash_day_rate": 0.2,
+    "maximum_largest_positive_year_share": 0.45,
+    "minimum_252_session_month_end_win_rate": 0.6,
+    "minimum_756_session_month_end_win_rate": 0.7,
+    "minimum_active_log_edge_without_best_year": 0.005,
+    "minimum_annual_win_rate": 0.55,
+    "minimum_cash_days": 30,
+    "minimum_cash_episodes": 12,
+    "minimum_median_annual_active_log_edge": 0.0005,
+    "minimum_positive_folds": 3,
+    "minimum_total_active_log_edge": 0.02
+  },
+  "evaluation_results_sha256": "sha256:96e53823551a3963cd54230364f3129f514ce2c72b8f09ea12a0a2194a816498",
+  "execution": {
+    "actions": [
+      "LONG_100_PERCENT",
+      "CASH_100_PERCENT"
+    ],
+    "asset": "AAPL",
+    "cash_interest_rate": 0.0,
+    "decision_information_cutoff": "completed close t",
+    "fill": "next adjusted AAPL open",
+    "leverage": false,
+    "maximum_realized_exposure": 1.0,
+    "maximum_target_exposure": 1.0,
+    "shorting": false
+  },
+  "git_commit": "e83341fb0b373c56bb579ecf2d7590059514bc20",
+  "manifest_sha256": "sha256:3c45eb787d42388e926c74a5f2204863ace5b9ce8b3e44bf3af1fc7343937c16",
+  "parent_development_manifest_sha256": null,
+  "physical_data_end": "2018-12-31",
+  "post_2023_market_observation_access_allowed": false,
+  "price_sha256": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+  "runtime_identity": {
+    "implementation": "CPython",
+    "packages": {
+      "numpy": "2.3.3",
+      "pandas": "2.3.3",
+      "requests": "2.32.5",
+      "yfinance": "0.2.66"
+    },
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.2"
+  },
+  "selected_variant_id": null,
+  "selection_tie_break": [
+    "highest minimum 10bps development fold active-log edge",
+    "highest total 10bps development active-log edge",
+    "fewer 10bps cash days",
+    "lexical variant id"
+  ],
+  "source_hashes": {
+    ".gitattributes": "cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440",
+    "agent_benchmark/cftc_cot.py": "7609e5f5be098bbe476c1d4f7427505160eece52cf6384b03488c6f601a3d1a0",
+    "agent_benchmark/cftc_cot_experiment.py": "9b35230dcad7b91d1ad997aec5193f7fd6880363d18b1ec4ba94ba0cb444cf92",
+    "agent_benchmark/cftc_cot_policy.py": "adfe29068ae5957a1f3558c4792251ddeb904ca49dc934a2d8dd0c56cf33216c",
+    "agent_benchmark/deterministic_aapl.py": "6a2297d298792766da7d7ed9a86c4c86d5dfa7749bb071d39136fd3b6e5ca15e",
+    "agent_benchmark/unleveraged_aapl.py": "a7adb4aaee6f66419d8a9b23da4a9ef958a38dfa6b24ded94f0148785d5380f9",
+    "docs/cftc_cot_sentiment_experiment.md": "64602f262cfca69625ebee3ffdbb54cea5178e79d9f21d6f1d57c3cba9e59377",
+    "requirements.txt": "6f8ab2b499653f57e9b72d57c6802d6b69f2966720f618f2ea560bf0bade55dc"
+  },
+  "stage": "development",
+  "static_anomaly_calendar_contains_later_metadata": true
+}

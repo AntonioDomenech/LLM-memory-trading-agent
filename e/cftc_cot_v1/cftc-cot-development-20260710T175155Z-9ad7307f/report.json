@@ -1,0 +1,1874 @@
+{
+  "artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\cftc_cot_v1\\cftc-cot-development-20260710T175155Z-9ad7307f",
+  "artifact_sha256": {
+    ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+    "cftc_exclusions.json": "f67a720cbca6c64217ea060b11ed790c09c19a974123ee8cc168c590e5ca503b",
+    "cftc_retrieval_metadata.json": "aeefda780abcffc5f817fcc7993e24dc3527c0f105f1fd02fc1f369c40be8e43",
+    "cot_26w_z075_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+    "cot_26w_z075_base_5bps_strategy.csv": "f9e4ec5353d53e9a9687f5fbcda4e1af2f1b0dd175f88852355778d89afe6182",
+    "cot_26w_z075_policy_decisions.csv": "8a5a1962a0b2b6b9f08b013f20ee44f0826d74143d6ff8e1ddf49c1ccf961e2f",
+    "cot_26w_z075_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+    "cot_26w_z075_stress_10bps_strategy.csv": "4af392c97b512d49b8efd4e7a57ed60f7926ae0e0c9c2cfaef7882fd57fd6a2d",
+    "cot_26w_z125_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+    "cot_26w_z125_base_5bps_strategy.csv": "53d25c8b6e03ec1fffe7dfec984aa17d2ef3c6af3d4d67c780234795afee5a68",
+    "cot_26w_z125_policy_decisions.csv": "3dd3a733cae0294abbbdadd88e861b50a6a8078b78e8033e9345d31df3784d58",
+    "cot_26w_z125_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+    "cot_26w_z125_stress_10bps_strategy.csv": "b2aa7cf6c4ca4ca48ae10dea086c24dfecbac66fef2108592aadc7fd410981f1",
+    "cot_52w_z075_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+    "cot_52w_z075_base_5bps_strategy.csv": "67311c7dee99490bc0687e9651cf116fdb3683b3cc138a7802d8d719dceb461f",
+    "cot_52w_z075_policy_decisions.csv": "664397a3bd22b40559da71cd3ccab18272b29a52d96a932589dfa9053c4133f2",
+    "cot_52w_z075_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+    "cot_52w_z075_stress_10bps_strategy.csv": "d7328d02b5325e1964432d13002850a7fe18ecc2ec5c1e6ab0853aa6635c1846",
+    "cot_52w_z125_base_5bps_buy_hold.csv": "f40e8df25d0887ff5be131818409239202dd7e796f0051da9d7ea38f72322657",
+    "cot_52w_z125_base_5bps_strategy.csv": "df1c832651f29ea9e9b2658b64651070cc221a6efa7b105b4e334ce382f53eac",
+    "cot_52w_z125_policy_decisions.csv": "5efe855a82ac7d6b38ad2c02e882d20fee759eb39df6a0c71f909ff459677ae6",
+    "cot_52w_z125_stress_10bps_buy_hold.csv": "54caf6f62e75a2e0655d2d41a5c27366840add78e0f3a46d2d1b505453db790f",
+    "cot_52w_z125_stress_10bps_strategy.csv": "0dbe8fb07933778903452732b304517f7054f8762d3938967069dfe8b88bec76",
+    "development_cftc_official_count_proof_through_2018.csv": "b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+    "development_cftc_raw_through_2018.csv": "dd73770d94c96f18b93b59e8b3ee82fedda2fde3c20c8e182e8e4d53bdbad2a5",
+    "development_prices_through_2018.csv": "6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+    "selection_manifest.json": "b05600c44d0c3f8e33bff99f6bd70b3d2594faca7dc6704085915ff2c7b04927"
+  },
+  "candidate_results": [
+    {
+      "passed": false,
+      "scenarios": {
+        "base_5bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": false,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -1.2819227036602927,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.1855433985776451,
+              "2006": 0.18389554860792545,
+              "2007": 1.3764142908238703,
+              "2008": -0.5690727540935915,
+              "2009": 1.4791205371991891,
+              "2010": 0.5152729141082288,
+              "2011": 0.24945048135145242,
+              "2012": 0.2764581506190258,
+              "2013": 0.11274801769656895,
+              "2014": 0.45507778256537135,
+              "2015": -0.035337139846438825,
+              "2016": 0.11433807596706425,
+              "2017": 0.4853162800914579,
+              "2018": -0.0563564842002694
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.07301718509454358,
+              "2006": -0.012724605853290424,
+              "2007": -0.13388573354974892,
+              "2008": 0.08051427088437593,
+              "2009": -0.14666357214141576,
+              "2010": -0.13052530346360153,
+              "2011": -0.27044223565209813,
+              "2012": 0.11961107819036317,
+              "2013": -0.0738603911185741,
+              "2014": -0.14290730550247058,
+              "2015": -0.19020252019877074,
+              "2016": -0.13131947257596138,
+              "2017": -0.17649972758455656,
+              "2018": 0.2202344471580855
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.0316480430114705,
+              "2006": 0.16892638471355537,
+              "2007": 1.0786258317615243,
+              "2008": -0.5329419547987355,
+              "2009": 1.1409299763949052,
+              "2010": 0.32985546128145193,
+              "2011": -0.046616836613397106,
+              "2012": 0.4386429175700657,
+              "2013": 0.03352186517280131,
+              "2014": 0.2613114998150683,
+              "2015": -0.20242477806971515,
+              "2016": -0.022795073129614485,
+              "2017": 0.24499063178660951,
+              "2018": 0.17612793453882225
+            },
+            "annual_win_rate": 0.15789473684210525,
+            "best_annual_active_log_edge": 0.2202344471580855,
+            "cash_day_rate": 0.20841180163214063,
+            "cash_days": 996,
+            "cash_episodes": 50,
+            "executed_orders": 100,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558001,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558001
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": true,
+                "end": "2008-12-31",
+                "excess_return": 0.036130799294855964,
+                "start": "2008-01-01",
+                "strategy_return": -0.5329419547987355
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.2923030254751863,
+                "beat_buy_hold": true,
+                "end": "2018-12-31",
+                "excess_return": 0.24263321456949727,
+                "start": "2018-10-01",
+                "strategy_return": -0.049669810905689005
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.219627524497583,
+              "2008_2011": -0.4671168403727395,
+              "2012_2015": -0.2873591386294523,
+              "2016_2018": -0.08758475300243244
+            },
+            "largest_positive_year_share": 0.5239189121599638,
+            "median_annual_active_log_edge": -0.07301718509454358,
+            "minimum_fold_active_log_edge": -0.4671168403727395,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7200444419262636,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7200444419262636
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442959,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442959
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": true,
+                "excess_return": 0.036130799294855964,
+                "strategy_return": -0.5329419547987355
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.035337139846438825,
+                "beat_buy_hold": false,
+                "excess_return": -0.16708763822327632,
+                "strategy_return": -0.20242477806971515
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.0563564842002694,
+                "beat_buy_hold": true,
+                "excess_return": 0.23248441873909165,
+                "strategy_return": 0.17612793453882225
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.6541286024862829,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.17050691244239632,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.09375,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -1.0616882565022072
+          },
+          "slippage_bps": 5.0
+        },
+        "stress_10bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": false,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -1.326423104618879,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.1855433985776438,
+              "2006": 0.1838955486079219,
+              "2007": 1.3764142908238721,
+              "2008": -0.5690727540935911,
+              "2009": 1.4791205371991842,
+              "2010": 0.5152729141082306,
+              "2011": 0.2494504813514502,
+              "2012": 0.2764581506190249,
+              "2013": 0.11274801769656917,
+              "2014": 0.4550777825653727,
+              "2015": -0.03533713984643738,
+              "2016": 0.11433807596706358,
+              "2017": 0.48531628009145966,
+              "2018": -0.05635648420026984
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.07501718626121155,
+              "2006": -0.01672460818662387,
+              "2007": -0.1363861100083193,
+              "2008": 0.07701464384294397,
+              "2009": -0.1496635738914151,
+              "2010": -0.13452530579693778,
+              "2011": -0.275442238568766,
+              "2012": 0.11611070114845892,
+              "2013": -0.07636001757667445,
+              "2014": -0.1474076831277076,
+              "2015": -0.1927021466568727,
+              "2016": -0.13531947490929558,
+              "2017": -0.1800001046264582,
+              "2018": 0.2152344442414158
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.0275888051485005,
+              "2006": 0.16426001541308244,
+              "2007": 1.0734349769156246,
+              "2008": -0.5345736269762926,
+              "2009": 1.1345168072882394,
+              "2010": 0.3245466610184524,
+              "2011": -0.05137185774496833,
+              "2012": 0.43361592824174444,
+              "2013": 0.03094167267575476,
+              "2014": 0.2556478755457823,
+              "2015": -0.204415928593763,
+              "2016": -0.026696087881827757,
+              "2017": 0.24064031348078774,
+              "2018": 0.1702619685799729
+            },
+            "annual_win_rate": 0.15789473684210525,
+            "best_annual_active_log_edge": 0.2152344442414158,
+            "cash_day_rate": 0.20841180163214063,
+            "cash_days": 996,
+            "cash_episodes": 50,
+            "executed_orders": 100,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558006,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558006
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": true,
+                "end": "2008-12-31",
+                "excess_return": 0.03449912711729852,
+                "start": "2008-01-01",
+                "strategy_return": -0.5345736269762926
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.29230302547518583,
+                "beat_buy_hold": true,
+                "end": "2018-12-31",
+                "excess_return": 0.24120843120284807,
+                "start": "2018-10-01",
+                "strategy_return": -0.05109459427233776
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.22812790445615477,
+              "2008_2011": -0.48261647441417493,
+              "2012_2015": -0.30035914621279575,
+              "2016_2018": -0.10008513529433793
+            },
+            "largest_positive_year_share": 0.5270706125247409,
+            "median_annual_active_log_edge": -0.07501718626121155,
+            "minimum_fold_active_log_edge": -0.48261647441417493,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7201842798673601,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7201842798673601
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442961,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442961
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": true,
+                "excess_return": 0.03449912711729852,
+                "strategy_return": -0.5345736269762926
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.03533713984643738,
+                "beat_buy_hold": false,
+                "excess_return": -0.16907878874732563,
+                "strategy_return": -0.204415928593763
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.05635648420026984,
+                "beat_buy_hold": true,
+                "excess_return": 0.22661845278024273,
+                "strategy_return": 0.1702619685799729
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.6708325398769477,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.17050691244239632,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.08854166666666667,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -1.1111886603774632
+          },
+          "slippage_bps": 10.0
+        }
+      },
+      "stage": "development",
+      "variant": {
+        "lookback_releases": 26,
+        "variant_id": "cot_26w_z075",
+        "z_threshold": 0.75
+      }
+    },
+    {
+      "passed": false,
+      "scenarios": {
+        "base_5bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": true,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -0.9125377659927745,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.1855433985776451,
+              "2006": 0.18389554860792545,
+              "2007": 1.3764142908238703,
+              "2008": -0.5690727540935915,
+              "2009": 1.4791205371991891,
+              "2010": 0.5152729141082288,
+              "2011": 0.24945048135145242,
+              "2012": 0.2764581506190258,
+              "2013": 0.11274801769656895,
+              "2014": 0.45507778256537135,
+              "2015": -0.035337139846438825,
+              "2016": 0.11433807596706425,
+              "2017": 0.4853162800914579,
+              "2018": -0.0563564842002694
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": 0.00040513737988698306,
+              "2006": 0.059829785468352464,
+              "2007": -0.0762491325075923,
+              "2008": 0.2486022979685565,
+              "2009": 0.012422837696427694,
+              "2010": -0.21671448661595857,
+              "2011": -0.16222337593647354,
+              "2012": 0.07556467068917043,
+              "2013": 5.871496865095249e-16,
+              "2014": -0.125722918079984,
+              "2015": -0.1659489384664771,
+              "2016": -0.1287593007625197,
+              "2017": -0.16019367566701,
+              "2018": -0.02494836919059743
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.1864290232914998,
+              "2006": 0.25688960172041697,
+              "2007": 1.2019506324123204,
+              "2008": -0.4474513019237878,
+              "2009": 1.5101103413707633,
+              "2010": 0.22003686737381178,
+              "2011": 0.06234684314712502,
+              "2012": 0.3766511449371541,
+              "2013": 0.11274801769656939,
+              "2014": 0.283173671305992,
+              "2015": -0.18284423288321183,
+              "2016": -0.02029005535018591,
+              "2017": 0.26545793058619305,
+              "2018": -0.07960760624174401
+            },
+            "annual_win_rate": 0.2631578947368421,
+            "best_annual_active_log_edge": 0.2486022979685565,
+            "cash_day_rate": 0.12157355095208203,
+            "cash_days": 581,
+            "cash_episodes": 42,
+            "executed_orders": 85,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558001,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558001
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": true,
+                "end": "2008-12-31",
+                "excess_return": 0.12162145216980369,
+                "start": "2008-01-01",
+                "strategy_return": -0.4474513019237878
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.2923030254751863,
+                "beat_buy_hold": true,
+                "end": "2018-12-31",
+                "excess_return": 0.08921991735118884,
+                "start": "2018-10-01",
+                "strategy_return": -0.20308310812399744
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.016014209659352893,
+              "2008_2011": -0.11791272688744792,
+              "2012_2015": -0.2161071858572901,
+              "2016_2018": -0.3139013456201271
+            },
+            "largest_positive_year_share": 0.626478844875015,
+            "median_annual_active_log_edge": 0.0,
+            "minimum_fold_active_log_edge": -0.3139013456201271,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7200444419262636,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7200444419262636
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442959,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442959
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": true,
+                "excess_return": 0.12162145216980369,
+                "strategy_return": -0.4474513019237878
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.035337139846438825,
+                "beat_buy_hold": false,
+                "excess_return": -0.147507093036773,
+                "strategy_return": -0.18284423288321183
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.0563564842002694,
+                "beat_buy_hold": false,
+                "excess_return": -0.023251122041474614,
+                "strategy_return": -0.07960760624174401
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.4851787201807341,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.2857142857142857,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.3541666666666667,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -0.663935468024218
+          },
+          "slippage_bps": 5.0
+        },
+        "stress_10bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": true,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -0.9510381634513533,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.1855433985776438,
+              "2006": 0.1838955486079219,
+              "2007": 1.3764142908238721,
+              "2008": -0.5690727540935911,
+              "2009": 1.4791205371991842,
+              "2010": 0.5152729141082306,
+              "2011": 0.2494504813514502,
+              "2012": 0.2764581506190249,
+              "2013": 0.11274801769656917,
+              "2014": 0.4550777825653727,
+              "2015": -0.03533713984643738,
+              "2016": 0.11433807596706358,
+              "2017": 0.48531628009145966,
+              "2018": -0.05635648420026984
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.0015948637867803876,
+              "2006": 0.05582978313501949,
+              "2007": -0.07874950896616194,
+              "2008": 0.24510267092712282,
+              "2009": 0.01142283711309384,
+              "2010": -0.2197144883659608,
+              "2011": -0.16522337768647113,
+              "2012": 0.07356466952250644,
+              "2013": 1.3867894462990527e-15,
+              "2014": -0.1297229204133185,
+              "2015": -0.1689489402164797,
+              "2016": -0.13275930309585549,
+              "2017": -0.1656940538755798,
+              "2018": -0.029447996815366577
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.18206053264344,
+              "2006": 0.2518720821158875,
+              "2007": 1.1964518043230945,
+              "2008": -0.4493816365934499,
+              "2009": 1.5076014842035428,
+              "2010": 0.21638223932287093,
+              "2011": 0.059164576547961145,
+              "2012": 0.37390059251207197,
+              "2013": 0.11274801769657072,
+              "2014": 0.2780512253545102,
+              "2015": -0.1852920280837963,
+              "2016": -0.024201070165892347,
+              "2017": 0.2585165409954393,
+              "2018": -0.08373972581084888
+            },
+            "annual_win_rate": 0.21052631578947367,
+            "best_annual_active_log_edge": 0.24510267092712282,
+            "cash_day_rate": 0.12157355095208203,
+            "cash_days": 581,
+            "cash_episodes": 42,
+            "executed_orders": 85,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558006,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558006
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": true,
+                "end": "2008-12-31",
+                "excess_return": 0.11969111750014128,
+                "start": "2008-01-01",
+                "strategy_return": -0.4493816365934499
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.29230302547518583,
+                "beat_buy_hold": true,
+                "end": "2018-12-31",
+                "excess_return": 0.08762767541131555,
+                "start": "2018-10-01",
+                "strategy_return": -0.20467535006387028
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.024514589617922855,
+              "2008_2011": -0.1284123580122153,
+              "2012_2015": -0.2251071911072904,
+              "2016_2018": -0.3279013537868019
+            },
+            "largest_positive_year_share": 0.6351127070078926,
+            "median_annual_active_log_edge": 0.0,
+            "minimum_fold_active_log_edge": -0.3279013537868019,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7201842798673601,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7201842798673601
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442961,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442961
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": true,
+                "excess_return": 0.11969111750014128,
+                "strategy_return": -0.4493816365934499
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.03533713984643738,
+                "beat_buy_hold": false,
+                "excess_return": -0.14995488823735892,
+                "strategy_return": -0.1852920280837963
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.05635648420026984,
+                "beat_buy_hold": false,
+                "excess_return": -0.027383241610579034,
+                "strategy_return": -0.08373972581084888
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.5063534444800017,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.2672811059907834,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.328125,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -0.7059354925242305
+          },
+          "slippage_bps": 10.0
+        }
+      },
+      "stage": "development",
+      "variant": {
+        "lookback_releases": 26,
+        "variant_id": "cot_26w_z125",
+        "z_threshold": 1.25
+      }
+    },
+    {
+      "passed": false,
+      "scenarios": {
+        "base_5bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": true,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -1.4508673880925067,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.1855433985776451,
+              "2006": 0.18389554860792545,
+              "2007": 1.3764142908238703,
+              "2008": -0.5690727540935915,
+              "2009": 1.4791205371991891,
+              "2010": 0.5152729141082288,
+              "2011": 0.24945048135145242,
+              "2012": 0.2764581506190258,
+              "2013": 0.11274801769656895,
+              "2014": 0.45507778256537135,
+              "2015": -0.035337139846438825,
+              "2016": 0.11433807596706425,
+              "2017": 0.4853162800914579,
+              "2018": -0.0563564842002694
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.108304589930066,
+              "2006": -0.11991051046462368,
+              "2007": -0.11794097768101863,
+              "2008": 0.03263801025080145,
+              "2009": -2.083172501686492e-15,
+              "2010": -0.17408173138885105,
+              "2011": -0.17739024020515018,
+              "2012": 0.04928253649999833,
+              "2013": -0.04849975484007687,
+              "2014": -0.19305579084367877,
+              "2015": -0.19020252019877062,
+              "2016": -0.21226116301918907,
+              "2017": -0.11531182574670336,
+              "2018": -0.026546294025177955
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 0.961206612989826,
+              "2006": 0.050115127108923074,
+              "2007": 1.1120346531364307,
+              "2008": -0.5547761082783901,
+              "2009": 1.4791205371991838,
+              "2010": 0.2731750662120489,
+              "2011": 0.046355945196271175,
+              "2012": 0.3409411379473717,
+              "2013": 0.060067825742770475,
+              "2014": 0.1996184731017332,
+              "2015": -0.20242477806971515,
+              "2016": -0.09877523270686162,
+              "2017": 0.32354786441157346,
+              "2018": -0.08107714968261881
+            },
+            "annual_win_rate": 0.10526315789473684,
+            "best_annual_active_log_edge": 0.04928253649999833,
+            "cash_day_rate": 0.18204645323289392,
+            "cash_days": 870,
+            "cash_episodes": 40,
+            "executed_orders": 81,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558001,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558001
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": true,
+                "end": "2008-12-31",
+                "excess_return": 0.014296645815201403,
+                "start": "2008-01-01",
+                "strategy_return": -0.5547761082783901
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.2923030254751863,
+                "beat_buy_hold": true,
+                "end": "2018-12-31",
+                "excess_return": 0.08355316767565557,
+                "start": "2018-10-01",
+                "strategy_return": -0.2087498577995307
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.34615607807570825,
+              "2008_2011": -0.31883396134320185,
+              "2012_2015": -0.38247552938252793,
+              "2016_2018": -0.3541192827910704
+            },
+            "largest_positive_year_share": 0.6015894480039855,
+            "median_annual_active_log_edge": -0.04849975484007687,
+            "minimum_fold_active_log_edge": -0.38247552938252793,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7200444419262636,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7200444419262636
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442959,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442959
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": true,
+                "excess_return": 0.014296645815201403,
+                "strategy_return": -0.5547761082783901
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.035337139846438825,
+                "beat_buy_hold": false,
+                "excess_return": -0.16708763822327632,
+                "strategy_return": -0.20242477806971515
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.0563564842002694,
+                "beat_buy_hold": false,
+                "excess_return": -0.024720665482349413,
+                "strategy_return": -0.08107714968261881
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.7537935461174209,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.11059907834101383,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.0,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -1.4015848515925085
+          },
+          "slippage_bps": 5.0
+        },
+        "stress_10bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": true,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -1.4893670355506192,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.1855433985776438,
+              "2006": 0.1838955486079219,
+              "2007": 1.3764142908238721,
+              "2008": -0.5690727540935911,
+              "2009": 1.4791205371991842,
+              "2010": 0.5152729141082306,
+              "2011": 0.2494504813514502,
+              "2012": 0.2764581506190249,
+              "2013": 0.11274801769656917,
+              "2014": 0.4550777825653727,
+              "2015": -0.03533713984643738,
+              "2016": 0.11433807596706358,
+              "2017": 0.48531628009145966,
+              "2018": -0.05635648420026984
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.10930459051339873,
+              "2006": -0.12291051221462392,
+              "2007": -0.12144135472292265,
+              "2008": 0.028138382626034037,
+              "2009": 4.3973884863296453e-16,
+              "2010": -0.1770817331388535,
+              "2011": -0.1823902431218159,
+              "2012": 0.04778216062476365,
+              "2013": -0.049999380714843444,
+              "2014": -0.20155617080224955,
+              "2015": -0.1927021466568731,
+              "2016": -0.2142611641858568,
+              "2017": -0.11581220103860447,
+              "2018": -0.030045921066611452
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 0.9592463855104627,
+              "2006": 0.046969500691494304,
+              "2007": 1.1046546594405036,
+              "2008": -0.5567749496074712,
+              "2009": 1.479120537199186,
+              "2010": 0.2693612623548347,
+              "2011": 0.04113722011109133,
+              "2012": 0.33893073077423597,
+              "2013": 0.05847931198814216,
+              "2014": 0.18946447782492792,
+              "2015": -0.20441592859376256,
+              "2016": -0.10057588204227497,
+              "2017": 0.32288575942687436,
+              "2018": -0.08428741629421121
+            },
+            "annual_win_rate": 0.10526315789473684,
+            "best_annual_active_log_edge": 0.04778216062476365,
+            "cash_day_rate": 0.18204645323289392,
+            "cash_days": 870,
+            "cash_episodes": 40,
+            "executed_orders": 81,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558006,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558006
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": true,
+                "end": "2008-12-31",
+                "excess_return": 0.012297804486119945,
+                "start": "2008-01-01",
+                "strategy_return": -0.5567749496074712
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.29230302547518583,
+                "beat_buy_hold": true,
+                "end": "2018-12-31",
+                "excess_return": 0.08118297293619658,
+                "start": "2018-10-01",
+                "strategy_return": -0.21112005253898924
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.3536564574509453,
+              "2008_2011": -0.3313335936346349,
+              "2012_2015": -0.3964755375492024,
+              "2016_2018": -0.36011928629107276
+            },
+            "largest_positive_year_share": 0.6293706364418251,
+            "median_annual_active_log_edge": -0.049999380714843444,
+            "minimum_fold_active_log_edge": -0.3964755375492024,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7201842798673601,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7201842798673601
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442961,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442961
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": true,
+                "excess_return": 0.012297804486119945,
+                "strategy_return": -0.5567749496074712
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.03533713984643738,
+                "beat_buy_hold": false,
+                "excess_return": -0.16907878874732518,
+                "strategy_return": -0.20441592859376256
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.05635648420026984,
+                "beat_buy_hold": false,
+                "excess_return": -0.027930932093941374,
+                "strategy_return": -0.08428741629421121
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.7634474447780374,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.08294930875576037,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.0,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -1.4415848749258555
+          },
+          "slippage_bps": 10.0
+        }
+      },
+      "stage": "development",
+      "variant": {
+        "lookback_releases": 52,
+        "variant_id": "cot_52w_z075",
+        "z_threshold": 0.75
+      }
+    },
+    {
+      "passed": false,
+      "scenarios": {
+        "base_5bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": true,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -1.4458051385853843,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.1855433985776451,
+              "2006": 0.18389554860792545,
+              "2007": 1.3764142908238703,
+              "2008": -0.5690727540935915,
+              "2009": 1.4791205371991891,
+              "2010": 0.5152729141082288,
+              "2011": 0.24945048135145242,
+              "2012": 0.2764581506190258,
+              "2013": 0.11274801769656895,
+              "2014": 0.45507778256537135,
+              "2015": -0.035337139846438825,
+              "2016": 0.11433807596706425,
+              "2017": 0.4853162800914579,
+              "2018": -0.0563564842002694
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.05679295824142818,
+              "2006": -0.057220919310727085,
+              "2007": -0.046949199080879155,
+              "2008": -0.062377028779222285,
+              "2009": -1.8892764956646158e-15,
+              "2010": -0.2725338068488924,
+              "2011": -0.07497183411848861,
+              "2012": 0.06678211056046851,
+              "2013": 1.7370003005390267e-15,
+              "2014": -0.27567468850760884,
+              "2015": -0.1240019178901654,
+              "2016": -0.09849861397001279,
+              "2017": -0.18494048386260337,
+              "2018": -0.19184368797535606
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7200444419262636,
+              "2001": 0.5325929383087789,
+              "2002": -0.3780538186442959,
+              "2003": 0.5250007139147677,
+              "2004": 2.0393445207648275,
+              "2005": 1.0648788045247355,
+              "2006": 0.11805368702907293,
+              "2007": 1.2674221105302053,
+              "2008": -0.5951315319645853,
+              "2009": 1.4791205371991865,
+              "2010": 0.15380105500503172,
+              "2011": 0.1592021950557545,
+              "2012": 0.3646135612565793,
+              "2013": 0.11274801769657117,
+              "2014": 0.10449108187971001,
+              "2015": -0.1478379104469052,
+              "2016": 0.009809764183071001,
+              "2017": 0.234526195303568,
+              "2018": -0.22108278039053708
+            },
+            "annual_win_rate": 0.05263157894736842,
+            "best_annual_active_log_edge": 0.06678211056046851,
+            "cash_day_rate": 0.09583594894329357,
+            "cash_days": 458,
+            "cash_episodes": 27,
+            "executed_orders": 55,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558001,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558001
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": false,
+                "end": "2008-12-31",
+                "excess_return": -0.026058777870993866,
+                "start": "2008-01-01",
+                "strategy_return": -0.5951315319645853
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.2923030254751863,
+                "beat_buy_hold": false,
+                "end": "2018-12-31",
+                "excess_return": 0.0,
+                "start": "2018-10-01",
+                "strategy_return": -0.2923030254751863
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.16096307663303444,
+              "2008_2011": -0.40988266974660514,
+              "2012_2015": -0.33289449583730396,
+              "2016_2018": -0.47528278580797234
+            },
+            "largest_positive_year_share": 1.0,
+            "median_annual_active_log_edge": -0.05679295824142818,
+            "minimum_fold_active_log_edge": -0.47528278580797234,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7200444419262636,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7200444419262636
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442959,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442959
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935915,
+                "beat_buy_hold": false,
+                "excess_return": -0.026058777870993866,
+                "strategy_return": -0.5951315319645853
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.035337139846438825,
+                "beat_buy_hold": false,
+                "excess_return": -0.11250077060046637,
+                "strategy_return": -0.1478379104469052
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.0563564842002694,
+                "beat_buy_hold": false,
+                "excess_return": -0.16472629619026768,
+                "strategy_return": -0.22108278039053708
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.748175541642639,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.10599078341013825,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.020833333333333332,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -1.3790230280249158
+          },
+          "slippage_bps": 5.0
+        },
+        "stress_10bps": {
+          "gate": {
+            "checks": {
+              "annual_win_rate": false,
+              "largest_positive_year_share": false,
+              "material_median_annual_edge": false,
+              "material_total_active_log_edge": false,
+              "material_without_best_year": false,
+              "maximum_cash_day_rate": true,
+              "minimum_cash_days": true,
+              "minimum_cash_episodes": true,
+              "no_leverage": true,
+              "positive_fold_count": false,
+              "rolling_252_win_rate": false,
+              "rolling_756_win_rate": false
+            },
+            "contract": {
+              "maximum_cash_day_rate": 0.2,
+              "maximum_largest_positive_year_share": 0.45,
+              "minimum_252_session_month_end_win_rate": 0.6,
+              "minimum_756_session_month_end_win_rate": 0.7,
+              "minimum_active_log_edge_without_best_year": 0.005,
+              "minimum_annual_win_rate": 0.55,
+              "minimum_cash_days": 30,
+              "minimum_cash_episodes": 12,
+              "minimum_median_annual_active_log_edge": 0.0005,
+              "minimum_positive_folds": 3,
+              "minimum_total_active_log_edge": 0.02
+            },
+            "passed": false
+          },
+          "metrics": {
+            "active_edge_win_tolerance": 1e-12,
+            "active_log_edge_without_best_year": -1.4718051537520604,
+            "annual_aapl_buy_hold_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.1855433985776438,
+              "2006": 0.1838955486079219,
+              "2007": 1.3764142908238721,
+              "2008": -0.5690727540935911,
+              "2009": 1.4791205371991842,
+              "2010": 0.5152729141082306,
+              "2011": 0.2494504813514502,
+              "2012": 0.2764581506190249,
+              "2013": 0.11274801769656917,
+              "2014": 0.4550777825653727,
+              "2015": -0.03533713984643738,
+              "2016": 0.11433807596706358,
+              "2017": 0.48531628009145966,
+              "2018": -0.05635648420026984
+            },
+            "annual_active_log_edges": {
+              "2000": 0.0,
+              "2001": 0.0,
+              "2002": 0.0,
+              "2003": 0.0,
+              "2004": 0.0,
+              "2005": -0.05779295882476191,
+              "2006": -0.06022092106072778,
+              "2007": -0.047949199664213585,
+              "2008": -0.06637703111255852,
+              "2009": 1.5387403807728961e-15,
+              "2010": -0.2755338085988942,
+              "2011": -0.07697183528515389,
+              "2012": 0.06578210997713753,
+              "2013": -8.198126964613361e-16,
+              "2014": -0.27867469025761127,
+              "2015": -0.12600191905683178,
+              "2016": -0.10149861572001412,
+              "2017": -0.18644085973783744,
+              "2018": -0.19434331443345648
+            },
+            "annual_strategy_returns": {
+              "2000": -0.7201842798673601,
+              "2001": 0.5325929383087757,
+              "2002": -0.3780538186442961,
+              "2003": 0.525000713914769,
+              "2004": 2.039344520764829,
+              "2005": 1.06281495661224,
+              "2006": 0.11470455023137305,
+              "2007": 1.2651558204315831,
+              "2008": -0.5967477721441874,
+              "2009": 1.4791205371991891,
+              "2010": 0.15034483674344878,
+              "2011": 0.15688610617550292,
+              "2012": 0.3632496289794984,
+              "2013": 0.11274801769656806,
+              "2014": 0.10118257195038494,
+              "2015": -0.1495405324296829,
+              "2016": 0.0067848727318498,
+              "2017": 0.23267533082620595,
+              "2018": -0.22302735111862715
+            },
+            "annual_win_rate": 0.05263157894736842,
+            "best_annual_active_log_edge": 0.06578210997713753,
+            "cash_day_rate": 0.09583594894329357,
+            "cash_days": 458,
+            "cash_episodes": 27,
+            "executed_orders": 55,
+            "fixed_downside_windows": {
+              "dot_com_bear_market": {
+                "aapl_buy_hold_return": -0.8092955186558006,
+                "beat_buy_hold": false,
+                "end": "2002-10-09",
+                "excess_return": 0.0,
+                "start": "2000-03-24",
+                "strategy_return": -0.8092955186558006
+              },
+              "global_financial_crisis_2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": false,
+                "end": "2008-12-31",
+                "excess_return": -0.027675018050596245,
+                "start": "2008-01-01",
+                "strategy_return": -0.5967477721441874
+              },
+              "q4_2018_selloff": {
+                "aapl_buy_hold_return": -0.29230302547518583,
+                "beat_buy_hold": false,
+                "end": "2018-12-31",
+                "excess_return": -1.1102230246251565e-16,
+                "start": "2018-10-01",
+                "strategy_return": -0.29230302547518594
+              }
+            },
+            "fold_active_log_edges": {
+              "2004_2007": -0.16596307954970327,
+              "2008_2011": -0.41888267499660514,
+              "2012_2015": -0.3388944993373064,
+              "2016_2018": -0.482282789891308
+            },
+            "largest_positive_year_share": 1.0,
+            "median_annual_active_log_edge": -0.05779295882476191,
+            "minimum_fold_active_log_edge": -0.482282789891308,
+            "negative_aapl_buy_hold_years": {
+              "2000": {
+                "aapl_buy_hold_return": -0.7201842798673601,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.7201842798673601
+              },
+              "2002": {
+                "aapl_buy_hold_return": -0.3780538186442961,
+                "beat_buy_hold": false,
+                "excess_return": 0.0,
+                "strategy_return": -0.3780538186442961
+              },
+              "2008": {
+                "aapl_buy_hold_return": -0.5690727540935911,
+                "beat_buy_hold": false,
+                "excess_return": -0.027675018050596245,
+                "strategy_return": -0.5967477721441874
+              },
+              "2015": {
+                "aapl_buy_hold_return": -0.03533713984643738,
+                "beat_buy_hold": false,
+                "excess_return": -0.11420339258324552,
+                "strategy_return": -0.1495405324296829
+              },
+              "2018": {
+                "aapl_buy_hold_return": -0.05635648420026984,
+                "beat_buy_hold": false,
+                "excess_return": -0.1666708669183573,
+                "strategy_return": -0.22302735111862715
+              }
+            },
+            "no_leverage_proof": {
+              "borrowing": false,
+              "maximum_holding_exposure": 1.0,
+              "maximum_post_fill_exposure": 1.0,
+              "maximum_requested_target": 1.0,
+              "minimum_cash": 0.0,
+              "minimum_shares": 0.0,
+              "passed": true,
+              "shorting": false,
+              "total_margin_interest": 0.0
+            },
+            "positive_folds": 0,
+            "relative_wealth_vs_buy_hold": -0.7548838364276667,
+            "rolling_252_session_month_end_observations": 217,
+            "rolling_252_session_month_end_win_rate": 0.10599078341013825,
+            "rolling_756_session_month_end_observations": 192,
+            "rolling_756_session_month_end_win_rate": 0.020833333333333332,
+            "sessions": 4779,
+            "stage": "development",
+            "total_active_log_edge": -1.4060230437749228
+          },
+          "slippage_bps": 10.0
+        }
+      },
+      "stage": "development",
+      "variant": {
+        "lookback_releases": 52,
+        "variant_id": "cot_52w_z125",
+        "z_threshold": 1.25
+      }
+    }
+  ],
+  "data": {
+    "cftc": {
+      "anomaly_calendar_sha256": "sha256:c32b33fc78f8948f0e62cce6fb332da853896e74f1363613c9931b3bdfb0edf0",
+      "content_type": "text/csv; charset=UTF-8",
+      "contract_codes": [
+        "13874A",
+        "209742",
+        "1170E1"
+      ],
+      "count_content_type": "text/csv; charset=UTF-8",
+      "count_http_status": 200,
+      "count_response_sha256": "sha256:b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+      "count_size_bytes": 19,
+      "count_source_url": "https://publicreporting.cftc.gov/resource/6dca-aqww.csv?%24select=count%28%2A%29+AS+row_count&%24where=cftc_contract_market_code+in+%28%2713874A%27%2C%27209742%27%2C%271170E1%27%29+AND+report_date_as_yyyy_mm_dd+%3E%3D+%271997-09-16T00%3A00%3A00.000%27+AND+report_date_as_yyyy_mm_dd+%3C+%272019-01-01T00%3A00%3A00.000%27&%24limit=1",
+      "dataset_id": "6dca-aqww",
+      "dataset_page": "https://publicreporting.cftc.gov/Commitments-of-Traders/Legacy-Futures-Only/6dca-aqww",
+      "http_status": 200,
+      "raw_response_sha256": "sha256:dd73770d94c96f18b93b59e8b3ee82fedda2fde3c20c8e182e8e4d53bdbad2a5",
+      "raw_size_bytes": 373647,
+      "requested_end_date": "2018-12-31",
+      "requested_start_date": "1997-09-16",
+      "retrieved_at_utc": "2026-07-10T17:51:14Z",
+      "source_url": "https://publicreporting.cftc.gov/resource/6dca-aqww.csv?%24select=id%2Cmarket_and_exchange_names%2Creport_date_as_yyyy_mm_dd%2Ccftc_contract_market_code%2Copen_interest_all%2Cnoncomm_positions_long_all%2Cnoncomm_positions_short_all&%24where=cftc_contract_market_code+in+%28%2713874A%27%2C%27209742%27%2C%271170E1%27%29+AND+report_date_as_yyyy_mm_dd+%3E%3D+%271997-09-16T00%3A00%3A00.000%27+AND+report_date_as_yyyy_mm_dd+%3C+%272019-01-01T00%3A00%3A00.000%27&%24order=report_date_as_yyyy_mm_dd+ASC%2Ccftc_contract_market_code+ASC%2Cid+ASC&%24limit=50000"
+    },
+    "cftc_coverage_audit": {
+      "complete_release_alignment_ratio": 1.0,
+      "complete_three_market_report_dates": 711,
+      "contracts": {
+        "1170E1": {
+          "coverage_ratio": 0.9442231075697212,
+          "end_coverage_lag_days": 0,
+          "expected_weekly_rows_approx": 753,
+          "first_report_date": "2004-07-27",
+          "first_report_lag_days": 0,
+          "last_report_date": "2018-12-31",
+          "maximum_internal_gap_days": 168,
+          "passed": true,
+          "rows": 711,
+          "structural_coverage_contract": {
+            "maximum_gap_days": 175,
+            "minimum_coverage_ratio": 0.94
+          }
+        },
+        "13874A": {
+          "coverage_ratio": 0.9963996399639964,
+          "end_coverage_lag_days": 0,
+          "expected_weekly_rows_approx": 1111,
+          "first_report_date": "1997-09-16",
+          "first_report_lag_days": 0,
+          "last_report_date": "2018-12-31",
+          "maximum_internal_gap_days": 25,
+          "passed": true,
+          "rows": 1107,
+          "structural_coverage_contract": {
+            "maximum_gap_days": 28,
+            "minimum_coverage_ratio": 0.99
+          }
+        },
+        "209742": {
+          "coverage_ratio": 1.000981354268891,
+          "end_coverage_lag_days": 0,
+          "expected_weekly_rows_approx": 1019,
+          "first_report_date": "1999-06-22",
+          "first_report_lag_days": 0,
+          "last_report_date": "2018-12-31",
+          "maximum_internal_gap_days": 11,
+          "passed": true,
+          "rows": 1020,
+          "structural_coverage_contract": {
+            "maximum_gap_days": 14,
+            "minimum_coverage_ratio": 0.99
+          }
+        }
+      },
+      "expected_end": "2018-12-31",
+      "expected_start": "1997-09-16",
+      "failures": [],
+      "official_row_count_proof": {
+        "count_response_sha256": "sha256:b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+        "official_rows": 2838,
+        "passed": true,
+        "payload_rows": 2838
+      },
+      "passed": true
+    },
+    "cftc_excluded_records": 14,
+    "cftc_usable_records": 2824,
+    "price_first_date": "1999-12-31",
+    "price_last_date": "2018-12-31",
+    "price_rows": 4780,
+    "price_sha256": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+    "price_source": "Yahoo Finance via yfinance; phase-bounded direct download"
+  },
+  "development_pass": false,
+  "git_at_end": {
+    "branch": "codex/aapl-cftc-cot-sentiment-v1",
+    "commit": "e83341fb0b373c56bb579ecf2d7590059514bc20",
+    "dirty": true,
+    "status": "?? e/cftc_cot_v1/cftc-cot-development-20260710T175155Z-9ad7307f/"
+  },
+  "git_at_start": {
+    "branch": "codex/aapl-cftc-cot-sentiment-v1",
+    "commit": "e83341fb0b373c56bb579ecf2d7590059514bc20",
+    "dirty": false,
+    "status": ""
+  },
+  "integrity_errors": [],
+  "physical_data_boundary": {
+    "cftc_end": "2018-12-31",
+    "confirmation_accessed": false,
+    "post_2023_market_observations_accessed": false,
+    "post_2023_market_outcomes_accessed": false,
+    "price_end": "2018-12-31",
+    "static_anomaly_metadata_contains_later_entries": true
+  },
+  "repository": {
+    "repo_root": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent",
+    "tracked_source_files": [
+      ".gitattributes",
+      "agent_benchmark/cftc_cot.py",
+      "agent_benchmark/cftc_cot_policy.py",
+      "agent_benchmark/cftc_cot_experiment.py",
+      "agent_benchmark/unleveraged_aapl.py",
+      "agent_benchmark/deterministic_aapl.py",
+      "docs/cftc_cot_sentiment_experiment.md",
+      "requirements.txt"
+    ]
+  },
+  "reproducibility": {
+    "api_cost_display": "$0.00",
+    "completed_within_3600_seconds": true,
+    "estimated_external_cost_usd": 0.0,
+    "model_calls": 0,
+    "runtime_seconds": 46.238477299921215
+  },
+  "run_id": "cftc-cot-development-20260710T175155Z-9ad7307f",
+  "selected_variant_id": null,
+  "selection_manifest": {
+    "candidate_family": [
+      {
+        "lookback_releases": 26,
+        "variant_id": "cot_26w_z075",
+        "z_threshold": 0.75
+      },
+      {
+        "lookback_releases": 26,
+        "variant_id": "cot_26w_z125",
+        "z_threshold": 1.25
+      },
+      {
+        "lookback_releases": 52,
+        "variant_id": "cot_52w_z075",
+        "z_threshold": 0.75
+      },
+      {
+        "lookback_releases": 52,
+        "variant_id": "cot_52w_z125",
+        "z_threshold": 1.25
+      }
+    ],
+    "cftc_anomaly_calendar_sha256": "sha256:c32b33fc78f8948f0e62cce6fb332da853896e74f1363613c9931b3bdfb0edf0",
+    "cftc_count_proof_sha256": "sha256:b90fff760c38497ff862724485bcc88ab3ac7c8a44201399927b24dd0c62282a",
+    "cftc_raw_sha256": "sha256:dd73770d94c96f18b93b59e8b3ee82fedda2fde3c20c8e182e8e4d53bdbad2a5",
+    "cftc_retrieval_metadata_sha256": "sha256:abb01845ca2a42e506fbd4ef318a9b754cac98c2cda82436fc94067d515c55d0",
+    "confirmation_gates": {
+      "maximum_cash_day_rate": 0.2,
+      "minimum_2022_active_log_edge": 0.0001,
+      "minimum_252_session_month_end_win_rate": 0.6,
+      "minimum_annual_win_rate": 0.6,
+      "minimum_cash_days": 10,
+      "minimum_cash_episodes": 4,
+      "minimum_median_annual_active_log_edge": 0.0005,
+      "minimum_total_active_log_edge": 0.01
+    },
+    "contract_version": "aapl-cftc-cot-sentiment-v1",
+    "development_gates": {
+      "maximum_cash_day_rate": 0.2,
+      "maximum_largest_positive_year_share": 0.45,
+      "minimum_252_session_month_end_win_rate": 0.6,
+      "minimum_756_session_month_end_win_rate": 0.7,
+      "minimum_active_log_edge_without_best_year": 0.005,
+      "minimum_annual_win_rate": 0.55,
+      "minimum_cash_days": 30,
+      "minimum_cash_episodes": 12,
+      "minimum_median_annual_active_log_edge": 0.0005,
+      "minimum_positive_folds": 3,
+      "minimum_total_active_log_edge": 0.02
+    },
+    "evaluation_results_sha256": "sha256:96e53823551a3963cd54230364f3129f514ce2c72b8f09ea12a0a2194a816498",
+    "execution": {
+      "actions": [
+        "LONG_100_PERCENT",
+        "CASH_100_PERCENT"
+      ],
+      "asset": "AAPL",
+      "cash_interest_rate": 0.0,
+      "decision_information_cutoff": "completed close t",
+      "fill": "next adjusted AAPL open",
+      "leverage": false,
+      "maximum_realized_exposure": 1.0,
+      "maximum_target_exposure": 1.0,
+      "shorting": false
+    },
+    "git_commit": "e83341fb0b373c56bb579ecf2d7590059514bc20",
+    "manifest_sha256": "sha256:3c45eb787d42388e926c74a5f2204863ace5b9ce8b3e44bf3af1fc7343937c16",
+    "parent_development_manifest_sha256": null,
+    "physical_data_end": "2018-12-31",
+    "post_2023_market_observation_access_allowed": false,
+    "price_sha256": "sha256:6ee87d3cbb6fc22e97963bd8c2972caad9a03ed1f939d8f2a5d259543ffd68af",
+    "runtime_identity": {
+      "implementation": "CPython",
+      "packages": {
+        "numpy": "2.3.3",
+        "pandas": "2.3.3",
+        "requests": "2.32.5",
+        "yfinance": "0.2.66"
+      },
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.12.2"
+    },
+    "selected_variant_id": null,
+    "selection_tie_break": [
+      "highest minimum 10bps development fold active-log edge",
+      "highest total 10bps development active-log edge",
+      "fewer 10bps cash days",
+      "lexical variant id"
+    ],
+    "source_hashes": {
+      ".gitattributes": "cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440",
+      "agent_benchmark/cftc_cot.py": "7609e5f5be098bbe476c1d4f7427505160eece52cf6384b03488c6f601a3d1a0",
+      "agent_benchmark/cftc_cot_experiment.py": "9b35230dcad7b91d1ad997aec5193f7fd6880363d18b1ec4ba94ba0cb444cf92",
+      "agent_benchmark/cftc_cot_policy.py": "adfe29068ae5957a1f3558c4792251ddeb904ca49dc934a2d8dd0c56cf33216c",
+      "agent_benchmark/deterministic_aapl.py": "6a2297d298792766da7d7ed9a86c4c86d5dfa7749bb071d39136fd3b6e5ca15e",
+      "agent_benchmark/unleveraged_aapl.py": "a7adb4aaee6f66419d8a9b23da4a9ef958a38dfa6b24ded94f0148785d5380f9",
+      "docs/cftc_cot_sentiment_experiment.md": "64602f262cfca69625ebee3ffdbb54cea5178e79d9f21d6f1d57c3cba9e59377",
+      "requirements.txt": "6f8ab2b499653f57e9b72d57c6802d6b69f2966720f618f2ea560bf0bade55dc"
+    },
+    "stage": "development",
+    "static_anomaly_calendar_contains_later_metadata": true
+  },
+  "source_hashes": {
+    ".gitattributes": "cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440",
+    "agent_benchmark/cftc_cot.py": "7609e5f5be098bbe476c1d4f7427505160eece52cf6384b03488c6f601a3d1a0",
+    "agent_benchmark/cftc_cot_experiment.py": "9b35230dcad7b91d1ad997aec5193f7fd6880363d18b1ec4ba94ba0cb444cf92",
+    "agent_benchmark/cftc_cot_policy.py": "adfe29068ae5957a1f3558c4792251ddeb904ca49dc934a2d8dd0c56cf33216c",
+    "agent_benchmark/deterministic_aapl.py": "6a2297d298792766da7d7ed9a86c4c86d5dfa7749bb071d39136fd3b6e5ca15e",
+    "agent_benchmark/unleveraged_aapl.py": "a7adb4aaee6f66419d8a9b23da4a9ef958a38dfa6b24ded94f0148785d5380f9",
+    "docs/cftc_cot_sentiment_experiment.md": "64602f262cfca69625ebee3ffdbb54cea5178e79d9f21d6f1d57c3cba9e59377",
+    "requirements.txt": "6f8ab2b499653f57e9b72d57c6802d6b69f2966720f618f2ea560bf0bade55dc"
+  },
+  "stage": "development",
+  "unexpected_worktree_changes": []
+}
