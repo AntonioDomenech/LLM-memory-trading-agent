@@ -8,13 +8,14 @@ I/O.  Ambiguous identities, document sections, or archive metadata fail closed.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 import json
 from pathlib import PurePosixPath
 import re
 from typing import Any, Mapping, Sequence
 import unicodedata
+from zoneinfo import ZoneInfo
 
 from .sec_point_in_time import (
     FilingRecord,
@@ -22,17 +23,19 @@ from .sec_point_in_time import (
     SecPointInTimeError,
     content_sha256,
     parse_acceptance_datetime,
+    parse_submissions_acceptance_datetime,
 )
 
 
 CONTRACT_VERSION = "aapl-sec-filing-content-audit-v1"
 MINIMUM_USABLE_TEXT_CHARACTERS = 500
+EASTERN = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)
 class SGMLHeader:
     accession_number: str
-    acceptance_datetime: str
+    acceptance_datetime: str | None
     form: str
     filing_date: str
     filer_cik: str
@@ -216,8 +219,23 @@ def _header_entities(header_text: str) -> dict[str, tuple[str, str]]:
     return result
 
 
-def _parse_header(header_text: str) -> SGMLHeader:
-    acceptance = parse_acceptance_datetime(header_text)
+def _parse_header(
+    header_text: str,
+    *,
+    allow_missing_acceptance: bool = False,
+) -> SGMLHeader:
+    acceptance_matches = set(
+        re.findall(
+            r"<ACCEPTANCE-DATETIME>\s*([0-9]{14})(?=\s|<|$)",
+            header_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not acceptance_matches and allow_missing_acceptance:
+        acceptance: datetime | None = None
+    else:
+        # Ambiguous values always fail, including in tolerant timestamp mode.
+        acceptance = parse_acceptance_datetime(header_text)
     accession = _unique_match(
         header_text,
         (
@@ -264,7 +282,11 @@ def _parse_header(header_text: str) -> SGMLHeader:
         raise SecPointInTimeError("SGML header has no unambiguous subject identity")
     return SGMLHeader(
         accession_number=accession,
-        acceptance_datetime=acceptance.strftime("%Y%m%d%H%M%S"),
+        acceptance_datetime=(
+            acceptance.strftime("%Y%m%d%H%M%S")
+            if acceptance is not None
+            else None
+        ),
         form=form,
         filing_date=filing_date,
         filer_cik=filer[0],
@@ -288,7 +310,11 @@ def _document_field(block: str, tag: str, *, required: bool) -> str:
     return values.pop()
 
 
-def parse_complete_submission(payload: bytes | str) -> CompleteSubmission:
+def parse_complete_submission(
+    payload: bytes | str,
+    *,
+    allow_missing_acceptance: bool = False,
+) -> CompleteSubmission:
     """Parse one complete-submission SGML payload without external access."""
 
     text, raw, source_encoding = _coerce_payload(
@@ -301,7 +327,10 @@ def parse_complete_submission(payload: bytes | str) -> CompleteSubmission:
     )
     if len(header_matches) != 1:
         raise SecPointInTimeError("Complete submission must contain one SEC-HEADER")
-    header = _parse_header(header_matches[0])
+    header = _parse_header(
+        header_matches[0],
+        allow_missing_acceptance=allow_missing_acceptance,
+    )
     submission_accessions = {
         value
         for value in re.findall(
@@ -560,13 +589,29 @@ def _normalized_sessions(values: Sequence[date | datetime | str]) -> tuple[date,
 def conservative_availability_session(
     acceptance: datetime,
     aapl_sessions: Sequence[date | datetime | str],
+    *,
+    filing_date: str | None = None,
+    date_of_filing_date_change: str | None = None,
 ) -> str | None:
-    """Return the first supplied session strictly after the SEC acceptance date."""
+    """Return the first session after the latest defensible catalogue date."""
 
     if not isinstance(acceptance, datetime):
         raise TypeError("acceptance must be a datetime")
     sessions = _normalized_sessions(aapl_sessions)
-    selected = next((session for session in sessions if session > acceptance.date()), None)
+    boundaries = [acceptance.date()]
+    for label, value in (
+        ("filing_date", filing_date),
+        ("date_of_filing_date_change", date_of_filing_date_change),
+    ):
+        if value:
+            try:
+                boundaries.append(date.fromisoformat(value))
+            except (TypeError, ValueError) as exc:
+                raise SecPointInTimeError(
+                    f"{label} is not a canonical ISO date"
+                ) from exc
+    not_before = max(boundaries)
+    selected = next((session for session in sessions if session > not_before), None)
     return selected.isoformat() if selected is not None else None
 
 
@@ -613,10 +658,22 @@ def reconcile_filing_content(
     dates = {record.filing_date, master_date, header.filing_date}
     if len(dates) != 1:
         raise SecPointInTimeError("SEC filing date does not reconcile")
-    record_acceptance = parse_acceptance_datetime(record.acceptance_datetime)
-    header_acceptance = parse_acceptance_datetime(header.acceptance_datetime)
-    if record_acceptance != header_acceptance:
-        raise SecPointInTimeError("SEC acceptance datetime does not reconcile")
+    record_acceptance = parse_submissions_acceptance_datetime(
+        record.acceptance_datetime
+    )
+    exact_acceptance_timestamp = header.acceptance_datetime is not None
+    if exact_acceptance_timestamp:
+        header_acceptance = parse_acceptance_datetime(
+            header.acceptance_datetime
+        ).replace(tzinfo=EASTERN)
+        if record_acceptance.astimezone(
+            timezone.utc
+        ) != header_acceptance.astimezone(timezone.utc):
+            raise SecPointInTimeError("SEC acceptance datetime does not reconcile")
+    else:
+        # Retrospective Submissions metadata still supplies a conservative date
+        # boundary, but it is not counted as exact raw-SGML timestamp evidence.
+        header_acceptance = record_acceptance.astimezone(EASTERN)
 
     master_filename = str(_master_value(master, "filename") or "")
     expected_master_tail = f"{record.accession_number}.txt"
@@ -631,14 +688,36 @@ def reconcile_filing_content(
     ):
         raise SecPointInTimeError("master.idx filename does not match subject CIK")
     _validate_index_identity(index, record)
+    complete_name = f"{record.accession_number}.txt"
+    complete_items = [item for item in index.items if item.name == complete_name]
+    if len(complete_items) != 1 or complete_items[0].size <= 0:
+        raise SecPointInTimeError(
+            "Complete submission must match one positive-size index item"
+        )
     primary, index_item = select_primary_document(record, submission, index)
     if primary.document_type != header.form:
         raise SecPointInTimeError(
             "Primary DOCUMENT type does not match reconciled SEC form"
         )
     normalized = normalize_filing_text(primary.text)
+    embedded_document_bytes = primary.text.encode("latin-1").strip(b"\r\n")
     availability = conservative_availability_session(
-        header_acceptance, aapl_sessions
+        header_acceptance,
+        aapl_sessions,
+        filing_date=record.filing_date,
+        date_of_filing_date_change=record.date_of_filing_date_change or None,
+    )
+    availability_not_before = max(
+        value
+        for value in (
+            header_acceptance.date(),
+            date.fromisoformat(record.filing_date),
+            (
+                date.fromisoformat(record.date_of_filing_date_change)
+                if record.date_of_filing_date_change
+                else header_acceptance.date()
+            ),
+        )
     )
     result = {
         "contract_version": CONTRACT_VERSION,
@@ -662,18 +741,29 @@ def reconcile_filing_content(
         "form": header.form,
         "filing_date": header.filing_date,
         "acceptance_datetime_et": header.acceptance_datetime,
+        "submissions_acceptance_datetime": record.acceptance_datetime,
+        "exact_acceptance_timestamp": exact_acceptance_timestamp,
         "acceptance_timezone": "America/New_York",
         "availability_session": availability,
         "availability_session_found": availability is not None,
+        "availability_not_before_date": availability_not_before.isoformat(),
         "availability_rule": (
-            "first supplied AAPL session strictly after SEC acceptance local date"
+            "first supplied AAPL session strictly after latest acceptance, filing, or filing-date-change date"
         ),
         "primary_document": {
             **primary.to_dict(include_text=False),
             "index_size": index_item.size,
+            "embedded_document_bytes_length": len(embedded_document_bytes),
+            "embedded_document_bytes_sha256": content_sha256(
+                embedded_document_bytes
+            ),
+            "embedded_document_comparison_rule": (
+                "latin-1 roundtrip with only outer CR/LF envelope removed"
+            ),
         },
         "normalized_text": normalized.to_dict(include_text=True),
         "submission_sha256": submission.submission_sha256,
+        "complete_submission_index_size": complete_items[0].size,
         "index_sha256": index.payload_sha256,
     }
     json.dumps(result, sort_keys=True, allow_nan=False)
@@ -686,10 +776,15 @@ def audit_filing_content(
     complete_submission_payload: bytes | str,
     index_payload: bytes | str | Mapping[str, Any],
     aapl_sessions: Sequence[date | datetime | str],
+    *,
+    allow_missing_acceptance: bool = False,
 ) -> dict[str, Any]:
     """Parse and reconcile one caller-supplied filing in a single pure call."""
 
-    submission = parse_complete_submission(complete_submission_payload)
+    submission = parse_complete_submission(
+        complete_submission_payload,
+        allow_missing_acceptance=allow_missing_acceptance,
+    )
     index = parse_sec_index_json(index_payload)
     return reconcile_filing_content(record, master, submission, index, aapl_sessions)
 

@@ -20,7 +20,7 @@ MAX_AUDIT_BYTES = 250 * 1024 * 1024
 MAX_AUDIT_SECONDS = 1800.0
 _ACCESSION_RE = re.compile(r"\d{10}-\d{2}-\d{6}\Z")
 _ACCEPTANCE_RE = re.compile(
-    rb"<ACCEPTANCE-DATETIME>\s*([0-9]{14})(?![0-9])", re.IGNORECASE
+    rb"<ACCEPTANCE-DATETIME>\s*([0-9]{14})(?=\s|<|$)", re.IGNORECASE
 )
 _EMAIL_RE = re.compile(
     r"(?<![A-Z0-9._%+-])([A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,}))(?![A-Z0-9._%+-])",
@@ -149,6 +149,14 @@ def _parse_submissions_acceptance(value: str) -> datetime:
             "ISO acceptanceDateTime must contain an explicit timezone"
         )
     return parsed
+
+
+def parse_submissions_acceptance_datetime(value: str) -> datetime:
+    """Return a timezone-aware instant from SEC Submissions metadata."""
+
+    if not isinstance(value, str):
+        raise SecPointInTimeError("SEC acceptance datetime must remain text")
+    return _parse_submissions_acceptance(value)
 def _as_bool(value: Any, name: str) -> bool:
     if value in (True, 1, "1"):
         return True
@@ -373,15 +381,17 @@ class BudgetCounter:
 
     def snapshot(self) -> dict[str, int | float]:
         self.check()
+        elapsed = float(self.clock()) - self._started_at
         return {
             "requests": self.requests, "bytes_received": self.bytes_received,
             "max_requests": self.max_requests, "max_bytes": self.max_bytes,
-            "max_seconds": self.max_seconds,
+            "max_seconds": self.max_seconds, "elapsed_seconds": elapsed,
         }
 __all__ = [
     "AAPL_CIK", "MAX_AUDIT_BYTES", "MAX_AUDIT_REQUESTS", "MAX_AUDIT_SECONDS",
     "ArchiveUrls", "BudgetCounter", "FilingRecord", "MasterIndexRecord",
     "SecAuditLimitError", "SecPointInTimeError", "UserAgentAudit", "archive_urls",
     "content_sha256", "parse_acceptance_datetime", "parse_master_idx",
-    "parse_submissions_rows", "validate_sec_user_agent",
+    "parse_submissions_acceptance_datetime", "parse_submissions_rows",
+    "validate_sec_user_agent",
 ]

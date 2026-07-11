@@ -155,16 +155,21 @@ made the document available at precisely that instant.
 For that reason, this audit cannot claim perfect historical tradability from
 acceptance time alone. Every admitted filing receives a conservative
 availability session: the first complete AAPL trading session strictly after
-the latest defensible acceptance/filing timestamp. The filing may first enter
+the latest defensible acceptance, filing, or filing-date-change date. The filing may first enter
 a decision after that session's close and may affect execution only at the
 following open. A missing, malformed, conflicting, or corrected timestamp
 never permits same-day use. If only a filing date is defensible, availability
-is no earlier than the next AAPL session.
+is no earlier than the next AAPL session. Those sessions must match the frozen
+full-session NYSE calendar from 2000-01-01 through 2025-01-10 exactly;
+arbitrary caller-supplied dates are not admissible.
 
 ## Deterministic 24-accession audit sample
 
 The sample is fixed before any document text is inspected. It contains 24
-distinct accessions.
+distinct accessions. Its eligible metadata universe is physically bounded from
+2000-01-01 through 2024-12-31. A filing is outside that universe if its filing
+date, acceptance date, or preserved filing-date-change evidence falls outside
+those dates; pre-2000 and post-2024 records cannot fill an edge slot.
 
 The deterministic core contains 18 accessions. For each of the years 2000,
 2005, 2009, 2014, 2019, and 2024, select by exact acceptance order:
@@ -224,6 +229,11 @@ email. The current local configuration does not contain an acceptable real
 SEC user-agent; the download phase is therefore blocked. The placeholder
 `contact@example.com` fallback is not admissible.
 
+An injected or mocked transport may validate the offline pipeline but cannot
+set the production audit's `overall_pass`. Only the live entrypoint, which
+constructs the bounded official-SEC transport internally after validating the
+real contact, may produce a production pass.
+
 The audit must stop before exceeding any cap. A timeout, request/byte-limit
 breach, HTTP ambiguity, or missing required sample is a failed audit, not
 permission to enlarge the budget, substitute documents, or relax a gate.
@@ -265,7 +275,11 @@ raw response hashes, normalized text hashes, reconciliation results,
 timestamp/availability decisions, request ledger, byte ledger, coverage table,
 all gate results, and explicit exclusions. The source files may remain outside
 Git, but the immutable audit artifact must checksum every admitted byte and
-record the clean implementation commit.
+record the clean implementation commit. That commit must contain the
+byte-equivalent audit implementation actually executing. Artifact verification
+also requires the externally retained SHA-256 of `checksums.json`; recomputing
+both a payload and its local manifest is not verification against the original
+seal.
 
 Passing this audit only authorizes a separately predeclared text-feature
 experiment. It does not show that filings predict AAPL or that an LLM can make

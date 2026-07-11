@@ -178,6 +178,71 @@ def test_header_filer_fallback_handles_self_filed_submission() -> None:
     assert parsed.header.subject_cik == AAPL_CIK
     assert parsed.header.filer_company == parsed.header.subject_company == "APPLE INC"
 
+
+def test_iso_submissions_acceptance_reconciles_to_sgml_eastern_instant() -> None:
+    result = audit_filing_content(
+        _record(acceptance_datetime="2016-10-26T20:42:16Z"),
+        _master(),
+        _submission_payload(),
+        _index_payload(),
+        ["2016-10-27"],
+    )
+    assert result["acceptance_datetime_et"] == ACCEPTED
+    assert result["availability_session"] == "2016-10-27"
+
+
+def test_availability_waits_for_later_filing_date_change() -> None:
+    result = audit_filing_content(
+        _record(date_of_filing_date_change="2016-10-28"),
+        _master(),
+        _submission_payload(),
+        _index_payload(),
+        ["2016-10-27", "2016-10-31"],
+    )
+    assert result["availability_not_before_date"] == "2016-10-28"
+    assert result["availability_session"] == "2016-10-31"
+
+
+def test_tolerant_mode_retains_identity_and_text_without_one_sgml_timestamp() -> None:
+    missing = _submission_payload().replace(
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}",
+        "<ACCEPTANCE-DATETIME>UNAVAILABLE",
+    )
+    with pytest.raises(SecPointInTimeError, match="unambiguous"):
+        audit_filing_content(
+            _record(), _master(), missing, _index_payload(), ["2016-10-27"]
+        )
+
+    result = audit_filing_content(
+        _record(),
+        _master(),
+        missing,
+        _index_payload(),
+        ["2016-10-27"],
+        allow_missing_acceptance=True,
+    )
+    assert result["identity_reconciled"] is True
+    assert result["exact_acceptance_timestamp"] is False
+    assert result["acceptance_datetime_et"] is None
+    assert result["availability_session"] == "2016-10-27"
+    assert result["normalized_text"]["usable"] is True
+
+    suffixed = _submission_payload().replace(
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}",
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}JUNK",
+    )
+    suffixed_result = audit_filing_content(
+        _record(),
+        _master(),
+        suffixed,
+        _index_payload(),
+        ["2016-10-27"],
+        allow_missing_acceptance=True,
+    )
+    assert suffixed_result["exact_acceptance_timestamp"] is False
+
+
+def test_tagged_header_variant_is_parsed() -> None:
     tagged = _submission_payload().replace(
         f"<SEC-DOCUMENT>{ACCESSION}",
         f"<SEC-DOCUMENT>{ACCESSION}.txt : 20161026",
