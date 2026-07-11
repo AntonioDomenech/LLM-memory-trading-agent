@@ -136,6 +136,7 @@ class SecAuditTransport:
         timeout_seconds: float = 30.0,
         max_retries: int = MAX_RETRIES,
         max_redirects: int = MAX_REDIRECTS,
+        allow_cache_reads: bool = True,
     ) -> None:
         if session is None:
             raise SecAuditTransportError("An injected SEC session is required")
@@ -145,6 +146,8 @@ class SecAuditTransport:
             raise SecAuditTransportError("SEC retry ceiling may only be tightened")
         if isinstance(max_redirects, bool) or not 0 <= max_redirects <= MAX_REDIRECTS:
             raise SecAuditTransportError("SEC redirect ceiling may only be tightened")
+        if not isinstance(allow_cache_reads, bool):
+            raise SecAuditTransportError("allow_cache_reads must be boolean")
         self._user_agent_audit = validate_sec_user_agent(user_agent)
         self._headers = _private_header_factory(user_agent)
         self._session = session
@@ -156,6 +159,7 @@ class SecAuditTransport:
         self._timeout = float(timeout_seconds)
         self._max_retries = int(max_retries)
         self._max_redirects = int(max_redirects)
+        self._allow_cache_reads = allow_cache_reads
         self._last_request_at: float | None = None
 
     def __repr__(self) -> str:
@@ -175,6 +179,7 @@ class SecAuditTransport:
             "timeout_seconds": self._timeout,
             "max_retries": self._max_retries,
             "max_redirects": self._max_redirects,
+            "allow_cache_reads": self._allow_cache_reads,
             "budget": self._budget.snapshot(),
         }
 
@@ -187,6 +192,8 @@ class SecAuditTransport:
         return self._cache_dir / f"{key}.body", self._cache_dir / f"{key}.json"
 
     def _load_cache(self, request_url: str) -> tuple[bytes, ResponseAudit] | None:
+        if not self._allow_cache_reads:
+            return None
         body_path, metadata_path = self._cache_paths(request_url)
         if not body_path.exists() and not metadata_path.exists():
             return None

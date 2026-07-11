@@ -10,14 +10,22 @@ from __future__ import annotations
 
 import copy
 from dataclasses import asdict
+from importlib import metadata as importlib_metadata
 import json
 from pathlib import Path
+import platform
 import re
+import ssl
 import subprocess
 from typing import Any, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 
-from .sec_audit_artifact import ArtifactVerification, seal_artifact
+from .sec_audit_artifact import (
+    METADATA_FILENAME,
+    ArtifactVerification,
+    seal_artifact,
+    verify_artifact,
+)
 from .sec_audit_evaluation import (
     FilingAuditResult,
     NormalizedFilingIdentity,
@@ -45,7 +53,7 @@ from .sec_point_in_time import (
     parse_master_idx,
     parse_submissions_rows,
 )
-from .sec_session_calendar import validate_aapl_session_calendar
+from .sec_session_calendar import EXPECTED_SESSIONS, validate_aapl_session_calendar
 
 
 CONTRACT_VERSION = "aapl-sec-point-in-time-audit-runner-v1"
@@ -61,7 +69,9 @@ SOURCE_FILES = (
     "agent_benchmark/sec_audit_artifact.py",
     "agent_benchmark/sec_session_calendar.py",
     "agent_benchmark/sec_audit_runner.py",
+    "agent_benchmark/sec_audit_cli.py",
     "docs/aapl_point_in_time_text_data_audit_v1.md",
+    "requirements.txt",
 )
 _AUDIT_FIELDS = frozenset(
     {
@@ -92,6 +102,239 @@ def _json_bytes(value: Any) -> bytes:
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False)
         + "\n"
     ).encode("utf-8")
+
+
+def _runtime_manifest(*, live: bool) -> dict[str, Any]:
+    packages: dict[str, str | None] = {}
+    for name in ("requests", "urllib3", "certifi", "tzdata"):
+        try:
+            packages[name] = importlib_metadata.version(name)
+        except importlib_metadata.PackageNotFoundError:
+            packages[name] = None
+    return {
+        "mode": "live_official_sec" if live else "offline_injected",
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "operating_system": platform.system(),
+        "operating_system_release": platform.release(),
+        "openssl_version": ssl.OPENSSL_VERSION,
+        "packages": packages,
+        "timezone_data_source": (
+            f"tzdata-{packages['tzdata']}"
+            if packages["tzdata"] is not None
+            else "system-zoneinfo"
+        ),
+    }
+
+
+def _read_artifact_json(artifact_dir: Path, name: str) -> Any:
+    try:
+        return json.loads(
+            (artifact_dir / name).read_text(encoding="utf-8", errors="strict")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SecPointInTimeError(
+            "sealed SEC audit contains unreadable JSON evidence"
+        ) from exc
+
+
+def verify_production_sec_audit_artifact(
+    artifact_dir: str | Path,
+    *,
+    expected_checksums_sha256: str,
+    expected_source_commit: str,
+) -> tuple[ArtifactVerification, dict[str, Any]]:
+    """Verify both byte integrity and complete production-audit semantics."""
+
+    directory = Path(artifact_dir).resolve()
+    verification = verify_artifact(
+        directory,
+        expected_checksums_sha256=expected_checksums_sha256,
+        expected_source_commit=expected_source_commit,
+        expected_audit_contract_version=CONTRACT_VERSION,
+    )
+    report = _read_artifact_json(directory, "audit_report.json")
+    plan = _read_artifact_json(directory, "audit_plan.json")
+    catalogue = _read_artifact_json(directory, "catalogue.json")
+    evidence = _read_artifact_json(directory, "filing_evidence.json")
+    ledger = _read_artifact_json(directory, "request_ledger.json")
+    calendar = _read_artifact_json(directory, "session_calendar.json")
+    roles = _read_artifact_json(directory, "text_role_manifest.json")
+    transport = _read_artifact_json(directory, "transport_state.json")
+    if not all(
+        isinstance(value, dict)
+        for value in (report, plan, calendar, transport)
+    ) or not all(isinstance(value, list) for value in (catalogue, evidence, ledger, roles)):
+        raise SecPointInTimeError("sealed SEC audit evidence schemas are invalid")
+
+    text_files = {
+        item.get("artifact_file")
+        for item in roles
+        if isinstance(item, dict) and isinstance(item.get("artifact_file"), str)
+    }
+    if (
+        len(roles) != 24
+        or len(text_files) != 24
+        or any(not re.fullmatch(r"text_[0-9]{18}\.txt", name) for name in text_files)
+    ):
+        raise SecPointInTimeError("sealed SEC audit text-role manifest is incomplete")
+    expected_files = {
+        METADATA_FILENAME,
+        "audit_plan.json",
+        "audit_report.json",
+        "catalogue.json",
+        "filing_evidence.json",
+        "request_ledger.json",
+        "session_calendar.json",
+        "text_role_manifest.json",
+        "transport_state.json",
+        *text_files,
+    }
+    if set(verification.checksums) != expected_files:
+        raise SecPointInTimeError("sealed SEC audit file set is not exact")
+
+    selection = plan.get("selection")
+    evaluation = report.get("evaluation")
+    trust = report.get("transport_trust")
+    behavior = report.get("behavior_evidence")
+    availability = report.get("availability_session_gate")
+    runtime = report.get("runtime_provenance")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            selection,
+            evaluation,
+            trust,
+            behavior,
+            availability,
+            runtime,
+        )
+    ):
+        raise SecPointInTimeError("sealed SEC audit report gates are incomplete")
+    if (
+        report.get("contract_version") != CONTRACT_VERSION
+        or report.get("source_commit") != expected_source_commit
+        or report.get("overall_pass") is not True
+        or report.get("offline_pipeline_pass") is not True
+        or report.get("catalogue_ready_for_bounded_download") is not True
+        or report.get("document_download_opened") is not True
+        or report.get("resource_and_user_agent_gate_passed") is not True
+        or report.get("post_2024_artifact_boundary_gate_passed") is not True
+        or availability.get("passed") is not True
+        or availability.get("observed_count") != 24
+        or evaluation.get("overall_pass") is not True
+        or plan.get("ready_for_bounded_download") is not True
+        or selection.get("selected_count") != 24
+        or selection.get("gap_count") != 0
+        or trust.get("trusted_production_transport") is not True
+        or trust.get("mode") != "bounded_official_sec_transport"
+        or trust.get("cache_hit_count") != 0
+        or trust.get("fresh_official_retrieval_gate_passed") is not True
+        or behavior.get("paid_api_calls") != 0
+        or behavior.get("llm_or_model_calls") != 0
+        or behavior.get("return_calculations") != 0
+        or behavior.get("trading_simulations") != 0
+        or behavior.get("outcome_guided_substitutions") != 0
+        or runtime != _runtime_manifest(live=True)
+    ):
+        raise SecPointInTimeError("sealed SEC audit passing gates are invalid")
+    gates = evaluation.get("gates")
+    plan_gates = plan.get("gates")
+    if (
+        not isinstance(gates, dict)
+        or not gates
+        or any(not isinstance(gate, dict) or gate.get("passed") is not True for gate in gates.values())
+        or not isinstance(plan_gates, dict)
+        or not plan_gates
+        or any(value is not True for value in plan_gates.values())
+    ):
+        raise SecPointInTimeError("sealed SEC audit component gates did not all pass")
+
+    selected_accessions = selection.get("selected_accessions")
+    if (
+        not isinstance(selected_accessions, list)
+        or len(selected_accessions) != 24
+        or len(set(selected_accessions)) != 24
+    ):
+        raise SecPointInTimeError("sealed SEC audit selection is not exact")
+    selected = set(selected_accessions)
+    catalogue_accessions = {
+        item.get("accession_number") for item in catalogue if isinstance(item, dict)
+    }
+    evidence_accessions = {
+        item.get("accession_number") for item in evidence if isinstance(item, dict)
+    }
+    role_accessions = {
+        item.get("accession_number") for item in roles if isinstance(item, dict)
+    }
+    if (
+        len(evidence) != 24
+        or evidence_accessions != selected
+        or role_accessions != selected
+        or not selected.issubset(catalogue_accessions)
+        or any(item.get("status") == "failed" for item in evidence if isinstance(item, dict))
+    ):
+        raise SecPointInTimeError("sealed SEC audit accession evidence does not reconcile")
+    structural = [
+        item
+        for item in roles
+        if isinstance(item, dict) and item.get("evidence_role") == "structural_only"
+    ]
+    if (
+        len(structural) != 6
+        or any(item.get("training_eligible_for_pre_2019_development") is not False for item in structural)
+    ):
+        raise SecPointInTimeError("sealed SEC audit structural-only roles are invalid")
+
+    validated_calendar = validate_aapl_session_calendar(calendar.get("sessions"))
+    if calendar != validated_calendar or tuple(calendar["sessions"]) != EXPECTED_SESSIONS:
+        raise SecPointInTimeError("sealed SEC audit calendar does not reconcile")
+    if not ledger or any(
+        not isinstance(item, dict)
+        or item.get("cache_hit") is not False
+        or canonical_sec_url(item.get("requested_url")) != item.get("requested_url")
+        or canonical_sec_url(item.get("url")) != item.get("url")
+        for item in ledger
+    ):
+        raise SecPointInTimeError("sealed SEC audit request ledger is not fresh and official")
+    budget = transport.get("budget")
+    user_agent = transport.get("user_agent")
+    if (
+        transport.get("ledger_reconciled") is not True
+        or not isinstance(budget, dict)
+        or not isinstance(user_agent, dict)
+        or user_agent.get("real_contact_validated") is not True
+        or budget.get("requests") != sum(item["network_requests"] for item in ledger)
+        or budget.get("bytes_received") != sum(item["size_bytes"] for item in ledger)
+        or budget.get("requests", MAX_AUDIT_REQUESTS + 1) > MAX_AUDIT_REQUESTS
+        or budget.get("bytes_received", MAX_AUDIT_BYTES + 1) > MAX_AUDIT_BYTES
+        or budget.get("elapsed_seconds", MAX_AUDIT_SECONDS + 1) > MAX_AUDIT_SECONDS
+    ):
+        raise SecPointInTimeError("sealed SEC audit transport ledger does not reconcile")
+
+    evidence_by_accession = {
+        item["accession_number"]: item for item in evidence if isinstance(item, dict)
+    }
+    for role in roles:
+        name = role["artifact_file"]
+        item = evidence_by_accession[role["accession_number"]]
+        normalized = item.get("normalized_text")
+        if (
+            not isinstance(normalized, dict)
+            or normalized.get("artifact_file") != name
+            or content_sha256((directory / name).read_bytes()) != normalized.get("sha256")
+        ):
+            raise SecPointInTimeError("sealed SEC audit normalized text does not reconcile")
+
+    final_verification = verify_artifact(
+        directory,
+        expected_checksums_sha256=expected_checksums_sha256,
+        expected_source_commit=expected_source_commit,
+        expected_audit_contract_version=CONTRACT_VERSION,
+    )
+    if final_verification != verification:
+        raise SecPointInTimeError("sealed SEC audit changed during semantic verification")
+    return final_verification, report
 
 
 def _json_object(payload: bytes, *, label: str) -> dict[str, Any]:
@@ -389,6 +632,7 @@ def _seal_initial_failure(
     artifact_dir: str | Path,
     source_commit: str,
     provenance: Mapping[str, Any],
+    runtime_provenance: Mapping[str, Any],
     calendar_evidence: Mapping[str, Any],
     transport: TransportLike,
     request_ledger: Sequence[Mapping[str, Any]],
@@ -402,6 +646,7 @@ def _seal_initial_failure(
         "contract_version": CONTRACT_VERSION,
         "source_commit": source_commit,
         "source_provenance": dict(provenance),
+        "runtime_provenance": dict(runtime_provenance),
         "status": "failed_before_catalogue_plan",
         **failure,
         "resource_and_user_agent_gate_passed": resource_gate,
@@ -577,6 +822,7 @@ def _run_sec_audit(
     artifact_dir: str | Path,
     source_repo: str | Path,
     trusted_production_transport: bool,
+    runtime_provenance: Mapping[str, Any],
 ) -> ArtifactVerification:
     """Run and seal the frozen audit through an explicitly injected transport.
 
@@ -600,6 +846,7 @@ def _run_sec_audit(
             artifact_dir=artifact_dir,
             source_commit=source_commit,
             provenance=provenance,
+            runtime_provenance=runtime_provenance,
             calendar_evidence=calendar_evidence,
             transport=transport,
             request_ledger=request_ledger,
@@ -828,10 +1075,15 @@ def _run_sec_audit(
         and artifact_boundary_passed
         and availability_count == 24
     )
+    cache_hit_count = sum(bool(item["cache_hit"]) for item in request_ledger)
+    fresh_official_retrieval_gate = bool(
+        request_ledger and cache_hit_count == 0
+    )
     report = {
         "contract_version": CONTRACT_VERSION,
         "source_commit": source_commit.lower(),
         "source_provenance": provenance,
+        "runtime_provenance": dict(runtime_provenance),
         "audit_start": plan["audit_start"],
         "audit_cutoff": plan["audit_cutoff"],
         "catalogue_ready_for_bounded_download": plan["ready_for_bounded_download"],
@@ -852,6 +1104,8 @@ def _run_sec_audit(
                 if trusted_production_transport
                 else "untrusted_injected_test_transport"
             ),
+            "cache_hit_count": cache_hit_count,
+            "fresh_official_retrieval_gate_passed": fresh_official_retrieval_gate,
         },
         "behavior_evidence": {
             "llm_or_model_calls": 0,
@@ -862,7 +1116,9 @@ def _run_sec_audit(
         },
         "offline_pipeline_pass": offline_pipeline_pass,
         "overall_pass": bool(
-            offline_pipeline_pass and trusted_production_transport
+            offline_pipeline_pass
+            and trusted_production_transport
+            and fresh_official_retrieval_gate
         ),
     }
     files = {
@@ -903,6 +1159,7 @@ def run_sec_audit(
         artifact_dir=artifact_dir,
         source_repo=source_repo,
         trusted_production_transport=False,
+        runtime_provenance=_runtime_manifest(live=False),
     )
 
 
@@ -929,6 +1186,7 @@ def run_live_sec_audit(
             budget=budget,
             clock=time.monotonic,
             sleep=time.sleep,
+            allow_cache_reads=False,
         )
         return _run_sec_audit(
             transport=transport,
@@ -936,6 +1194,7 @@ def run_live_sec_audit(
             artifact_dir=artifact_dir,
             source_repo=source_repo,
             trusted_production_transport=True,
+            runtime_provenance=_runtime_manifest(live=True),
         )
 
 
@@ -945,5 +1204,6 @@ __all__ = [
     "TransportLike",
     "run_sec_audit",
     "run_live_sec_audit",
+    "verify_production_sec_audit_artifact",
     "verify_source_provenance",
 ]

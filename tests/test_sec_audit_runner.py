@@ -13,6 +13,7 @@ import pytest
 
 from agent_benchmark.sec_audit_artifact import (
     SecAuditArtifactError,
+    seal_artifact,
     verify_artifact,
 )
 from agent_benchmark.sec_audit_plan import MAIN_SUBMISSIONS_NAME, MAIN_SUBMISSIONS_URL, build_sec_audit_plan
@@ -20,6 +21,7 @@ from agent_benchmark.sec_audit_runner import (
     CONTRACT_VERSION,
     SOURCE_FILES,
     run_sec_audit,
+    verify_production_sec_audit_artifact,
 )
 from agent_benchmark.sec_point_in_time import (
     AAPL_CIK,
@@ -328,9 +330,12 @@ def test_mocked_end_to_end_audit_passes_and_seals_exact_evidence(tmp_path: Path)
     assert report["offline_pipeline_pass"] is True
     assert report["overall_pass"] is False
     assert report["transport_trust"] == {
+        "cache_hit_count": 0,
+        "fresh_official_retrieval_gate_passed": True,
         "mode": "untrusted_injected_test_transport",
         "trusted_production_transport": False,
     }
+    assert report["runtime_provenance"]["mode"] == "offline_injected"
     assert report["evaluation"]["overall_pass"] is True
     assert report["behavior_evidence"] == {
         "llm_or_model_calls": 0,
@@ -804,3 +809,68 @@ def test_provenance_rejects_same_paths_with_unrelated_contents(tmp_path: Path) -
             source_repo=repo,
         )
     assert transport.calls == []
+
+
+def test_production_semantic_verifier_requires_complete_reconciled_artifact(
+    tmp_path: Path,
+) -> None:
+    transport, sessions, _ = _fixture()
+    source_repo, source_commit = _source_repo(tmp_path)
+    offline = tmp_path / "offline-complete"
+    run_sec_audit(
+        transport=transport,
+        aapl_sessions=sessions,
+        artifact_dir=offline,
+        source_repo=source_repo,
+    )
+    payloads = {
+        path.name: path.read_bytes()
+        for path in offline.iterdir()
+        if path.name not in {"artifact_metadata.json", "checksums.json"}
+    }
+    report = json.loads(payloads["audit_report.json"].decode("utf-8"))
+    report["overall_pass"] = True
+    report["transport_trust"].update(
+        {
+            "trusted_production_transport": True,
+            "mode": "bounded_official_sec_transport",
+            "cache_hit_count": 0,
+            "fresh_official_retrieval_gate_passed": True,
+        }
+    )
+    report["runtime_provenance"]["mode"] = "live_official_sec"
+    payloads["audit_report.json"] = (
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    production = tmp_path / "production-complete"
+    sealed = seal_artifact(
+        production,
+        payloads,
+        source_commit=source_commit,
+        audit_contract_version=CONTRACT_VERSION,
+    )
+    verified, verified_report = verify_production_sec_audit_artifact(
+        production,
+        expected_checksums_sha256=sealed.checksums_sha256,
+        expected_source_commit=source_commit,
+    )
+    assert verified == sealed
+    assert verified_report["overall_pass"] is True
+
+    roles = json.loads(payloads["text_role_manifest.json"].decode("utf-8"))
+    payloads["text_role_manifest.json"] = (
+        json.dumps(roles[:-1], indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    incomplete = tmp_path / "production-incomplete"
+    incomplete_seal = seal_artifact(
+        incomplete,
+        payloads,
+        source_commit=source_commit,
+        audit_contract_version=CONTRACT_VERSION,
+    )
+    with pytest.raises(SecPointInTimeError, match="text-role manifest"):
+        verify_production_sec_audit_artifact(
+            incomplete,
+            expected_checksums_sha256=incomplete_seal.checksums_sha256,
+            expected_source_commit=source_commit,
+        )

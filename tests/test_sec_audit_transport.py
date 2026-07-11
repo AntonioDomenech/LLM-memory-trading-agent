@@ -96,6 +96,7 @@ def _transport(
     session: FakeSession | None = None,
     max_retries: int = 3,
     max_redirects: int = 3,
+    allow_cache_reads: bool = True,
 ) -> tuple[SecAuditTransport, FakeSession, BudgetCounter, FakeClock]:
     clock = FakeClock()
     budget = BudgetCounter(
@@ -114,6 +115,7 @@ def _transport(
         sleep=clock.sleep,
         max_retries=max_retries,
         max_redirects=max_redirects,
+        allow_cache_reads=allow_cache_reads,
     )
     return client, resolved_session, budget, clock
 
@@ -199,6 +201,42 @@ def test_success_streams_caches_and_returns_only_safe_audit_metadata(
     assert PRIVATE_USER_AGENT not in metadata
     assert "private-contact" not in metadata
     assert "user_agent_sha256" in metadata
+
+
+def test_production_mode_ignores_mutable_cache_and_fetches_fresh_bytes(
+    tmp_path: Path,
+) -> None:
+    url = "https://data.sec.gov/submissions/CIK0000320193.json"
+    cached_body = b'{"source":"cache"}'
+    first, _, _, _ = _transport(
+        tmp_path,
+        [
+            FakeResponse(
+                200,
+                headers={"Content-Type": "application/json"},
+                chunks=[cached_body],
+            )
+        ],
+    )
+    assert first.fetch(url)[0] == cached_body
+
+    fresh_body = b'{"source":"network"}'
+    second, session, _, _ = _transport(
+        tmp_path,
+        [
+            FakeResponse(
+                200,
+                headers={"Content-Type": "application/json"},
+                chunks=[fresh_body],
+            )
+        ],
+        allow_cache_reads=False,
+    )
+    body, audit = second.fetch(url)
+    assert body == fresh_body
+    assert audit.cache_hit is False
+    assert audit.network_requests == 1
+    assert len(session.calls) == 1
 
 
 def test_manual_redirect_stays_official_and_is_rate_limited(tmp_path: Path) -> None:

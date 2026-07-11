@@ -234,6 +234,29 @@ set the production audit's `overall_pass`. Only the live entrypoint, which
 constructs the bounded official-SEC transport internally after validating the
 real contact, may produce a production pass.
 
+The command is deliberately preflight-only unless live access is explicit:
+
+```powershell
+python -m agent_benchmark.sec_audit_cli --preflight
+python -m agent_benchmark.sec_audit_cli --execute-live
+```
+
+Both commands read only `secrets.sec_user_agent` from the ignored
+`data/local_config.json`; unrelated API keys are neither loaded into the audit
+nor printed. Preflight performs zero network calls. Live execution is bounded
+to official SEC HTTPS hosts and writes only under
+`e/sec_point_in_time_audit_v1/`, with cache bytes under the ignored
+`data/cache/sec_point_in_time_audit_v1/` directory.
+
+A production pass requires fresh official retrieval for every admitted
+response. Mutable cache entries are ignored by the live path and cannot support
+`overall_pass`; the cache is diagnostic only. The artifact also records the
+executing Python, Requests, urllib3, certificate bundle, OpenSSL, operating
+system, and timezone-data versions.
+Preflight fails closed unless Python is 3.11-3.13, Requests is 2.31 or newer
+within major version 2, urllib3 is major version 2, the certificate bundle is
+installed, and Windows junction detection is available.
+
 The audit must stop before exceeding any cap. A timeout, request/byte-limit
 breach, HTTP ambiguity, or missing required sample is a failed audit, not
 permission to enlarge the budget, substitute documents, or relax a gate.
