@@ -543,6 +543,9 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     }
     assert "reveal_registry" in REQUIRED_SOURCE_HASHES
     assert "stage_verifier" in REQUIRED_SOURCE_HASHES
+    assert "market_source_bytes" in REQUIRED_SOURCE_HASHES
+    assert "market_acquirer" in REQUIRED_SOURCE_HASHES
+    assert "stage_access" in REQUIRED_SOURCE_HASHES
     assert (
         first["holdout_governance"][
             "candidate_binds_predecessor_registry_snapshot"
@@ -568,6 +571,12 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     ] == "prediction_unavailable_integrity_failure"
     assert feature_semantics["label_cost_application"].endswith(
         "entry_and_exit_position_changing_fills"
+    )
+    assert first["model"]["completed_call_attempt_receipt"].startswith(
+        "exact_request_response_and_output_bytes"
+    )
+    assert first["model"]["invalid_attempt_semantics"].startswith(
+        "sealed_invalid_status"
     )
     assert first["model"]["per_call_client_receipt_trust"] == (
         "unattested_until_stage_runner_replay"

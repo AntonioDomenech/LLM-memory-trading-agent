@@ -148,7 +148,9 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "extractor_schema",
     "learner",
     "ledger",
+    "market_acquirer",
     "market_features",
+    "market_source_bytes",
     "preprocessor",
     "reveal_registry",
     "runner",
@@ -157,15 +159,20 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "sec_audit_verifier",
     "sec_corpus_selector",
     "stage_verifier",
+    "stage_access",
 )
 REQUIRED_STAGE_VERIFIER_CHECKS: Final[tuple[str, ...]] = tuple(
     sorted(
         {
             "artifact_replay",
+            "artifact_seal_cas",
+            "calendar_source_semantics",
             "candidate_identity",
             "chronology",
             "gate_replay",
             "ledger_replay",
+            "market_source_byte_reconciliation",
+            "model_attempt_replay",
             "no_leverage",
             "prediction_replay",
             "prerequisite_evidence_identity",
@@ -174,6 +181,7 @@ REQUIRED_STAGE_VERIFIER_CHECKS: Final[tuple[str, ...]] = tuple(
             "runtime_budget",
             "source_identity",
             "stage_access_identity",
+            "stage_access_manifest_replay",
             "stage_identity",
             "zero_cost",
         }
@@ -724,6 +732,13 @@ def build_contract_manifest() -> dict[str, Any]:
             "per_call_client_receipt_trust": (
                 "unattested_until_stage_runner_replay"
             ),
+            "completed_call_attempt_receipt": (
+                "exact_request_response_and_output_bytes_valid_or_schema_invalid_"
+                "one_call_no_retry_no_repair"
+            ),
+            "invalid_attempt_semantics": (
+                "sealed_invalid_status_no_semantic_output_prediction_row_audited"
+            ),
             "runtime_identity_guard": (
                 "candidate_pins_checked_immediately_before_and_after_complete_"
                 "stage_extraction_batch"
@@ -1074,6 +1089,10 @@ def build_contract_manifest() -> dict[str, Any]:
             "require_existing_unleveraged_ledger_proof": True,
             "last_cutoff_decision_without_in_period_fill": "recorded_not_scored",
             "open_episode_at_cutoff": "terminal_valued_and_never_used_as_training",
+            "stage_boundary_positions": (
+                "development_starts_from_cash_later_stages_inherit_the_exact_"
+                "cumulative_long_or_cash_state_without_a_synthetic_reentry_fill"
+            ),
             "period_attribution": "sum_daily_active_log_increments_on_one_continuous_ledger",
             "brier_rows": "only_predictions_with_full_horizon_matured_by_score_cutoff",
             "comparison_tolerance": ACTIVE_EDGE_TOLERANCE,
@@ -1098,6 +1117,10 @@ def build_contract_manifest() -> dict[str, Any]:
             "annual_win": "active_log_edge_strictly_above_1e-12",
             "rolling_win": "month_end_sum_strictly_above_1e-12",
             "episode_positive_share_denominator": "sum_of_strictly_positive_episode_edges",
+            "episode_concentration_support": (
+                "all_within_score_window_ledger_contributions_including_carry_in_"
+                "and_open_at_cutoff_episodes"
+            ),
             "zero_positive_episode_denominator": "gate_fails",
             "drawdown": "maximum_peak_to_trough_decline_in_total_wealth",
             "cross_year_episode": "state_continues_and_daily_edge_is_attributed_by_session_year",

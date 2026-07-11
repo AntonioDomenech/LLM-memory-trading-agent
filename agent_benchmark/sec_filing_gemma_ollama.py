@@ -41,6 +41,17 @@ RUNTIME_IDENTITY_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-ollama-runtime-identity-v1"
 )
 RECEIPT_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-ollama-call-receipt-v1"
+ATTEMPT_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-ollama-model-attempt-receipt-v1"
+)
+VALID_ATTEMPT_STATUS: Final[str] = "valid"
+INVALID_ATTEMPT_STATUS: Final[str] = "invalid_extractor_output"
+INVALID_ATTEMPT_REASON: Final[str] = (
+    "extractor_output_schema_invalid_no_retry_no_repair"
+)
+ABNORMAL_ATTEMPT_REASON: Final[str] = (
+    "abnormal_model_completion_no_retry_no_repair"
+)
 RUNTIME_GUARD_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-ollama-runtime-guard-v1"
 )
@@ -183,6 +194,118 @@ class OllamaExtractionReceipt:
             "runtime_fingerprint_sha256": self.runtime_fingerprint_sha256,
             "runtime_evidence_sha256": self.runtime_evidence_sha256,
             "http_status": self.http_status,
+            "transport_mode": self.transport_mode,
+            "trusted_production_transport": self.trusted_production_transport,
+            "network_requests": self.network_requests,
+            "redirects": self.redirects,
+            "retries": self.retries,
+            "pull_attempts": self.pull_attempts,
+            "repair_attempts": self.repair_attempts,
+            "model_streaming": self.model_streaming,
+            "model_thinking": self.model_thinking,
+            "elapsed_nanoseconds": self.elapsed_nanoseconds,
+            "elapsed_role": self.elapsed_role,
+        }
+
+    @property
+    def receipt_sha256(self) -> str:
+        return canonical_sha256(self._manifest_body())
+
+    def to_manifest(self) -> dict[str, Any]:
+        body = self._manifest_body()
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+@dataclass(frozen=True, slots=True)
+class OllamaModelAttemptReceipt:
+    """Byte-level evidence for one completed model call, valid or invalid.
+
+    Transport, HTTP, and outer Ollama-envelope failures still raise because no
+    trustworthy completed model attempt exists.  Once a complete assistant
+    message is received, its exact bytes are sealed even when the extractor
+    payload violates the frozen schema.  Invalid bytes are never exposed as
+    semantic output and cannot trigger a retry or repair call.
+    """
+
+    schema_version: str
+    attempt_status: str
+    invalid_reason: str | None
+    endpoint: str
+    candidate_sha256: str
+    sentence_ids: tuple[str, ...]
+    request_bytes: bytes
+    request_sha256: str
+    response_bytes: bytes
+    response_sha256: str
+    extractor_output_bytes: bytes
+    extractor_output_sha256: str
+    extractor_output_canonical_sha256: str | None
+    model_name: str
+    model_digest: str
+    runtime_fingerprint_sha256: str
+    runtime_evidence_sha256: str
+    http_status: int
+    response_url: str
+    response_content_type: str
+    response_content_length: int | None
+    response_history_count: int
+    transport_mode: str
+    trusted_production_transport: bool
+    network_requests: int
+    redirects: int
+    retries: int
+    pull_attempts: int
+    repair_attempts: int
+    model_streaming: bool
+    model_thinking: bool
+    elapsed_nanoseconds: int
+    elapsed_role: str
+
+    def validated_extractor_output(self) -> dict[str, Any]:
+        if self.attempt_status != VALID_ATTEMPT_STATUS:
+            raise SecFilingGemmaOllamaError(
+                "Invalid model-attempt bytes cannot be exposed as semantic output"
+            )
+        value = _strict_json_bytes(
+            self.extractor_output_bytes,
+            location="sealed valid extractor output",
+            maximum=MAX_RESPONSE_BYTES,
+        )
+        if not isinstance(value, dict):
+            raise SecFilingGemmaOllamaError(
+                "Sealed valid extractor output is not an object"
+            )
+        validate_extractor_output(value, supplied_sentence_ids=self.sentence_ids)
+        return value
+
+    def _manifest_body(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "attempt_status": self.attempt_status,
+            "invalid_reason": self.invalid_reason,
+            "endpoint": self.endpoint,
+            "candidate_sha256": self.candidate_sha256,
+            "sentence_ids": list(self.sentence_ids),
+            "request_bytes_base64": base64.b64encode(self.request_bytes).decode("ascii"),
+            "request_sha256": self.request_sha256,
+            "response_bytes_base64": base64.b64encode(self.response_bytes).decode("ascii"),
+            "response_sha256": self.response_sha256,
+            "extractor_output_bytes_base64": base64.b64encode(
+                self.extractor_output_bytes
+            ).decode("ascii"),
+            "extractor_output_sha256": self.extractor_output_sha256,
+            "extractor_output_canonical_sha256": (
+                self.extractor_output_canonical_sha256
+            ),
+            "model_name": self.model_name,
+            "model_digest": self.model_digest,
+            "runtime_fingerprint_sha256": self.runtime_fingerprint_sha256,
+            "runtime_evidence_sha256": self.runtime_evidence_sha256,
+            "http_status": self.http_status,
+            "response_url": self.response_url,
+            "response_content_type": self.response_content_type,
+            "response_content_length": self.response_content_length,
+            "response_history_count": self.response_history_count,
             "transport_mode": self.transport_mode,
             "trusted_production_transport": self.trusted_production_transport,
             "network_requests": self.network_requests,
@@ -603,7 +726,9 @@ def _header(headers: Mapping[str, Any], name: str) -> str | None:
     return None
 
 
-def _validate_http_envelope(response: ResponseLike, response_bytes: bytes) -> None:
+def _validate_http_envelope(
+    response: ResponseLike, response_bytes: bytes
+) -> dict[str, Any]:
     status = getattr(response, "status_code", None)
     if isinstance(status, bool) or not isinstance(status, int):
         raise SecFilingGemmaOllamaError("Ollama status code is invalid")
@@ -611,18 +736,22 @@ def _validate_http_envelope(response: ResponseLike, response_bytes: bytes) -> No
         raise SecFilingGemmaOllamaError("Ollama redirects are forbidden")
     if status != 200:
         raise SecFilingGemmaOllamaError("Ollama returned a non-success status")
-    if getattr(response, "url", None) != OLLAMA_ENDPOINT:
+    response_url = getattr(response, "url", None)
+    if type(response_url) is not str or response_url != OLLAMA_ENDPOINT:
         raise SecFilingGemmaOllamaError("Ollama response URL changed")
     history = getattr(response, "history", None)
     if not isinstance(history, Sequence) or isinstance(history, (str, bytes)):
         raise SecFilingGemmaOllamaError("Ollama redirect history is invalid")
-    if len(history) != 0:
+    history_count = len(history)
+    if history_count != 0:
         raise SecFilingGemmaOllamaError("Ollama redirects are forbidden")
     headers = getattr(response, "headers", None)
     if not isinstance(headers, Mapping):
         raise SecFilingGemmaOllamaError("Ollama response headers are invalid")
-    content_type = (_header(headers, "Content-Type") or "").split(";", 1)[0]
-    if content_type.strip().casefold() != "application/json":
+    content_type = (
+        (_header(headers, "Content-Type") or "").split(";", 1)[0].strip().casefold()
+    )
+    if content_type != "application/json":
         raise SecFilingGemmaOllamaError("Ollama response is not application/json")
     content_length = _header(headers, "Content-Length")
     if content_length is not None:
@@ -630,6 +759,15 @@ def _validate_http_envelope(response: ResponseLike, response_bytes: bytes) -> No
             raise SecFilingGemmaOllamaError("Ollama Content-Length is invalid")
         if int(content_length) != len(response_bytes):
             raise SecFilingGemmaOllamaError("Ollama Content-Length does not reconcile")
+    return {
+        "http_status": status,
+        "response_url": response_url,
+        "response_content_type": content_type,
+        "response_content_length": (
+            None if content_length is None else int(content_length)
+        ),
+        "response_history_count": history_count,
+    }
 
 
 def _read_bounded_response(response: ResponseLike) -> bytes:
@@ -688,9 +826,11 @@ def _decode_manifest_bytes(value: Any, *, location: str) -> bytes:
     return decoded
 
 
-def _validate_ollama_response(
-    response_bytes: bytes, *, supplied_sentence_ids: tuple[str, ...]
-) -> tuple[bytes, str, str]:
+def _extract_ollama_attempt_output_bytes(
+    response_bytes: bytes,
+) -> tuple[bytes, bool]:
+    """Return exact assistant bytes and whether completion was a normal stop."""
+
     response = _strict_json_bytes(
         response_bytes,
         location="Ollama response",
@@ -704,8 +844,10 @@ def _validate_ollama_response(
     _validate_created_at(response["created_at"])
     if response["done"] is not True:
         raise SecFilingGemmaOllamaError("Ollama response is not complete")
-    if response["done_reason"] != "stop":
-        raise SecFilingGemmaOllamaError("Ollama response was truncated or stopped abnormally")
+    done_reason = response["done_reason"]
+    if type(done_reason) is not str or not done_reason:
+        raise SecFilingGemmaOllamaError("Ollama done_reason is invalid")
+    normal_completion = done_reason == "stop"
     for field in (
         "total_duration",
         "load_duration",
@@ -727,6 +869,29 @@ def _validate_ollama_response(
         raise SecFilingGemmaOllamaError(
             "Ollama extractor output is not valid Unicode text"
         ) from exc
+    if not output_bytes or len(output_bytes) > MAX_RESPONSE_BYTES:
+        raise SecFilingGemmaOllamaError(
+            "Ollama extractor output is empty or oversized"
+        )
+    return output_bytes, normal_completion
+
+
+def _extract_ollama_output_bytes(response_bytes: bytes) -> bytes:
+    """Validate one normally completed response for the valid-only API."""
+
+    output_bytes, normal_completion = _extract_ollama_attempt_output_bytes(
+        response_bytes
+    )
+    if not normal_completion:
+        raise SecFilingGemmaOllamaError(
+            "Ollama response was truncated or stopped abnormally"
+        )
+    return output_bytes
+
+
+def _validate_extractor_output_bytes(
+    output_bytes: bytes, *, supplied_sentence_ids: tuple[str, ...]
+) -> tuple[str, str]:
     output = _strict_json_bytes(
         output_bytes,
         location="Ollama extractor output",
@@ -738,13 +903,20 @@ def _validate_ollama_response(
         validate_extractor_output(
             output, supplied_sentence_ids=supplied_sentence_ids
         )
-    except SecFilingGemmaContractError as exc:
+    except (SecFilingGemmaContractError, TypeError, ValueError) as exc:
         raise SecFilingGemmaOllamaError("Ollama extractor output violates its schema") from exc
-    return (
+    return hashlib.sha256(output_bytes).hexdigest(), canonical_sha256(output)
+
+
+def _validate_ollama_response(
+    response_bytes: bytes, *, supplied_sentence_ids: tuple[str, ...]
+) -> tuple[bytes, str, str]:
+    output_bytes = _extract_ollama_output_bytes(response_bytes)
+    output_hash, canonical_hash = _validate_extractor_output_bytes(
         output_bytes,
-        hashlib.sha256(output_bytes).hexdigest(),
-        canonical_sha256(output),
+        supplied_sentence_ids=supplied_sentence_ids,
     )
+    return output_bytes, output_hash, canonical_hash
 
 
 def validate_ollama_extraction_receipt(
@@ -756,11 +928,17 @@ def validate_ollama_extraction_receipt(
     expected_runtime_evidence_sha256: str,
     expected_model_digest: str,
     expected_runtime_fingerprint_sha256: str,
+    expected_transport_mode: str,
 ) -> OllamaExtractionReceipt:
     """Replay a persisted call receipt against candidate-authoritative pins."""
 
-    if not isinstance(manifest, Mapping):
+    if type(manifest) is not dict:
         raise SecFilingGemmaOllamaError("Ollama receipt manifest must be a mapping")
+    manifest = dict(manifest)
+    if type(manifest.get("sentence_ids")) is not list:
+        raise SecFilingGemmaOllamaError(
+            "Ollama receipt sentence IDs must be a detached list"
+        )
     body_keys = set(OllamaExtractionReceipt.__dataclass_fields__) - {
         "request_bytes",
         "response_bytes",
@@ -909,11 +1087,17 @@ def validate_ollama_extraction_receipt(
     ):
         if manifest[field] is not False:
             raise SecFilingGemmaOllamaError(f"Ollama receipt {field} changed")
-    if manifest["transport_mode"] not in {
+    permitted_transport_modes = {
         "untrusted_injected_test_transport",
         "owned_hardened_loopback_session_requires_stage_attestation",
-    }:
-        raise SecFilingGemmaOllamaError("Ollama receipt transport mode changed")
+    }
+    if (
+        expected_transport_mode not in permitted_transport_modes
+        or manifest["transport_mode"] != expected_transport_mode
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama receipt transport mode changed or is not externally pinned"
+        )
     elapsed = _strict_nonnegative_int(
         manifest["elapsed_nanoseconds"], "elapsed_nanoseconds"
     )
@@ -953,6 +1137,275 @@ def validate_ollama_extraction_receipt(
     return receipt
 
 
+def validate_ollama_model_attempt_receipt(
+    manifest: Mapping[str, Any],
+    *,
+    expected_candidate_sha256: str,
+    expected_model_payload_sha256: str,
+    expected_sentence_ids: Sequence[str],
+    expected_runtime_evidence_sha256: str,
+    expected_model_digest: str,
+    expected_runtime_fingerprint_sha256: str,
+    expected_transport_mode: str,
+) -> OllamaModelAttemptReceipt:
+    """Replay one persisted valid-or-invalid model attempt from exact bytes."""
+
+    if type(manifest) is not dict:
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt receipt must be a mapping"
+        )
+    manifest = dict(manifest)
+    if type(manifest.get("sentence_ids")) is not list:
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt sentence IDs must be a detached list"
+        )
+    body_keys = set(OllamaModelAttemptReceipt.__dataclass_fields__) - {
+        "request_bytes",
+        "response_bytes",
+        "extractor_output_bytes",
+    }
+    body_keys |= {
+        "request_bytes_base64",
+        "response_bytes_base64",
+        "extractor_output_bytes_base64",
+    }
+    _expect_exact_keys(
+        manifest,
+        body_keys | {"receipt_sha256"},
+        "Ollama model-attempt receipt",
+    )
+    body = {key: manifest[key] for key in manifest if key != "receipt_sha256"}
+    receipt_hash = _sha256(manifest["receipt_sha256"], "receipt_sha256")
+    if not hmac.compare_digest(canonical_sha256(body), receipt_hash):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt receipt hash is not canonical"
+        )
+    if manifest["schema_version"] != ATTEMPT_RECEIPT_SCHEMA_VERSION:
+        raise SecFilingGemmaOllamaError("Ollama model-attempt schema changed")
+    status = manifest["attempt_status"]
+    if status not in {VALID_ATTEMPT_STATUS, INVALID_ATTEMPT_STATUS}:
+        raise SecFilingGemmaOllamaError("Ollama model-attempt status changed")
+    reason = manifest["invalid_reason"]
+    if (
+        status == VALID_ATTEMPT_STATUS
+        and reason is not None
+    ) or (
+        status == INVALID_ATTEMPT_STATUS
+        and reason not in {INVALID_ATTEMPT_REASON, ABNORMAL_ATTEMPT_REASON}
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt status and invalid reason disagree"
+        )
+
+    request_bytes = _decode_manifest_bytes(
+        manifest["request_bytes_base64"], location="request_bytes_base64"
+    )
+    response_bytes = _decode_manifest_bytes(
+        manifest["response_bytes_base64"], location="response_bytes_base64"
+    )
+    output_bytes = _decode_manifest_bytes(
+        manifest["extractor_output_bytes_base64"],
+        location="extractor_output_bytes_base64",
+    )
+    request_payload = _strict_json_bytes(
+        request_bytes,
+        location="sealed Ollama attempt request",
+        maximum=MAX_RESPONSE_BYTES,
+    )
+    if not isinstance(request_payload, Mapping):
+        raise SecFilingGemmaOllamaError(
+            "Sealed Ollama attempt request must be an object"
+        )
+    if (
+        isinstance(expected_sentence_ids, (str, bytes))
+        or not isinstance(expected_sentence_ids, Sequence)
+    ):
+        raise SecFilingGemmaOllamaError("Expected sentence IDs must be a sequence")
+    sentence_ids = tuple(expected_sentence_ids)
+    candidate_hash, normalized_ids, rebuilt_request, request_hash = _validated_payload(
+        {
+            "candidate_sha256": expected_candidate_sha256,
+            "sentence_ids": sentence_ids,
+            "model_payload": request_payload,
+            "model_payload_sha256": expected_model_payload_sha256,
+        },
+        expected_candidate_sha256=expected_candidate_sha256,
+        expected_model_payload_sha256=expected_model_payload_sha256,
+    )
+    if (
+        request_bytes != rebuilt_request
+        or manifest["request_sha256"] != request_hash
+        or manifest["candidate_sha256"] != candidate_hash
+        or manifest["sentence_ids"] != list(normalized_ids)
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt request or event binding changed"
+        )
+
+    response_output, normal_completion = _extract_ollama_attempt_output_bytes(
+        response_bytes
+    )
+    response_hash = hashlib.sha256(response_bytes).hexdigest()
+    output_hash = hashlib.sha256(output_bytes).hexdigest()
+    if (
+        response_output != output_bytes
+        or manifest["response_sha256"] != response_hash
+        or manifest["extractor_output_sha256"] != output_hash
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt response or output bytes changed"
+        )
+    if not normal_completion:
+        output_is_valid = False
+        canonical_output_hash = None
+        expected_reason = ABNORMAL_ATTEMPT_REASON
+    else:
+        try:
+            validated_hash, canonical_output_hash = _validate_extractor_output_bytes(
+                output_bytes,
+                supplied_sentence_ids=normalized_ids,
+            )
+        except SecFilingGemmaOllamaError:
+            output_is_valid = False
+            canonical_output_hash = None
+            expected_reason = INVALID_ATTEMPT_REASON
+        else:
+            output_is_valid = validated_hash == output_hash
+            expected_reason = None
+    if output_is_valid != (status == VALID_ATTEMPT_STATUS):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt status does not match the exact output bytes"
+        )
+    if reason != expected_reason:
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt invalid reason does not match completion evidence"
+        )
+    observed_canonical_hash = manifest["extractor_output_canonical_sha256"]
+    if observed_canonical_hash is not None:
+        observed_canonical_hash = _sha256(
+            observed_canonical_hash,
+            "extractor_output_canonical_sha256",
+        )
+    if observed_canonical_hash != canonical_output_hash:
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt canonical output identity changed"
+        )
+
+    for field, expected in (
+        ("endpoint", OLLAMA_ENDPOINT),
+        ("response_url", OLLAMA_ENDPOINT),
+        ("response_content_type", "application/json"),
+        ("model_name", OLLAMA_MODEL),
+        ("model_digest", _sha256(expected_model_digest, "expected_model_digest")),
+        (
+            "runtime_fingerprint_sha256",
+            _sha256(
+                expected_runtime_fingerprint_sha256,
+                "expected_runtime_fingerprint_sha256",
+            ),
+        ),
+        (
+            "runtime_evidence_sha256",
+            _sha256(
+                expected_runtime_evidence_sha256,
+                "expected_runtime_evidence_sha256",
+            ),
+        ),
+        ("elapsed_role", DIAGNOSTIC_TIME_ROLE),
+    ):
+        if manifest[field] != expected:
+            raise SecFilingGemmaOllamaError(
+                f"Ollama model-attempt {field} changed"
+            )
+    for field, expected in (
+        ("http_status", 200),
+        ("response_history_count", 0),
+        ("network_requests", 1),
+        ("redirects", 0),
+        ("retries", 0),
+        ("pull_attempts", 0),
+        ("repair_attempts", 0),
+    ):
+        if _strict_nonnegative_int(manifest[field], field) != expected:
+            raise SecFilingGemmaOllamaError(
+                f"Ollama model-attempt {field} changed"
+            )
+    response_content_length = manifest["response_content_length"]
+    if response_content_length is not None:
+        if (
+            _strict_nonnegative_int(
+                response_content_length, "response_content_length"
+            )
+            != len(response_bytes)
+        ):
+            raise SecFilingGemmaOllamaError(
+                "Ollama model-attempt response_content_length changed"
+            )
+    for field in (
+        "trusted_production_transport",
+        "model_streaming",
+        "model_thinking",
+    ):
+        if manifest[field] is not False:
+            raise SecFilingGemmaOllamaError(
+                f"Ollama model-attempt {field} changed"
+            )
+    permitted_transport_modes = {
+        "untrusted_injected_test_transport",
+        "owned_hardened_loopback_session_requires_stage_attestation",
+    }
+    if (
+        expected_transport_mode not in permitted_transport_modes
+        or manifest["transport_mode"] != expected_transport_mode
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt transport mode changed or is not externally pinned"
+        )
+    elapsed = _strict_nonnegative_int(
+        manifest["elapsed_nanoseconds"], "elapsed_nanoseconds"
+    )
+    receipt = OllamaModelAttemptReceipt(
+        schema_version=manifest["schema_version"],
+        attempt_status=status,
+        invalid_reason=reason,
+        endpoint=manifest["endpoint"],
+        candidate_sha256=manifest["candidate_sha256"],
+        sentence_ids=normalized_ids,
+        request_bytes=request_bytes,
+        request_sha256=manifest["request_sha256"],
+        response_bytes=response_bytes,
+        response_sha256=manifest["response_sha256"],
+        extractor_output_bytes=output_bytes,
+        extractor_output_sha256=manifest["extractor_output_sha256"],
+        extractor_output_canonical_sha256=observed_canonical_hash,
+        model_name=manifest["model_name"],
+        model_digest=manifest["model_digest"],
+        runtime_fingerprint_sha256=manifest["runtime_fingerprint_sha256"],
+        runtime_evidence_sha256=manifest["runtime_evidence_sha256"],
+        http_status=manifest["http_status"],
+        response_url=manifest["response_url"],
+        response_content_type=manifest["response_content_type"],
+        response_content_length=response_content_length,
+        response_history_count=manifest["response_history_count"],
+        transport_mode=manifest["transport_mode"],
+        trusted_production_transport=False,
+        network_requests=manifest["network_requests"],
+        redirects=manifest["redirects"],
+        retries=manifest["retries"],
+        pull_attempts=manifest["pull_attempts"],
+        repair_attempts=manifest["repair_attempts"],
+        model_streaming=manifest["model_streaming"],
+        model_thinking=manifest["model_thinking"],
+        elapsed_nanoseconds=elapsed,
+        elapsed_role=manifest["elapsed_role"],
+    )
+    if receipt.to_manifest() != dict(manifest):
+        raise SecFilingGemmaOllamaError(
+            "Ollama model-attempt receipt is not canonical"
+        )
+    return receipt
+
+
 def build_hardened_loopback_session() -> requests.Session:
     """Construct the production transport without proxy or retry inheritance."""
 
@@ -976,7 +1429,7 @@ def build_hardened_loopback_session() -> requests.Session:
     return session
 
 
-def call_ollama_extractor(
+def call_ollama_extractor_attempt(
     validated_request: Mapping[str, Any],
     *,
     expected_candidate_sha256: str,
@@ -987,8 +1440,8 @@ def call_ollama_extractor(
     runtime_identity: PinnedOllamaRuntimeIdentity,
     transport: TransportLike | None = None,
     monotonic_ns: Callable[[], int] = time.monotonic_ns,
-) -> OllamaExtractionReceipt:
-    """Perform exactly one bounded local extraction call and return its receipt.
+) -> OllamaModelAttemptReceipt:
+    """Perform exactly one bounded local call and seal valid or invalid output.
 
     The client never self-attests production trust: even an internally created
     hardened session remains untrusted until the stage runner verifies the
@@ -1035,11 +1488,34 @@ def call_ollama_extractor(
         except Exception:
             raise SecFilingGemmaOllamaError("Ollama loopback request failed") from None
         response_bytes = _read_bounded_response(response)
-        _validate_http_envelope(response, response_bytes)
-        output_bytes, output_hash, output_canonical_hash = _validate_ollama_response(
-            response_bytes,
-            supplied_sentence_ids=sentence_ids,
+        http_evidence = _validate_http_envelope(response, response_bytes)
+        output_bytes, normal_completion = _extract_ollama_attempt_output_bytes(
+            response_bytes
         )
+        output_hash = hashlib.sha256(output_bytes).hexdigest()
+        if not normal_completion:
+            attempt_status = INVALID_ATTEMPT_STATUS
+            invalid_reason: str | None = ABNORMAL_ATTEMPT_REASON
+            output_canonical_hash = None
+        else:
+            try:
+                validated_output_hash, output_canonical_hash = (
+                    _validate_extractor_output_bytes(
+                        output_bytes,
+                        supplied_sentence_ids=sentence_ids,
+                    )
+                )
+            except SecFilingGemmaOllamaError:
+                attempt_status = INVALID_ATTEMPT_STATUS
+                invalid_reason = INVALID_ATTEMPT_REASON
+                output_canonical_hash = None
+            else:
+                if validated_output_hash != output_hash:
+                    raise SecFilingGemmaOllamaError(
+                        "Validated extractor output hash changed unexpectedly"
+                    )
+                attempt_status = VALID_ATTEMPT_STATUS
+                invalid_reason = None
     finally:
         if response is not None:
             try:
@@ -1059,8 +1535,10 @@ def call_ollama_extractor(
     if end < start:
         raise SecFilingGemmaOllamaError("Diagnostic monotonic clock moved backwards")
     elapsed = end - start
-    return OllamaExtractionReceipt(
-        schema_version=RECEIPT_SCHEMA_VERSION,
+    return OllamaModelAttemptReceipt(
+        schema_version=ATTEMPT_RECEIPT_SCHEMA_VERSION,
+        attempt_status=attempt_status,
+        invalid_reason=invalid_reason,
         endpoint=OLLAMA_ENDPOINT,
         candidate_sha256=candidate_hash,
         sentence_ids=sentence_ids,
@@ -1075,7 +1553,11 @@ def call_ollama_extractor(
         model_digest=runtime_identity.model_digest,
         runtime_fingerprint_sha256=runtime_identity.runtime_fingerprint_sha256,
         runtime_evidence_sha256=runtime_identity.evidence_sha256,
-        http_status=200,
+        http_status=http_evidence["http_status"],
+        response_url=http_evidence["response_url"],
+        response_content_type=http_evidence["response_content_type"],
+        response_content_length=http_evidence["response_content_length"],
+        response_history_count=http_evidence["response_history_count"],
         transport_mode=(
             "owned_hardened_loopback_session_requires_stage_attestation"
             if owned_transport
@@ -1094,23 +1576,104 @@ def call_ollama_extractor(
     )
 
 
+def call_ollama_extractor(
+    validated_request: Mapping[str, Any],
+    *,
+    expected_candidate_sha256: str,
+    expected_model_payload_sha256: str,
+    expected_runtime_evidence_sha256: str,
+    expected_model_digest: str,
+    expected_runtime_fingerprint_sha256: str,
+    runtime_identity: PinnedOllamaRuntimeIdentity,
+    transport: TransportLike | None = None,
+    monotonic_ns: Callable[[], int] = time.monotonic_ns,
+) -> OllamaExtractionReceipt:
+    """Backward-compatible valid-only facade over the durable attempt API."""
+
+    attempt = call_ollama_extractor_attempt(
+        validated_request,
+        expected_candidate_sha256=expected_candidate_sha256,
+        expected_model_payload_sha256=expected_model_payload_sha256,
+        expected_runtime_evidence_sha256=expected_runtime_evidence_sha256,
+        expected_model_digest=expected_model_digest,
+        expected_runtime_fingerprint_sha256=expected_runtime_fingerprint_sha256,
+        runtime_identity=runtime_identity,
+        transport=transport,
+        monotonic_ns=monotonic_ns,
+    )
+    if attempt.attempt_status != VALID_ATTEMPT_STATUS:
+        if attempt.invalid_reason == ABNORMAL_ATTEMPT_REASON:
+            raise SecFilingGemmaOllamaError(
+                "Ollama response was truncated or stopped abnormally"
+            )
+        # Preserve the original valid-only API's precise failure category while
+        # the durable attempt API remains available to the stage runner.
+        _validate_extractor_output_bytes(
+            attempt.extractor_output_bytes,
+            supplied_sentence_ids=attempt.sentence_ids,
+        )
+        raise SecFilingGemmaOllamaError("Invalid extractor attempt was misclassified")
+    canonical_hash = attempt.extractor_output_canonical_sha256
+    if canonical_hash is None:
+        raise SecFilingGemmaOllamaError(
+            "Valid Ollama attempt lacks its canonical extractor output hash"
+        )
+    return OllamaExtractionReceipt(
+        schema_version=RECEIPT_SCHEMA_VERSION,
+        endpoint=attempt.endpoint,
+        candidate_sha256=attempt.candidate_sha256,
+        sentence_ids=attempt.sentence_ids,
+        request_bytes=attempt.request_bytes,
+        request_sha256=attempt.request_sha256,
+        response_bytes=attempt.response_bytes,
+        response_sha256=attempt.response_sha256,
+        extractor_output_bytes=attempt.extractor_output_bytes,
+        extractor_output_sha256=attempt.extractor_output_sha256,
+        extractor_output_canonical_sha256=canonical_hash,
+        model_name=attempt.model_name,
+        model_digest=attempt.model_digest,
+        runtime_fingerprint_sha256=attempt.runtime_fingerprint_sha256,
+        runtime_evidence_sha256=attempt.runtime_evidence_sha256,
+        http_status=attempt.http_status,
+        transport_mode=attempt.transport_mode,
+        trusted_production_transport=attempt.trusted_production_transport,
+        network_requests=attempt.network_requests,
+        redirects=attempt.redirects,
+        retries=attempt.retries,
+        pull_attempts=attempt.pull_attempts,
+        repair_attempts=attempt.repair_attempts,
+        model_streaming=attempt.model_streaming,
+        model_thinking=attempt.model_thinking,
+        elapsed_nanoseconds=attempt.elapsed_nanoseconds,
+        elapsed_role=attempt.elapsed_role,
+    )
+
+
 __all__ = [
+    "ABNORMAL_ATTEMPT_REASON",
+    "ATTEMPT_RECEIPT_SCHEMA_VERSION",
     "CONNECT_TIMEOUT_SECONDS",
     "DIAGNOSTIC_TIME_ROLE",
+    "INVALID_ATTEMPT_REASON",
+    "INVALID_ATTEMPT_STATUS",
     "MAX_RESPONSE_BYTES",
     "OLLAMA_ENDPOINT",
     "OLLAMA_MODEL",
     "OllamaExtractionReceipt",
+    "OllamaModelAttemptReceipt",
     "PinnedOllamaRuntimeIdentity",
     "READ_TIMEOUT_SECONDS",
     "RECEIPT_SCHEMA_VERSION",
     "RUNTIME_GUARD_SCHEMA_VERSION",
     "RUNTIME_IDENTITY_SCHEMA_VERSION",
     "SecFilingGemmaOllamaError",
+    "VALID_ATTEMPT_STATUS",
     "build_runtime_identity_guard",
     "build_hardened_loopback_session",
     "call_ollama_extractor",
+    "call_ollama_extractor_attempt",
     "validate_ollama_extraction_receipt",
+    "validate_ollama_model_attempt_receipt",
     "validate_pinned_runtime_identity",
     "validate_runtime_identity_guard",
 ]

@@ -5,6 +5,7 @@ import copy
 from dataclasses import FrozenInstanceError, replace
 import hashlib
 import json
+from types import MappingProxyType
 from typing import Any, Callable
 
 import pytest
@@ -17,8 +18,12 @@ from agent_benchmark.sec_filing_gemma_contract import (
     canonical_sha256,
 )
 from agent_benchmark.sec_filing_gemma_ollama import (
+    ABNORMAL_ATTEMPT_REASON,
+    ATTEMPT_RECEIPT_SCHEMA_VERSION,
     CONNECT_TIMEOUT_SECONDS,
     DIAGNOSTIC_TIME_ROLE,
+    INVALID_ATTEMPT_REASON,
+    INVALID_ATTEMPT_STATUS,
     MAX_RESPONSE_BYTES,
     OLLAMA_ENDPOINT,
     OLLAMA_MODEL,
@@ -26,10 +31,13 @@ from agent_benchmark.sec_filing_gemma_ollama import (
     RECEIPT_SCHEMA_VERSION,
     RUNTIME_IDENTITY_SCHEMA_VERSION,
     SecFilingGemmaOllamaError,
+    VALID_ATTEMPT_STATUS,
     build_hardened_loopback_session,
     build_runtime_identity_guard,
     call_ollama_extractor,
+    call_ollama_extractor_attempt,
     validate_ollama_extraction_receipt,
+    validate_ollama_model_attempt_receipt,
     validate_pinned_runtime_identity,
     validate_runtime_identity_guard,
 )
@@ -233,6 +241,30 @@ def _call(
     return receipt, resolved_transport
 
 
+def _call_attempt(
+    *,
+    response: FakeResponse | None = None,
+    transport: FakeTransport | None = None,
+):
+    valid, candidate_hash, payload_hash = _validated_request()
+    resolved_transport = transport or FakeTransport(response)
+    identity = _identity()
+    receipt = call_ollama_extractor_attempt(
+        valid,
+        expected_candidate_sha256=candidate_hash,
+        expected_model_payload_sha256=payload_hash,
+        expected_runtime_evidence_sha256=identity.evidence_sha256,
+        expected_model_digest=identity.model_digest,
+        expected_runtime_fingerprint_sha256=(
+            identity.runtime_fingerprint_sha256
+        ),
+        runtime_identity=identity,
+        transport=resolved_transport,
+        monotonic_ns=_clock(100, 175),
+    )
+    return receipt, resolved_transport
+
+
 def test_one_exact_loopback_call_and_immutable_byte_receipt() -> None:
     receipt, transport = _call()
     valid, candidate_hash, payload_hash = _validated_request()
@@ -295,9 +327,180 @@ def test_persisted_receipt_replays_against_candidate_authoritative_pins() -> Non
         expected_runtime_fingerprint_sha256=(
             receipt.runtime_fingerprint_sha256
         ),
+        expected_transport_mode=receipt.transport_mode,
     )
     assert replayed == receipt
     assert replayed.to_manifest() == receipt.to_manifest()
+
+
+def _replay_attempt(receipt):
+    return validate_ollama_model_attempt_receipt(
+        receipt.to_manifest(),
+        expected_candidate_sha256=receipt.candidate_sha256,
+        expected_model_payload_sha256=receipt.request_sha256,
+        expected_sentence_ids=receipt.sentence_ids,
+        expected_runtime_evidence_sha256=receipt.runtime_evidence_sha256,
+        expected_model_digest=receipt.model_digest,
+        expected_runtime_fingerprint_sha256=(
+            receipt.runtime_fingerprint_sha256
+        ),
+        expected_transport_mode=receipt.transport_mode,
+    )
+
+
+def test_valid_attempt_receipt_roundtrips_and_preserves_valid_facade() -> None:
+    attempt, transport = _call_attempt()
+    assert attempt.schema_version == ATTEMPT_RECEIPT_SCHEMA_VERSION
+    assert attempt.attempt_status == VALID_ATTEMPT_STATUS
+    assert attempt.invalid_reason is None
+    assert attempt.validated_extractor_output() == _output()
+    assert len(transport.calls) == 1
+    assert attempt.network_requests == 1
+    assert attempt.retries == attempt.repair_attempts == 0
+    assert attempt.trusted_production_transport is False
+    assert _replay_attempt(attempt) == attempt
+
+
+def test_invalid_schema_is_sealed_once_without_semantic_output_or_retry() -> None:
+    invalid = _output()
+    invalid["dimensions"]["demand"] = {
+        "current_impact": "favorable",
+        "change_vs_prior": "improving",
+        "evidence_sentence_ids": ["C9999"],
+    }
+    transport = FakeTransport(
+        FakeResponse(_response_bytes(_response_payload(output=invalid)))
+    )
+    attempt, _ = _call_attempt(transport=transport)
+    assert attempt.attempt_status == INVALID_ATTEMPT_STATUS
+    assert attempt.invalid_reason == INVALID_ATTEMPT_REASON
+    assert attempt.extractor_output_canonical_sha256 is None
+    assert len(transport.calls) == 1
+    assert attempt.network_requests == 1
+    assert attempt.retries == attempt.repair_attempts == 0
+    with pytest.raises(SecFilingGemmaOllamaError, match="cannot be exposed"):
+        attempt.validated_extractor_output()
+    assert _replay_attempt(attempt) == attempt
+
+
+def test_malformed_inner_json_is_an_auditable_invalid_attempt() -> None:
+    payload = _response_payload()
+    payload["message"]["content"] = "```json\n{}\n```"
+    attempt, transport = _call_attempt(
+        response=FakeResponse(_response_bytes(payload))
+    )
+    assert attempt.attempt_status == INVALID_ATTEMPT_STATUS
+    assert attempt.invalid_reason == INVALID_ATTEMPT_REASON
+    assert attempt.extractor_output_canonical_sha256 is None
+    assert len(transport.calls) == 1
+    assert _replay_attempt(attempt) == attempt
+
+
+def test_abnormal_completed_response_is_sealed_once_as_invalid() -> None:
+    payload = _response_payload()
+    payload["done_reason"] = "length"
+    attempt, transport = _call_attempt(
+        response=FakeResponse(_response_bytes(payload))
+    )
+    assert attempt.attempt_status == INVALID_ATTEMPT_STATUS
+    assert attempt.invalid_reason == ABNORMAL_ATTEMPT_REASON
+    assert attempt.extractor_output_canonical_sha256 is None
+    assert len(transport.calls) == 1
+    assert attempt.retries == attempt.repair_attempts == 0
+    assert _replay_attempt(attempt) == attempt
+
+
+def test_http_envelope_is_captured_once_without_post_validation_reread() -> None:
+    class SwitchingUrlResponse(FakeResponse):
+        def __init__(self, body: bytes) -> None:
+            self._url_reads = 0
+            super().__init__(body)
+
+        @property
+        def url(self) -> str:
+            self._url_reads += 1
+            return OLLAMA_ENDPOINT if self._url_reads == 1 else "http://evil.invalid/"
+
+        @url.setter
+        def url(self, _value: str) -> None:
+            pass
+
+    response = SwitchingUrlResponse(_response_bytes())
+    attempt, _ = _call_attempt(response=response)
+    assert attempt.response_url == OLLAMA_ENDPOINT
+    assert response._url_reads == 1
+    assert _replay_attempt(attempt) == attempt
+
+
+def test_unhashable_schema_value_is_sealed_as_invalid_instead_of_escaping() -> None:
+    invalid = _output()
+    invalid["dimensions"]["demand"]["evidence_sentence_ids"] = [{}]
+    attempt, transport = _call_attempt(
+        response=FakeResponse(_response_bytes(_response_payload(output=invalid)))
+    )
+    assert attempt.attempt_status == INVALID_ATTEMPT_STATUS
+    assert attempt.invalid_reason == INVALID_ATTEMPT_REASON
+    assert attempt.extractor_output_canonical_sha256 is None
+    assert len(transport.calls) == 1
+    assert _replay_attempt(attempt) == attempt
+
+
+def test_attempt_validator_rejects_live_or_switching_mapping_views() -> None:
+    attempt, _ = _call_attempt()
+    with pytest.raises(SecFilingGemmaOllamaError, match="mapping"):
+        validate_ollama_model_attempt_receipt(
+            MappingProxyType(attempt.to_manifest()),
+            expected_candidate_sha256=attempt.candidate_sha256,
+            expected_model_payload_sha256=attempt.request_sha256,
+            expected_sentence_ids=attempt.sentence_ids,
+            expected_runtime_evidence_sha256=attempt.runtime_evidence_sha256,
+            expected_model_digest=attempt.model_digest,
+            expected_runtime_fingerprint_sha256=(
+                attempt.runtime_fingerprint_sha256
+            ),
+            expected_transport_mode=attempt.transport_mode,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.update(attempt_status=VALID_ATTEMPT_STATUS),
+        lambda value: value.update(invalid_reason=None),
+        lambda value: value.update(extractor_output_canonical_sha256=_digest("fake")),
+        lambda value: value.update(network_requests=2),
+        lambda value: value.update(trusted_production_transport=True),
+        lambda value: value.update(response_url="http://localhost:11434/api/chat"),
+        lambda value: value.update(response_content_type="text/plain"),
+        lambda value: value.update(response_content_length=0),
+        lambda value: value.update(response_history_count=1),
+        lambda value: value.update(
+            transport_mode="owned_hardened_loopback_session_requires_stage_attestation"
+        ),
+    ],
+)
+def test_rehashed_invalid_attempt_forgery_is_rejected(mutation) -> None:
+    payload = _response_payload()
+    payload["message"]["content"] = "not-json"
+    attempt, _ = _call_attempt(response=FakeResponse(_response_bytes(payload)))
+    manifest = attempt.to_manifest()
+    mutation(manifest)
+    manifest["receipt_sha256"] = canonical_sha256(
+        {key: manifest[key] for key in manifest if key != "receipt_sha256"}
+    )
+    with pytest.raises(SecFilingGemmaOllamaError):
+        validate_ollama_model_attempt_receipt(
+            manifest,
+            expected_candidate_sha256=attempt.candidate_sha256,
+            expected_model_payload_sha256=attempt.request_sha256,
+            expected_sentence_ids=attempt.sentence_ids,
+            expected_runtime_evidence_sha256=attempt.runtime_evidence_sha256,
+            expected_model_digest=attempt.model_digest,
+            expected_runtime_fingerprint_sha256=(
+                attempt.runtime_fingerprint_sha256
+            ),
+            expected_transport_mode=attempt.transport_mode,
+        )
 
 
 @pytest.mark.parametrize(
@@ -318,6 +521,14 @@ def test_persisted_receipt_replays_against_candidate_authoritative_pins() -> Non
         (
             lambda value: value.update(network_requests=True),
             "network_requests",
+        ),
+        (
+            lambda value: value.update(
+                transport_mode=(
+                    "owned_hardened_loopback_session_requires_stage_attestation"
+                )
+            ),
+            "transport mode",
         ),
     ],
 )
@@ -341,6 +552,7 @@ def test_rehashed_persisted_receipt_tampering_is_rejected(
             expected_runtime_fingerprint_sha256=(
                 receipt.runtime_fingerprint_sha256
             ),
+            expected_transport_mode=receipt.transport_mode,
         )
 
 
@@ -754,3 +966,4 @@ def test_backward_or_noninteger_diagnostic_clock_cannot_create_receipt() -> None
             monotonic_ns=lambda: 1.5,  # type: ignore[return-value]
         )
     assert transport.calls == []
+    VALID_ATTEMPT_STATUS,

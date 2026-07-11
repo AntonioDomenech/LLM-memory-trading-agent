@@ -479,6 +479,13 @@ A strategy that only looks good while Apple rises is insufficient.
 The strategy and buy-and-hold start with the same USD 1,000 and use the same
 AAPL sessions and adjusted prices.
 
+Development is the single portfolio genesis. At the 2019 and 2024 stage
+boundaries, both ledgers inherit their exact cumulative positions: buy-and-hold
+is already LONG, and the strategy is LONG or CASH according to any episode
+already in progress. Neither side receives a synthetic boundary trade or an
+extra entry cost. A position-changing fill that genuinely occurs on the first
+session of a new stage is still charged normally.
+
 The only permitted target exposures are exactly 0 and 1. There is no
 leverage, shorting, borrowing, negative cash, fractional exposure, or margin
 interest. Decisions are made after a completed close and fill at the next
@@ -490,6 +497,10 @@ cutoff is valued at the cutoff under both terminal conventions and can never
 become a training lesson inside that frozen score. Period results are sums of
 daily active log increments from one continuous ledger; Brier statistics use
 only predictions whose complete horizon matured by the relevant cutoff.
+Episode concentration uses every within-window ledger contribution, including
+episodes carried in from a prior stage and episodes still open at the cutoff.
+Those partial contributions do not enter full-horizon episode win, mean-edge,
+Brier, or training statistics.
 
 Every saved ledger must pass the existing independent no-leverage proof and
 reconcile daily strategy-versus-buy-and-hold log increments. A declaration in
@@ -554,12 +565,30 @@ preserved rather than overwritten.
 
 ## What has and has not happened
 
-At contract-freeze time:
+At the current implementation checkpoint:
 
 - the SEC audit/parser implementation exists and its offline tests pass;
 - this experiment contract and its mutation tests exist;
-- stage access remains intentionally disabled until the authoritative sealed
-  prediction/ledger/gate verifier is implemented;
+- the exact market-source snapshot parser now replays every available OHLCV
+  value from detached bytes and rejects future rows, noncanonical containers,
+  and one-ULP substitutions;
+- a completed Gemma call now emits one exact attempt receipt even when the
+  extractor payload is invalid, with no retry or repair and no invalid
+  semantic output exposed downstream;
+- non-authorizing stage-access plans bind the exact candidate, registry,
+  verifier source, SEC URL set, presealed market sources, model, budgets, and
+  prohibited stages without containing a result or pass field;
+- the prediction artifact sealer now persists exact pre-label prefix bytes
+  through an append-only external-pin compare-and-swap receipt rather than
+  accepting caller-supplied checksum strings;
+- an artifact seal proves exact structural ancestry only; the authoritative
+  stage verifier must additionally replay the full prediction-prefix semantics
+  against the same bytes and all candidate, calendar, event, and market pins;
+- the SEC/Gemma scorer now deterministically replays the cumulative LONG/CASH
+  state, same-ledger buy-and-hold, both cost levels, terminal conventions,
+  stage-boundary positions, and open/carry-in episode concentration;
+- stage access remains intentionally disabled until the authoritative verifier
+  replays that scorer and all of its raw sealed inputs;
 - the final all-stage runtime summary is diagnostic only; stage-specific and
   cumulative receipts plus the five-development-filing latency preflight must
   be implemented before it can unlock anything;
@@ -577,10 +606,14 @@ At contract-freeze time:
 - no 2019-2023 confirmation result has been opened; and
 - no 2024, 2025, or 2026 performance has been calculated.
 
-The next implementation milestone is to bind the authoritative SEC audit,
-retrieve and semantically reconcile the official calendar sources, implement
-the deterministic corpus and per-event redaction pipeline, add stage-specific
-runtime receipts and the registry's effectful atomic pin/request-consumption
-store, and implement the sequential sealed prediction/ledger verifier. That
-machinery must be committed before opening filing meaning or any later-stage
-outcome.
+Market reconciliation currently proves the complete presealed canonical
+snapshot-to-stage transformation. It does not by itself prove where the
+snapshot came from; the production acquisition runner must also seal and bind
+the upstream provider response and its normalization receipt before the stage
+verifier may accept it.
+
+The next implementation milestone is the fixed authoritative stage verifier.
+It must replay the already implemented corpus, redaction, model-attempt,
+market-byte, feature, learner, prediction, sealing, score/gate, reveal-store,
+and runtime evidence. That machinery must be committed before opening filing
+meaning or any later-stage outcome.
