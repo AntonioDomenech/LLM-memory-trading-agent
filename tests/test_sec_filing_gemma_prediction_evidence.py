@@ -22,6 +22,8 @@ from agent_benchmark.sec_filing_gemma_prediction_evidence import (
     AVAILABLE_PREDICTION_STATUS,
     INTERMEDIATE_FOLD_ID,
     MODEL_VARIANTS,
+    PREDICTION_PREFIX_SCHEMA_VERSION,
+    PREDICTION_ROW_SCHEMA_VERSION,
     UNAVAILABLE_PREDICTION_STATUS,
     append_prediction_row,
     build_label_release_ledger,
@@ -68,6 +70,7 @@ def _fold(cutoff: str, maximum_maturity: str, salt: str) -> dict[str, object]:
     return {
         "fold_train_cutoff_session": cutoff,
         "training_set_count": 40,
+        "training_positive_count": 18,
         "training_set_membership_sha256": _hash(f"{salt}:membership"),
         "semantic_training_feature_matrix_sha256": _hash(
             f"{salt}:semantic-features"
@@ -330,6 +333,32 @@ def test_exact_append_replay_and_external_prior_pins(evidence) -> None:
         )
 
 
+@pytest.mark.parametrize("positive_count", [0, 40, 41])
+def test_fold_context_requires_both_training_target_classes(
+    evidence, positive_count: int
+) -> None:
+    changed = copy.deepcopy(evidence["fold_contexts"]["fold_1"])
+    changed["training_positive_count"] = positive_count
+
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="training_positive_count|both binary classes",
+    ):
+        append_prediction_row(
+            None,
+            evidence["specs"][0],
+            current_event_binding=evidence["events"][0],
+            current_fold_context=changed,
+            session_dates=EXPECTED_SESSIONS,
+            expected_calendar_sessions_sha256=evidence["calendar_hash"],
+            candidate_sha256=evidence["candidate_hash"],
+            corpus_universe_sha256=evidence["universe_hash"],
+            expected_event_bindings=evidence["events"][:1],
+            expected_prior_prefix_sha256=None,
+            expected_prior_tip_sha256=None,
+        )
+
+
 def test_earlier_prefix_hash_has_no_future_event_or_fold_context(evidence) -> None:
     prefix_1_hash = prediction_prefix_sha256(
         evidence["prefix"], through_sequence_number=1
@@ -348,8 +377,14 @@ def test_earlier_prefix_hash_has_no_future_event_or_fold_context(evidence) -> No
         ablation_probability=0.3,
         ablation_edge=-0.2,
     )
+    future_event_b = copy.deepcopy(future_event)
+    future_event_b["extraction_identity_sha256"] = _hash("future-b:extraction")
+    future_event_b["market_prefix_chain_identity_sha256"] = _hash(
+        "future-b:market-prefix-chain"
+    )
+    future_event_b["market_feature_row_sha256"] = _hash("future-b:market-row")
     future_spec_b = _available(
-        future_event,
+        future_event_b,
         semantic_probability=0.9,
         semantic_edge=0.2,
         ablation_probability=0.8,
@@ -371,21 +406,21 @@ def test_earlier_prefix_hash_has_no_future_event_or_fold_context(evidence) -> No
         expected_prior_tip_sha256=None,
     )
     finals = []
-    for spec, fold_context in (
-        (future_spec_a, fold_2_a),
-        (future_spec_b, fold_2_b),
+    for spec, fold_context, appended_event in (
+        (future_spec_a, fold_2_a, future_event),
+        (future_spec_b, fold_2_b, future_event_b),
     ):
         finals.append(
             append_prediction_row(
                 first_prefix,
                 spec,
-                current_event_binding=future_event,
+                current_event_binding=appended_event,
                 current_fold_context=fold_context,
                 session_dates=EXPECTED_SESSIONS,
                 expected_calendar_sessions_sha256=evidence["calendar_hash"],
                 candidate_sha256=evidence["candidate_hash"],
                 corpus_universe_sha256=evidence["universe_hash"],
-                expected_event_bindings=[evidence["events"][0], future_event],
+                expected_event_bindings=[evidence["events"][0], appended_event],
                 expected_prior_prefix_sha256=first_prefix[
                     "prediction_prefix_sha256"
                 ],
@@ -396,6 +431,74 @@ def test_earlier_prefix_hash_has_no_future_event_or_fold_context(evidence) -> No
     assert prediction_prefix_sha256(finals[0], through_sequence_number=1) == prefix_1_hash
     assert prediction_prefix_sha256(finals[1], through_sequence_number=1) == prefix_1_hash
     assert finals[0]["prediction_prefix_sha256"] != finals[1]["prediction_prefix_sha256"]
+
+
+def test_v2_feature_identity_binding_is_explicit_and_legacy_binding_fails(
+    evidence,
+) -> None:
+    assert PREDICTION_ROW_SCHEMA_VERSION.endswith("-v2")
+    assert PREDICTION_PREFIX_SCHEMA_VERSION.endswith("-v2")
+    assert evidence["prefix"]["schema_version"] == PREDICTION_PREFIX_SCHEMA_VERSION
+    assert all(
+        row["schema_version"] == PREDICTION_ROW_SCHEMA_VERSION
+        for row in evidence["prefix"]["rows"]
+    )
+
+    legacy_event = copy.deepcopy(evidence["events"][0])
+    legacy_spec = copy.deepcopy(evidence["specs"][0])
+    for value in (legacy_event, legacy_spec):
+        value.pop("extraction_identity_sha256")
+        value.pop("market_prefix_chain_identity_sha256")
+        value.pop("market_feature_row_sha256")
+        value["extraction_output_sha256"] = _hash("legacy-output-only")
+
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="extraction_identity_sha256.*market_feature_row_sha256",
+    ):
+        append_prediction_row(
+            None,
+            legacy_spec,
+            current_event_binding=legacy_event,
+            current_fold_context=evidence["fold_contexts"]["fold_1"],
+            session_dates=EXPECTED_SESSIONS,
+            expected_calendar_sessions_sha256=evidence["calendar_hash"],
+            candidate_sha256=evidence["candidate_hash"],
+            corpus_universe_sha256=evidence["universe_hash"],
+            expected_event_bindings=[legacy_event],
+            expected_prior_prefix_sha256=None,
+            expected_prior_tip_sha256=None,
+        )
+
+    legacy_prefix = copy.deepcopy(evidence["prefix"])
+    legacy_prefix["schema_version"] = (
+        "aapl-sec-gemma-pre-label-prediction-prefix-v1"
+    )
+    with pytest.raises(SecFilingGemmaContractError, match="schema_version"):
+        validate_prediction_prefix(
+            legacy_prefix, **evidence["validation_kwargs"]
+        )
+
+
+@pytest.mark.parametrize(
+    "identity_field",
+    [
+        "extraction_identity_sha256",
+        "market_prefix_chain_identity_sha256",
+        "market_feature_row_sha256",
+    ],
+)
+def test_prediction_row_cannot_substitute_a_feature_identity(
+    evidence, identity_field: str
+) -> None:
+    changed = copy.deepcopy(evidence["prefix"])
+    changed["rows"][0][identity_field] = _hash(f"substituted:{identity_field}")
+    _refresh_prefix_container(changed)
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="bound to another external event",
+    ):
+        validate_prediction_prefix(changed, **evidence["validation_kwargs"])
 
 
 def test_cross_prefix_tampering_omission_and_reordering_fail(evidence) -> None:
@@ -549,6 +652,12 @@ def test_unavailable_row_has_no_probability_or_gate_claims_but_is_sealed_and_lab
     assert row["prediction_status"] == UNAVAILABLE_PREDICTION_STATUS
     assert row["unavailable_reason"] == "missing_required_market_features"
     assert row["unavailable_fail_safe_action_semantics"] == "NO_NEW_EPISODE"
+    for identity_field in (
+        "extraction_identity_sha256",
+        "market_prefix_chain_identity_sha256",
+        "market_feature_row_sha256",
+    ):
+        assert row[identity_field] == evidence["events"][2][identity_field]
     for field in (
         "semantic_cash_probability_hex",
         "semantic_expected_edge_hex",

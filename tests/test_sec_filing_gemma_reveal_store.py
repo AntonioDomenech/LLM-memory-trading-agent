@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import shutil
 import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -179,14 +181,18 @@ def _consume(
     access_hash: dict,
     validator=_semantic_validator,
 ) -> dict:
-    return store.consume_request(
-        request,
-        candidate_manifest=candidate,
-        stage=stage,
-        stage_access_manifest=access_hash,
-        prerequisite_stage_evidence=evidence,
-        prerequisite_validator=validator,
-    )
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        validator,
+    ):
+        return store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage=stage,
+            stage_access_manifest=access_hash,
+            prerequisite_stage_evidence=evidence,
+        )
 
 
 def test_fresh_store_uses_only_tracked_genesis_and_is_idempotent(
@@ -324,6 +330,119 @@ def test_intermediate_request_is_single_use_and_does_not_touch_final(
             access_hash=access_hash,
         )
     assert store.load() == before_replay
+
+
+def test_public_consume_uses_only_the_fixed_verifier_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    signature = inspect.signature(SecFilingGemmaRevealStore.consume_request)
+    assert "prerequisite_validator" not in signature.parameters
+
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="fixed-verifier-only")
+    evidence = _evidence("development", candidate, salt="fixed-verifier-only")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="fixed-verifier-only",
+    )
+    before = store.load()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Fixed semantic prerequisite verifier failed",
+    ):
+        store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+    assert store.load() == before
+
+
+def test_verifier_exception_after_state_mutation_restores_exact_original_bytes(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="mutate-then-raise")
+    evidence = _evidence("development", candidate, salt="mutate-then-raise")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="mutate-then-raise",
+    )
+    before = store.load()
+    original_bytes = store.state_path.read_bytes()
+
+    def mutate_then_raise(_evidence, _access, _context):
+        store.state_path.write_bytes(b'{"verifier_mutation":true}\n')
+        assert store.state_path.read_bytes() != original_bytes
+        raise RuntimeError("verifier failed after mutation")
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Fixed semantic prerequisite verifier failed",
+    ):
+        _consume(
+            store,
+            request,
+            candidate,
+            evidence,
+            stage="intermediate",
+            access_hash=access_manifest,
+            validator=mutate_then_raise,
+        )
+
+    assert store.state_path.read_bytes() == original_bytes
+    assert store.load() == before
+
+
+def test_invalid_verifier_result_after_state_mutation_restores_exact_original_bytes(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="mutate-then-invalid")
+    evidence = _evidence("development", candidate, salt="mutate-then-invalid")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="mutate-then-invalid",
+    )
+    before = store.load()
+    original_bytes = store.state_path.read_bytes()
+
+    def mutate_then_return_invalid(_evidence, _access, _context):
+        store.state_path.write_bytes(b'{"verifier_mutation":true}\n')
+        assert store.state_path.read_bytes() != original_bytes
+        return True
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="not an arbitrary truthy result",
+    ):
+        _consume(
+            store,
+            request,
+            candidate,
+            evidence,
+            stage="intermediate",
+            access_hash=access_manifest,
+            validator=mutate_then_return_invalid,
+        )
+
+    assert store.state_path.read_bytes() == original_bytes
+    assert store.load() == before
 
 
 @pytest.mark.parametrize(
@@ -575,7 +694,7 @@ def test_validator_source_identity_is_derived_from_the_candidate(
     assert store.load() == before
 
 
-def test_callback_cannot_redirect_the_authoritative_store_path(
+def test_fixed_verifier_cannot_redirect_the_authoritative_store_path(
     tmp_path: Path,
 ) -> None:
     store = _store(tmp_path)

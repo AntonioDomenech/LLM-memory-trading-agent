@@ -430,6 +430,10 @@ a 20-session CASH episode beats holding AAPL after 10-basis-point costs by more
 than `1e-12` active log edge. The same tolerance defines episode wins and live
 lesson labels. Candidate actions use exact greater-than-or-equal comparisons
 against the frozen probability and expected-edge thresholds.
+Each prediction also binds the exact fold training-set size and positive-label
+count. The Beta(1,1) causal climatology is derived from those complete frozen
+counts, including the 2000-2004 baseline for fold 1, rather than reconstructed
+from later prediction rows.
 
 Candidate selection is deterministic: keep only candidates passing every
 development gate at both 5 and 10 bps, then rank by lower 10-bps Brier score,
@@ -484,7 +488,10 @@ boundaries, both ledgers inherit their exact cumulative positions: buy-and-hold
 is already LONG, and the strategy is LONG or CASH according to any episode
 already in progress. Neither side receives a synthetic boundary trade or an
 extra entry cost. A position-changing fill that genuinely occurs on the first
-session of a new stage is still charged normally.
+session of a new stage is still charged normally. The inherited positions also
+earn or avoid the move from the immediately preceding adjusted open to that
+first stage-session adjusted open before the opening fill, so a cross-stage
+CASH episode cannot silently lose one return interval.
 
 The only permitted target exposures are exactly 0 and 1. There is no
 leverage, shorting, borrowing, negative cash, fractional exposure, or margin
@@ -577,21 +584,44 @@ At the current implementation checkpoint:
   semantic output exposed downstream;
 - non-authorizing stage-access plans bind the exact candidate, registry,
   verifier source, SEC URL set, presealed market sources, model, budgets, and
-  prohibited stages without containing a result or pass field;
+  prohibited stages without containing a result or pass field; their only
+  prior-stage text scope is the exact read-only normalized 10-K/10-Q carry-in
+  required for the first same-form comparison;
 - the prediction artifact sealer now persists exact pre-label prefix bytes
   through an append-only external-pin compare-and-swap receipt rather than
   accepting caller-supplied checksum strings;
+- prediction evidence v2 binds the always-present extraction identity, the
+  independent market-feature-row identity, and a causal market-prefix-chain
+  identity even when a prediction is unavailable; each fixed fold also binds
+  its exact training row and positive-label counts;
 - an artifact seal proves exact structural ancestry only; the authoritative
   stage verifier must additionally replay the full prediction-prefix semantics
   against the same bytes and all candidate, calendar, event, and market pins;
 - the SEC/Gemma scorer now deterministically replays the cumulative LONG/CASH
   state, same-ledger buy-and-hold, both cost levels, terminal conventions,
   stage-boundary positions, and open/carry-in episode concentration;
-- stage access remains intentionally disabled until the authoritative verifier
-  replays that scorer and all of its raw sealed inputs;
-- the final all-stage runtime summary is diagnostic only; stage-specific and
-  cumulative receipts plus the five-development-filing latency preflight must
-  be implemented before it can unlock anything;
+- a separate zero-tolerance adapter independently replays every score-ledger
+  return, fill cost, binary exposure, cash/share identity, and debt value and
+  also runs the repository's pre-existing unleveraged proof;
+- the reveal store directly invokes one fixed verifier and exposes no
+  caller-supplied validator parameter. Verifier exceptions, invalid results,
+  state mutation, or path redirection restore the exact authenticated prior
+  store bytes before the error escapes;
+- the fixed verifier now produces a canonical non-authorizing audit that
+  replays candidate/source pins, calendar and universe manifests, exact Ollama
+  attempt receipts, market-stage snapshots, prediction-prefix ancestry,
+  learner arithmetic, raw scores, gates, ranking, no-leverage proof, runtime
+  structure, registry, request, and stage-access bindings;
+- supplied learner matrices and targets must match the fold-bound feature,
+  target, membership, count, and maturity identities before any deterministic
+  refit. Intermediate stage identity remains explicitly blocked because the
+  current envelope does not yet replay the development winner and bind its
+  output model state to the intermediate input state;
+- stage access remains intentionally disabled: the authorizing verifier entry
+  point always raises while any required end-to-end check remains unsupported;
+- stage-specific runtime receipts are structurally reconciled, but the final
+  all-stage summary remains diagnostic until owned-transport and monotonic-time
+  attestations plus the five-development-filing latency preflight exist;
 - the future verifier must derive the eligible universe from the sealed SEC
   catalogue, bind exact AAPL/SPY/QQQ/IWM/VIX/TNX input hashes, and prove that
   every training row is one exact matured filing event tied to its extraction
@@ -612,8 +642,13 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is the fixed authoritative stage verifier.
-It must replay the already implemented corpus, redaction, model-attempt,
-market-byte, feature, learner, prediction, sealing, score/gate, reveal-store,
-and runtime evidence. That machinery must be committed before opening filing
-meaning or any later-stage outcome.
+The next implementation milestone is the authoritative raw-evidence bundle
+that can turn the fixed fail-closed audit into a complete verifier. It must
+rebuild the SEC catalogue and normalized document bytes, preprocessing,
+extraction, feature rows, matured labels, and training membership from their
+sealed source bytes; parse official calendar semantics; bind market-provider
+responses to the canonical snapshots; chain every artifact from genesis; and
+require the consumed authorization-entry hash in every downstream API. Runtime
+and source-path attestations must also become independently replayable. That
+machinery must be committed and pass the five-filing preflight before any
+filing meaning or later-stage outcome is opened.

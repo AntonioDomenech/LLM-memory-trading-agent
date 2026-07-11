@@ -4,7 +4,7 @@ The sibling :mod:`sec_filing_gemma_reveal_registry` module deliberately has no
 I/O.  This module is its narrow effectful boundary.  It authenticates the
 checked-in genesis evidence, keeps one authoritative registry/pin pair, applies
 registry appends with compare-and-swap semantics, and consumes stage reveal
-requests exactly once only after an independent semantic prerequisite callback
+requests exactly once only after the fixed semantic prerequisite verifier
 returns a strongly bound result.
 
 No market data, filing text, model runtime, clock, or network service is used.
@@ -15,7 +15,7 @@ consumption increments the separate actual-final-touch counter exactly once.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 import copy
 from dataclasses import dataclass
 import hmac
@@ -47,6 +47,9 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     validate_registry_pin_transition,
     validate_reveal_registry,
     validate_single_candidate_reveal_request,
+)
+from agent_benchmark.sec_filing_gemma_stage_verifier import (
+    authoritative_prerequisite_validator,
 )
 
 
@@ -866,12 +869,6 @@ class SemanticPrerequisiteValidation:
         return {**body, "result_sha256": canonical_sha256(body)}
 
 
-PrerequisiteValidator = Callable[
-    [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]],
-    SemanticPrerequisiteValidation,
-]
-
-
 def _validate_semantic_result(
     result: Any,
     *,
@@ -881,7 +878,7 @@ def _validate_semantic_result(
 ) -> dict[str, Any]:
     if type(result) is not SemanticPrerequisiteValidation:
         raise SecFilingGemmaRevealStoreError(
-            "Prerequisite callback must return SemanticPrerequisiteValidation, "
+            "Prerequisite verifier must return SemanticPrerequisiteValidation, "
             "not an arbitrary truthy result"
         )
     value = result.to_dict()
@@ -898,7 +895,7 @@ def _validate_semantic_result(
         )
     ):
         raise SecFilingGemmaRevealStoreError(
-            "Prerequisite callback is not the independently pinned validator"
+            "Prerequisite result is not from the independently pinned validator"
         )
     for key in (
         "prerequisite_stage",
@@ -1454,20 +1451,21 @@ class SecFilingGemmaRevealStore:
         stage: str,
         stage_access_manifest: Mapping[str, Any],
         prerequisite_stage_evidence: Mapping[str, Any],
-        prerequisite_validator: PrerequisiteValidator,
     ) -> dict[str, Any]:
         """Validate and atomically consume one non-authorizing stage request.
 
-        The callback executes while the exclusive lock is held.  It receives
+        The fixed candidate-bound verifier executes while the exclusive lock is
+        held. It receives
         defensive read-only copies of the prerequisite evidence, the actual
         self-hashed stage-access manifest, and the expected request context.
         It must return :class:`SemanticPrerequisiteValidation`.  Failure,
-        replay, callback mutation of the state file, or any binding mismatch
+        replay, verifier mutation of the state file, or any binding mismatch
         leaves no consumption entry.
-        """
 
-        if not callable(prerequisite_validator):
-            raise TypeError("prerequisite_validator must be callable")
+        There is deliberately no caller-supplied validator parameter. Until
+        the fixed verifier can complete every frozen check, it raises and this
+        method cannot consume a request.
+        """
         with self._locked():
             locked_repository_root = self._repository_root
             locked_store_directory = self._store_directory
@@ -1562,60 +1560,80 @@ class SecFilingGemmaRevealStore:
                 "registry_tip_sha256": request_value["registry_tip_sha256"],
             }
             context = MappingProxyType(context_dict)
-            try:
-                result = prerequisite_validator(
-                    MappingProxyType(evidence),
-                    MappingProxyType(access_manifest),
-                    context,
-                )
-            except SecFilingGemmaRevealStoreError:
-                raise
-            except Exception as exc:
-                raise SecFilingGemmaRevealStoreError(
-                    "Semantic prerequisite callback failed; request was not consumed"
-                ) from exc
-            if (
-                self._repository_root != locked_repository_root
-                or self._store_directory != locked_store_directory
-                or self.state_path != locked_state_path
-                or self.lock_path != locked_lock_path
-            ):
-                self._repository_root = locked_repository_root
-                self._store_directory = locked_store_directory
-                raise SecFilingGemmaRevealStoreError(
-                    "Reveal-store paths changed during prerequisite validation"
-                )
-            validation = _validate_semantic_result(
-                result,
-                expected_context=context,
-                expected_validator_id=AUTHORITATIVE_VALIDATOR_ID,
-                expected_validator_source_sha256=candidate_value["bindings"][
-                    "source_hashes"
-                ]["stage_verifier"],
+            original_state_bytes = _read_regular_bytes(
+                locked_state_path,
+                "authoritative reveal-store state before prerequisite validation",
             )
-
-            # A callback is effectful Python.  Re-read the authoritative file so
-            # direct tampering during validation cannot be silently overwritten.
             try:
-                after_callback = self._read_state_locked(anchor)
-            except SecFilingGemmaRevealStoreError as exc:
                 try:
-                    _atomic_replace(self.state_path, _encoded_state(current))
-                except SecFilingGemmaRevealStoreError as restore_exc:
+                    result = authoritative_prerequisite_validator(
+                        MappingProxyType(evidence),
+                        MappingProxyType(access_manifest),
+                        context,
+                    )
+                except SecFilingGemmaRevealStoreError:
+                    raise
+                except Exception as exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Fixed semantic prerequisite verifier failed; request was not consumed"
+                    ) from exc
+                if (
+                    self._repository_root != locked_repository_root
+                    or self._store_directory != locked_store_directory
+                    or self.state_path != locked_state_path
+                    or self.lock_path != locked_lock_path
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Reveal-store paths changed during prerequisite validation"
+                    )
+                validation = _validate_semantic_result(
+                    result,
+                    expected_context=context,
+                    expected_validator_id=AUTHORITATIVE_VALIDATOR_ID,
+                    expected_validator_source_sha256=candidate_value["bindings"][
+                        "source_hashes"
+                    ]["stage_verifier"],
+                )
+                # The verifier is effectful Python. Check exact bytes before
+                # parsing so even a rehashed or differently encoded mutation is
+                # rejected rather than silently replaced by the next state.
+                try:
+                    after_verifier_bytes = _read_regular_bytes(
+                        locked_state_path,
+                        "authoritative reveal-store state after prerequisite validation",
+                    )
+                    after_verifier = self._read_state_locked(anchor)
+                except SecFilingGemmaRevealStoreError as exc:
                     raise SecFilingGemmaRevealStoreError(
                         "Reveal-store state was damaged during prerequisite "
-                        "validation and could not be restored"
+                        "validation; the prior authenticated state will be restored"
+                    ) from exc
+                if after_verifier_bytes != original_state_bytes or after_verifier != current:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Reveal-store state changed during prerequisite validation; "
+                        "the prior authenticated state will be restored"
+                    )
+            except BaseException:
+                # Cleanup has finally-like semantics: verifier exceptions,
+                # invalid semantic results, path redirection, and state-damage
+                # errors cannot escape while mutated authoritative bytes remain.
+                self._repository_root = locked_repository_root
+                self._store_directory = locked_store_directory
+                try:
+                    _atomic_replace(locked_state_path, original_state_bytes)
+                    restored_state_bytes = _read_regular_bytes(
+                        locked_state_path,
+                        "restored authoritative reveal-store state",
+                    )
+                    if restored_state_bytes != original_state_bytes:
+                        raise SecFilingGemmaRevealStoreError(
+                            "Restored reveal-store bytes do not match the authenticated original"
+                        )
+                except BaseException as restore_exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Reveal-store state could not be restored after prerequisite validation"
                     ) from restore_exc
-                raise SecFilingGemmaRevealStoreError(
-                    "Reveal-store state was damaged during prerequisite "
-                    "validation; the prior authenticated state was restored"
-                ) from exc
-            if after_callback != current:
-                _atomic_replace(self.state_path, _encoded_state(current))
-                raise SecFilingGemmaRevealStoreError(
-                    "Reveal-store state changed during prerequisite validation; "
-                    "the prior authenticated state was restored"
-                )
+                raise
 
             entries = copy.deepcopy(ledger["entries"])
             final_delta = 1 if stage == "final" else 0
@@ -1662,7 +1680,6 @@ __all__ = [
     "SEMANTIC_PREREQUISITE_SCHEMA_VERSION",
     "STATE_FILENAME",
     "STORE_SCHEMA_VERSION",
-    "PrerequisiteValidator",
     "SecFilingGemmaRevealStore",
     "SecFilingGemmaRevealStoreError",
     "SemanticPrerequisiteValidation",

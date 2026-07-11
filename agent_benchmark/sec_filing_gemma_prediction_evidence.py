@@ -41,10 +41,10 @@ from agent_benchmark.sec_filing_gemma_contract import (
 
 
 PREDICTION_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-pre-label-prediction-row-v1"
+    "aapl-sec-gemma-pre-label-prediction-row-v2"
 )
 PREDICTION_PREFIX_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-pre-label-prediction-prefix-v1"
+    "aapl-sec-gemma-pre-label-prediction-prefix-v2"
 )
 PRELABEL_SEAL_ENTRY_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-pre-label-seal-entry-v1"
@@ -81,6 +81,7 @@ _ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
 _FOLD_CONTEXT_KEYS = {
     "fold_train_cutoff_session",
     "training_set_count",
+    "training_positive_count",
     "training_set_membership_sha256",
     "semantic_training_feature_matrix_sha256",
     "ablation_training_feature_matrix_sha256",
@@ -100,6 +101,14 @@ _EVENT_BINDING_KEYS = {
     "market_feature_row_sha256",
     "fold_id",
 }
+
+# Prediction evidence v2 deliberately binds the causal feature identities
+# emitted by ``sec_filing_gemma_features``.  ``extraction_identity_sha256`` is
+# always present, including when semantic extraction is unavailable;
+# ``market_feature_row_sha256`` identifies the independent market-only row;
+# and ``market_prefix_chain_identity_sha256`` is the upstream stable causal
+# prefix identity.  Legacy extraction-output-only event mappings are rejected
+# by the exact-key check rather than being silently upgraded.
 _PREDICTION_SPEC_KEYS = _EVENT_BINDING_KEYS | {
     "prediction_status",
     "unavailable_reason",
@@ -444,11 +453,22 @@ def _normalize_fold_context(
         raise SecFilingGemmaContractError(
             "Fold training includes a label not mature before its test window"
         )
+    training_set_count = _strict_int(
+        context["training_set_count"], "training_set_count", minimum=2
+    )
+    training_positive_count = _strict_int(
+        context["training_positive_count"],
+        "training_positive_count",
+        minimum=1,
+    )
+    if training_positive_count >= training_set_count:
+        raise SecFilingGemmaContractError(
+            "Fold training targets must contain both binary classes"
+        )
     normalized: dict[str, Any] = {
         "fold_train_cutoff_session": cutoff.isoformat(),
-        "training_set_count": _strict_int(
-            context["training_set_count"], "training_set_count", minimum=1
-        ),
+        "training_set_count": training_set_count,
+        "training_positive_count": training_positive_count,
         "training_set_max_label_maturity_session": maximum.isoformat(),
     }
     for key in sorted(
@@ -456,6 +476,7 @@ def _normalize_fold_context(
         - {
             "fold_train_cutoff_session",
             "training_set_count",
+            "training_positive_count",
             "training_set_max_label_maturity_session",
         }
     ):
@@ -552,7 +573,7 @@ def _prediction_genesis(
 ) -> str:
     return canonical_sha256(
         {
-            "domain": "aapl-sec-gemma-prediction-genesis-v1",
+            "domain": "aapl-sec-gemma-prediction-genesis-v2",
             "contract_sha256": contract_hash,
             "candidate_sha256": candidate_hash,
             "corpus_universe_sha256": universe_hash,

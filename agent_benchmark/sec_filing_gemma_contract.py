@@ -1093,6 +1093,10 @@ def build_contract_manifest() -> dict[str, Any]:
                 "development_starts_from_cash_later_stages_inherit_the_exact_"
                 "cumulative_long_or_cash_state_without_a_synthetic_reentry_fill"
             ),
+            "stage_boundary_return_interval": (
+                "later_stages_include_the_preceding_adjusted_open_to_first_"
+                "stage_session_adjusted_open_holding_return_before_any_fill"
+            ),
             "period_attribution": "sum_daily_active_log_increments_on_one_continuous_ledger",
             "brier_rows": "only_predictions_with_full_horizon_matured_by_score_cutoff",
             "comparison_tolerance": ACTIVE_EDGE_TOLERANCE,

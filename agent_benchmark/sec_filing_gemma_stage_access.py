@@ -42,6 +42,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     canonical_sha256,
     validate_candidate_manifest,
     validate_corpus_universe_manifest,
+    validate_stage_content_manifest,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     MARKET_SOURCE_FAMILY,
@@ -367,6 +368,96 @@ def _documents_from_complete_universe(
     return _canonical_documents(documents)
 
 
+def _prior_same_form_carry_ins(
+    universe_manifest: Mapping[str, Any],
+    prerequisite_content_manifest: Mapping[str, Any],
+    *,
+    prerequisite_stage: str,
+    requested_stage: str,
+    prerequisite_content_manifest_sha256: str,
+) -> list[dict[str, Any]]:
+    """Derive the exact sealed prior text needed by first-stage comparisons."""
+
+    records = universe_manifest.get("records")
+    if not isinstance(records, list):
+        raise SecFilingGemmaStageAccessError(
+            "Complete corpus universe records are unavailable"
+        )
+    requested = sorted(
+        (
+            record
+            for record in records
+            if record["artifact_stage"] == requested_stage
+        ),
+        key=lambda record: (
+            record["availability_session"],
+            record["accession_number"],
+        ),
+    )
+    content_documents = prerequisite_content_manifest.get("documents")
+    if not isinstance(content_documents, list):
+        raise SecFilingGemmaStageAccessError(
+            "Prerequisite content manifest documents are unavailable"
+        )
+    content_by_accession = {
+        document["accession_number"]: document for document in content_documents
+    }
+    carry_ins: list[dict[str, Any]] = []
+    for form in sorted({record["form"] for record in requested}):
+        first = next(record for record in requested if record["form"] == form)
+        prior = [
+            record
+            for record in records
+            if record["form"] == form
+            and (
+                record["availability_session"],
+                record["accession_number"],
+            )
+            < (
+                first["availability_session"],
+                first["accession_number"],
+            )
+        ]
+        if not prior:
+            raise SecFilingGemmaStageAccessError(
+                "Requested stage lacks its exact prior same-form filing"
+            )
+        selected = max(
+            prior,
+            key=lambda record: (
+                record["availability_session"],
+                record["accession_number"],
+            ),
+        )
+        if selected["artifact_stage"] != prerequisite_stage:
+            raise SecFilingGemmaStageAccessError(
+                "Prior same-form carry-in is not from the prerequisite stage"
+            )
+        content_record = content_by_accession.get(selected["accession_number"])
+        if not isinstance(content_record, Mapping):
+            raise SecFilingGemmaStageAccessError(
+                "Prior same-form carry-in is absent from prerequisite content evidence"
+            )
+        carry_ins.append(
+            {
+                "accession_number": selected["accession_number"],
+                "form": selected["form"],
+                "availability_session": selected["availability_session"],
+                "artifact_stage": selected["artifact_stage"],
+                "source_record_sha256": selected["source_record_sha256"],
+                "normalized_text_sha256": content_record[
+                    "normalized_text_sha256"
+                ],
+                "normalized_text_bytes": content_record[
+                    "normalized_text_bytes"
+                ],
+                "content_record_sha256": canonical_sha256(content_record),
+                "content_manifest_sha256": prerequisite_content_manifest_sha256,
+            }
+        )
+    return carry_ins
+
+
 def _canonical_market_sources(
     artifact_hashes: Any, window_hashes: Any
 ) -> list[dict[str, str]]:
@@ -512,6 +603,8 @@ def build_stage_access_manifest(
     registry_entry_sha256: str,
     base_corpus_universe_sha256: str,
     corpus_universe_manifest: Mapping[str, Any],
+    prerequisite_content_manifest: Mapping[str, Any],
+    expected_prerequisite_content_manifest_sha256: str,
     session_calendar_sha256: str,
     authorized_documents: Sequence[Mapping[str, Any]],
     market_source_manifest_sha256: str,
@@ -620,6 +713,35 @@ def build_stage_access_manifest(
             "Complete corpus evidence differs from the immutable candidate"
         )
 
+    prerequisite_content = _expect_mapping(
+        _json_snapshot(
+            prerequisite_content_manifest,
+            "prerequisite stage content manifest",
+        ),
+        "prerequisite stage content manifest",
+    )
+    expected_content_hash = _sha256(
+        expected_prerequisite_content_manifest_sha256,
+        "expected_prerequisite_content_manifest_sha256",
+    )
+    try:
+        content_hash = validate_stage_content_manifest(
+            prerequisite_content,
+            universe_manifest=universe,
+            expected_content_manifest_sha256=expected_content_hash,
+        )
+    except SecFilingGemmaContractError as exc:
+        raise SecFilingGemmaStageAccessError(
+            "Stage access requires validated prerequisite content evidence"
+        ) from exc
+    if (
+        prerequisite_content["artifact_stage"] != prerequisite
+        or prerequisite_content["corpus_universe_sha256"] != universe_hash
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Prerequisite content evidence belongs to another stage or universe"
+        )
+
     model = _expect_mapping(candidate["model"], "candidate model")
     if model["name"] != MODEL_NAME or model["endpoint"] != MODEL_ENDPOINT:
         raise SecFilingGemmaStageAccessError(
@@ -685,6 +807,13 @@ def build_stage_access_manifest(
 
     accessions = [item["accession_number"] for item in documents]
     urls = [item["official_url"] for item in documents]
+    prior_same_form_carry_ins = _prior_same_form_carry_ins(
+        universe,
+        prerequisite_content,
+        prerequisite_stage=prerequisite,
+        requested_stage=requested,
+        prerequisite_content_manifest_sha256=content_hash,
+    )
     prohibited_stages = [stage for stage in STAGE_ORDER if stage != requested]
     body: dict[str, Any] = {
         "schema_version": STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
@@ -757,6 +886,21 @@ def build_stage_access_manifest(
             "official_urls_sha256": canonical_sha256(urls),
             "documents": documents,
         },
+        "prior_same_form_carry_in": {
+            "selection_policy": (
+                "latest_prerequisite_stage_filing_of_each_requested_stage_form"
+            ),
+            "artifact_scope": "sealed_normalized_text_only",
+            "network_refetch_permitted": False,
+            "write_permitted": False,
+            "bound_by_prerequisite_stage_evidence_sha256": request_identity[
+                "prerequisite_stage_evidence_sha256"
+            ],
+            "prerequisite_content_manifest_sha256": content_hash,
+            "record_count": len(prior_same_form_carry_ins),
+            "records_sha256": canonical_sha256(prior_same_form_carry_ins),
+            "records": prior_same_form_carry_ins,
+        },
         "market_access": {
             "artifact_stage": requested,
             "source_family": MARKET_SOURCE_FAMILY,
@@ -802,8 +946,12 @@ def build_stage_access_manifest(
         "scope": {
             "authorized_stage": requested,
             "prohibited_stages": prohibited_stages,
-            "prerequisite_stage_data_scope": "sealed_evidence_identity_only",
-            "cross_stage_access_permitted": False,
+            "prerequisite_stage_data_scope": (
+                "sealed_evidence_identity_plus_exact_read_only_prior_same_form_"
+                "normalized_text_carry_in"
+            ),
+            "general_cross_stage_access_permitted": False,
+            "exact_prior_same_form_carry_in_read_permitted": True,
             "future_stage_access_permitted": False,
             "outcome_access_before_atomic_request_consumption_permitted": False,
         },
@@ -835,6 +983,8 @@ def validate_stage_access_manifest(
     registry_entry_sha256: str,
     base_corpus_universe_sha256: str,
     corpus_universe_manifest: Mapping[str, Any],
+    prerequisite_content_manifest: Mapping[str, Any],
+    expected_prerequisite_content_manifest_sha256: str,
     session_calendar_sha256: str,
     authorized_documents: Sequence[Mapping[str, Any]],
     market_source_manifest_sha256: str,
@@ -861,6 +1011,7 @@ def validate_stage_access_manifest(
         "registry",
         "corpus_provenance",
         "sec_access_plan",
+        "prior_same_form_carry_in",
         "market_access",
         "model_access",
         "budgets",
@@ -934,6 +1085,10 @@ def validate_stage_access_manifest(
         registry_entry_sha256=registry_entry_sha256,
         base_corpus_universe_sha256=base_corpus_universe_sha256,
         corpus_universe_manifest=corpus_universe_manifest,
+        prerequisite_content_manifest=prerequisite_content_manifest,
+        expected_prerequisite_content_manifest_sha256=(
+            expected_prerequisite_content_manifest_sha256
+        ),
         session_calendar_sha256=session_calendar_sha256,
         authorized_documents=authorized_documents,
         market_source_manifest_sha256=market_source_manifest_sha256,

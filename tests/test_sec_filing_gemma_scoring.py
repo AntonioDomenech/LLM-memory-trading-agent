@@ -13,6 +13,10 @@ from agent_benchmark.sec_filing_gemma_contract import (
     canonical_sha256,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import MARKET_ROW_SCHEMA_VERSION
+from agent_benchmark.sec_filing_gemma_no_leverage import (
+    SecFilingGemmaNoLeverageError,
+    validate_sec_gemma_no_leverage_proof,
+)
 from agent_benchmark.sec_filing_gemma_prediction_evidence import (
     AVAILABLE_PREDICTION_STATUS,
 )
@@ -99,6 +103,8 @@ def _prediction_row(
     fill_session: str | None = None,
     probability: float = 0.8,
     ablation_probability: float = 0.5,
+    training_set_count: int = 2,
+    training_positive_count: int = 1,
 ) -> dict:
     decision = sessions[decision_index]
     fill = fill_session or sessions[decision_index + 1]
@@ -140,6 +146,8 @@ def _prediction_row(
         "fold_id": "fold_1",
         "fold_context": {
             "fold_train_cutoff_session": "2004-12-31",
+            "training_set_count": training_set_count,
+            "training_positive_count": training_positive_count,
         },
         "prediction_status": AVAILABLE_PREDICTION_STATUS,
         "semantic_cash_probability_hex": float(probability).hex(),
@@ -215,6 +223,8 @@ def _evidence(
     include_label: bool = True,
     probability: float = 0.8,
     ablation_probability: float = 0.5,
+    training_set_count: int = 2,
+    training_positive_count: int = 1,
 ) -> dict:
     sessions = _sessions(start, count)
     opens = [100.0 + index for index in range(count)] if opens is None else opens
@@ -228,6 +238,8 @@ def _evidence(
         fill_session=fill_session,
         probability=probability,
         ablation_probability=ablation_probability,
+        training_set_count=training_set_count,
+        training_positive_count=training_positive_count,
     )
     prefix = _prefix([row])
     labels = _label_ledger([row], market, [include_label])
@@ -259,6 +271,7 @@ def _intermediate_boundary_evidence(
     start_semantic: bool = True,
     falling_stage_prices: bool = False,
     decision_offset_from_stage_start: int = -5,
+    first_stage_open: float | None = None,
 ) -> dict:
     full_sessions = [
         session
@@ -275,6 +288,9 @@ def _intermediate_boundary_evidence(
             range(stage_start_index, len(market_sessions))
         ):
             opens[index] = 100.0 - 5.0 * offset
+    if first_stage_open is not None:
+        for index in range(stage_start_index, len(market_sessions)):
+            opens[index] = first_stage_open
     market = _market("intermediate", market_sessions, opens)
     row = _prediction_row(
         sessions=full_sessions,
@@ -392,6 +408,27 @@ def test_brier_uses_exact_mature_rows_causal_beta_climatology_and_ablation_tie()
     ) == 0.0
 
 
+def test_brier_climatology_uses_the_complete_frozen_training_counts() -> None:
+    evidence = _evidence(
+        opens=[100.0 - index for index in range(30)],
+        probability=0.8,
+        training_set_count=100,
+        training_positive_count=80,
+    )
+    brier = _build(evidence)["metrics"]["brier"]
+    record = brier["records"][0]
+    expected_climatology = 81.0 / 102.0
+
+    assert record["training_set_count"] == 100
+    assert record["training_positive_count"] == 80
+    assert decode_score_float_hex(
+        record["causal_climatology_probability_hex"]
+    ) == expected_climatology
+    assert decode_score_float_hex(
+        brier["causal_climatology_brier_score_hex"]
+    ) == pytest.approx((expected_climatology - 1.0) ** 2)
+
+
 @pytest.mark.parametrize("field", ["fill_session", "cash_exit_session"])
 def test_wrong_t_plus_1_or_t_plus_21_is_rejected_even_when_rehashed(field: str) -> None:
     evidence = _evidence()
@@ -501,6 +538,33 @@ def test_carry_in_episode_does_not_rebuy_benchmark_at_stage_boundary() -> None:
     assert metrics["contributing_cash_episodes"] == 1
     assert metrics["open_cash_episodes_at_cutoff"] == 0
     assert metrics["open_contributing_cash_episodes_at_cutoff"] == 1
+
+
+def test_carry_in_episode_includes_the_prior_open_to_boundary_open_return() -> None:
+    evidence = _intermediate_boundary_evidence(
+        stage_session_count=5,
+        first_stage_open=80.0,
+    )
+    receipt = _build(evidence)
+    first = receipt["ledger"][0]
+    metrics = receipt["metrics"]
+
+    assert decode_score_float_hex(
+        receipt["configuration"]["prior_adjusted_open_hex"]
+    ) == 100.0
+    assert first["holding_exposure_for_return"] == 0
+    assert first["strategy_position_changed"] is False
+    assert first["benchmark_position_changed"] is False
+    expected = -math.log(80.0 / 100.0)
+    assert decode_score_float_hex(metrics["total_active_log_edge_hex"]) == pytest.approx(
+        expected, abs=1e-15
+    )
+    assert decode_score_float_hex(
+        metrics["episode_records"][0]["stage_active_log_edge_hex"]
+    ) == pytest.approx(expected, abs=1e-15)
+    assert decode_score_float_hex(
+        metrics["maximum_single_episode_positive_edge_share_hex"]
+    ) == 1.0
 
 
 def test_no_carry_boundary_inherits_long_without_new_entry_cost() -> None:
@@ -699,6 +763,72 @@ def test_rehashed_metric_or_terminal_tamper_is_rejected() -> None:
     forged["score_receipt_sha256"] = canonical_sha256(body)
     with pytest.raises(SecFilingGemmaScoringError, match="deterministic ledger replay"):
         _validate(evidence, forged)
+
+
+def test_independent_zero_tolerance_no_leverage_proof_replays_valid_score() -> None:
+    receipt = _build(_evidence())
+
+    proof = validate_sec_gemma_no_leverage_proof(
+        receipt,
+        expected_score_receipt_sha256=receipt["score_receipt_sha256"],
+    )
+
+    assert proof["exact_binary_exposure"] is True
+    assert proof["exact_cash_share_identity"] is True
+    assert proof["exact_transaction_cost_replay"] is True
+    assert decode_score_float_hex(proof["proof_tolerance_hex"]) == 0.0
+    assert proof["shorting"] is False
+    assert proof["borrowing"] is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "fractional_target",
+        "leveraged_shares",
+        "negative_cash",
+        "margin_debt",
+        "wealth",
+        "genesis",
+    ],
+)
+def test_independent_no_leverage_proof_rejects_rehashed_execution_tamper(
+    mutation: str,
+) -> None:
+    forged = copy.deepcopy(_build(_evidence()))
+    if mutation == "fractional_target":
+        forged["ledger"][0]["target_exposure"] = 0.5
+    elif mutation == "leveraged_shares":
+        shares = decode_score_float_hex(forged["ledger"][0]["strategy_shares_hex"])
+        forged["ledger"][0]["strategy_shares_hex"] = (shares * 2.0).hex()
+    elif mutation == "negative_cash":
+        forged["ledger"][1]["strategy_cash_hex"] = (-1.0).hex()
+    elif mutation == "margin_debt":
+        forged["ledger"][0]["margin_debt_hex"] = math.nextafter(0.0, 1.0).hex()
+    elif mutation == "wealth":
+        wealth = decode_score_float_hex(forged["ledger"][0]["strategy_wealth_hex"])
+        forged["ledger"][0]["strategy_wealth_hex"] = math.nextafter(
+            wealth, math.inf
+        ).hex()
+    else:
+        forged["ledger_genesis_sha256"] = _h("forged ledger genesis")
+    forged = _rehash_tampered_score(forged)
+
+    with pytest.raises(SecFilingGemmaNoLeverageError):
+        validate_sec_gemma_no_leverage_proof(
+            forged,
+            expected_score_receipt_sha256=forged["score_receipt_sha256"],
+        )
+
+
+def test_independent_no_leverage_proof_requires_external_score_pin() -> None:
+    receipt = _build(_evidence())
+
+    with pytest.raises(SecFilingGemmaNoLeverageError, match="externally pinned"):
+        validate_sec_gemma_no_leverage_proof(
+            receipt,
+            expected_score_receipt_sha256=_h("wrong score pin"),
+        )
 
 
 def test_rehashed_label_edge_or_binary_boundary_tamper_is_recomputed_from_market() -> None:

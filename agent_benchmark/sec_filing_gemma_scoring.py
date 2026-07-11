@@ -696,6 +696,7 @@ def _simulate_ledgers(
     terminal_convention: str,
     initial_strategy_exposure: int,
     initial_benchmark_exposure: int,
+    prior_adjusted_open: float | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if terminal_convention not in TERMINAL_CONVENTIONS:
         raise SecFilingGemmaScoringError("Unknown terminal valuation convention")
@@ -718,7 +719,15 @@ def _simulate_ledgers(
         )
     strategy_exposure = initial_strategy_exposure
     benchmark_exposure = initial_benchmark_exposure
-    previous_open: float | None = None
+    if prior_adjusted_open is not None:
+        prior_adjusted_open = _finite(
+            prior_adjusted_open, "prior adjusted open"
+        )
+        if prior_adjusted_open <= 0.0:
+            raise SecFilingGemmaScoringError(
+                "Prior adjusted open must be strictly positive"
+            )
+    previous_open = prior_adjusted_open
     previous_strategy_wealth = INITIAL_CAPITAL
     previous_benchmark_wealth = INITIAL_CAPITAL
     genesis = canonical_sha256(
@@ -729,6 +738,7 @@ def _simulate_ledgers(
             "terminal_convention": terminal_convention,
             "initial_strategy_exposure": initial_strategy_exposure,
             "initial_benchmark_exposure": initial_benchmark_exposure,
+            "prior_adjusted_open_hex": _optional_hex(prior_adjusted_open),
         }
     )
     parent = genesis
@@ -866,9 +876,6 @@ def _brier_metrics(
     labels: Mapping[str, Mapping[str, Any]],
     selected_variant: str,
 ) -> dict[str, Any]:
-    rows_by_hash = {
-        row["prediction_row_sha256"]: row for row in prediction_rows
-    }
     eligible = [
         row
         for row in prediction_rows
@@ -883,19 +890,24 @@ def _brier_metrics(
     records: list[dict[str, Any]] = []
     for row in eligible:
         fold = _mapping(row.get("fold_context"), "prediction fold context")
-        train_cutoff = _iso(
+        _iso(
             fold.get("fold_train_cutoff_session"), "fold train cutoff"
         )
-        training_labels = [
-            labels[training_hash]["cash_beats_long_10bps"]
-            for training_hash, training_row in rows_by_hash.items()
-            if training_hash in labels
-            and training_row.get("prediction_status")
-            == AVAILABLE_PREDICTION_STATUS
-            and training_row["label_maturity_session"] <= train_cutoff
-        ]
-        positives = sum(training_labels)
-        climatology = (positives + 1.0) / (len(training_labels) + 2.0)
+        training_count = _strict_int(
+            fold.get("training_set_count"),
+            "fold training_set_count",
+            minimum=2,
+        )
+        positive_count = _strict_int(
+            fold.get("training_positive_count"),
+            "fold training_positive_count",
+            minimum=1,
+        )
+        if positive_count >= training_count:
+            raise SecFilingGemmaScoringError(
+                "Fold training counts do not contain both binary classes"
+            )
+        climatology = (positive_count + 1.0) / (training_count + 2.0)
         target = 1.0 if labels[row["prediction_row_sha256"]][
             "cash_beats_long_10bps"
         ] else 0.0
@@ -910,6 +922,8 @@ def _brier_metrics(
                 "decision_session": row["decision_session"],
                 "label_maturity_session": row["label_maturity_session"],
                 "fold_id": row.get("fold_id"),
+                "training_set_count": training_count,
+                "training_positive_count": positive_count,
                 "target": int(target),
                 "model_probability_hex": _float_hex(model_probability),
                 "ablation_probability_hex": _float_hex(ablation_probability),
@@ -1295,6 +1309,15 @@ def build_score_receipt(
             episodes=episodes,
         )
     )
+    first_score_index = all_sessions.index(score_sessions[0])
+    if stage == "development":
+        prior_adjusted_open = None
+    else:
+        if first_score_index == 0:
+            raise SecFilingGemmaScoringError(
+                "A later stage lacks the preceding authoritative market open"
+            )
+        prior_adjusted_open = prices[all_sessions[first_score_index - 1]][0]
     ledger, ledger_summary = _simulate_ledgers(
         sessions=score_sessions,
         prices=prices,
@@ -1303,6 +1326,7 @@ def build_score_receipt(
         terminal_convention=terminal_convention,
         initial_strategy_exposure=initial_strategy_exposure,
         initial_benchmark_exposure=initial_benchmark_exposure,
+        prior_adjusted_open=prior_adjusted_open,
     )
     brier = _brier_metrics(
         stage=stage,
@@ -1344,6 +1368,7 @@ def build_score_receipt(
             "initial_capital_hex": _float_hex(INITIAL_CAPITAL),
             "initial_strategy_exposure": initial_strategy_exposure,
             "initial_benchmark_exposure": initial_benchmark_exposure,
+            "prior_adjusted_open_hex": _optional_hex(prior_adjusted_open),
             "stage_boundary_position_semantics": (
                 "development_genesis_then_cumulative_position_state"
             ),

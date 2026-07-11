@@ -14,6 +14,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
     build_corpus_universe_manifest,
+    build_stage_content_manifest,
     canonical_sha256,
     session_calendar_sha256,
 )
@@ -118,6 +119,30 @@ def _documents(stage: str, universe: dict) -> list[dict[str, str]]:
     return sorted(documents, key=lambda item: item["accession_number"])
 
 
+def _content_manifest(stage: str, universe: dict) -> dict:
+    documents = [
+        {
+            "accession_number": record["accession_number"],
+            "primary_document_sha256": _h(
+                f"{stage}:{record['accession_number']}:primary"
+            ),
+            "normalized_text_sha256": _h(
+                f"{stage}:{record['accession_number']}:normalized"
+            ),
+            "primary_document_bytes": 2_000,
+            "normalized_text_bytes": 1_000,
+        }
+        for record in universe["records"]
+        if record["artifact_stage"] == stage
+    ]
+    return build_stage_content_manifest(
+        artifact_stage=stage,
+        corpus_universe_sha256=universe["universe_sha256"],
+        documents=documents,
+        universe_manifest=universe,
+    )
+
+
 def _request_identity(
     *,
     candidate: dict,
@@ -172,6 +197,7 @@ def _context(stage: str = "intermediate") -> dict:
         requested_stage=stage,
     )
     documents = _documents(stage, universe)
+    prerequisite_content = _content_manifest(prerequisite, universe)
     artifacts = {symbol: _h(f"artifact-{symbol}") for symbol in MARKET_SYMBOLS}
     windows = {symbol: _h(f"{stage}-window-{symbol}") for symbol in MARKET_SYMBOLS}
     output_namespace = (
@@ -196,6 +222,10 @@ def _context(stage: str = "intermediate") -> dict:
             "corpus_universe_sha256"
         ],
         "corpus_universe_manifest": universe,
+        "prerequisite_content_manifest": prerequisite_content,
+        "expected_prerequisite_content_manifest_sha256": prerequisite_content[
+            "content_manifest_sha256"
+        ],
         "session_calendar_sha256": candidate["bindings"][
             "calendar_sessions_sha256"
         ],
@@ -243,6 +273,8 @@ def _validate(
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -318,6 +350,39 @@ def test_exact_two_permitted_transitions_build_and_validate(stage: str) -> None:
     assert live["entry_count"] == 0
     assert live["included_in_base_universe_identity"] is False
     assert live["authorized_for_holdout_stage"] is False
+    carry_in = manifest["prior_same_form_carry_in"]
+    assert carry_in["artifact_scope"] == "sealed_normalized_text_only"
+    assert carry_in["network_refetch_permitted"] is False
+    assert carry_in["write_permitted"] is False
+    assert carry_in["record_count"] == 2
+    assert carry_in["prerequisite_content_manifest_sha256"] == context[
+        "expected_prerequisite_content_manifest_sha256"
+    ]
+    assert {record["form"] for record in carry_in["records"]} == {"10-K", "10-Q"}
+    assert {
+        record["artifact_stage"] for record in carry_in["records"]
+    } == {context["prerequisite_stage"]}
+    assert carry_in["bound_by_prerequisite_stage_evidence_sha256"] == context[
+        "identity"
+    ]["prerequisite_stage_evidence_sha256"]
+    prerequisite_documents = {
+        document["accession_number"]: document
+        for document in context["prerequisite_content_manifest"]["documents"]
+    }
+    for record in carry_in["records"]:
+        content = prerequisite_documents[record["accession_number"]]
+        assert record["normalized_text_sha256"] == content[
+            "normalized_text_sha256"
+        ]
+        assert record["normalized_text_bytes"] == content[
+            "normalized_text_bytes"
+        ]
+        assert record["content_record_sha256"] == canonical_sha256(content)
+    assert manifest["scope"]["general_cross_stage_access_permitted"] is False
+    assert (
+        manifest["scope"]["exact_prior_same_form_carry_in_read_permitted"]
+        is True
+    )
     assert stage not in manifest["scope"]["prohibited_stages"]
     assert set(manifest["scope"]["prohibited_stages"]) == {
         value for value in ("development", "intermediate", "final") if value != stage
@@ -356,6 +421,8 @@ def test_other_or_reused_stage_transitions_are_rejected(
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -429,6 +496,8 @@ def test_stage_verifier_source_must_equal_the_candidate_immutable_pin() -> None:
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -515,6 +584,8 @@ def test_omitted_or_extra_document_fails_all_and_only_external_plan() -> None:
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -565,6 +636,8 @@ def test_same_accession_wrong_primary_filename_is_rejected() -> None:
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -603,6 +676,8 @@ def test_duplicate_or_reordered_accessions_and_urls_are_rejected() -> None:
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -648,6 +723,8 @@ def test_nonofficial_or_nonmatching_sec_url_is_rejected_before_authorization() -
             "registry_entry_sha256",
             "base_corpus_universe_sha256",
             "corpus_universe_manifest",
+            "prerequisite_content_manifest",
+            "expected_prerequisite_content_manifest_sha256",
             "session_calendar_sha256",
             "market_source_manifest_sha256",
             "market_source_artifact_sha256s",
@@ -686,6 +763,9 @@ def test_nonofficial_or_nonmatching_sec_url_is_rejected_before_authorization() -
                 "entry_count": 1,
             }
         ),
+        lambda value: value["prior_same_form_carry_in"]["records"][0].update(
+            {"accession_number": "0000320193-18-999999"}
+        ),
     ],
     ids=[
         "protected-scope",
@@ -695,6 +775,7 @@ def test_nonofficial_or_nonmatching_sec_url_is_rejected_before_authorization() -
         "market-source",
         "verifier-source",
         "live-extension",
+        "prior-same-form-carry-in",
     ],
 )
 def test_rehashed_protected_scope_model_cost_budget_or_market_changes_fail(
