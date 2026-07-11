@@ -543,6 +543,15 @@ The complete experiment has a hard one-hour limit:
   seconds; and
 - total wall-clock time: at most 3,600 seconds.
 
+The 1.5-GiB SEC number is an aggregate network-transport ceiling, not an
+in-memory evidence allowance. Each stage may carry at most 128 MiB of decoded
+normalized filing content into the verifier. The complete caller bundle,
+including source evidence and recursively embedded parent evidence, is capped
+at 192 MiB of decoded Base64 and an estimated 256 MiB of canonical JSON. A
+size-only evidence preflight must pass after corpus acquisition and before the
+first Gemma call or any 2019+ stage is opened. If the complete corpus does not
+fit, this version fails; it may not drop documents or silently raise the cap.
+
 There are 240 seconds of unallocated contingency. A five-filing
 development-only latency preflight must project the complete run inside the
 remaining budget before 2019 or later material can be opened. Documents
@@ -584,9 +593,10 @@ At the current implementation checkpoint:
   semantic output exposed downstream;
 - non-authorizing stage-access plans bind the exact candidate, registry,
   verifier source, SEC URL set, presealed market sources, model, budgets, and
-  prohibited stages without containing a result or pass field; their only
-  prior-stage text scope is the exact read-only normalized 10-K/10-Q carry-in
-  required for the first same-form comparison;
+  prohibited stages without containing a result or pass field. Version 2 also
+  pins the prerequisite stage's content manifest, stage artifact, and external
+  seal receipt; its only prior-stage text scope is the exact read-only
+  normalized 10-K/10-Q carry-in required for the first same-form comparison;
 - the prediction artifact sealer now persists exact pre-label prefix bytes
   through an append-only external-pin compare-and-swap receipt rather than
   accepting caller-supplied checksum strings;
@@ -604,21 +614,50 @@ At the current implementation checkpoint:
   return, fill cost, binary exposure, cash/share identity, and debt value and
   also runs the repository's pre-existing unleveraged proof;
 - the reveal store directly invokes one fixed verifier and exposes no
-  caller-supplied validator parameter. Verifier exceptions, invalid results,
-  state mutation, or path redirection restore the exact authenticated prior
-  store bytes before the error escapes;
-- the fixed verifier now produces a canonical non-authorizing audit that
-  replays candidate/source pins, calendar and universe manifests, exact Ollama
-  attempt receipts, market-stage snapshots, prediction-prefix ancestry,
+  caller-supplied validator parameter. Reveal, registry-CAS, and downstream
+  authorization inputs must be exact built-in JSON within fixed depth,
+  element, text, integer, estimated-JSON, and Base64 budgets; reveal inputs
+  share one no-copy budget and every bound is rechecked while detaching.
+  Verifier exceptions, invalid results, state mutation, or path redirection
+  normally restore the exact authenticated prior bytes before the error
+  escapes; an interrupted restore is resumed from its separate recovery record
+  on the next locked load;
+- the reveal store now persists a separate monotonic current-tip/CAS anchor,
+  uses a write-ahead pending transaction for state-plus-grant changes, and can
+  return the exact persisted grant bundle on an identical crash retry without
+  rerunning the verifier or consuming a request twice. Interrupted genesis
+  creation is also recoverable. The anchor is a second file in the same store
+  directory: it detects state-only rollback, but it is not an external trust
+  domain and cannot by itself defeat coordinated replacement of both files;
+- the fixed verifier now produces a version-3 canonical non-authorizing audit
+  that replays candidate/source pins, calendar and universe manifests, exact
+  Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
   learner arithmetic, raw scores, gates, ranking, no-leverage proof, runtime
-  structure, registry, request, and stage-access bindings;
+  structure, registry, request, and stage-access bindings. It bounds all
+  untrusted envelopes before decoding or copying, replays the complete parent
+  evidence and receipt recursively, and rejects substitution of earlier-stage
+  content;
+- runtime source identity now checks the current regular files at the canonical
+  paths of modules that were already loaded; the audit refuses to import an
+  absent module and accepts no caller-supplied root, path, or runtime bytes. Eleven
+  previously omitted local dependencies are now separately pinned, and an AST
+  closure check rejects any future static local import that is not in the
+  declared source tree. This still cannot prove that current disk bytes created
+  every already-running Python code object, so a fresh owned startup/import
+  attestation remains blocked. Five conceptual owners also remain unresolved:
+  extractor prompt, extractor schema, ledger, market acquirer, and runner;
 - supplied learner matrices and targets must match the fold-bound feature,
   target, membership, count, and maturity identities before any deterministic
-  refit. Intermediate stage identity remains explicitly blocked because the
-  current envelope does not yet replay the development winner and bind its
-  output model state to the intermediate input state;
-- stage access remains intentionally disabled: the authorizing verifier entry
-  point always raises while any required end-to-end check remains unsupported;
+  refit. Intermediate stage identity remains explicitly blocked: recursive
+  parent evidence replay is not yet authenticated against the prior consumed
+  reveal-store ledger entry, and the development winner/output model state is
+  not yet bound to the intermediate learner input state;
+- stage access remains intentionally disabled twice: the authorizing verifier
+  entry point raises while any end-to-end check is unsupported, and the reveal
+  store has a separate false-by-default promotion gate, so substituting only a
+  successful verifier cannot consume a request. The supplied stage-content pin
+  is cross-checked against stage access, but its store-state claim is not yet
+  authenticated by the reveal store;
 - stage-specific runtime receipts are structurally reconciled, but the final
   all-stage summary remains diagnostic until owned-transport and monotonic-time
   attestations plus the five-development-filing latency preflight exist;
@@ -642,13 +681,15 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is the authoritative raw-evidence bundle
-that can turn the fixed fail-closed audit into a complete verifier. It must
-rebuild the SEC catalogue and normalized document bytes, preprocessing,
-extraction, feature rows, matured labels, and training membership from their
-sealed source bytes; parse official calendar semantics; bind market-provider
-responses to the canonical snapshots; chain every artifact from genesis; and
-require the consumed authorization-entry hash in every downstream API. Runtime
-and source-path attestations must also become independently replayable. That
-machinery must be committed and pass the five-filing preflight before any
-filing meaning or later-stage outcome is opened.
+The next implementation milestone is the remainder of the authoritative
+raw-evidence chain that can turn the fixed fail-closed audit into a complete
+verifier. It must rebuild preprocessing, extraction, feature rows, matured
+labels, and training membership from the replayed SEC catalogue and normalized
+document bytes; parse official calendar semantics; bind market-provider
+responses to the canonical snapshots; chain every artifact from genesis;
+authenticate each parent against the prior consumed reveal-store entry; issue
+the independently trusted content pin; and require the consumed authorization
+entry hash in every downstream API. A production trust domain must also retain
+the current store tip outside the mutable store directory. That machinery must
+be committed and pass the five-filing preflight before any filing meaning or
+later-stage outcome is opened.

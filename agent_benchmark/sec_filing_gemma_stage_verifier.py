@@ -1,4 +1,4 @@
-"""Pure, deliberately non-authorizing SEC/Gemma stage-evidence audit.
+"""Deliberately non-authorizing SEC/Gemma stage-evidence audit.
 
 This module is the narrow bridge between the evidence components and the
 effectful reveal store.  It replays the parts that can currently be proved
@@ -7,8 +7,9 @@ from detached bytes and records the remaining trust gaps explicitly.  It does
 holdout stage.  The fail-closed boundary is intentional: several required
 production attestations do not yet have authoritative component APIs.
 
-No function in this module performs filesystem, network, model, market, SEC,
-or outcome I/O.
+The runtime source-identity check reads bounded local source files that were
+already imported by the process. No function performs network, model, market,
+SEC, or outcome I/O.
 """
 
 from __future__ import annotations
@@ -46,6 +47,12 @@ from agent_benchmark.sec_filing_gemma_contract import (
     validate_corpus_universe_manifest,
     validate_stage_content_manifest,
 )
+from agent_benchmark.sec_filing_gemma_corpus import (
+    DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION,
+    DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION,
+    validate_detached_catalog_replay,
+    validate_detached_stage_content_replay,
+)
 from agent_benchmark.sec_filing_gemma_learner import (
     SecFilingGemmaTwoHeadLearner,
 )
@@ -73,6 +80,12 @@ from agent_benchmark.sec_filing_gemma_scoring import (
     validate_score_receipt,
     validate_stage_gate_receipt,
 )
+import agent_benchmark.sec_filing_gemma_source_identity as source_identity_module
+from agent_benchmark.sec_filing_gemma_source_identity import (
+    CANONICAL_SOURCE_ROLE_PATHS,
+    UNRESOLVED_SOURCE_ROLES,
+    audit_candidate_source_identity,
+)
 from agent_benchmark.sec_filing_gemma_stage_access import (
     validate_stage_access_manifest,
 )
@@ -80,10 +93,10 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 
 
 STAGE_EVIDENCE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-evidence-audit-v1"
+    "aapl-sec-gemma-stage-evidence-audit-v3"
 )
 STAGE_AUDIT_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-evidence-audit-receipt-v1"
+    "aapl-sec-gemma-stage-evidence-audit-receipt-v3"
 )
 STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-runtime-receipt-v1"
@@ -94,8 +107,37 @@ AUTHORITATIVE_VALIDATOR_ID: Final[str] = (
 OWNED_HARDENED_TRANSPORT_MODE: Final[str] = (
     "owned_hardened_loopback_session_requires_stage_attestation"
 )
+TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-trusted-stage-content-pin-v1"
+)
+
+# These are parser/allocation ceilings, not acquisition budgets.  The SEC
+# contract has a 1.5-GiB aggregate transport ceiling, but no single Apple
+# filing, source module, market CSV, or canonical receipt is permitted to make
+# the verifier allocate anything close to that amount in one operation.
+MAX_BASE64_ITEM_BYTES: Final[int] = 64 * 1024 * 1024
+MAX_SOURCE_MODULE_BYTES: Final[int] = 16 * 1024 * 1024
+MAX_SOURCE_MODULE_TOTAL_BYTES: Final[int] = 128 * 1024 * 1024
+MAX_SMALL_RECEIPT_BYTES: Final[int] = 1 * 1024 * 1024
+MAX_PREDICTION_ARTIFACT_BYTES: Final[int] = 64 * 1024 * 1024
+MAX_PREFLIGHT_NESTING_DEPTH: Final[int] = 32
+MAX_PREFLIGHT_CONTAINER_ITEMS: Final[int] = 20_000
+MAX_PREFLIGHT_TOTAL_ELEMENTS: Final[int] = 1_000_000
+MAX_PREFLIGHT_BASE64_ITEMS: Final[int] = 4_096
+MAX_PREFLIGHT_BASE64_DECODED_BYTES: Final[int] = 192 * 1024 * 1024
+MAX_PREFLIGHT_STRING_CHARACTERS: Final[int] = 4 * 1024 * 1024
+MAX_PREFLIGHT_TEXT_CHARACTERS_TOTAL: Final[int] = 64 * 1024 * 1024
+MAX_PREFLIGHT_KEY_CHARACTERS: Final[int] = 512
+MAX_PREFLIGHT_INTEGER_BITS: Final[int] = 256
+MAX_PREFLIGHT_ESTIMATED_JSON_BYTES: Final[int] = 256 * 1024 * 1024
+MAX_STAGE_CONTENT_BYTES: Final[int] = 128 * 1024 * 1024
+MAX_CATALOG_SOURCE_ITEMS: Final[int] = 64
+MAX_CATALOG_SOURCE_BYTES: Final[int] = 128 * 1024 * 1024
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_BASE64_ALPHABET: Final[frozenset[str]] = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+)
 _PREREQUISITE_TRANSITIONS: Final[dict[str, str]] = {
     "development": "intermediate",
     "intermediate": "final",
@@ -106,8 +148,10 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "chain every artifact and receipt forward from deterministic genesis"
     ),
     "artifact_replay": (
-        "the envelope does not yet replay SEC catalog and document bytes, "
-        "preprocessing, extraction and feature proofs, labels, and the prelabel ledger"
+        "detached SEC catalogue and document bytes replay within the current "
+        "envelope, but preprocessing, extraction and feature proofs, labels, the "
+        "prelabel ledger, and full seal chain do not; replayed parent lineage is "
+        "not yet authenticated against the prior consumed reveal-store entry"
     ),
     "calendar_source_semantics": (
         "official calendar bytes are hash-bound but no pure parser proves the "
@@ -115,8 +159,8 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "chronology": (
         "prediction-row chronology is structurally replayed, but authoritative "
-        "event bindings and training rows are not yet derived from raw corpus, "
-        "feature, and matured-label evidence"
+        "event bindings and training rows are not yet derived from replayed filing "
+        "bytes through preprocessing, features, and matured-label evidence"
     ),
     "market_source_byte_reconciliation": (
         "snapshot-to-stage values replay, but provider-response-to-snapshot "
@@ -124,29 +168,31 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "model_attempt_replay": (
         "exact attempt bytes replay, but the independently expected payload is "
-        "not yet derived from authoritative preprocessing and corpus evidence"
+        "not yet derived from authoritative preprocessing of the replayed filing bytes"
     ),
     "prediction_replay": (
         "policy-prefix transitions and learner arithmetic replay, but event "
         "bindings and training matrices are still supplied by the evidence envelope"
     ),
     "prerequisite_evidence_identity": (
-        "the directly invoked verifier envelope still omits authoritative raw "
-        "corpus, content, feature, label, and full seal-chain pins, and no "
-        "downstream API requires the consumed authorization-entry hash"
+        "the directly invoked verifier replays raw catalogue and content bytes but "
+        "still omits preprocessing, feature, label, prelabel-ledger, and full "
+        "seal-chain proofs; the reveal store does not yet issue the separately "
+        "trusted stage-content pin, and downstream APIs do not require the consumed grant"
     ),
     "runtime_budget": (
         "stage-specific measurements are internally reconciled but the owned "
         "transport and monotonic runtime are not independently attested"
     ),
     "source_identity": (
-        "source bytes match candidate hashes, but candidate source roles do not "
-        "yet bind canonical repository paths and role semantics"
+        "resolved source roles replay against frozen paths, but extractor_prompt, "
+        "extractor_schema, ledger, market_acquirer, and runner remain unresolved; "
+        "current files at loaded module paths do not yet attest the source bytes "
+        "that created the executing code objects"
     ),
     "stage_access_identity": (
-        "the access plan binds carry-in normalized-text hashes, byte counts, and "
-        "content records, but does not replay the actual normalized-text bytes "
-        "and downstream APIs do not require the consumed authorization-entry hash"
+        "the plan binds carry-in content reconstructed from exact normalized bytes, "
+        "but downstream data readers do not require the consumed authorization-entry hash"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "
@@ -154,9 +200,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
 }
 _INTERMEDIATE_STAGE_IDENTITY_GAP: Final[str] = (
-    "the intermediate evidence envelope supplies only an opaque parent evidence "
-    "hash; it does not replay the development winner or bind the parent learner "
-    "output state to the intermediate learner input state"
+    "the parent evidence and audit receipt are replayed exactly, including earlier "
+    "content, but the development winner and parent learner output state are not "
+    "yet bound to the intermediate learner input state"
 )
 _LEARNER_FIT_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -212,38 +258,421 @@ def _expect_keys(value: Mapping[str, Any], expected: set[str], location: str) ->
         )
 
 
-def _plain(value: Any, location: str) -> Any:
-    """Take one detached finite-JSON snapshot and reject custom containers."""
+def _is_plain_mapping(value: Any, *, top_level: bool) -> bool:
+    del top_level
+    return type(value) is dict
 
-    if value is None or type(value) in {str, bool, int}:
-        return value
-    if type(value) is float:
-        if not math.isfinite(value):
-            raise SecFilingGemmaStageVerifierError(f"{location} is non-finite")
-        return value
-    if type(value) is list:
-        return [_plain(child, f"{location}[{index}]") for index, child in enumerate(value)]
-    if type(value) is dict:
-        result: dict[str, Any] = {}
-        for key, child in value.items():
-            if type(key) is not str:
+
+def _base64_decoded_length_preflight(
+    value: Any,
+    location: str,
+    *,
+    maximum: int = MAX_BASE64_ITEM_BYTES,
+) -> int:
+    """Validate Base64 shape/size without encoding, decoding, or copying it."""
+
+    if type(value) is not str or not value:
+        raise SecFilingGemmaStageVerifierError(
+            f"{location} must be nonempty canonical Base64"
+        )
+    encoded_length = len(value)
+    maximum_encoded_length = 4 * ((maximum + 2) // 3)
+    if encoded_length > maximum_encoded_length or encoded_length % 4:
+        raise SecFilingGemmaStageVerifierError(
+            f"{location} encoded length exceeds its allocation ceiling or is invalid"
+        )
+    # Inspect padding by index.  ``rstrip`` and a core slice would each copy a
+    # caller-controlled multi-megabyte string during the no-copy preflight.
+    padding = 0
+    if value[-1] == "=":
+        padding = 1
+        if encoded_length >= 2 and value[-2] == "=":
+            padding = 2
+    core_length = encoded_length - padding
+    for index in range(core_length):
+        if value[index] not in _BASE64_ALPHABET:
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} is not strict Base64"
+            )
+    for index in range(core_length, encoded_length):
+        if value[index] != "=":  # pragma: no cover - defensive by construction
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} has invalid Base64 padding"
+            )
+    decoded_length = (encoded_length // 4) * 3 - padding
+    if decoded_length < 1 or decoded_length > maximum:
+        raise SecFilingGemmaStageVerifierError(
+            f"{location} decoded length exceeds its allocation ceiling"
+        )
+    return decoded_length
+
+
+def _json_string_encoded_upper_bound(value: str) -> int:
+    """Bound ``json.dumps(..., ensure_ascii=True)`` without serializing."""
+
+    encoded = 2  # surrounding quotes
+    for character in value:
+        codepoint = ord(character)
+        if character in {'"', "\\"}:
+            encoded += 2
+        elif codepoint < 0x20:
+            encoded += 6
+        elif codepoint < 0x80:
+            encoded += 1
+        elif codepoint <= 0xFFFF:
+            encoded += 6
+        else:
+            encoded += 12
+    return encoded
+
+
+def _walk_plain_json(
+    value: Any,
+    location: str,
+    *,
+    detach: bool,
+) -> tuple[Any, dict[str, int]]:
+    """Bound and optionally detach one untrusted finite-JSON envelope.
+
+    The copy mode applies every bound during the same traversal that builds
+    the snapshot.  A mutation after a prior no-copy pass therefore cannot add
+    an unchecked deep or oversized value.  Only exact built-in containers are
+    accepted, so custom iteration hooks never run.
+    """
+
+    totals = {
+        "elements": 0,
+        "base64_items": 0,
+        "base64_decoded_bytes": 0,
+        "text_characters": 0,
+        "estimated_json_bytes": 0,
+    }
+
+    def add_json_bytes(count: int) -> None:
+        totals["estimated_json_bytes"] += count
+        if (
+            totals["estimated_json_bytes"]
+            > MAX_PREFLIGHT_ESTIMATED_JSON_BYTES
+        ):
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} exceeds the estimated canonical-JSON byte ceiling"
+            )
+
+    def add_text_characters(count: int) -> None:
+        totals["text_characters"] += count
+        if totals["text_characters"] > MAX_PREFLIGHT_TEXT_CHARACTERS_TOTAL:
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} exceeds the aggregate text-character ceiling"
+            )
+
+    def walk(
+        node: Any,
+        node_location: str,
+        *,
+        depth: int,
+        base64_values: bool,
+        top_level: bool,
+    ) -> Any:
+        if depth > MAX_PREFLIGHT_NESTING_DEPTH:
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} exceeds the maximum nesting depth"
+            )
+        totals["elements"] += 1
+        if totals["elements"] > MAX_PREFLIGHT_TOTAL_ELEMENTS:
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} exceeds the maximum element count"
+            )
+        if node is None:
+            add_json_bytes(4)
+            return None
+        if type(node) is bool:
+            add_json_bytes(4 if node else 5)
+            return node
+        if type(node) is int:
+            if node.bit_length() > MAX_PREFLIGHT_INTEGER_BITS:
                 raise SecFilingGemmaStageVerifierError(
-                    f"{location} contains a non-string key"
+                    f"{node_location} exceeds the maximum integer size"
                 )
-            result[key] = _plain(child, f"{location}.{key}")
-        return result
-    raise SecFilingGemmaStageVerifierError(
-        f"{location} must contain detached plain JSON values"
+            add_json_bytes(len(str(node)))
+            return node
+        if type(node) is float:
+            if not math.isfinite(node):
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} is non-finite"
+                )
+            add_json_bytes(32)
+            return node
+        if type(node) is str:
+            if not base64_values and len(node) > MAX_PREFLIGHT_STRING_CHARACTERS:
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} exceeds the maximum string length"
+                )
+            if base64_values:
+                decoded_length = _base64_decoded_length_preflight(
+                    node,
+                    node_location,
+                    maximum=MAX_PREDICTION_ARTIFACT_BYTES,
+                )
+                totals["base64_items"] += 1
+                totals["base64_decoded_bytes"] += decoded_length
+                if totals["base64_items"] > MAX_PREFLIGHT_BASE64_ITEMS:
+                    raise SecFilingGemmaStageVerifierError(
+                        f"{location} exceeds the maximum Base64 item count"
+                    )
+                if (
+                    totals["base64_decoded_bytes"]
+                    > MAX_PREFLIGHT_BASE64_DECODED_BYTES
+                ):
+                    raise SecFilingGemmaStageVerifierError(
+                        f"{location} exceeds the aggregate Base64 byte ceiling"
+                    )
+                add_json_bytes(len(node) + 2)
+            else:
+                add_text_characters(len(node))
+                add_json_bytes(_json_string_encoded_upper_bound(node))
+            return node
+        if type(node) is list:
+            initial_length = len(node)
+            if initial_length > MAX_PREFLIGHT_CONTAINER_ITEMS:
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} exceeds the maximum item count"
+                )
+            add_json_bytes(2 + max(0, initial_length - 1))
+            result: list[Any] | None = [] if detach else None
+            try:
+                for index, child in enumerate(node):
+                    copied = walk(
+                        child,
+                        f"{node_location}[{index}]",
+                        depth=depth + 1,
+                        base64_values=False,
+                        top_level=False,
+                    )
+                    if result is not None:
+                        result.append(copied)
+            except (IndexError, RuntimeError) as exc:
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} changed during bounded traversal"
+                ) from exc
+            if len(node) != initial_length or (
+                result is not None and len(result) != initial_length
+            ):
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} changed during bounded traversal"
+                )
+            return result
+        if _is_plain_mapping(node, top_level=top_level):
+            initial_length = len(node)
+            if initial_length > MAX_PREFLIGHT_CONTAINER_ITEMS:
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} exceeds the maximum item count"
+                )
+            add_json_bytes(2 + max(0, initial_length - 1) + initial_length)
+            result_dict: dict[str, Any] | None = {} if detach else None
+            observed = 0
+            try:
+                for key, child in node.items():
+                    observed += 1
+                    if type(key) is not str:
+                        raise SecFilingGemmaStageVerifierError(
+                            f"{node_location} contains a non-string key"
+                        )
+                    if len(key) > MAX_PREFLIGHT_KEY_CHARACTERS:
+                        raise SecFilingGemmaStageVerifierError(
+                            f"{node_location} contains an oversized key"
+                        )
+                    add_text_characters(len(key))
+                    add_json_bytes(_json_string_encoded_upper_bound(key))
+                    child_is_base64 = key.endswith("_base64") or (
+                        base64_values and type(child) is str
+                    )
+                    child_base64_mapping = key.endswith(
+                        ("_base64_by_role", "_base64_by_name", "_base64_by_symbol")
+                    )
+                    copied = walk(
+                        child,
+                        f"{node_location}.{key}",
+                        depth=depth + 1,
+                        base64_values=(child_is_base64 or child_base64_mapping),
+                        top_level=False,
+                    )
+                    if result_dict is not None:
+                        result_dict[key] = copied
+            except RuntimeError as exc:
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} changed during bounded traversal"
+                ) from exc
+            if len(node) != initial_length or observed != initial_length:
+                raise SecFilingGemmaStageVerifierError(
+                    f"{node_location} changed during bounded traversal"
+                )
+            return result_dict
+        raise SecFilingGemmaStageVerifierError(
+            f"{node_location} must contain detached plain JSON values"
+        )
+
+    snapshot = walk(
+        value,
+        location,
+        depth=0,
+        base64_values=False,
+        top_level=True,
     )
+    return snapshot, totals
+
+
+def _preflight_plain_json(value: Any, location: str) -> dict[str, int]:
+    """Bound an untrusted envelope without copying or serializing it."""
+
+    _snapshot, totals = _walk_plain_json(value, location, detach=False)
+    return totals
+
+
+def _bounded_plain_json_copy(value: Any, location: str) -> tuple[Any, dict[str, int]]:
+    """Detach an untrusted envelope while independently reapplying all bounds."""
+
+    return _walk_plain_json(value, location, detach=True)
+
+
+def preflight_untrusted_stage_json(value: Any, location: str) -> dict[str, int]:
+    """Public no-copy bound for effectful callers before defensive copying.
+
+    The reveal store invokes this immediately after authenticating its own
+    state and before traversing a caller-owned request, candidate, access
+    manifest, or evidence envelope.  This preserves the verifier's allocation
+    limits across the effectful boundary instead of applying them only after a
+    potentially enormous defensive copy has already been made.
+    """
+
+    if type(location) is not str or not location or len(location) > 128:
+        raise SecFilingGemmaStageVerifierError(
+            "Preflight location must be a short exact built-in string"
+        )
+    return _preflight_plain_json(value, location)
+
+
+def detach_untrusted_stage_json(value: Any, location: str) -> Any:
+    """Return a bounded detached snapshot after a fresh copy-time traversal."""
+
+    if type(location) is not str or not location or len(location) > 128:
+        raise SecFilingGemmaStageVerifierError(
+            "Detach location must be a short exact built-in string"
+        )
+    snapshot, _totals = _bounded_plain_json_copy(value, location)
+    return snapshot
+
+
+def _preflight_base64_mapping_values(
+    value: Any,
+    location: str,
+    *,
+    maximum_items: int,
+    maximum_item_bytes: int,
+    maximum_total_bytes: int,
+) -> int:
+    """Apply context-specific Base64 bounds without constructing a snapshot."""
+
+    _preflight_plain_json(value, location)
+    if not _is_plain_mapping(value, top_level=True):
+        raise SecFilingGemmaStageVerifierError(f"{location} must be a mapping")
+    if not 1 <= len(value) <= maximum_items:
+        raise SecFilingGemmaStageVerifierError(
+            f"{location} exceeds its fixed item-count ceiling"
+        )
+    total = 0
+    for key, encoded in value.items():
+        if type(key) is not str:
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} contains a non-string key"
+            )
+        total += _base64_decoded_length_preflight(
+            encoded,
+            f"{location}.{key}",
+            maximum=maximum_item_bytes,
+        )
+        if total > maximum_total_bytes:
+            raise SecFilingGemmaStageVerifierError(
+                f"{location} exceeds its aggregate byte ceiling"
+            )
+    return total
+
+
+def _preflight_catalog_payloads(value: Any) -> None:
+    _preflight_plain_json(value, "detached catalogue evidence")
+    if not _is_plain_mapping(value, top_level=True):
+        raise SecFilingGemmaStageVerifierError(
+            "detached catalogue evidence must be a mapping"
+        )
+    sources = value.get("source_payloads")
+    if type(sources) is not list or not 1 <= len(sources) <= MAX_CATALOG_SOURCE_ITEMS:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue source payload count exceeds its fixed ceiling"
+        )
+    total = 0
+    for index, item in enumerate(sources):
+        if (
+            type(item) is not dict
+            or len(item) != 2
+            or "name" not in item
+            or "payload_base64" not in item
+        ):
+            raise SecFilingGemmaStageVerifierError(
+                f"catalogue sources[{index}] shape changed"
+            )
+        total += _base64_decoded_length_preflight(
+            item["payload_base64"],
+            f"catalogue sources[{index}].payload_base64",
+            maximum=MAX_BASE64_ITEM_BYTES,
+        )
+        if total > MAX_CATALOG_SOURCE_BYTES:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached catalogue source payloads exceed their aggregate byte ceiling"
+            )
+
+
+def _preflight_stage_documents(
+    value: Any,
+    *,
+    expected_stage: str,
+    maximum_items: int,
+    maximum_total_bytes: int,
+) -> None:
+    location = f"detached {expected_stage} content evidence"
+    _preflight_plain_json(value, location)
+    if not _is_plain_mapping(value, top_level=True):
+        raise SecFilingGemmaStageVerifierError(f"{location} must be a mapping")
+    documents = value.get("document_payloads")
+    if type(documents) is not list or not 1 <= len(documents) <= maximum_items:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached stage document count exceeds its fixed ceiling"
+        )
+    total = 0
+    for index, item in enumerate(documents):
+        if (
+            type(item) is not dict
+            or len(item) != 2
+            or "accession_number" not in item
+            or "payload_base64" not in item
+        ):
+            raise SecFilingGemmaStageVerifierError(
+                f"{location}.document_payloads[{index}] shape changed"
+            )
+        total += _base64_decoded_length_preflight(
+            item["payload_base64"],
+            f"{location}.document_payloads[{index}].payload_base64",
+            maximum=MAX_BASE64_ITEM_BYTES,
+        )
+        if total > maximum_total_bytes:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached stage documents exceed the externally bounded aggregate bytes"
+            )
 
 
 def _mapping_snapshot(value: Any, location: str) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
+    if not _is_plain_mapping(value, top_level=True):
         raise SecFilingGemmaStageVerifierError(f"{location} must be a mapping")
-    # MappingProxyType is used by the reveal store.  Detach it once, then reject
-    # all custom nested containers before any security-sensitive replay.
     try:
-        detached = _plain(dict(value), location)
+        detached, _totals = _bounded_plain_json_copy(value, location)
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
         raise SecFilingGemmaStageVerifierError(
             f"{location} could not be detached safely"
@@ -253,18 +682,25 @@ def _mapping_snapshot(value: Any, location: str) -> dict[str, Any]:
     return detached
 
 
-def _decode_base64(value: Any, location: str, *, maximum: int = 2_000_000_000) -> bytes:
-    if not isinstance(value, str) or not value:
-        raise SecFilingGemmaStageVerifierError(
-            f"{location} must be nonempty canonical Base64"
-        )
+def _decode_base64(
+    value: Any,
+    location: str,
+    *,
+    maximum: int = MAX_BASE64_ITEM_BYTES,
+) -> bytes:
+    expected_length = _base64_decoded_length_preflight(
+        value, location, maximum=maximum
+    )
     try:
         payload = base64.b64decode(value.encode("ascii"), validate=True)
     except (UnicodeEncodeError, ValueError) as exc:
         raise SecFilingGemmaStageVerifierError(
             f"{location} is not strict Base64"
         ) from exc
-    if not payload or len(payload) > maximum or base64.b64encode(payload).decode("ascii") != value:
+    if (
+        len(payload) != expected_length
+        or base64.b64encode(payload).decode("ascii") != value
+    ):
         raise SecFilingGemmaStageVerifierError(
             f"{location} is empty, oversized, or noncanonical"
         )
@@ -275,6 +711,7 @@ def _strict_json_bytes(payload: bytes, location: str) -> dict[str, Any]:
     try:
         text = payload.decode("utf-8", errors="strict")
         parsed = json.loads(text)
+        _preflight_plain_json(parsed, location)
         canonical = json.dumps(
             parsed,
             sort_keys=True,
@@ -282,7 +719,13 @@ def _strict_json_bytes(payload: bytes, location: str) -> dict[str, Any]:
             ensure_ascii=True,
             allow_nan=False,
         ).encode("utf-8")
-    except (UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as exc:
         raise SecFilingGemmaStageVerifierError(
             f"{location} is not canonical JSON bytes"
         ) from exc
@@ -290,7 +733,12 @@ def _strict_json_bytes(payload: bytes, location: str) -> dict[str, Any]:
         raise SecFilingGemmaStageVerifierError(
             f"{location} is not one canonical JSON object"
         )
-    return _plain(parsed, location)
+    detached, _totals = _bounded_plain_json_copy(parsed, location)
+    if type(detached) is not dict:  # pragma: no cover - checked above
+        raise SecFilingGemmaStageVerifierError(
+            f"{location} is not one canonical JSON object"
+        )
+    return detached
 
 
 def validate_candidate_source_bytes(
@@ -302,6 +750,13 @@ def validate_candidate_source_bytes(
 ) -> dict[str, Any]:
     """Replay the frozen contract/candidate and every candidate source byte pin."""
 
+    _preflight_base64_mapping_values(
+        source_bytes_base64_by_role,
+        "source bytes",
+        maximum_items=len(REQUIRED_SOURCE_HASHES),
+        maximum_item_bytes=MAX_SOURCE_MODULE_BYTES,
+        maximum_total_bytes=MAX_SOURCE_MODULE_TOTAL_BYTES,
+    )
     contract = _mapping_snapshot(contract_manifest, "contract manifest")
     candidate = _mapping_snapshot(candidate_manifest, "candidate manifest")
     sources = _mapping_snapshot(source_bytes_base64_by_role, "source bytes")
@@ -317,7 +772,11 @@ def validate_candidate_source_bytes(
     _expect_keys(sources, set(REQUIRED_SOURCE_HASHES), "source bytes")
     observed: dict[str, str] = {}
     for role in REQUIRED_SOURCE_HASHES:
-        payload = _decode_base64(sources[role], f"source bytes {role}", maximum=32 * 1024 * 1024)
+        payload = _decode_base64(
+            sources[role],
+            f"source bytes {role}",
+            maximum=MAX_SOURCE_MODULE_BYTES,
+        )
         digest = hashlib.sha256(payload).hexdigest()
         if not hmac.compare_digest(
             digest, candidate["bindings"]["source_hashes"][role]
@@ -334,6 +793,500 @@ def validate_candidate_source_bytes(
     }
 
 
+def validate_candidate_source_role_audit(
+    *,
+    candidate_manifest: Mapping[str, Any],
+    expected_candidate_sha256: str,
+    source_bytes_base64_by_role: Mapping[str, str],
+) -> dict[str, Any]:
+    """Audit resolved source roles against frozen paths without inventing owners."""
+
+    _preflight_base64_mapping_values(
+        source_bytes_base64_by_role,
+        "source bytes",
+        maximum_items=len(REQUIRED_SOURCE_HASHES),
+        maximum_item_bytes=MAX_SOURCE_MODULE_BYTES,
+        maximum_total_bytes=MAX_SOURCE_MODULE_TOTAL_BYTES,
+    )
+    candidate = _mapping_snapshot(candidate_manifest, "candidate manifest")
+    sources = _mapping_snapshot(source_bytes_base64_by_role, "source bytes")
+    _expect_keys(sources, set(REQUIRED_SOURCE_HASHES), "source bytes")
+    paths = dict(CANONICAL_SOURCE_ROLE_PATHS)
+    payloads: dict[str, bytes | None] = {}
+    for role in REQUIRED_SOURCE_HASHES:
+        payload = _decode_base64(
+            sources[role],
+            f"source bytes {role}",
+            maximum=MAX_SOURCE_MODULE_BYTES,
+        )
+        payloads[role] = None if paths[role] is None else payload
+    try:
+        raw_receipt = audit_candidate_source_identity(
+            candidate_manifest=candidate,
+            expected_candidate_sha256=expected_candidate_sha256,
+            source_paths_by_role=paths,
+            source_bytes_by_role=payloads,
+        )
+    except (TypeError, ValueError) as exc:
+        raise SecFilingGemmaStageVerifierError(
+            "Frozen source-role identity audit failed"
+        ) from exc
+    receipt = _mapping_snapshot(raw_receipt, "source identity receipt")
+    if (
+        receipt.get("candidate_sha256") != expected_candidate_sha256
+        or receipt.get("unresolved_roles") != list(UNRESOLVED_SOURCE_ROLES)
+        or receipt.get("unresolved_role_count") != len(UNRESOLVED_SOURCE_ROLES)
+        or len(UNRESOLVED_SOURCE_ROLES) != 5
+        or receipt.get("complete") is not False
+        or receipt.get("authorizes") is not False
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Source-role receipt changed its incomplete non-authorizing semantics"
+        )
+    return receipt
+
+
+def validate_candidate_runtime_source_audit(
+    *,
+    candidate_manifest: Mapping[str, Any],
+    expected_candidate_sha256: str,
+) -> dict[str, Any]:
+    """Audit current files at already-loaded module paths without caller input."""
+
+    candidate = _mapping_snapshot(candidate_manifest, "candidate manifest")
+    try:
+        raw_receipt = source_identity_module.audit_runtime_candidate_source_identity(
+            candidate_manifest=candidate,
+            expected_candidate_sha256=expected_candidate_sha256,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise SecFilingGemmaStageVerifierError(
+            "Runtime source-module identity audit failed"
+        ) from exc
+    receipt = _mapping_snapshot(raw_receipt, "runtime source identity receipt")
+    observed_receipt_hash = _sha256(
+        receipt.get("source_identity_receipt_sha256"),
+        "runtime source identity receipt hash",
+    )
+    body = {
+        key: receipt[key]
+        for key in receipt
+        if key != "source_identity_receipt_sha256"
+    }
+    if not hmac.compare_digest(observed_receipt_hash, canonical_sha256(body)):
+        raise SecFilingGemmaStageVerifierError(
+            "Runtime source identity receipt is not canonical"
+        )
+    expected_tree = candidate.get("bindings", {}).get("source_tree_sha256")
+    if (
+        receipt.get("candidate_sha256") != expected_candidate_sha256
+        or receipt.get("candidate_source_tree_sha256") != expected_tree
+        or receipt.get("computed_source_tree_sha256") != expected_tree
+        or receipt.get("required_source_roles") != list(REQUIRED_SOURCE_HASHES)
+        or receipt.get("declared_static_local_import_closure_complete") is not True
+        or receipt.get("runtime_source_files_verified") is not True
+        or receipt.get("runtime_module_paths_verified") is not True
+        or receipt.get("runtime_module_files_attested") is not True
+        or receipt.get("runtime_executing_code_bytes_attested") is not False
+        or receipt.get("caller_supplied_paths_or_bytes_accepted") is not False
+        or receipt.get("complete") is not False
+        or receipt.get("authorizes") is not False
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Runtime source identity receipt crossed its non-substitutable boundary"
+        )
+    return receipt
+
+
+def _detached_replay_trust_boundary(
+    receipt: Mapping[str, Any], location: str
+) -> dict[str, bool]:
+    boundary = {
+        "authorizing": receipt.get("authorizing"),
+        "fresh_network_provenance_verified": receipt.get(
+            "fresh_network_provenance_verified"
+        ),
+        "network_receipt_claims_replayed_not_observed": receipt.get(
+            "network_receipt_claims_replayed_not_observed"
+        ),
+    }
+    expected = {
+        "authorizing": False,
+        "fresh_network_provenance_verified": False,
+        "network_receipt_claims_replayed_not_observed": True,
+    }
+    if boundary != expected:
+        raise SecFilingGemmaStageVerifierError(
+            f"{location} changed its detached non-authorizing trust boundary"
+        )
+    return expected
+
+
+def validate_detached_catalog_evidence(
+    value: Mapping[str, Any],
+    *,
+    candidate_manifest: Mapping[str, Any],
+    corpus_universe_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Replay the exact detached SEC catalogue bytes into the bound universe."""
+
+    _preflight_catalog_payloads(value)
+    replay = _mapping_snapshot(value, "detached catalogue evidence")
+    _expect_keys(
+        replay,
+        {
+            "source_payloads",
+            "request_receipts",
+            "catalog_artifact",
+            "expected_source_payload_sha256s",
+            "expected_request_receipt_sha256s",
+            "expected_request_receipts_sha256",
+            "expected_catalog_artifact_sha256",
+            "expected_corpus_universe_sha256",
+            "expected_calendar_artifact_sha256",
+        },
+        "detached catalogue evidence",
+    )
+    candidate = _mapping_snapshot(candidate_manifest, "candidate manifest")
+    universe = _mapping_snapshot(corpus_universe_manifest, "corpus universe")
+    sources = replay["source_payloads"]
+    if type(sources) is not list or not sources:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue source payloads must be a nonempty list"
+        )
+    if len(sources) > MAX_CATALOG_SOURCE_ITEMS:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue source payload count exceeds its fixed ceiling"
+        )
+    aggregate_source_bytes = 0
+    for index, item in enumerate(sources):
+        if type(item) is not dict:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached catalogue source item must be an object"
+            )
+        _expect_keys(
+            item, {"name", "payload_base64"}, f"catalogue sources[{index}]"
+        )
+        aggregate_source_bytes += _base64_decoded_length_preflight(
+            item["payload_base64"],
+            f"catalogue sources[{index}].payload_base64",
+            maximum=MAX_BASE64_ITEM_BYTES,
+        )
+        if aggregate_source_bytes > MAX_CATALOG_SOURCE_BYTES:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached catalogue source payloads exceed their aggregate byte ceiling"
+            )
+    decoded_sources = [
+        {
+            "name": item["name"],
+            "payload": _decode_base64(
+                item["payload_base64"],
+                f"catalogue sources[{index}].payload_base64",
+                maximum=MAX_BASE64_ITEM_BYTES,
+            ),
+        }
+        for index, item in enumerate(sources)
+    ]
+    candidate_bindings = candidate["bindings"]
+    expected_catalog = _sha256(
+        replay["expected_catalog_artifact_sha256"],
+        "expected catalogue artifact hash",
+    )
+    expected_universe = _sha256(
+        replay["expected_corpus_universe_sha256"],
+        "expected corpus universe hash",
+    )
+    expected_calendar = _sha256(
+        replay["expected_calendar_artifact_sha256"],
+        "expected calendar artifact hash",
+    )
+    if (
+        expected_catalog != candidate_bindings["sec_catalog_artifact_sha256"]
+        or expected_catalog != universe.get("catalog_artifact_sha256")
+        or expected_universe != candidate_bindings["corpus_universe_sha256"]
+        or expected_universe != universe.get("universe_sha256")
+        or expected_calendar
+        != candidate_bindings["calendar_source_evidence_sha256"]
+        or expected_calendar != universe.get("calendar_artifact_sha256")
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue external pins differ from candidate or universe"
+        )
+    catalog_artifact = replay["catalog_artifact"]
+    if (
+        type(catalog_artifact) is not dict
+        or catalog_artifact.get("catalog_artifact_sha256") != expected_catalog
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue artifact differs from the candidate pin"
+        )
+    try:
+        receipt = validate_detached_catalog_replay(
+            source_payloads=decoded_sources,
+            request_receipts=replay["request_receipts"],
+            catalog_artifact=catalog_artifact,
+            corpus_universe_manifest=universe,
+            expected_source_payload_sha256s=replay[
+                "expected_source_payload_sha256s"
+            ],
+            expected_request_receipt_sha256s=replay[
+                "expected_request_receipt_sha256s"
+            ],
+            expected_request_receipts_sha256=replay[
+                "expected_request_receipts_sha256"
+            ],
+            expected_catalog_artifact_sha256=expected_catalog,
+            expected_corpus_universe_sha256=expected_universe,
+            expected_calendar_artifact_sha256=expected_calendar,
+            session_dates=list(EXPECTED_SESSIONS),
+        )
+    except (TypeError, ValueError) as exc:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue byte replay failed"
+        ) from exc
+    if (
+        DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION
+        == DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION
+        or receipt["schema_version"]
+        != DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue replay receipt schema is missing or ambiguous"
+        )
+    if (
+        receipt["catalog_artifact_sha256"] != expected_catalog
+        or receipt["corpus_universe_sha256"] != expected_universe
+        or receipt["request_receipts_sha256"]
+        != replay["expected_request_receipts_sha256"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue replay receipt crossed an external binding"
+        )
+    trust_boundary = _detached_replay_trust_boundary(
+        receipt, "Detached catalogue replay"
+    )
+    return {
+        **trust_boundary,
+        "schema_version": receipt["schema_version"],
+        "catalog_artifact_sha256": receipt["catalog_artifact_sha256"],
+        "corpus_universe_sha256": receipt["corpus_universe_sha256"],
+        "eligible_records_sha256": receipt["eligible_records_sha256"],
+        "request_receipts_sha256": receipt["request_receipts_sha256"],
+        "source_payload_sha256s": dict(receipt["source_payload_sha256s"]),
+        "request_receipt_sha256s": dict(receipt["request_receipt_sha256s"]),
+        "replay_validation_sha256": receipt["replay_validation_sha256"],
+    }
+
+
+def validate_detached_stage_content_evidence(
+    value: Mapping[str, Any],
+    *,
+    expected_stage: str,
+    candidate_manifest: Mapping[str, Any],
+    corpus_universe_manifest: Mapping[str, Any],
+    externally_pinned_content_manifest_sha256: str,
+    externally_pinned_stage_artifact_sha256: str,
+    maximum_total_document_bytes: int,
+) -> dict[str, Any]:
+    """Replay one stage's exact primary bytes and deterministic normalization."""
+
+    if expected_stage not in STAGE_ORDER:
+        raise SecFilingGemmaStageVerifierError("Detached content expected stage is invalid")
+    if (
+        type(maximum_total_document_bytes) is not int
+        or not 1 <= maximum_total_document_bytes <= MAX_SEC_BYTES
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached stage aggregate document-byte ceiling is invalid"
+        )
+    _preflight_stage_documents(
+        value,
+        expected_stage=expected_stage,
+        maximum_items=STAGE_MODEL_CALL_CAPS[expected_stage],
+        maximum_total_bytes=maximum_total_document_bytes,
+    )
+    replay = _mapping_snapshot(value, f"detached {expected_stage} content evidence")
+    _expect_keys(
+        replay,
+        {
+            "stage",
+            "document_payloads",
+            "request_receipts",
+            "content_manifest",
+            "stage_artifact",
+            "expected_document_sha256s",
+            "expected_normalized_text_sha256s",
+            "expected_request_receipt_sha256s",
+            "expected_request_receipts_sha256",
+            "expected_content_manifest_sha256",
+            "expected_stage_artifact_sha256",
+        },
+        f"detached {expected_stage} content evidence",
+    )
+    if replay["stage"] != expected_stage:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content evidence crossed a stage slot"
+        )
+    candidate = _mapping_snapshot(candidate_manifest, "candidate manifest")
+    universe = _mapping_snapshot(corpus_universe_manifest, "corpus universe")
+    documents = replay["document_payloads"]
+    if type(documents) is not list or not documents:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached stage document payloads must be a nonempty list"
+        )
+    universe_records = universe.get("records")
+    if type(universe_records) is not list:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content universe records are unavailable"
+        )
+    expected_record_count = sum(
+        type(record) is dict and record.get("artifact_stage") == expected_stage
+        for record in universe_records
+    )
+    if (
+        not 1 <= len(documents) <= STAGE_MODEL_CALL_CAPS[expected_stage]
+        or len(documents) != expected_record_count
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached stage document count differs from the bounded universe stage"
+        )
+    aggregate_document_bytes = 0
+    for index, item in enumerate(documents):
+        if type(item) is not dict:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached stage document item must be an object"
+            )
+        _expect_keys(
+            item,
+            {"accession_number", "payload_base64"},
+            f"detached {expected_stage} documents[{index}]",
+        )
+        aggregate_document_bytes += _base64_decoded_length_preflight(
+            item["payload_base64"],
+            f"detached {expected_stage} documents[{index}].payload_base64",
+            maximum=MAX_BASE64_ITEM_BYTES,
+        )
+        if aggregate_document_bytes > maximum_total_document_bytes:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached stage documents exceed the externally bounded aggregate bytes"
+            )
+    decoded_documents = [
+        {
+            "accession_number": item["accession_number"],
+            "payload": _decode_base64(
+                item["payload_base64"],
+                f"detached {expected_stage} documents[{index}].payload_base64",
+                maximum=MAX_BASE64_ITEM_BYTES,
+            ),
+        }
+        for index, item in enumerate(documents)
+    ]
+    universe_hash = candidate["bindings"]["corpus_universe_sha256"]
+    if universe.get("universe_sha256") != universe_hash:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content universe differs from the candidate"
+        )
+    content_manifest = replay["content_manifest"]
+    stage_artifact = replay["stage_artifact"]
+    expected_content = _sha256(
+        replay["expected_content_manifest_sha256"],
+        "expected content manifest hash",
+    )
+    expected_artifact = _sha256(
+        replay["expected_stage_artifact_sha256"],
+        "expected stage artifact hash",
+    )
+    pinned_content = _sha256(
+        externally_pinned_content_manifest_sha256,
+        "externally pinned content manifest hash",
+    )
+    pinned_artifact = _sha256(
+        externally_pinned_stage_artifact_sha256,
+        "externally pinned stage artifact hash",
+    )
+    if expected_content != pinned_content or expected_artifact != pinned_artifact:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content hashes differ from the pre-existing trusted pins"
+        )
+    if (
+        type(content_manifest) is not dict
+        or content_manifest.get("artifact_stage") != expected_stage
+        or content_manifest.get("corpus_universe_sha256") != universe_hash
+        or content_manifest.get("content_manifest_sha256") != expected_content
+        or type(stage_artifact) is not dict
+        or stage_artifact.get("artifact_stage") != expected_stage
+        or stage_artifact.get("corpus_universe_sha256") != universe_hash
+        or stage_artifact.get("content_manifest_sha256") != expected_content
+        or stage_artifact.get("stage_artifact_sha256") != expected_artifact
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content manifests crossed a stage, universe, or artifact binding"
+        )
+    try:
+        receipt = validate_detached_stage_content_replay(
+            authorized_stage=expected_stage,
+            document_payloads=decoded_documents,
+            request_receipts=replay["request_receipts"],
+            content_manifest=content_manifest,
+            stage_artifact=stage_artifact,
+            corpus_universe_manifest=universe,
+            expected_document_sha256s=replay["expected_document_sha256s"],
+            expected_normalized_text_sha256s=replay[
+                "expected_normalized_text_sha256s"
+            ],
+            expected_request_receipt_sha256s=replay[
+                "expected_request_receipt_sha256s"
+            ],
+            expected_request_receipts_sha256=replay[
+                "expected_request_receipts_sha256"
+            ],
+            expected_content_manifest_sha256=expected_content,
+            expected_stage_artifact_sha256=expected_artifact,
+            expected_corpus_universe_sha256=universe_hash,
+            session_dates=list(EXPECTED_SESSIONS),
+        )
+    except (TypeError, ValueError) as exc:
+        raise SecFilingGemmaStageVerifierError(
+            f"Detached {expected_stage} content byte replay failed"
+        ) from exc
+    if (
+        DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION
+        == DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION
+        or receipt["schema_version"]
+        != DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content replay receipt schema is missing or ambiguous"
+        )
+    if (
+        receipt["artifact_stage"] != expected_stage
+        or receipt["corpus_universe_sha256"] != universe_hash
+        or receipt["content_manifest_sha256"] != expected_content
+        or receipt["stage_artifact_sha256"] != expected_artifact
+        or receipt["request_receipts_sha256"]
+        != replay["expected_request_receipts_sha256"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content replay receipt crossed an external binding"
+        )
+    trust_boundary = _detached_replay_trust_boundary(
+        receipt, f"Detached {expected_stage} content replay"
+    )
+    return {
+        **trust_boundary,
+        "schema_version": receipt["schema_version"],
+        "artifact_stage": receipt["artifact_stage"],
+        "corpus_universe_sha256": receipt["corpus_universe_sha256"],
+        "content_manifest_sha256": receipt["content_manifest_sha256"],
+        "stage_artifact_sha256": receipt["stage_artifact_sha256"],
+        "request_receipts_sha256": receipt["request_receipts_sha256"],
+        "primary_document_sha256s": dict(receipt["primary_document_sha256s"]),
+        "normalized_text_sha256s": dict(receipt["normalized_text_sha256s"]),
+        "request_receipt_sha256s": dict(receipt["request_receipt_sha256s"]),
+        "replay_validation_sha256": receipt["replay_validation_sha256"],
+    }
+
+
 def validate_calendar_and_universe_snapshot(
     *,
     calendar_evidence_manifest: Mapping[str, Any],
@@ -347,6 +1300,13 @@ def validate_calendar_and_universe_snapshot(
     official NYSE pages/PDFs into the session sequence.
     """
 
+    _preflight_base64_mapping_values(
+        calendar_source_bytes_base64_by_name,
+        "calendar source bytes",
+        maximum_items=16,
+        maximum_item_bytes=MAX_BASE64_ITEM_BYTES,
+        maximum_total_bytes=256 * 1024 * 1024,
+    )
     calendar = _mapping_snapshot(calendar_evidence_manifest, "calendar evidence")
     source_bytes = _mapping_snapshot(
         calendar_source_bytes_base64_by_name, "calendar source bytes"
@@ -431,6 +1391,20 @@ def validate_model_attempt_batch(
 ) -> dict[str, Any]:
     """Replay exact request/response bytes and one before/after runtime guard."""
 
+    _preflight_plain_json(batch, "model batch")
+    if not _is_plain_mapping(batch, top_level=True):
+        raise SecFilingGemmaStageVerifierError("model batch must be a mapping")
+    preflight_stage = batch.get("stage")
+    preflight_attempts = batch.get("attempts")
+    if preflight_stage not in STAGE_ORDER:
+        raise SecFilingGemmaStageVerifierError("Model batch stage is invalid")
+    if (
+        type(preflight_attempts) is not list
+        or not 1 <= len(preflight_attempts) <= STAGE_MODEL_CALL_CAPS[preflight_stage]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Model batch count exceeds the fixed stage cap"
+        )
     value = _mapping_snapshot(batch, "model batch")
     _expect_keys(
         value,
@@ -543,6 +1517,23 @@ def validate_model_attempt_batch(
 def validate_market_snapshot_stage_replay(value: Mapping[str, Any]) -> dict[str, Any]:
     """Replay canonical snapshot bytes into one structural market stage."""
 
+    _preflight_plain_json(value, "market replay")
+    if not _is_plain_mapping(value, top_level=True):
+        raise SecFilingGemmaStageVerifierError("market replay must be a mapping")
+    _preflight_base64_mapping_values(
+        value.get("artifact_bytes_base64_by_symbol"),
+        "market artifact bytes",
+        maximum_items=16,
+        maximum_item_bytes=MAX_BASE64_ITEM_BYTES,
+        maximum_total_bytes=256 * 1024 * 1024,
+    )
+    _preflight_base64_mapping_values(
+        value.get("window_bytes_base64_by_symbol"),
+        "market window bytes",
+        maximum_items=16,
+        maximum_item_bytes=MAX_BASE64_ITEM_BYTES,
+        maximum_total_bytes=256 * 1024 * 1024,
+    )
     replay = _mapping_snapshot(value, "market replay")
     _expect_keys(
         replay,
@@ -597,6 +1588,24 @@ def validate_prediction_artifact_replay(
 ) -> dict[str, Any]:
     """Validate exact seal CAS bytes and replay every prediction transition."""
 
+    _preflight_plain_json(value, "prediction replay")
+    if not _is_plain_mapping(value, top_level=True):
+        raise SecFilingGemmaStageVerifierError("prediction replay must be a mapping")
+    prediction_fields = (
+        ("artifact_bytes_base64", MAX_PREDICTION_ARTIFACT_BYTES),
+        ("seal_receipt_bytes_base64", MAX_SMALL_RECEIPT_BYTES),
+        ("external_prior_pin_bytes_base64", MAX_SMALL_RECEIPT_BYTES),
+        ("external_next_pin_bytes_base64", MAX_SMALL_RECEIPT_BYTES),
+    )
+    prediction_total = 0
+    for field, maximum in prediction_fields:
+        prediction_total += _base64_decoded_length_preflight(
+            value.get(field), f"prediction replay.{field}", maximum=maximum
+        )
+    if prediction_total > MAX_PREDICTION_ARTIFACT_BYTES + 3 * MAX_SMALL_RECEIPT_BYTES:
+        raise SecFilingGemmaStageVerifierError(
+            "Prediction replay exceeds its aggregate byte ceiling"
+        )
     replay = _mapping_snapshot(value, "prediction replay")
     _expect_keys(
         replay,
@@ -609,15 +1618,25 @@ def validate_prediction_artifact_replay(
         },
         "prediction replay",
     )
-    artifact = _decode_base64(replay["artifact_bytes_base64"], "prediction artifact")
+    artifact = _decode_base64(
+        replay["artifact_bytes_base64"],
+        "prediction artifact",
+        maximum=MAX_PREDICTION_ARTIFACT_BYTES,
+    )
     seal_receipt = _decode_base64(
-        replay["seal_receipt_bytes_base64"], "prediction seal receipt", maximum=256 * 1024
+        replay["seal_receipt_bytes_base64"],
+        "prediction seal receipt",
+        maximum=MAX_SMALL_RECEIPT_BYTES,
     )
     prior_pin = _decode_base64(
-        replay["external_prior_pin_bytes_base64"], "prediction prior pin", maximum=256 * 1024
+        replay["external_prior_pin_bytes_base64"],
+        "prediction prior pin",
+        maximum=MAX_SMALL_RECEIPT_BYTES,
     )
     next_pin = _decode_base64(
-        replay["external_next_pin_bytes_base64"], "prediction next pin", maximum=256 * 1024
+        replay["external_next_pin_bytes_base64"],
+        "prediction next pin",
+        maximum=MAX_SMALL_RECEIPT_BYTES,
     )
     try:
         seal = validate_prediction_artifact_seal_receipt(
@@ -1147,6 +2166,8 @@ def validate_registry_request_and_stage_access(
     candidate_manifest: Mapping[str, Any],
     corpus_universe_manifest: Mapping[str, Any],
     prerequisite_content_manifest: Mapping[str, Any],
+    prerequisite_stage_artifact_sha256: str,
+    prerequisite_external_seal_receipt_sha256: str,
     expected_stage_evidence_sha256: str,
 ) -> dict[str, str]:
     """Replay registry/request/access identities without opening requested bytes."""
@@ -1264,6 +2285,12 @@ def validate_registry_request_and_stage_access(
             corpus_universe_manifest=universe,
             prerequisite_content_manifest=prerequisite_content,
             expected_prerequisite_content_manifest_sha256=content_hash,
+            prerequisite_stage_artifact_sha256=(
+                prerequisite_stage_artifact_sha256
+            ),
+            prerequisite_external_seal_receipt_sha256=(
+                prerequisite_external_seal_receipt_sha256
+            ),
             session_calendar_sha256=candidate["bindings"][
                 "calendar_sessions_sha256"
             ],
@@ -1287,6 +2314,97 @@ def validate_registry_request_and_stage_access(
     }
 
 
+def validate_trusted_stage_content_pin(
+    *,
+    stage_access_manifest: Mapping[str, Any],
+    trusted_stage_content_pin: Mapping[str, Any] | None,
+    expected_stage: str,
+) -> dict[str, str]:
+    """Cross-bind completed content to pins outside its evidence envelope.
+
+    ``prerequisite_evidence_pin`` is part of the already self-hashed stage-access
+    plan.  The second object is expected to come from a separately persisted
+    artifact-sealer/reveal-store state. This verifier can bind the two
+    caller-supplied objects; it deliberately does not claim that the caller
+    authenticated that store.
+    """
+
+    access = _mapping_snapshot(stage_access_manifest, "stage access manifest")
+    if trusted_stage_content_pin is None:
+        raise SecFilingGemmaStageVerifierError(
+            "A separately persisted trusted stage-content pin is required"
+        )
+    trusted = _mapping_snapshot(
+        trusted_stage_content_pin, "trusted stage-content pin"
+    )
+    access_pin = access.get("prerequisite_evidence_pin")
+    if type(access_pin) is not dict:
+        raise SecFilingGemmaStageVerifierError(
+            "Stage access lacks its pre-existing prerequisite evidence pin"
+        )
+    _expect_keys(
+        access_pin,
+        {
+            "stage",
+            "content_manifest_sha256",
+            "stage_artifact_sha256",
+            "external_seal_receipt_sha256",
+        },
+        "stage-access prerequisite evidence pin",
+    )
+    _expect_keys(
+        trusted,
+        {
+            "schema_version",
+            "stage",
+            "content_manifest_sha256",
+            "stage_artifact_sha256",
+            "external_seal_receipt_sha256",
+            "trusted_store_state_sha256",
+            "pin_sha256",
+        },
+        "trusted stage-content pin",
+    )
+    if trusted["schema_version"] != TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION:
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted stage-content pin schema changed"
+        )
+    body = {key: trusted[key] for key in trusted if key != "pin_sha256"}
+    expected_pin_hash = _sha256(trusted["pin_sha256"], "trusted content pin hash")
+    if not hmac.compare_digest(expected_pin_hash, canonical_sha256(body)):
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted stage-content pin is not canonical"
+        )
+    if access_pin["stage"] != expected_stage or trusted["stage"] != expected_stage:
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted stage-content pin crossed a stage"
+        )
+    for key in (
+        "content_manifest_sha256",
+        "stage_artifact_sha256",
+        "external_seal_receipt_sha256",
+    ):
+        access_value = _sha256(access_pin[key], f"stage-access {key}")
+        trusted_value = _sha256(trusted[key], f"trusted content {key}")
+        if not hmac.compare_digest(access_value, trusted_value):
+            raise SecFilingGemmaStageVerifierError(
+                f"Trusted stage-content {key} differs from the pre-existing stage-access pin"
+            )
+    store_state_hash = _sha256(
+        trusted["trusted_store_state_sha256"], "trusted content store-state hash"
+    )
+    return {
+        "stage": expected_stage,
+        "content_manifest_sha256": trusted["content_manifest_sha256"],
+        "stage_artifact_sha256": trusted["stage_artifact_sha256"],
+        "external_seal_receipt_sha256": trusted[
+            "external_seal_receipt_sha256"
+        ],
+        "trusted_store_state_sha256": store_state_hash,
+        "pin_sha256": expected_pin_hash,
+    }
+
+
 def _stage_evidence_hash(evidence: Mapping[str, Any]) -> str:
     observed = _sha256(evidence.get("stage_evidence_sha256"), "stage evidence hash")
     body = {key: evidence[key] for key in evidence if key != "stage_evidence_sha256"}
@@ -1296,26 +2414,169 @@ def _stage_evidence_hash(evidence: Mapping[str, Any]) -> str:
     return observed
 
 
+def validate_parent_stage_lineage(
+    parent_stage_lineage: Mapping[str, Any] | None,
+    *,
+    prerequisite_stage: str,
+    declared_parent_stage_evidence_sha256: str | None,
+    current_candidate_sha256: str,
+) -> dict[str, Any] | None:
+    """Replay the actual parent evidence and exact parent audit receipt."""
+
+    if prerequisite_stage == "development":
+        if parent_stage_lineage is not None or declared_parent_stage_evidence_sha256 is not None:
+            raise SecFilingGemmaStageVerifierError(
+                "Development cannot claim a parent stage"
+            )
+        return None
+    if prerequisite_stage != "intermediate":
+        raise SecFilingGemmaStageVerifierError(
+            "Only the intermediate prerequisite can carry parent lineage"
+        )
+    declared_hash = _sha256(
+        declared_parent_stage_evidence_sha256,
+        "parent stage evidence hash",
+    )
+    if parent_stage_lineage is None:
+        raise SecFilingGemmaStageVerifierError(
+            "Intermediate evidence requires its complete parent lineage"
+        )
+    lineage = _mapping_snapshot(parent_stage_lineage, "parent stage lineage")
+    _expect_keys(
+        lineage,
+        {
+            "evidence",
+            "stage_access_manifest",
+            "expected_context",
+            "trusted_stage_content_pin",
+            "audit_receipt",
+        },
+        "parent stage lineage",
+    )
+    parent_evidence = _mapping_snapshot(lineage["evidence"], "parent stage evidence")
+    if parent_evidence.get("prerequisite_stage") != "development":
+        raise SecFilingGemmaStageVerifierError(
+            "Intermediate parent evidence must be the development prerequisite"
+        )
+    parent_hash = _stage_evidence_hash(parent_evidence)
+    if not hmac.compare_digest(parent_hash, declared_hash):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent evidence bytes differ from the declared parent hash"
+        )
+    parent_candidate = parent_evidence.get("candidate_manifest")
+    parent_candidate_hash = (
+        parent_candidate.get("candidate_sha256")
+        if type(parent_candidate) is dict
+        else None
+    )
+    if parent_candidate_hash != current_candidate_sha256:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent evidence belongs to another candidate"
+        )
+    computed_receipt = audit_stage_evidence(
+        parent_evidence,
+        lineage["stage_access_manifest"],
+        lineage["expected_context"],
+        trusted_stage_content_pin=lineage["trusted_stage_content_pin"],
+    )
+    supplied_receipt = _mapping_snapshot(
+        lineage["audit_receipt"], "parent stage audit receipt"
+    )
+    if supplied_receipt != computed_receipt:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent audit receipt differs from authoritative parent replay"
+        )
+    if (
+        computed_receipt.get("stage_evidence_sha256") != parent_hash
+        or computed_receipt.get("candidate_sha256") != current_candidate_sha256
+        or computed_receipt.get("prerequisite_stage") != "development"
+        or computed_receipt.get("requested_stage") != "intermediate"
+        or computed_receipt.get("authorizes_outcome_access") is not False
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent audit receipt crossed an evidence, candidate, or stage binding"
+        )
+    parent_content = parent_evidence.get("content_replays_by_stage")
+    if type(parent_content) is not dict or set(parent_content) != {"development"}:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent evidence lacks exact development content replay"
+        )
+    return {
+        "parent_stage_evidence_sha256": parent_hash,
+        "parent_audit_receipt_sha256": computed_receipt[
+            "audit_receipt_sha256"
+        ],
+        "parent_trusted_stage_content_pin_sha256": computed_receipt[
+            "trusted_stage_content_pin_sha256"
+        ],
+        "trusted_stage_content_pin": {
+            "stage": computed_receipt["prerequisite_stage"],
+            "content_manifest_sha256": computed_receipt[
+                "trusted_content_manifest_sha256"
+            ],
+            "stage_artifact_sha256": computed_receipt[
+                "trusted_stage_artifact_sha256"
+            ],
+            "external_seal_receipt_sha256": computed_receipt[
+                "trusted_external_seal_receipt_sha256"
+            ],
+            "trusted_store_state_sha256": computed_receipt[
+                "trusted_store_state_sha256"
+            ],
+            "pin_sha256": computed_receipt[
+                "trusted_stage_content_pin_sha256"
+            ],
+        },
+        "content_replays_by_stage": parent_content,
+    }
+
+
 def audit_stage_evidence(
     evidence: Mapping[str, Any],
     stage_access_manifest: Mapping[str, Any],
     expected_context: Mapping[str, Any],
+    *,
+    trusted_stage_content_pin: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Replay all currently provable evidence and return a blocked audit receipt."""
 
-    value = _mapping_snapshot(evidence, "stage evidence")
+    # Use one shared budget across all independent caller objects.  The first
+    # traversal rejects an already-oversized bundle before any copy; the second
+    # traversal rechecks the same bounds while detaching, closing mutation
+    # windows between check and copy.
+    caller_bundle = {
+        "evidence": evidence,
+        "stage_access_manifest": stage_access_manifest,
+        "expected_context": expected_context,
+        "trusted_stage_content_pin": trusted_stage_content_pin,
+    }
+    _preflight_plain_json(caller_bundle, "stage audit caller bundle")
+    detached_bundle, _bundle_totals = _bounded_plain_json_copy(
+        caller_bundle, "stage audit caller bundle"
+    )
+    if type(detached_bundle) is not dict:  # pragma: no cover - fixed wrapper
+        raise SecFilingGemmaStageVerifierError(
+            "Stage audit caller bundle could not be detached"
+        )
+    value = _mapping_snapshot(detached_bundle["evidence"], "stage evidence")
+    stage_access_manifest = detached_bundle["stage_access_manifest"]
+    expected_context = detached_bundle["expected_context"]
+    trusted_stage_content_pin = detached_bundle["trusted_stage_content_pin"]
     _expect_keys(
         value,
         {
             "schema_version",
             "prerequisite_stage",
             "parent_stage_evidence_sha256",
+            "parent_stage_lineage",
             "contract_manifest",
             "candidate_manifest",
             "source_bytes_base64_by_role",
             "calendar_evidence_manifest",
             "calendar_source_bytes_base64_by_name",
             "corpus_universe_manifest",
+            "catalog_replay",
+            "content_replays_by_stage",
             "prerequisite_content_manifest",
             "model_batches_by_stage",
             "market_replays_by_stage",
@@ -1334,20 +2595,37 @@ def audit_stage_evidence(
     prerequisite = value["prerequisite_stage"]
     if prerequisite not in _PREREQUISITE_TRANSITIONS:
         raise SecFilingGemmaStageVerifierError("Only prerequisite stages are auditable")
-    if prerequisite == "development":
-        if value["parent_stage_evidence_sha256"] is not None:
-            raise SecFilingGemmaStageVerifierError("Development cannot claim a parent stage")
-    else:
-        _sha256(value["parent_stage_evidence_sha256"], "parent stage evidence hash")
     evidence_hash = _stage_evidence_hash(value)
     candidate = value["candidate_manifest"]
     candidate_hash = candidate.get("candidate_sha256") if type(candidate) is dict else None
     _sha256(candidate_hash, "candidate hash")
+    parent_lineage = validate_parent_stage_lineage(
+        value["parent_stage_lineage"],
+        prerequisite_stage=prerequisite,
+        declared_parent_stage_evidence_sha256=value[
+            "parent_stage_evidence_sha256"
+        ],
+        current_candidate_sha256=candidate_hash,
+    )
+    current_content_pin = validate_trusted_stage_content_pin(
+        stage_access_manifest=stage_access_manifest,
+        trusted_stage_content_pin=trusted_stage_content_pin,
+        expected_stage=prerequisite,
+    )
     identities = validate_candidate_source_bytes(
         contract_manifest=value["contract_manifest"],
         candidate_manifest=candidate,
         expected_candidate_sha256=candidate_hash,
         source_bytes_base64_by_role=value["source_bytes_base64_by_role"],
+    )
+    source_identity = validate_candidate_source_role_audit(
+        candidate_manifest=candidate,
+        expected_candidate_sha256=candidate_hash,
+        source_bytes_base64_by_role=value["source_bytes_base64_by_role"],
+    )
+    runtime_source_identity = validate_candidate_runtime_source_audit(
+        candidate_manifest=candidate,
+        expected_candidate_sha256=candidate_hash,
     )
     calendar = validate_calendar_and_universe_snapshot(
         calendar_evidence_manifest=value["calendar_evidence_manifest"],
@@ -1357,17 +2635,66 @@ def audit_stage_evidence(
         corpus_universe_manifest=value["corpus_universe_manifest"],
         candidate_manifest=candidate,
     )
+    catalog_replay = validate_detached_catalog_evidence(
+        value["catalog_replay"],
+        candidate_manifest=candidate,
+        corpus_universe_manifest=value["corpus_universe_manifest"],
+    )
+    if catalog_replay["corpus_universe_sha256"] != calendar[
+        "corpus_universe_sha256"
+    ]:
+        raise SecFilingGemmaStageVerifierError(
+            "Detached catalogue and structural universe identities differ"
+        )
     stages = STAGE_ORDER[: STAGE_ORDER.index(prerequisite) + 1]
     batches = value["model_batches_by_stage"]
     markets = value["market_replays_by_stage"]
+    content_replays = value["content_replays_by_stage"]
     if type(batches) is not dict or set(batches) != set(stages):
         raise SecFilingGemmaStageVerifierError("Model batch stage coverage is incomplete")
     if type(markets) is not dict or set(markets) != set(stages):
         raise SecFilingGemmaStageVerifierError("Market replay stage coverage is incomplete")
+    if type(content_replays) is not dict or set(content_replays) != set(stages):
+        raise SecFilingGemmaStageVerifierError(
+            "Detached content replay stage coverage is incomplete"
+        )
     universe_records = value["corpus_universe_manifest"]["records"]
     model_summaries: dict[str, Any] = {}
     market_summaries: dict[str, Any] = {}
+    content_summaries: dict[str, Any] = {}
     for stage in stages:
+        if stage == prerequisite:
+            stage_content_pin = current_content_pin
+        else:
+            if parent_lineage is None:
+                raise SecFilingGemmaStageVerifierError(
+                    "Earlier-stage content lacks replayed parent lineage"
+                )
+            parent_receipt_content = parent_lineage[
+                "trusted_stage_content_pin"
+            ]
+            if parent_receipt_content.get("stage") != stage:
+                raise SecFilingGemmaStageVerifierError(
+                    "Parent trusted content pin crossed an earlier stage"
+                )
+            stage_content_pin = parent_receipt_content
+        content_summaries[stage] = validate_detached_stage_content_evidence(
+            content_replays[stage],
+            expected_stage=stage,
+            candidate_manifest=candidate,
+            corpus_universe_manifest=value["corpus_universe_manifest"],
+            externally_pinned_content_manifest_sha256=stage_content_pin[
+                "content_manifest_sha256"
+            ],
+            externally_pinned_stage_artifact_sha256=stage_content_pin[
+                "stage_artifact_sha256"
+            ],
+            maximum_total_document_bytes=MAX_STAGE_CONTENT_BYTES,
+        )
+        if content_summaries[stage]["artifact_stage"] != stage:
+            raise SecFilingGemmaStageVerifierError(
+                "Detached content replay crossed a stage slot"
+            )
         expected_accessions = [
             record["accession_number"]
             for record in universe_records
@@ -1395,6 +2722,24 @@ def audit_stage_evidence(
         market_summaries[stage] = validate_market_snapshot_stage_replay(markets[stage])
         if market_summaries[stage]["artifact_stage"] != stage:
             raise SecFilingGemmaStageVerifierError("Market replay crossed a stage")
+    if parent_lineage is not None:
+        parent_content_replays = parent_lineage["content_replays_by_stage"]
+        for stage in stages[:-1]:
+            if content_replays[stage] != parent_content_replays.get(stage):
+                raise SecFilingGemmaStageVerifierError(
+                    "Earlier-stage content differs from the replayed parent evidence"
+                )
+    prerequisite_content = value["prerequisite_content_manifest"]
+    if (
+        type(prerequisite_content) is not dict
+        or prerequisite_content
+        != content_replays[prerequisite]["content_manifest"]
+        or prerequisite_content.get("content_manifest_sha256")
+        != content_summaries[prerequisite]["content_manifest_sha256"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Prerequisite content manifest differs from detached byte replay"
+        )
     prediction = validate_prediction_artifact_replay(
         value["prediction_replay"],
         candidate_sha256=candidate_hash,
@@ -1428,6 +2773,12 @@ def audit_stage_evidence(
         candidate_manifest=candidate,
         corpus_universe_manifest=value["corpus_universe_manifest"],
         prerequisite_content_manifest=value["prerequisite_content_manifest"],
+        prerequisite_stage_artifact_sha256=current_content_pin[
+            "stage_artifact_sha256"
+        ],
+        prerequisite_external_seal_receipt_sha256=current_content_pin[
+            "external_seal_receipt_sha256"
+        ],
         expected_stage_evidence_sha256=evidence_hash,
     )
 
@@ -1461,9 +2812,91 @@ def audit_stage_evidence(
             status[check]["reason"] = (
                 "no complete authoritative end-to-end component currently proves this check"
             )
+    corpus_replay_trust_boundary = {
+        "catalog": {
+            "authorizing": catalog_replay["authorizing"],
+            "fresh_network_provenance_verified": catalog_replay[
+                "fresh_network_provenance_verified"
+            ],
+            "network_receipt_claims_replayed_not_observed": catalog_replay[
+                "network_receipt_claims_replayed_not_observed"
+            ],
+        },
+        "content_by_stage": {
+            stage: {
+                "authorizing": summary["authorizing"],
+                "fresh_network_provenance_verified": summary[
+                    "fresh_network_provenance_verified"
+                ],
+                "network_receipt_claims_replayed_not_observed": summary[
+                    "network_receipt_claims_replayed_not_observed"
+                ],
+            }
+            for stage, summary in content_summaries.items()
+        },
+    }
+    corpus_replay_receipt_schema_versions = {
+        "catalog": catalog_replay["schema_version"],
+        "content_by_stage": {
+            stage: summary["schema_version"]
+            for stage, summary in content_summaries.items()
+        },
+    }
+    source_runtime_trust_boundary = {
+        "candidate_pinned_detached_source_bytes_verified": True,
+        "current_files_at_loaded_module_paths_verified": True,
+        "executing_validator_source_bytes_attested": False,
+        "runtime_module_paths_verified": True,
+        "caller_supplied_runtime_paths_or_bytes_accepted": False,
+        "role_ownership_complete": runtime_source_identity["complete"],
+        "identity_scope": "current_files_at_already_loaded_module_paths",
+    }
+    trusted_content_pin_boundary = {
+        "stage_access_pin_cross_bound": True,
+        "separately_supplied_store_pin_claim_present": True,
+        "separately_supplied_store_pin_authenticated": False,
+        "trusted_store_state_authenticated_by_verifier": False,
+        "authorizing": False,
+    }
     component_hashes = {
         "candidate_and_sources": canonical_sha256(identities),
+        "source_identity_audit": source_identity[
+            "source_identity_receipt_sha256"
+        ],
+        "runtime_source_identity_audit": runtime_source_identity[
+            "source_identity_receipt_sha256"
+        ],
+        "source_runtime_trust_boundary": canonical_sha256(
+            source_runtime_trust_boundary
+        ),
+        "trusted_stage_content_pin": current_content_pin["pin_sha256"],
+        "trusted_content_pin_boundary": canonical_sha256(
+            trusted_content_pin_boundary
+        ),
+        "parent_stage_lineage": canonical_sha256(parent_lineage),
         "calendar_and_universe": canonical_sha256(calendar),
+        "catalog_replay": catalog_replay["replay_validation_sha256"],
+        "catalog_request_receipts": catalog_replay[
+            "request_receipts_sha256"
+        ],
+        "content_replays": canonical_sha256(
+            {
+                stage: summary["replay_validation_sha256"]
+                for stage, summary in content_summaries.items()
+            }
+        ),
+        "content_request_receipts": canonical_sha256(
+            {
+                stage: summary["request_receipts_sha256"]
+                for stage, summary in content_summaries.items()
+            }
+        ),
+        "corpus_replay_trust_boundary": canonical_sha256(
+            corpus_replay_trust_boundary
+        ),
+        "corpus_replay_receipt_schemas": canonical_sha256(
+            corpus_replay_receipt_schema_versions
+        ),
         "model_batches": canonical_sha256(model_summaries),
         "market_replays": canonical_sha256(market_summaries),
         "prediction": canonical_sha256(
@@ -1478,12 +2911,64 @@ def audit_stage_evidence(
         "schema_version": STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
         "validator_id": AUTHORITATIVE_VALIDATOR_ID,
         "validator_source_sha256": identities["stage_verifier_source_sha256"],
+        "validator_source_sha256_role": (
+            "candidate_pin_reconciled_to_current_file_at_loaded_module_path"
+        ),
+        "source_runtime_trust_boundary": source_runtime_trust_boundary,
+        "trusted_content_pin_boundary": trusted_content_pin_boundary,
         "prerequisite_stage": prerequisite,
         "requested_stage": _PREREQUISITE_TRANSITIONS[prerequisite],
         "stage_evidence_sha256": evidence_hash,
         "candidate_sha256": candidate_hash,
         "candidate_design_sha256": candidate_design_sha256(candidate),
         "selected_candidate_id": scores["selected_candidate_id"],
+        "source_identity_receipt_sha256": source_identity[
+            "source_identity_receipt_sha256"
+        ],
+        "runtime_source_identity_receipt_sha256": runtime_source_identity[
+            "source_identity_receipt_sha256"
+        ],
+        "trusted_stage_content_pin_sha256": current_content_pin["pin_sha256"],
+        "trusted_content_manifest_sha256": current_content_pin[
+            "content_manifest_sha256"
+        ],
+        "trusted_stage_artifact_sha256": current_content_pin[
+            "stage_artifact_sha256"
+        ],
+        "trusted_external_seal_receipt_sha256": current_content_pin[
+            "external_seal_receipt_sha256"
+        ],
+        "trusted_store_state_sha256": current_content_pin[
+            "trusted_store_state_sha256"
+        ],
+        "parent_stage_evidence_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_stage_evidence_sha256"]
+        ),
+        "parent_audit_receipt_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_audit_receipt_sha256"]
+        ),
+        "catalog_replay_receipt_sha256": catalog_replay[
+            "replay_validation_sha256"
+        ],
+        "content_replay_receipt_sha256s_by_stage": {
+            stage: summary["replay_validation_sha256"]
+            for stage, summary in content_summaries.items()
+        },
+        "catalog_request_receipts_sha256": catalog_replay[
+            "request_receipts_sha256"
+        ],
+        "content_request_receipts_sha256s_by_stage": {
+            stage: summary["request_receipts_sha256"]
+            for stage, summary in content_summaries.items()
+        },
+        "corpus_replay_trust_boundary": corpus_replay_trust_boundary,
+        "corpus_replay_receipt_schema_versions": (
+            corpus_replay_receipt_schema_versions
+        ),
         "semantic_checks": list(REQUIRED_STAGE_VERIFIER_CHECKS),
         "check_status": status,
         "component_receipt_sha256s": component_hashes,
@@ -1500,10 +2985,17 @@ def authoritative_prerequisite_validator(
     evidence: Mapping[str, Any],
     stage_access_manifest: Mapping[str, Any],
     expected_context: Mapping[str, Any],
+    *,
+    trusted_stage_content_pin: Mapping[str, Any] | None = None,
 ) -> None:
     """Fail closed instead of manufacturing an authorizing semantic result."""
 
-    receipt = audit_stage_evidence(evidence, stage_access_manifest, expected_context)
+    receipt = audit_stage_evidence(
+        evidence,
+        stage_access_manifest,
+        expected_context,
+        trusted_stage_content_pin=trusted_stage_content_pin,
+    )
     blocked = [
         check
         for check, result in receipt["check_status"].items()
@@ -1517,21 +3009,31 @@ def authoritative_prerequisite_validator(
 
 __all__ = [
     "AUTHORITATIVE_VALIDATOR_ID",
+    "MAX_STAGE_CONTENT_BYTES",
     "OWNED_HARDENED_TRANSPORT_MODE",
     "STAGE_AUDIT_RECEIPT_SCHEMA_VERSION",
     "STAGE_EVIDENCE_SCHEMA_VERSION",
     "STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION",
+    "TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION",
     "SecFilingGemmaStageVerifierBlocked",
     "SecFilingGemmaStageVerifierError",
     "audit_stage_evidence",
     "authoritative_prerequisite_validator",
+    "detach_untrusted_stage_json",
+    "preflight_untrusted_stage_json",
     "validate_calendar_and_universe_snapshot",
     "validate_candidate_source_bytes",
+    "validate_candidate_source_role_audit",
+    "validate_candidate_runtime_source_audit",
+    "validate_detached_catalog_evidence",
+    "validate_detached_stage_content_evidence",
     "validate_learner_refit_replays",
     "validate_market_snapshot_stage_replay",
     "validate_model_attempt_batch",
     "validate_prediction_artifact_replay",
     "validate_raw_scores_gates_and_ranking",
     "validate_registry_request_and_stage_access",
+    "validate_parent_stage_lineage",
     "validate_stage_runtime_receipt",
+    "validate_trusted_stage_content_pin",
 ]

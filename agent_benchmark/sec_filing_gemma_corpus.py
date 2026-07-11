@@ -37,6 +37,7 @@ from .sec_filing_gemma_contract import (
     STAGE_ORDER,
     STAGE_WINDOWS,
     build_contract_manifest,
+    build_corpus_universe_manifest,
     build_stage_content_manifest,
     canonical_session_calendar,
     canonical_sha256,
@@ -57,6 +58,12 @@ from .sec_point_in_time import (
 CATALOG_SCHEMA_VERSION = "aapl-sec-gemma-official-catalog-v1"
 STAGE_ARTIFACT_SCHEMA_VERSION = "aapl-sec-gemma-stage-primary-bytes-v1"
 REQUEST_RECEIPT_SCHEMA_VERSION = "aapl-sec-gemma-sec-request-receipt-v1"
+DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION = (
+    "aapl-sec-gemma-detached-catalog-replay-receipt-v1"
+)
+DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION = (
+    "aapl-sec-gemma-detached-stage-content-replay-receipt-v1"
+)
 MAIN_SUBMISSIONS_NAME = f"CIK{AAPL_CIK}.json"
 MAIN_SUBMISSIONS_URL = canonical_sec_url(
     f"https://data.sec.gov/submissions/{MAIN_SUBMISSIONS_NAME}"
@@ -67,7 +74,12 @@ _HISTORICAL_NAME_RE = re.compile(
 _PRIMARY_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
 _ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_BARE_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _EASTERN = ZoneInfo("America/New_York")
+
+DETACHED_REPLAY_SCOPE = (
+    "detached_exact_bytes_and_external_receipt_pins_without_fresh_network_provenance"
+)
 
 _RESPONSE_AUDIT_KEYS = {
     "url",
@@ -108,6 +120,24 @@ _STRICT_TRANSPORT_BEHAVIOR = {
     "content_length_preflight": True,
     "incremental_byte_budget": True,
 }
+_REQUEST_RECEIPT_KEYS = {
+    "schema_version",
+    "sequence_number",
+    "purpose",
+    "requested_url",
+    "final_url",
+    "status_code",
+    "content_type",
+    "size_bytes",
+    "content_sha256",
+    "cache_hit",
+    "network_requests",
+    "retries",
+    "redirects",
+    "user_agent_sha256",
+    "request_receipt_sha256",
+}
+_MAX_DETACHED_JSON_DEPTH = 64
 
 
 class SecFilingGemmaCorpusError(SecPointInTimeError):
@@ -320,6 +350,239 @@ def _json_object_snapshot(value: Any, *, location: str) -> dict[str, Any]:
     if type(snapshot) is not dict:
         raise SecFilingGemmaCorpusError(f"{location} must be a JSON object")
     return snapshot
+
+
+def _bare_sha256_value(value: Any, *, location: str) -> str:
+    if type(value) is not str or _BARE_SHA256_RE.fullmatch(value) is None:
+        raise SecFilingGemmaCorpusError(
+            f"{location} must be an externally supplied lowercase SHA-256 digest"
+        )
+    return value
+
+
+def _plain_json_value(
+    value: Any,
+    *,
+    location: str,
+    _active_container_ids: set[int] | None = None,
+    _depth: int = 0,
+) -> Any:
+    """Detach only exact built-in JSON containers, never caller subclasses."""
+
+    if _depth > _MAX_DETACHED_JSON_DEPTH:
+        raise SecFilingGemmaCorpusError(
+            f"{location} exceeds the detached JSON nesting limit"
+        )
+    if value is None or type(value) in {bool, int, str}:
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise SecFilingGemmaCorpusError(f"{location} contains a non-finite value")
+        return value
+    if type(value) in {list, dict}:
+        active = _active_container_ids
+        if active is None:
+            active = set()
+        identity = id(value)
+        if identity in active:
+            raise SecFilingGemmaCorpusError(
+                f"{location} contains a cyclic detached JSON container"
+            )
+        active.add(identity)
+        try:
+            if type(value) is list:
+                return [
+                    _plain_json_value(
+                        item,
+                        location=f"{location}[{index}]",
+                        _active_container_ids=active,
+                        _depth=_depth + 1,
+                    )
+                    for index, item in enumerate(value)
+                ]
+            if not all(type(key) is str for key in value):
+                raise SecFilingGemmaCorpusError(
+                    f"{location} keys must be exact strings"
+                )
+            return {
+                key: _plain_json_value(
+                    item,
+                    location=f"{location}.{key}",
+                    _active_container_ids=active,
+                    _depth=_depth + 1,
+                )
+                for key, item in value.items()
+            }
+        finally:
+            active.remove(identity)
+    raise SecFilingGemmaCorpusError(
+        f"{location} must contain detached plain JSON values"
+    )
+
+
+def _plain_json_object(value: Any, *, location: str) -> dict[str, Any]:
+    detached = _plain_json_value(value, location=location)
+    if type(detached) is not dict:
+        raise SecFilingGemmaCorpusError(f"{location} must be a detached plain object")
+    return detached
+
+
+def _plain_json_array(value: Any, *, location: str) -> list[Any]:
+    if type(value) not in {list, tuple}:
+        raise SecFilingGemmaCorpusError(
+            f"{location} must be an exact detached ordered list or tuple"
+        )
+    return [
+        _plain_json_value(item, location=f"{location}[{index}]")
+        for index, item in enumerate(value)
+    ]
+
+
+def _exact_ordered_container(value: Any, *, location: str) -> list[Any]:
+    if type(value) not in {list, tuple}:
+        raise SecFilingGemmaCorpusError(
+            f"{location} must be an exact ordered list or tuple"
+        )
+    return list(value)
+
+
+def _external_hash_map(
+    value: Any,
+    *,
+    expected_keys: Sequence[str],
+    location: str,
+) -> dict[str, str]:
+    if type(value) is not dict or not all(type(key) is str for key in value):
+        raise SecFilingGemmaCorpusError(f"{location} must be a detached plain hash map")
+    if set(value) != set(expected_keys):
+        raise SecFilingGemmaCorpusError(
+            f"{location} does not bind the exact expected identities"
+        )
+    return {
+        key: _bare_sha256_value(value[key], location=f"{location}.{key}")
+        for key in expected_keys
+    }
+
+
+def _detached_transport_claim(value: Any) -> dict[str, Any]:
+    state = _plain_json_object(value, location="detached transport-security claim")
+    if set(state) != _TRANSPORT_SECURITY_KEYS:
+        raise SecFilingGemmaCorpusError(
+            "Detached transport-security claim has a noncanonical schema"
+        )
+    for key, expected in _STRICT_TRANSPORT_BEHAVIOR.items():
+        if type(state[key]) is not type(expected) or state[key] != expected:
+            raise SecFilingGemmaCorpusError(
+                "Detached transport-security claim differs from the frozen policy"
+            )
+    request_cap = state["transport_max_requests"]
+    byte_cap = state["transport_max_bytes"]
+    second_cap = state["transport_max_seconds"]
+    if (
+        type(request_cap) is not int
+        or not 1 <= request_cap <= MAX_SEC_REQUESTS
+        or type(byte_cap) is not int
+        or not 1 <= byte_cap <= MAX_SEC_BYTES
+        or type(second_cap) is not float
+        or not math.isfinite(second_cap)
+        or not 0.0 < second_cap <= MAX_SEC_SECONDS
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached transport-security limits exceed the frozen contract"
+        )
+    return state
+
+
+def _reconcile_detached_transport_usage(
+    state: Mapping[str, Any],
+    *,
+    request_count: int,
+    byte_count: int,
+) -> None:
+    if (
+        request_count > state["transport_max_requests"]
+        or byte_count > state["transport_max_bytes"]
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached request and byte totals exceed the claimed transport ceilings"
+        )
+
+
+def _validate_detached_receipt(
+    value: Any,
+    *,
+    expected_sequence_number: int,
+    expected_purpose: str,
+    expected_url: str,
+    payload: bytes,
+    expected_receipt_sha256: str,
+    expected_user_agent_sha256: str | None,
+    require_json: bool,
+) -> tuple[dict[str, Any], str]:
+    receipt = _plain_json_object(value, location="detached SEC request receipt")
+    if set(receipt) != _REQUEST_RECEIPT_KEYS:
+        raise SecFilingGemmaCorpusError(
+            "Detached SEC request receipt has a noncanonical schema"
+        )
+    body = {
+        key: receipt[key]
+        for key in receipt
+        if key != "request_receipt_sha256"
+    }
+    observed_hash = _bare_sha256_value(
+        receipt["request_receipt_sha256"],
+        location="detached request receipt self-hash",
+    )
+    external_hash = _bare_sha256_value(
+        expected_receipt_sha256,
+        location="externally pinned request receipt hash",
+    )
+    if observed_hash != canonical_sha256(body) or observed_hash != external_hash:
+        raise SecFilingGemmaCorpusError(
+            "Detached SEC request receipt is not exactly externally pinned"
+        )
+    if (
+        type(receipt["sequence_number"]) is not int
+        or receipt["sequence_number"] != expected_sequence_number
+        or receipt["schema_version"] != REQUEST_RECEIPT_SCHEMA_VERSION
+        or receipt["purpose"] != expected_purpose
+        or receipt["requested_url"] != expected_url
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached SEC request receipt is bound to another request or order"
+        )
+    user_agent_hash = receipt["user_agent_sha256"]
+    if (
+        type(user_agent_hash) is not str
+        or _TAGGED_SHA256_RE.fullmatch(user_agent_hash) is None
+        or (
+            expected_user_agent_sha256 is not None
+            and user_agent_hash != expected_user_agent_sha256
+        )
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached SEC request receipts disagree on User-Agent identity"
+        )
+    audit = {
+        "url": receipt["final_url"],
+        "status_code": receipt["status_code"],
+        "content_type": receipt["content_type"],
+        "size_bytes": receipt["size_bytes"],
+        "content_sha256": receipt["content_sha256"],
+        "cache_hit": receipt["cache_hit"],
+        "user_agent_sha256": user_agent_hash,
+        "network_requests": receipt["network_requests"],
+        "retries": receipt["retries"],
+        "redirects": receipt["redirects"],
+    }
+    _validated_response_audit(
+        audit,
+        requested=expected_url,
+        payload=payload,
+        user_agent_sha256=user_agent_hash,
+        require_json=require_json,
+    )
+    return receipt, user_agent_hash
 
 
 def _deep_freeze(value: Any) -> Any:
@@ -1190,6 +1453,371 @@ def acquire_official_sec_catalog(
     )
 
 
+def validate_detached_catalog_replay(
+    *,
+    source_payloads: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    request_receipts: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    catalog_artifact: dict[str, Any],
+    corpus_universe_manifest: dict[str, Any],
+    expected_source_payload_sha256s: dict[str, str],
+    expected_request_receipt_sha256s: dict[str, str],
+    expected_request_receipts_sha256: str,
+    expected_catalog_artifact_sha256: str,
+    expected_corpus_universe_sha256: str,
+    expected_calendar_artifact_sha256: str,
+    session_dates: list[str] | tuple[str, ...],
+) -> Mapping[str, Any]:
+    """Replay the catalogue and universe from detached bytes only.
+
+    This validator performs no I/O. Request receipts are checked against exact
+    external pins and exact payload bytes, but they remain detached claims; the
+    returned receipt deliberately does not attest a fresh network request.
+    Caller-supplied source counts, eligible records, and universe rows are never
+    used as inputs to the reconstruction. Structured artifacts must be decoded
+    into exact plain built-in JSON containers; ordered byte and receipt inputs
+    may use exact built-in lists or tuples.
+    """
+
+    session_values = _exact_ordered_container(
+        session_dates, location="detached catalogue session calendar"
+    )
+    sessions = canonical_session_calendar(session_values)
+    source_values = _exact_ordered_container(
+        source_payloads, location="detached Submissions source payloads"
+    )
+    if not source_values:
+        raise SecFilingGemmaCorpusError("Detached catalogue has no source payloads")
+    detached_sources: list[tuple[str, str, bytes]] = []
+    for index, raw in enumerate(source_values):
+        if type(raw) is not dict or set(raw) != {"name", "payload"}:
+            raise SecFilingGemmaCorpusError(
+                f"Detached Submissions source {index} must have exact name/payload keys"
+            )
+        name = raw["name"]
+        payload = raw["payload"]
+        if type(name) is not str or type(payload) is not bytes:
+            raise SecFilingGemmaCorpusError(
+                "Detached Submissions source names and payload bytes are not exact"
+            )
+        if index == 0:
+            if name != MAIN_SUBMISSIONS_NAME:
+                raise SecFilingGemmaCorpusError(
+                    "Detached catalogue must begin with the exact main Submissions bytes"
+                )
+            url = MAIN_SUBMISSIONS_URL
+        else:
+            if _HISTORICAL_NAME_RE.fullmatch(name) is None:
+                raise SecFilingGemmaCorpusError(
+                    "Detached historical Submissions filename is outside Apple scope"
+                )
+            url = canonical_sec_url(f"https://data.sec.gov/submissions/{name}")
+        detached_sources.append((name, url, payload))
+
+    main_payload = _strict_json_object(
+        detached_sources[0][2], label="detached main Submissions payload"
+    )
+    references = _reference_specs(main_payload)
+    expected_names = [MAIN_SUBMISSIONS_NAME, *[item["name"] for item in references]]
+    observed_names = [item[0] for item in detached_sources]
+    if observed_names != expected_names:
+        raise SecFilingGemmaCorpusError(
+            "Detached Submissions sources omit, add, substitute, or reorder a referenced file"
+        )
+    source_hash_pins = _external_hash_map(
+        expected_source_payload_sha256s,
+        expected_keys=expected_names,
+        location="externally pinned Submissions source hashes",
+    )
+    receipt_hash_pins = _external_hash_map(
+        expected_request_receipt_sha256s,
+        expected_keys=expected_names,
+        location="externally pinned catalogue request-receipt hashes",
+    )
+    receipt_values = _plain_json_array(
+        request_receipts, location="detached catalogue request receipts"
+    )
+    if len(receipt_values) != len(detached_sources):
+        raise SecFilingGemmaCorpusError(
+            "Detached catalogue request receipts omit or add a source receipt"
+        )
+
+    parsed_sources: list[
+        tuple[str, str, bytes, dict[str, Any], tuple[_ParsedCatalogRow, ...], int, int]
+    ] = []
+    user_agent_hash: str | None = None
+    reference_by_name = {item["name"]: item for item in references}
+    for position, ((name, url, payload), receipt_value) in enumerate(
+        zip(detached_sources, receipt_values), start=1
+    ):
+        payload_hash = _bare_sha256(payload)
+        if payload_hash != source_hash_pins[name]:
+            raise SecFilingGemmaCorpusError(
+                "Detached Submissions bytes differ from their external source hash"
+            )
+        receipt, observed_user_agent = _validate_detached_receipt(
+            receipt_value,
+            expected_sequence_number=position,
+            expected_purpose=(
+                "apple_main_submissions"
+                if name == MAIN_SUBMISSIONS_NAME
+                else "apple_historical_submissions"
+            ),
+            expected_url=url,
+            payload=payload,
+            expected_receipt_sha256=receipt_hash_pins[name],
+            expected_user_agent_sha256=user_agent_hash,
+            require_json=True,
+        )
+        if user_agent_hash is None:
+            user_agent_hash = observed_user_agent
+        payload_object = (
+            main_payload
+            if name == MAIN_SUBMISSIONS_NAME
+            else _strict_json_object(
+                payload, label=f"detached historical Submissions payload {name}"
+            )
+        )
+        if name != MAIN_SUBMISSIONS_NAME and "cik" in payload_object:
+            if _canonical_cik(
+                payload_object["cik"], location="historical Submissions CIK"
+            ) != AAPL_CIK:
+                raise SecFilingGemmaCorpusError(
+                    "Historical Submissions payload claims a non-Apple CIK"
+                )
+        if name == MAIN_SUBMISSIONS_NAME:
+            filings = payload_object.get("filings")
+            columns = filings.get("recent") if isinstance(filings, Mapping) else None
+        else:
+            columns = {
+                key: value for key, value in payload_object.items() if key != "cik"
+            }
+        if not isinstance(columns, Mapping):
+            raise SecFilingGemmaCorpusError(f"{name} lacks a columnar filing table")
+        records, raw_count, unique_count = _records_from_columns(
+            columns, source_name=name
+        )
+        if name != MAIN_SUBMISSIONS_NAME:
+            reference = reference_by_name[name]
+            filing_dates = [item.record.filing_date for item in records]
+            if raw_count != reference["filing_count"]:
+                raise SecFilingGemmaCorpusError(
+                    "Historical Submissions row count differs from its main reference"
+                )
+            if not filing_dates or min(filing_dates) != reference["filing_from"]:
+                raise SecFilingGemmaCorpusError(
+                    "Historical Submissions minimum filing date differs from filingFrom"
+                )
+            if max(filing_dates) != reference["filing_to"]:
+                raise SecFilingGemmaCorpusError(
+                    "Historical Submissions maximum filing date differs from filingTo"
+                )
+        parsed_sources.append(
+            (name, url, payload, receipt, records, raw_count, unique_count)
+        )
+
+    receipts = [item[3] for item in parsed_sources]
+    receipt_set_hash = canonical_sha256(receipts)
+    if receipt_set_hash != _bare_sha256_value(
+        expected_request_receipts_sha256,
+        location="externally pinned catalogue request-receipt set hash",
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached catalogue request-receipt set is not externally pinned"
+        )
+
+    sourced_records: list[tuple[_ParsedCatalogRow, str, str]] = []
+    source_summaries: list[dict[str, Any]] = []
+    for name, url, payload, receipt, records, raw_count, unique_count in parsed_sources:
+        payload_hash = _bare_sha256(payload)
+        sourced_records.extend((record, url, payload_hash) for record in records)
+        row_set = [
+            {
+                "accession_number": item.record.accession_number,
+                "raw_identity_sha256": item.raw_identity_sha256,
+            }
+            for item in sorted(records, key=lambda value: value.record.accession_number)
+        ]
+        source_summaries.append(
+            {
+                "name": name,
+                "url": url,
+                "payload_sha256": payload_hash,
+                "payload_bytes": len(payload),
+                "raw_record_count": raw_count,
+                "unique_record_count": unique_count,
+                "raw_row_set_sha256": canonical_sha256(row_set),
+                "request_receipt_sha256": receipt["request_receipt_sha256"],
+            }
+        )
+
+    by_accession: dict[str, tuple[_ParsedCatalogRow, str, str]] = {}
+    cross_source_duplicates = 0
+    for item, source_url, source_hash in sourced_records:
+        prior = by_accession.get(item.record.accession_number)
+        if prior is None:
+            by_accession[item.record.accession_number] = (
+                item,
+                source_url,
+                source_hash,
+            )
+        elif prior[0].raw_identity_json == item.raw_identity_json:
+            cross_source_duplicates += 1
+        else:
+            raise SecFilingGemmaCorpusError(
+                "Conflicting metadata exists for an accession across Submissions sources"
+            )
+
+    eligible: list[dict[str, Any]] = []
+    exclusion_counts = {
+        "amendment": 0,
+        "other_form": 0,
+        "outside_contract_availability_window": 0,
+    }
+    for item, source_url, source_hash in by_accession.values():
+        canonical, reason = _universe_record(
+            item.record,
+            source_url=source_url,
+            source_content_sha256=source_hash,
+            raw_row_identity_sha256=item.raw_identity_sha256,
+            sessions=sessions,
+        )
+        if canonical is None:
+            exclusion_counts[reason] += 1
+        else:
+            eligible.append(canonical)
+    eligible.sort(
+        key=lambda record: (
+            record["filing_date"],
+            record["acceptance_datetime"],
+            record["accession_number"],
+        )
+    )
+    if not eligible:
+        raise SecFilingGemmaCorpusError(
+            "Detached Submissions bytes produced no eligible periodic filings"
+        )
+
+    catalog_snapshot = _plain_json_object(
+        catalog_artifact, location="detached catalogue artifact"
+    )
+    transport_claim = _detached_transport_claim(
+        catalog_snapshot.get("transport_security")
+    )
+    _reconcile_detached_transport_usage(
+        transport_claim,
+        request_count=len(parsed_sources),
+        byte_count=sum(len(item[2]) for item in parsed_sources),
+    )
+    if user_agent_hash is None:
+        raise SecFilingGemmaCorpusError("Detached catalogue lacks request identity")
+    evidence_boundary = {
+        "complete_current_plus_every_referenced_historical_submissions": True,
+        "contract_availability_window": [
+            STAGE_WINDOWS["development"][0],
+            STAGE_WINDOWS["final"][1],
+        ],
+        "legacy_24_slot_audit_scope_end": "2024-12-31",
+        "legacy_24_slot_audit_is_exhaustive_catalog_proof": False,
+        "catalog_authentication": "exact_official_sec_submissions_bytes",
+        "primary_document_authentication": "separate_stage_artifact",
+        "full_predictive_corpus_master_index_sgml_or_index_reconciled": False,
+        "sgml_or_master_index_reconciliation_claimed_for_2025_2026": False,
+    }
+    artifact_body = {
+        "schema_version": CATALOG_SCHEMA_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "subject_cik": AAPL_CIK,
+        "main_submissions_url": MAIN_SUBMISSIONS_URL,
+        "historical_reference_names": [item["name"] for item in references],
+        "historical_reference_policy": (
+            "experiment_strict_required_fields_and_exact_downloaded_min_max_not_sec_wide_claim"
+        ),
+        "source_count": len(parsed_sources),
+        "sources": source_summaries,
+        "raw_record_count": sum(item[5] for item in parsed_sources),
+        "catalog_total_record_count": len(by_accession),
+        "within_source_exact_duplicate_count": sum(
+            item[5] - item[6] for item in parsed_sources
+        ),
+        "cross_source_exact_duplicate_count": cross_source_duplicates,
+        "catalog_eligible_record_count": len(eligible),
+        "exclusion_counts": exclusion_counts,
+        "eligible_records": eligible,
+        "eligible_records_sha256": canonical_sha256(eligible),
+        "request_receipts_sha256": receipt_set_hash,
+        "acquisition_request_count": len(parsed_sources),
+        "acquisition_bytes": sum(len(item[2]) for item in parsed_sources),
+        "transport_security": transport_claim,
+        "outer_budget_role": "post_transport_reconciliation_not_streaming_protection",
+        "user_agent_sha256": user_agent_hash,
+        "evidence_boundary": evidence_boundary,
+        "contains_outcomes_market_data_or_model_output": False,
+    }
+    rebuilt_catalog = {
+        **artifact_body,
+        "catalog_artifact_sha256": canonical_sha256(artifact_body),
+    }
+    catalog_hash = _bare_sha256_value(
+        expected_catalog_artifact_sha256,
+        location="externally pinned catalogue artifact hash",
+    )
+    if rebuilt_catalog != catalog_snapshot or rebuilt_catalog[
+        "catalog_artifact_sha256"
+    ] != catalog_hash:
+        raise SecFilingGemmaCorpusError(
+            "Detached catalogue artifact differs from exact byte replay"
+        )
+
+    calendar_hash = _bare_sha256_value(
+        expected_calendar_artifact_sha256,
+        location="externally pinned calendar artifact hash",
+    )
+    rebuilt_universe = build_corpus_universe_manifest(
+        catalog_artifact_sha256=catalog_hash,
+        calendar_artifact_sha256=calendar_hash,
+        catalog_total_record_count=len(by_accession),
+        catalog_eligible_record_count=len(eligible),
+        session_dates=sessions,
+        records=eligible,
+    )
+    universe_snapshot = _plain_json_object(
+        corpus_universe_manifest, location="detached corpus universe manifest"
+    )
+    universe_hash = _bare_sha256_value(
+        expected_corpus_universe_sha256,
+        location="externally pinned corpus universe hash",
+    )
+    if rebuilt_universe != universe_snapshot or rebuilt_universe["universe_sha256"] != universe_hash:
+        raise SecFilingGemmaCorpusError(
+            "Detached corpus universe differs from exact catalogue-byte replay"
+        )
+
+    replay_body = {
+        "schema_version": DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION,
+        "validation_scope": DETACHED_REPLAY_SCOPE,
+        "authorizing": False,
+        "fresh_network_provenance_verified": False,
+        "network_receipt_claims_replayed_not_observed": True,
+        "catalog_artifact_sha256": catalog_hash,
+        "corpus_universe_sha256": universe_hash,
+        "eligible_records_sha256": rebuilt_catalog["eligible_records_sha256"],
+        "request_receipts_sha256": receipt_set_hash,
+        "source_payload_sha256s": {
+            name: _bare_sha256(payload) for name, _url, payload in detached_sources
+        },
+        "request_receipt_sha256s": {
+            name: receipt["request_receipt_sha256"]
+            for name, receipt in zip(expected_names, receipts)
+        },
+    }
+    return _deep_freeze(
+        {
+            **replay_body,
+            "replay_validation_sha256": canonical_sha256(replay_body),
+        }
+    )
+
+
 def _primary_document_url(record: Mapping[str, Any]) -> str:
     accession = record.get("accession_number")
     filename = record.get("primary_document")
@@ -1397,8 +2025,321 @@ def acquire_authorized_stage_documents(
     )
 
 
+def validate_detached_stage_content_replay(
+    *,
+    authorized_stage: str,
+    document_payloads: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    request_receipts: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    content_manifest: dict[str, Any],
+    stage_artifact: dict[str, Any],
+    corpus_universe_manifest: dict[str, Any],
+    expected_document_sha256s: dict[str, str],
+    expected_normalized_text_sha256s: dict[str, str],
+    expected_request_receipt_sha256s: dict[str, str],
+    expected_request_receipts_sha256: str,
+    expected_content_manifest_sha256: str,
+    expected_stage_artifact_sha256: str,
+    expected_corpus_universe_sha256: str,
+    session_dates: list[str] | tuple[str, ...],
+) -> Mapping[str, Any]:
+    """Replay one stage artifact from detached primary-document bytes only.
+
+    The function performs no I/O and does not accept caller-supplied document
+    counts or rows as reconstruction inputs.  It validates an externally pinned
+    canonical universe, selects the stage records from that universe, normalizes
+    each exact byte stream again, and rebuilds both manifests.  Request receipts
+    are exact externally pinned claims about the supplied bytes; replaying them
+    is intentionally not presented as evidence of a fresh network request.
+    Structured artifacts must be decoded into exact plain built-in JSON
+    containers; ordered byte and receipt inputs may use exact built-in lists or
+    tuples.
+    """
+
+    if type(authorized_stage) is not str or authorized_stage not in STAGE_ORDER:
+        raise SecFilingGemmaCorpusError("Authorized detached corpus stage is invalid")
+    session_values = _exact_ordered_container(
+        session_dates, location="detached stage session calendar"
+    )
+    sessions = canonical_session_calendar(session_values)
+    universe_snapshot = _plain_json_object(
+        corpus_universe_manifest,
+        location="detached stage corpus universe manifest",
+    )
+    universe_hash_pin = _bare_sha256_value(
+        expected_corpus_universe_sha256,
+        location="externally pinned corpus universe hash",
+    )
+    universe_hash = validate_corpus_universe_manifest(
+        universe_snapshot,
+        session_dates=sessions,
+        expected_universe_sha256=universe_hash_pin,
+        require_complete_coverage=True,
+    )
+    if universe_hash != universe_hash_pin:
+        raise SecFilingGemmaCorpusError(
+            "Detached stage corpus universe external pin changed"
+        )
+
+    selected = [
+        record
+        for record in universe_snapshot["records"]
+        if record["artifact_stage"] == authorized_stage
+    ]
+    selected.sort(
+        key=lambda record: (record["availability_session"], record["accession_number"])
+    )
+    if not selected:
+        raise SecFilingGemmaCorpusError(
+            "Detached authorized stage contains no filing documents"
+        )
+    accessions = [record["accession_number"] for record in selected]
+    urls = [_primary_document_url(record) for record in selected]
+    if len(urls) != len(set(urls)):
+        raise SecFilingGemmaCorpusError(
+            "Detached authorized stage derives duplicate primary-document URLs"
+        )
+
+    payload_values = _exact_ordered_container(
+        document_payloads, location="detached stage document payloads"
+    )
+    detached_payloads: list[bytes] = []
+    observed_accessions: list[str] = []
+    for index, raw in enumerate(payload_values):
+        if type(raw) is not dict or set(raw) != {"accession_number", "payload"}:
+            raise SecFilingGemmaCorpusError(
+                f"Detached stage document {index} must have exact accession/payload keys"
+            )
+        accession = raw["accession_number"]
+        payload = raw["payload"]
+        if type(accession) is not str or type(payload) is not bytes:
+            raise SecFilingGemmaCorpusError(
+                "Detached stage document identities and payload bytes are not exact"
+            )
+        observed_accessions.append(accession)
+        detached_payloads.append(payload)
+    if observed_accessions != accessions:
+        raise SecFilingGemmaCorpusError(
+            "Detached stage documents omit, add, substitute, or reorder an accession"
+        )
+
+    document_hash_pins = _external_hash_map(
+        expected_document_sha256s,
+        expected_keys=accessions,
+        location="externally pinned primary-document hashes",
+    )
+    normalized_hash_pins = _external_hash_map(
+        expected_normalized_text_sha256s,
+        expected_keys=accessions,
+        location="externally pinned normalized-text hashes",
+    )
+    receipt_hash_pins = _external_hash_map(
+        expected_request_receipt_sha256s,
+        expected_keys=accessions,
+        location="externally pinned stage request-receipt hashes",
+    )
+    receipt_values = _plain_json_array(
+        request_receipts, location="detached stage request receipts"
+    )
+    if len(receipt_values) != len(accessions):
+        raise SecFilingGemmaCorpusError(
+            "Detached stage request receipts omit or add a document receipt"
+        )
+
+    receipts: list[dict[str, Any]] = []
+    manifest_rows: list[dict[str, Any]] = []
+    artifact_rows: list[dict[str, Any]] = []
+    raw_hashes: dict[str, str] = {}
+    normalized_hashes: dict[str, str] = {}
+    user_agent_hash: str | None = None
+    for position, (record, url, payload, receipt_value) in enumerate(
+        zip(selected, urls, detached_payloads, receipt_values), start=1
+    ):
+        accession = record["accession_number"]
+        if not payload:
+            raise SecFilingGemmaCorpusError("Detached SEC primary document is empty")
+        raw_hash = _bare_sha256(payload)
+        if raw_hash != document_hash_pins[accession]:
+            raise SecFilingGemmaCorpusError(
+                "Detached primary-document bytes differ from their external hash"
+            )
+        receipt, observed_user_agent = _validate_detached_receipt(
+            receipt_value,
+            expected_sequence_number=position,
+            expected_purpose=f"{authorized_stage}_primary_document",
+            expected_url=url,
+            payload=payload,
+            expected_receipt_sha256=receipt_hash_pins[accession],
+            expected_user_agent_sha256=user_agent_hash,
+            require_json=False,
+        )
+        if user_agent_hash is None:
+            user_agent_hash = observed_user_agent
+        try:
+            normalized = normalize_filing_text(payload.decode("latin-1"))
+        except (UnicodeDecodeError, SecPointInTimeError, TypeError, ValueError):
+            raise SecFilingGemmaCorpusError(
+                "Detached SEC primary document could not be deterministically normalized"
+            ) from None
+        normalized_bytes = normalized.text.encode("utf-8")
+        if not normalized_bytes:
+            raise SecFilingGemmaCorpusError(
+                "Detached SEC primary document has no normalized visible text"
+            )
+        normalized_hash = _bare_sha256(normalized_bytes)
+        if (
+            normalized.sha256 != f"sha256:{normalized_hash}"
+            or normalized_hash != normalized_hash_pins[accession]
+        ):
+            raise SecFilingGemmaCorpusError(
+                "Detached normalized SEC text differs from its external hash"
+            )
+        receipt_hash = receipt["request_receipt_sha256"]
+        receipts.append(receipt)
+        raw_hashes[accession] = raw_hash
+        normalized_hashes[accession] = normalized_hash
+        manifest_rows.append(
+            {
+                "accession_number": accession,
+                "primary_document_sha256": raw_hash,
+                "normalized_text_sha256": normalized_hash,
+                "primary_document_bytes": len(payload),
+                "normalized_text_bytes": len(normalized_bytes),
+            }
+        )
+        artifact_rows.append(
+            {
+                "accession_number": accession,
+                "availability_session": record["availability_session"],
+                "primary_document": record["primary_document"],
+                "url": url,
+                "primary_document_sha256": raw_hash,
+                "primary_document_bytes": len(payload),
+                "normalized_text_sha256": normalized_hash,
+                "normalized_text_bytes": len(normalized_bytes),
+                "normalized_character_count": normalized.character_count,
+                "normalized_text_usable": normalized.usable,
+                "request_receipt_sha256": receipt_hash,
+            }
+        )
+
+    receipt_set_hash = canonical_sha256(receipts)
+    if receipt_set_hash != _bare_sha256_value(
+        expected_request_receipts_sha256,
+        location="externally pinned stage request-receipt set hash",
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached stage request-receipt set is not externally pinned"
+        )
+
+    rebuilt_content_manifest = build_stage_content_manifest(
+        artifact_stage=authorized_stage,
+        corpus_universe_sha256=universe_hash,
+        documents=manifest_rows,
+        universe_manifest=universe_snapshot,
+    )
+    content_snapshot = _plain_json_object(
+        content_manifest, location="detached stage content manifest"
+    )
+    content_hash = _bare_sha256_value(
+        expected_content_manifest_sha256,
+        location="externally pinned stage content-manifest hash",
+    )
+    if (
+        rebuilt_content_manifest != content_snapshot
+        or rebuilt_content_manifest["content_manifest_sha256"] != content_hash
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached stage content manifest differs from exact document-byte replay"
+        )
+
+    artifact_snapshot = _plain_json_object(
+        stage_artifact, location="detached stage artifact"
+    )
+    transport_claim = _detached_transport_claim(
+        artifact_snapshot.get("transport_security")
+    )
+    _reconcile_detached_transport_usage(
+        transport_claim,
+        request_count=len(artifact_rows),
+        byte_count=sum(len(payload) for payload in detached_payloads),
+    )
+    if user_agent_hash is None:
+        raise SecFilingGemmaCorpusError("Detached stage lacks request identity")
+    artifact_body = {
+        "schema_version": STAGE_ARTIFACT_SCHEMA_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "artifact_stage": authorized_stage,
+        "corpus_universe_sha256": universe_hash,
+        "catalog_artifact_sha256": universe_snapshot["catalog_artifact_sha256"],
+        "content_manifest_sha256": content_hash,
+        "document_count": len(artifact_rows),
+        "documents": artifact_rows,
+        "request_receipts": receipts,
+        "request_receipts_sha256": receipt_set_hash,
+        "acquisition_request_count": len(artifact_rows),
+        "acquisition_bytes": sum(len(payload) for payload in detached_payloads),
+        "transport_security": transport_claim,
+        "outer_budget_role": "post_transport_reconciliation_not_streaming_protection",
+        "user_agent_sha256": user_agent_hash,
+        "selection_policy": "all_and_only_authorized_stage_universe_primary_documents",
+        "arbitrary_urls_or_accessions_accepted": False,
+        "sampling_dropping_cache_or_substitution_allowed": False,
+        "evidence_boundary": {
+            "metadata": "exact_current_plus_referenced_official_sec_submissions_bytes",
+            "document": "exact_official_sec_primary_document_bytes",
+            "legacy_24_slot_audit_is_exhaustive_catalog_proof": False,
+            "full_predictive_corpus_master_index_sgml_or_index_reconciled": False,
+            "sgml_or_master_index_reconciliation_claimed_for_2025_2026": False,
+        },
+        "contains_outcomes_market_data_or_model_output": False,
+    }
+    rebuilt_stage_artifact = {
+        **artifact_body,
+        "stage_artifact_sha256": canonical_sha256(artifact_body),
+    }
+    stage_hash = _bare_sha256_value(
+        expected_stage_artifact_sha256,
+        location="externally pinned stage artifact hash",
+    )
+    if (
+        rebuilt_stage_artifact != artifact_snapshot
+        or rebuilt_stage_artifact["stage_artifact_sha256"] != stage_hash
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Detached stage artifact differs from exact document-byte replay"
+        )
+
+    replay_body = {
+        "schema_version": DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION,
+        "validation_scope": DETACHED_REPLAY_SCOPE,
+        "authorizing": False,
+        "fresh_network_provenance_verified": False,
+        "network_receipt_claims_replayed_not_observed": True,
+        "artifact_stage": authorized_stage,
+        "corpus_universe_sha256": universe_hash,
+        "content_manifest_sha256": content_hash,
+        "stage_artifact_sha256": stage_hash,
+        "request_receipts_sha256": receipt_set_hash,
+        "primary_document_sha256s": raw_hashes,
+        "normalized_text_sha256s": normalized_hashes,
+        "request_receipt_sha256s": {
+            accession: receipt["request_receipt_sha256"]
+            for accession, receipt in zip(accessions, receipts)
+        },
+    }
+    return _deep_freeze(
+        {
+            **replay_body,
+            "replay_validation_sha256": canonical_sha256(replay_body),
+        }
+    )
+
+
 __all__ = [
     "CATALOG_SCHEMA_VERSION",
+    "DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION",
+    "DETACHED_REPLAY_SCOPE",
+    "DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION",
     "MAIN_SUBMISSIONS_NAME",
     "MAIN_SUBMISSIONS_URL",
     "REQUEST_RECEIPT_SCHEMA_VERSION",
@@ -1412,4 +2353,6 @@ __all__ = [
     "StageDocumentBytes",
     "acquire_authorized_stage_documents",
     "acquire_official_sec_catalog",
+    "validate_detached_catalog_replay",
+    "validate_detached_stage_content_replay",
 ]

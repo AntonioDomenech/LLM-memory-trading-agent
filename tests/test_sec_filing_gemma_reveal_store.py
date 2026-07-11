@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 import hashlib
 import inspect
 import json
 from pathlib import Path
 import shutil
 import subprocess
+from types import MappingProxyType
 from unittest.mock import patch
 
 import pytest
 
+import agent_benchmark.sec_filing_gemma_reveal_store as reveal_store_module
+
 from agent_benchmark.sec_filing_gemma_contract import (
+    CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
     canonical_sha256,
@@ -21,15 +26,28 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     append_candidate_attempt,
     build_registry_pin_transition,
     build_single_candidate_reveal_request,
+    candidate_design_sha256,
     historical_reveal_declaration,
 )
 from agent_benchmark.sec_filing_gemma_reveal_store import (
     AUTHORITATIVE_VALIDATOR_ID,
+    CURRENT_TIP_PENDING_SCHEMA_VERSION,
+    MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+    MAX_STATE_FILE_BYTES,
     REQUIRED_SEMANTIC_CHECKS,
     STATE_FILENAME,
     SecFilingGemmaRevealStore,
     SecFilingGemmaRevealStoreError,
     SemanticPrerequisiteValidation,
+)
+from agent_benchmark.sec_filing_gemma_stage_access import (
+    STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+)
+from agent_benchmark.sec_filing_gemma_stage_authorization import (
+    CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+    SecFilingGemmaStageAuthorizationError,
+    build_consumed_stage_authorization_grant,
+    validate_consumed_stage_authorization_grant,
 )
 from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 
@@ -90,7 +108,11 @@ def _register(
     initial = store.load()
     prior_registry = initial["latest_registry"]
     prior_pin = initial["latest_registry_pin"]
-    candidate = _candidate(prior_registry, 1, salt=salt)
+    candidate = _candidate(
+        prior_registry,
+        len(prior_registry["entries"]) + 1,
+        salt=salt,
+    )
     appended = append_candidate_attempt(
         prior_registry,
         external_prior_pin=prior_pin,
@@ -148,6 +170,59 @@ def _request(
     return request, access_manifest
 
 
+def _grant_request(
+    state: dict,
+    candidate: dict,
+    *,
+    stage: str,
+    evidence: dict,
+) -> tuple[dict, dict]:
+    prerequisite = "development" if stage == "intermediate" else "intermediate"
+    attempt = candidate["bindings"]["holdout_attempt_id"]
+    access_body = {
+        "schema_version": STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "transition": {
+            "prerequisite_stage": prerequisite,
+            "requested_stage": stage,
+            "transition_ordinal": 1 if stage == "intermediate" else 2,
+            "single_use_consumption_required": True,
+            "stage_reuse_permitted": False,
+        },
+        "candidate": {
+            "candidate_sha256": candidate["candidate_sha256"],
+            "candidate_design_sha256": candidate_design_sha256(candidate),
+            "attempt_id": attempt,
+        },
+        "output": {
+            "namespace": f"aapl-sec-gemma-{attempt}-{stage}",
+            "write_mode": "create_new_exclusive",
+            "existing_namespace_reuse_permitted": False,
+            "cross_stage_write_permitted": False,
+        },
+        "scope": {
+            "authorized_stage": stage,
+            "future_stage_access_permitted": False,
+            "outcome_access_before_atomic_request_consumption_permitted": False,
+        },
+    }
+    access_manifest = {
+        **access_body,
+        "stage_access_manifest_sha256": canonical_sha256(access_body),
+    }
+    request = build_single_candidate_reveal_request(
+        state["latest_registry"],
+        external_pin=state["latest_registry_pin"],
+        candidate_manifest=candidate,
+        stage=stage,
+        stage_access_manifest_sha256=access_manifest[
+            "stage_access_manifest_sha256"
+        ],
+        prerequisite_stage_evidence_sha256=canonical_sha256(evidence),
+    )
+    return request, access_manifest
+
+
 def _semantic_validator(
     evidence: dict, access_manifest: dict, context: dict
 ) -> SemanticPrerequisiteValidation:
@@ -185,6 +260,10 @@ def _consume(
         "agent_benchmark.sec_filing_gemma_reveal_store."
         "authoritative_prerequisite_validator",
         validator,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
+        True,
     ):
         return store.consume_request(
             request,
@@ -216,6 +295,40 @@ def test_fresh_store_uses_only_tracked_genesis_and_is_idempotent(
     assert chain["repository_final_touch_count_lower_bound"] == 10
 
 
+def test_interrupted_genesis_pending_anchor_recovers_on_initialize(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    real_atomic_replace = reveal_store_module._atomic_replace
+    stopped = False
+
+    def stop_after_genesis_pending(path: Path, payload: bytes) -> None:
+        nonlocal stopped
+        real_atomic_replace(path, payload)
+        if path == store.current_tip_anchor_path and not stopped:
+            parsed = json.loads(payload)
+            if parsed.get("schema_version") == CURRENT_TIP_PENDING_SCHEMA_VERSION:
+                stopped = True
+                raise RuntimeError("simulated stop after genesis pending anchor")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
+        stop_after_genesis_pending,
+    ), pytest.raises(RuntimeError, match="genesis pending anchor"):
+        store.initialize()
+
+    assert stopped is True
+    assert not store.state_path.exists()
+    assert store.current_tip_anchor_path.exists()
+    recovered = store.initialize()
+    assert recovered["consumption_ledger"]["entries"] == []
+    assert store.load() == recovered
+    assert (
+        json.loads(store.current_tip_anchor_path.read_bytes())["schema_version"]
+        != CURRENT_TIP_PENDING_SCHEMA_VERSION
+    )
+
+
 def test_registry_registration_is_exact_cas_and_does_not_count_as_final_touch(
     tmp_path: Path,
 ) -> None:
@@ -232,6 +345,33 @@ def test_registry_registration_is_exact_cas_and_does_not_count_as_final_touch(
     assert registered["consumption_ledger"]["chain"][
         "actual_final_touch_count"
     ] == 0
+
+
+def test_registry_cas_deep_input_fails_before_copy_and_preserves_store(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    transition: dict[str, object] = {}
+    cursor = transition
+    for _ in range(40):
+        nested: dict[str, object] = {}
+        cursor["nested"] = nested
+        cursor = nested
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="CAS inputs exceed fixed allocation bounds",
+    ):
+        store.compare_and_swap_append(
+            transition=transition,
+            appended_registry={},
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
 
 
 def test_stale_or_forked_registry_cas_is_rejected_without_state_change(
@@ -365,6 +505,638 @@ def test_public_consume_uses_only_the_fixed_verifier_and_fails_closed(
     assert store.load() == before
 
 
+def test_substituted_successful_verifier_cannot_bypass_store_promotion_gate(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="independent-promotion-gate")
+    evidence = _evidence(
+        "development", candidate, salt="independent-promotion-gate"
+    )
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="independent-promotion-gate",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        _semantic_validator,
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="stage promotion remains independently disabled",
+    ):
+        store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert store.load()["consumption_ledger"]["entries"] == []
+
+
+def test_substituted_verifier_cannot_enable_the_store_promotion_gate(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="verifier-gate-flip")
+    evidence = _evidence("development", candidate, salt="verifier-gate-flip")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="verifier-gate-flip",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    def flip_gate_then_succeed(evidence_value, access_value, context_value):
+        reveal_store_module.AUTHORITATIVE_STAGE_PROMOTION_ENABLED = True
+        return _semantic_validator(evidence_value, access_value, context_value)
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        flip_gate_then_succeed,
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="stage promotion remains independently disabled",
+    ):
+        store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert reveal_store_module.AUTHORITATIVE_STAGE_PROMOTION_ENABLED is False
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert store.load()["consumption_ledger"]["entries"] == []
+
+
+def test_grant_issuing_consume_remains_locked_by_the_fixed_verifier(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="fixed-grant-verifier")
+    evidence = _evidence("development", candidate, salt="fixed-grant-verifier")
+    request, access_manifest = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+    )
+    before = store.load()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Fixed semantic prerequisite verifier failed",
+    ):
+        store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+    assert store.load() == before
+
+
+def test_successful_consumption_issues_exact_post_append_grant_under_the_lock(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="issued-grant")
+    evidence = _evidence("development", candidate, salt="issued-grant")
+    request, access_manifest = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+    )
+    observed: dict[str, object] = {}
+
+    def checking_builder(**kwargs):
+        on_disk_bytes = store.state_path.read_bytes()
+        on_disk = json.loads(on_disk_bytes)
+        snapshot = kwargs["authenticated_store_snapshot"]
+        # Grant construction happens before the write-ahead transaction; the
+        # old state must still be authoritative until state+bundle can commit
+        # as one recoverable unit.
+        assert on_disk["consumption_ledger"]["chain"]["consumed_request_count"] == 0
+        entry = snapshot["consumption_ledger"]["entries"][-1]
+        assert entry["entry_sha256"] == kwargs[
+            "expected_new_consumption_entry_sha256"
+        ]
+        assert snapshot["consumption_ledger"]["chain"]["tip_sha256"] == entry[
+            "entry_sha256"
+        ]
+        observed["entry_sha256"] = entry["entry_sha256"]
+        expected_bytes = (
+            json.dumps(
+                snapshot,
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        observed["state_bytes_sha256"] = hashlib.sha256(expected_bytes).hexdigest()
+        observed["state_byte_count"] = len(expected_bytes)
+        return build_consumed_stage_authorization_grant(**kwargs)
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        _semantic_validator,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
+        True,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "build_consumed_stage_authorization_grant",
+        checking_builder,
+    ):
+        bundle = store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    snapshot = bundle["authenticated_store_snapshot"]
+    entry = snapshot["consumption_ledger"]["entries"][-1]
+    grant = bundle["authorization_grant"]
+    assert bundle["schema_version"] == (
+        CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION
+    )
+    assert canonical_sha256(
+        {key: bundle[key] for key in bundle if key != "bundle_sha256"}
+    ) == bundle["bundle_sha256"]
+    assert snapshot == store.load()
+    assert observed["entry_sha256"] == entry["entry_sha256"]
+    assert grant["consumption_entry_sha256"] == entry["entry_sha256"]
+    assert grant["consumption_ledger_tip_sha256"] == entry["entry_sha256"]
+    assert grant["store_state_sha256"] == snapshot["state_sha256"]
+    assert grant["store_snapshot_bytes_sha256"] == observed["state_bytes_sha256"]
+    assert grant["store_snapshot_byte_count"] == observed["state_byte_count"]
+    assert grant["outcomes_included"] is False
+    assert validate_consumed_stage_authorization_grant(
+        grant,
+        authenticated_store_snapshot=snapshot,
+        external_store_state_pin=bundle["store_state_pin"],
+        independent_current_tip_anchor=store.load_current_tip_anchor(),
+        expected_consumption_entry_sha256=entry["entry_sha256"],
+        expected_request_sha256=request["request_sha256"],
+        expected_candidate_sha256=candidate["candidate_sha256"],
+        expected_stage="intermediate",
+        expected_prerequisite_stage_evidence_sha256=canonical_sha256(evidence),
+        expected_stage_access_manifest_sha256=access_manifest[
+            "stage_access_manifest_sha256"
+        ],
+        expected_output_namespace=access_manifest["output"]["namespace"],
+    ) == grant["authorization_grant_sha256"]
+
+
+def test_grant_failure_rolls_back_the_consumption_before_unlocking(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="grant-rollback")
+    evidence = _evidence("development", candidate, salt="grant-rollback")
+    request, access_manifest = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+    )
+    before = store.load()
+    before_bytes = store.state_path.read_bytes()
+
+    def fail_grant(**_kwargs):
+        raise SecFilingGemmaStageAuthorizationError("synthetic grant failure")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        _semantic_validator,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
+        True,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "build_consumed_stage_authorization_grant",
+        fail_grant,
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="could not produce an exact authorization grant",
+    ):
+        store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert store.state_path.read_bytes() == before_bytes
+    assert store.load() == before
+
+
+def test_state_write_crash_recovers_exact_bundle_and_retry_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="crash-retry")
+    evidence = _evidence("development", candidate, salt="crash-retry")
+    request, access_manifest = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+    )
+    real_atomic_replace = reveal_store_module._atomic_replace
+    crashed = False
+
+    def crash_after_state_replace(path: Path, payload: bytes) -> None:
+        nonlocal crashed
+        real_atomic_replace(path, payload)
+        if path == store.state_path and not crashed:
+            crashed = True
+            raise RuntimeError("simulated process stop after state replace")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        _semantic_validator,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
+        True,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
+        crash_after_state_replace,
+    ), pytest.raises(RuntimeError, match="simulated process stop"):
+        store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    pending = json.loads(store.current_tip_anchor_path.read_bytes())
+    assert pending["schema_version"] == CURRENT_TIP_PENDING_SCHEMA_VERSION
+    exact_persisted_bundle = pending["next_tip_anchor"][
+        "authorization_bundles"
+    ][request["request_sha256"]]
+
+    def verifier_must_not_run(*_args, **_kwargs):
+        raise AssertionError("an idempotent retry must not re-run the verifier")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        verifier_must_not_run,
+    ):
+        recovered = store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert recovered == exact_persisted_bundle
+    assert store.load()["consumption_ledger"]["chain"][
+        "consumed_request_count"
+    ] == 1
+    current_tip = store.load_current_tip_anchor()
+    assert current_tip["schema_version"] != CURRENT_TIP_PENDING_SCHEMA_VERSION
+    assert current_tip["authorization_bundles"][request["request_sha256"]] == recovered
+
+
+def test_old_snapshot_and_bundled_pin_fail_after_any_newer_store_tip(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="stale-bundle")
+    evidence = _evidence("development", candidate, salt="stale-bundle")
+    request, access_manifest = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+    )
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        _semantic_validator,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
+        True,
+    ):
+        old_bundle = store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+    old_state_bytes = store.state_path.read_bytes()
+    old_state = old_bundle["authenticated_store_snapshot"]
+    old_entry = old_state["consumption_ledger"]["entries"][-1]
+
+    _register(store, salt="newer-registry-tip")
+    new_state = store.load()
+    new_tip = store.load_current_tip_anchor()
+    assert new_state["state_sha256"] != old_state["state_sha256"]
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="current-tip anchor does not authenticate",
+    ):
+        validate_consumed_stage_authorization_grant(
+            old_bundle["authorization_grant"],
+            authenticated_store_snapshot=old_state,
+            external_store_state_pin=old_bundle["store_state_pin"],
+            independent_current_tip_anchor=new_tip,
+            expected_consumption_entry_sha256=old_entry["entry_sha256"],
+            expected_request_sha256=request["request_sha256"],
+            expected_candidate_sha256=candidate["candidate_sha256"],
+            expected_stage="intermediate",
+            expected_prerequisite_stage_evidence_sha256=canonical_sha256(evidence),
+            expected_stage_access_manifest_sha256=access_manifest[
+                "stage_access_manifest_sha256"
+            ],
+            expected_output_namespace=access_manifest["output"]["namespace"],
+        )
+
+    # Rolling back only the state to the old bundled snapshot cannot pass the
+    # separately persisted newer tip anchor on the next load.
+    store.state_path.write_bytes(old_state_bytes)
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="current-tip anchor does not authenticate",
+    ):
+        store.load()
+
+
+def test_malicious_mapping_cannot_execute_a_state_and_anchor_rollback(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    stale_state_bytes = store.state_path.read_bytes()
+    stale_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    _register(store, salt="mapping-rollback-current")
+    current_state_bytes = store.state_path.read_bytes()
+    current_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    hooks_executed = False
+
+    class RollbackMapping(Mapping):
+        def _rollback(self) -> None:
+            nonlocal hooks_executed
+            hooks_executed = True
+            store.state_path.write_bytes(stale_state_bytes)
+            store.current_tip_anchor_path.write_bytes(stale_tip_bytes)
+
+        def __getitem__(self, key):
+            self._rollback()
+            raise KeyError(key)
+
+        def __iter__(self):
+            self._rollback()
+            return iter(())
+
+        def __len__(self):
+            self._rollback()
+            return 0
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="exact built-in dict",
+    ):
+        store.compare_and_swap_append(
+            transition=RollbackMapping(),
+            appended_registry={},
+        )
+
+    assert hooks_executed is False
+    assert store.state_path.read_bytes() == current_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == current_tip_bytes
+    store.load()
+
+
+def test_nested_mapping_proxy_cannot_execute_state_and_anchor_rollback(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    stale_state_bytes = store.state_path.read_bytes()
+    stale_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    registered, candidate = _register(store, salt="nested-proxy-current")
+    evidence = _evidence("development", candidate, salt="nested-proxy-current")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="nested-proxy-current",
+    )
+    current_state_bytes = store.state_path.read_bytes()
+    current_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    hooks_executed = False
+
+    class RollbackMapping(Mapping):
+        def _rollback(self) -> None:
+            nonlocal hooks_executed
+            hooks_executed = True
+            store.state_path.write_bytes(stale_state_bytes)
+            store.current_tip_anchor_path.write_bytes(stale_tip_bytes)
+
+        def __getitem__(self, key):
+            self._rollback()
+            raise KeyError(key)
+
+        def __iter__(self):
+            self._rollback()
+            return iter(())
+
+        def __len__(self):
+            self._rollback()
+            return 0
+
+    evidence["nested_hostile_proxy"] = MappingProxyType(RollbackMapping())
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="fixed verifier allocation bounds",
+    ):
+        store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert hooks_executed is False
+    assert store.state_path.read_bytes() == current_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == current_tip_bytes
+    store.load()
+
+
+def test_oversized_state_and_current_tip_anchor_fail_before_unbounded_reads(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with store.state_path.open("r+b") as handle:
+        handle.truncate(MAX_STATE_FILE_BYTES + 1)
+    with pytest.raises(SecFilingGemmaRevealStoreError, match="exceeds"):
+        store.load()
+
+    store.state_path.write_bytes(state_bytes)
+    store.load()
+    with store.current_tip_anchor_path.open("r+b") as handle:
+        handle.truncate(MAX_CURRENT_TIP_ANCHOR_FILE_BYTES + 1)
+    with pytest.raises(SecFilingGemmaRevealStoreError, match="exceeds"):
+        store.load()
+
+    store.current_tip_anchor_path.write_bytes(tip_bytes)
+    assert store.load()["state_sha256"] == json.loads(state_bytes)["state_sha256"]
+
+
+def test_deep_caller_evidence_fails_before_copy_or_verifier_and_preserves_store(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="deep-preflight")
+    evidence = _evidence("development", candidate, salt="deep-preflight")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="deep-preflight",
+    )
+    cursor: dict[str, object] = evidence
+    for _ in range(40):
+        nested: dict[str, object] = {}
+        cursor["nested"] = nested
+        cursor = nested
+
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._exact_caller_dict",
+        side_effect=AssertionError("caller evidence must not be copied"),
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        side_effect=AssertionError("verifier must not run"),
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="exceed the fixed verifier allocation bounds",
+    ):
+        store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    store.load()
+
+
+def test_evidence_mutation_after_preflight_is_rechecked_during_bounded_copy(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="preflight-mutation")
+    evidence = _evidence("development", candidate, salt="preflight-mutation")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="preflight-mutation",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    real_preflight = reveal_store_module.preflight_untrusted_stage_json
+    mutated = False
+
+    def mutate_after_preflight(value, location):
+        nonlocal mutated
+        totals = real_preflight(value, location)
+        cursor: dict[str, object] = evidence
+        for _ in range(40):
+            nested: dict[str, object] = {}
+            cursor["inserted_after_check"] = nested
+            cursor = nested
+        mutated = True
+        return totals
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "preflight_untrusted_stage_json",
+        mutate_after_preflight,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        side_effect=AssertionError("verifier must not run"),
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="exceed the fixed verifier allocation bounds",
+    ):
+        store.consume_request(
+            request,
+            candidate_manifest=candidate,
+            stage="intermediate",
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+    assert mutated is True
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    store.load()
+
+
 def test_verifier_exception_after_state_mutation_restores_exact_original_bytes(
     tmp_path: Path,
 ) -> None:
@@ -383,6 +1155,7 @@ def test_verifier_exception_after_state_mutation_restores_exact_original_bytes(
     original_bytes = store.state_path.read_bytes()
 
     def mutate_then_raise(_evidence, _access, _context):
+        assert store.restore_pending_path.exists()
         store.state_path.write_bytes(b'{"verifier_mutation":true}\n')
         assert store.state_path.read_bytes() != original_bytes
         raise RuntimeError("verifier failed after mutation")
@@ -403,6 +1176,73 @@ def test_verifier_exception_after_state_mutation_restores_exact_original_bytes(
 
     assert store.state_path.read_bytes() == original_bytes
     assert store.load() == before
+
+
+def test_interrupted_failed_verifier_restore_recovers_both_files_on_next_load(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="restore-transaction-crash")
+    evidence = _evidence(
+        "development", candidate, salt="restore-transaction-crash"
+    )
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="restore-transaction-crash",
+    )
+    original_state = store.load()
+    original_state_bytes = store.state_path.read_bytes()
+    original_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    def mutate_both_then_raise(_evidence, _access, _context):
+        store.state_path.write_bytes(b'{"mutated_state":true}\n')
+        store.current_tip_anchor_path.write_bytes(b'{"mutated_tip":true}\n')
+        raise RuntimeError("verifier failed after mutating both files")
+
+    real_atomic_replace = reveal_store_module._atomic_replace
+    stopped = False
+
+    def stop_after_recovered_state(path: Path, payload: bytes) -> None:
+        nonlocal stopped
+        real_atomic_replace(path, payload)
+        if (
+            path == store.state_path
+            and store.restore_pending_path.exists()
+            and not stopped
+        ):
+            stopped = True
+            raise RuntimeError("simulated stop between restore targets")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
+        stop_after_recovered_state,
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="could not be restored",
+    ):
+        _consume(
+            store,
+            request,
+            candidate,
+            evidence,
+            stage="intermediate",
+            access_hash=access_manifest,
+            validator=mutate_both_then_raise,
+        )
+
+    assert stopped is True
+    assert store.restore_pending_path.exists()
+    assert store.state_path.read_bytes() == original_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() != original_tip_bytes
+
+    assert store.load() == original_state
+    assert store.state_path.read_bytes() == original_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == original_tip_bytes
+    assert not store.restore_pending_path.exists()
 
 
 def test_invalid_verifier_result_after_state_mutation_restores_exact_original_bytes(

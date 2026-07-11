@@ -58,7 +58,7 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 
 
 STAGE_ACCESS_MANIFEST_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-access-manifest-v1"
+    "aapl-sec-gemma-stage-access-manifest-v2"
 )
 MODEL_NAME: Final[str] = "gemma4:12b"
 MODEL_ENDPOINT: Final[str] = "http://127.0.0.1:11434/api/chat"
@@ -605,6 +605,8 @@ def build_stage_access_manifest(
     corpus_universe_manifest: Mapping[str, Any],
     prerequisite_content_manifest: Mapping[str, Any],
     expected_prerequisite_content_manifest_sha256: str,
+    prerequisite_stage_artifact_sha256: str,
+    prerequisite_external_seal_receipt_sha256: str,
     session_calendar_sha256: str,
     authorized_documents: Sequence[Mapping[str, Any]],
     market_source_manifest_sha256: str,
@@ -741,6 +743,14 @@ def build_stage_access_manifest(
         raise SecFilingGemmaStageAccessError(
             "Prerequisite content evidence belongs to another stage or universe"
         )
+    prerequisite_artifact_hash = _sha256(
+        prerequisite_stage_artifact_sha256,
+        "prerequisite_stage_artifact_sha256",
+    )
+    prerequisite_seal_receipt_hash = _sha256(
+        prerequisite_external_seal_receipt_sha256,
+        "prerequisite_external_seal_receipt_sha256",
+    )
 
     model = _expect_mapping(candidate["model"], "candidate model")
     if model["name"] != MODEL_NAME or model["endpoint"] != MODEL_ENDPOINT:
@@ -825,6 +835,12 @@ def build_stage_access_manifest(
             "transition_ordinal": STAGE_ORDER.index(requested),
             "single_use_consumption_required": True,
             "stage_reuse_permitted": False,
+        },
+        "prerequisite_evidence_pin": {
+            "stage": prerequisite,
+            "content_manifest_sha256": content_hash,
+            "stage_artifact_sha256": prerequisite_artifact_hash,
+            "external_seal_receipt_sha256": prerequisite_seal_receipt_hash,
         },
         "candidate": {
             "candidate_sha256": candidate_hash,
@@ -985,6 +1001,8 @@ def validate_stage_access_manifest(
     corpus_universe_manifest: Mapping[str, Any],
     prerequisite_content_manifest: Mapping[str, Any],
     expected_prerequisite_content_manifest_sha256: str,
+    prerequisite_stage_artifact_sha256: str,
+    prerequisite_external_seal_receipt_sha256: str,
     session_calendar_sha256: str,
     authorized_documents: Sequence[Mapping[str, Any]],
     market_source_manifest_sha256: str,
@@ -1005,6 +1023,7 @@ def validate_stage_access_manifest(
         "contract_version",
         "contract_sha256",
         "transition",
+        "prerequisite_evidence_pin",
         "candidate",
         "verifier",
         "reveal_request_binding",
@@ -1088,6 +1107,10 @@ def validate_stage_access_manifest(
         prerequisite_content_manifest=prerequisite_content_manifest,
         expected_prerequisite_content_manifest_sha256=(
             expected_prerequisite_content_manifest_sha256
+        ),
+        prerequisite_stage_artifact_sha256=prerequisite_stage_artifact_sha256,
+        prerequisite_external_seal_receipt_sha256=(
+            prerequisite_external_seal_receipt_sha256
         ),
         session_calendar_sha256=session_calendar_sha256,
         authorized_documents=authorized_documents,

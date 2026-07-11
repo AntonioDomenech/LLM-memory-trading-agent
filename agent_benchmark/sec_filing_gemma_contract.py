@@ -30,7 +30,7 @@ from agent_benchmark.sec_session_calendar import (
 
 
 CONTRACT_VERSION: Final[str] = "aapl-sec-filing-gemma-v1"
-CANDIDATE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-candidate-v1"
+CANDIDATE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-candidate-v2"
 STAGE_RECEIPT_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-stage-receipt-v1"
 EXTRACTOR_SCHEMA_VERSION: Final[str] = "sec-filing-extractor-v1"
 EXTRACTOR_REQUEST_VERSION: Final[str] = "issuer-relative-grounded-request-v1"
@@ -142,24 +142,42 @@ CANDIDATE_IDS: Final[tuple[str, ...]] = (
 REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "artifact_sealer",
     "calendar",
+    "cftc_cot_policy",
+    "content_normalizer",
     "contract",
+    "deterministic_aapl",
+    "direct_edge_features",
+    "downside_features",
     "extractor",
     "extractor_prompt",
     "extractor_schema",
     "learner",
     "ledger",
     "market_acquirer",
+    "market_evidence",
     "market_features",
     "market_source_bytes",
+    "no_leverage",
+    "package_init",
     "preprocessor",
+    "prediction_evidence",
     "reveal_registry",
+    "reveal_store",
     "runner",
     "scorer",
     "sec_acquirer",
+    "sec_audit_artifact",
+    "sec_audit_evaluation",
+    "sec_audit_plan",
+    "sec_audit_selection",
     "sec_audit_verifier",
     "sec_corpus_selector",
-    "stage_verifier",
+    "sec_point_in_time",
+    "source_identity",
     "stage_access",
+    "stage_authorization",
+    "stage_verifier",
+    "unleveraged_aapl",
 )
 REQUIRED_STAGE_VERIFIER_CHECKS: Final[tuple[str, ...]] = tuple(
     sorted(

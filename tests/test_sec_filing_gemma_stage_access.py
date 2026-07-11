@@ -226,6 +226,12 @@ def _context(stage: str = "intermediate") -> dict:
         "expected_prerequisite_content_manifest_sha256": prerequisite_content[
             "content_manifest_sha256"
         ],
+        "prerequisite_stage_artifact_sha256": _h(
+            f"{prerequisite}-stage-artifact"
+        ),
+        "prerequisite_external_seal_receipt_sha256": _h(
+            f"{prerequisite}-external-seal-receipt"
+        ),
         "session_calendar_sha256": candidate["bindings"][
             "calendar_sessions_sha256"
         ],
@@ -275,6 +281,8 @@ def _validate(
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -358,6 +366,18 @@ def test_exact_two_permitted_transitions_build_and_validate(stage: str) -> None:
     assert carry_in["prerequisite_content_manifest_sha256"] == context[
         "expected_prerequisite_content_manifest_sha256"
     ]
+    assert manifest["prerequisite_evidence_pin"] == {
+        "stage": context["prerequisite_stage"],
+        "content_manifest_sha256": context[
+            "expected_prerequisite_content_manifest_sha256"
+        ],
+        "stage_artifact_sha256": context[
+            "prerequisite_stage_artifact_sha256"
+        ],
+        "external_seal_receipt_sha256": context[
+            "prerequisite_external_seal_receipt_sha256"
+        ],
+    }
     assert {record["form"] for record in carry_in["records"]} == {"10-K", "10-Q"}
     assert {
         record["artifact_stage"] for record in carry_in["records"]
@@ -423,6 +443,8 @@ def test_other_or_reused_stage_transitions_are_rejected(
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -477,6 +499,24 @@ def test_arbitrary_self_hashed_manifest_cannot_replace_externally_bound_inputs()
         _validate(context, manifest=forged, request=request)
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "content_manifest_sha256",
+        "stage_artifact_sha256",
+        "external_seal_receipt_sha256",
+    ],
+)
+def test_prerequisite_evidence_pin_is_exact_and_manifest_bound(field: str) -> None:
+    context = _context()
+    forged = copy.deepcopy(context["manifest"])
+    forged["prerequisite_evidence_pin"][field] = _h(f"forged-{field}")
+    forged = _rehash_manifest(forged)
+    request = _request_for(context, forged)
+    with pytest.raises(SecFilingGemmaStageAccessError, match="exact externally bound"):
+        _validate(context, manifest=forged, request=request)
+
+
 def test_stage_verifier_source_must_equal_the_candidate_immutable_pin() -> None:
     context = _context()
     kwargs = {
@@ -498,6 +538,8 @@ def test_stage_verifier_source_must_equal_the_candidate_immutable_pin() -> None:
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -586,6 +628,8 @@ def test_omitted_or_extra_document_fails_all_and_only_external_plan() -> None:
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -638,6 +682,8 @@ def test_same_accession_wrong_primary_filename_is_rejected() -> None:
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -678,6 +724,8 @@ def test_duplicate_or_reordered_accessions_and_urls_are_rejected() -> None:
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "authorized_documents",
             "market_source_manifest_sha256",
@@ -725,6 +773,8 @@ def test_nonofficial_or_nonmatching_sec_url_is_rejected_before_authorization() -
             "corpus_universe_manifest",
             "prerequisite_content_manifest",
             "expected_prerequisite_content_manifest_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
             "session_calendar_sha256",
             "market_source_manifest_sha256",
             "market_source_artifact_sha256s",

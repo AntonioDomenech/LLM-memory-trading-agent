@@ -546,6 +546,26 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     assert "market_source_bytes" in REQUIRED_SOURCE_HASHES
     assert "market_acquirer" in REQUIRED_SOURCE_HASHES
     assert "stage_access" in REQUIRED_SOURCE_HASHES
+    assert {
+        "cftc_cot_policy",
+        "content_normalizer",
+        "deterministic_aapl",
+        "direct_edge_features",
+        "downside_features",
+        "market_evidence",
+        "no_leverage",
+        "package_init",
+        "prediction_evidence",
+        "reveal_store",
+        "sec_audit_artifact",
+        "sec_audit_evaluation",
+        "sec_audit_plan",
+        "sec_audit_selection",
+        "sec_point_in_time",
+        "source_identity",
+        "stage_authorization",
+        "unleveraged_aapl",
+    }.issubset(REQUIRED_SOURCE_HASHES)
     assert (
         first["holdout_governance"][
             "candidate_binds_predecessor_registry_snapshot"

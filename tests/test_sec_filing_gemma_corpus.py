@@ -16,13 +16,18 @@ from agent_benchmark.sec_filing_gemma_contract import (
     MAX_SEC_SECONDS,
     SecFilingGemmaContractError,
     build_corpus_universe_manifest,
+    canonical_sha256,
 )
 from agent_benchmark.sec_filing_gemma_corpus import (
+    DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION,
+    DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION,
     MAIN_SUBMISSIONS_URL,
     SecCorpusBudget,
     SecFilingGemmaCorpusError,
     acquire_authorized_stage_documents,
     acquire_official_sec_catalog,
+    validate_detached_catalog_replay,
+    validate_detached_stage_content_replay,
 )
 from agent_benchmark.sec_point_in_time import (
     SecAuditLimitError,
@@ -291,6 +296,340 @@ def _universe() -> dict[str, Any]:
         session_dates=EXPECTED_SESSIONS,
         records=records,
     )
+
+
+def _catalog_detached_replay_inputs() -> dict[str, Any]:
+    old_a = [_row(1, year=2000, form="10-K")]
+    old_b = [_row(2, year=2001, form="10-Q")]
+    name_a = "CIK0000320193-submissions-001.json"
+    name_b = "CIK0000320193-submissions-002.json"
+    recent = [_row(3, year=2025, form="10-Q")]
+    payloads = {
+        MAIN_SUBMISSIONS_URL: _main(
+            recent,
+            [_reference(name_b, old_b), _reference(name_a, old_a)],
+        ),
+        _historical_url(name_a): _json_bytes(_columns(old_a)),
+        _historical_url(name_b): _json_bytes(_columns(old_b)),
+    }
+    result, _transport = _catalog(payloads)
+    calendar_hash = "c" * 64
+    universe = build_corpus_universe_manifest(
+        catalog_artifact_sha256=result.catalog_artifact_sha256,
+        calendar_artifact_sha256=calendar_hash,
+        catalog_total_record_count=result.catalog_total_record_count,
+        catalog_eligible_record_count=result.catalog_eligible_record_count,
+        session_dates=EXPECTED_SESSIONS,
+        records=[dict(record) for record in result.universe_records],
+    )
+    receipts = json.loads(result.request_receipts_json)
+    return {
+        "source_payloads": [
+            {"name": source.name, "payload": source.payload}
+            for source in result.sources
+        ],
+        "request_receipts": receipts,
+        "catalog_artifact": json.loads(result.artifact_json),
+        "corpus_universe_manifest": universe,
+        "expected_source_payload_sha256s": {
+            source.name: source.payload_sha256 for source in result.sources
+        },
+        "expected_request_receipt_sha256s": {
+            source.name: receipt["request_receipt_sha256"]
+            for source, receipt in zip(result.sources, receipts)
+        },
+        "expected_request_receipts_sha256": result.artifact[
+            "request_receipts_sha256"
+        ],
+        "expected_catalog_artifact_sha256": result.catalog_artifact_sha256,
+        "expected_corpus_universe_sha256": universe["universe_sha256"],
+        "expected_calendar_artifact_sha256": calendar_hash,
+        "session_dates": list(EXPECTED_SESSIONS),
+    }
+
+
+def _stage_detached_replay_inputs() -> dict[str, Any]:
+    universe = _universe()
+    records = [
+        record
+        for record in universe["records"]
+        if record["artifact_stage"] == "development"
+    ]
+    payloads = {
+        _primary_url(record["accession_number"], record["primary_document"]): (
+            f"<html><body><p>Exact filing {record['accession_number']} text.</p></body></html>"
+        ).encode("ascii")
+        for record in records
+    }
+    result = acquire_authorized_stage_documents(
+        transport=FakeTransport(payloads),
+        user_agent=USER_AGENT,
+        budget=SecCorpusBudget(clock=Clock()),
+        authorized_stage="development",
+        universe_manifest=universe,
+        expected_universe_sha256=universe["universe_sha256"],
+        session_dates=EXPECTED_SESSIONS,
+    )
+    receipts = json.loads(result.request_receipts_json)
+    return {
+        "authorized_stage": "development",
+        "document_payloads": [
+            {
+                "accession_number": document.accession_number,
+                "payload": document.raw_primary_document,
+            }
+            for document in result.documents
+        ],
+        "request_receipts": receipts,
+        "content_manifest": json.loads(result.content_manifest_json),
+        "stage_artifact": json.loads(result.artifact_json),
+        "corpus_universe_manifest": universe,
+        "expected_document_sha256s": {
+            document.accession_number: document.primary_document_sha256
+            for document in result.documents
+        },
+        "expected_normalized_text_sha256s": {
+            document.accession_number: document.normalized_text_sha256
+            for document in result.documents
+        },
+        "expected_request_receipt_sha256s": {
+            document.accession_number: receipt["request_receipt_sha256"]
+            for document, receipt in zip(result.documents, receipts)
+        },
+        "expected_request_receipts_sha256": result.artifact[
+            "request_receipts_sha256"
+        ],
+        "expected_content_manifest_sha256": result.content_manifest[
+            "content_manifest_sha256"
+        ],
+        "expected_stage_artifact_sha256": result.stage_artifact_sha256,
+        "expected_corpus_universe_sha256": universe["universe_sha256"],
+        "session_dates": list(EXPECTED_SESSIONS),
+    }
+
+
+def test_detached_catalog_replay_rebuilds_catalogue_and_universe_from_bytes() -> None:
+    inputs = _catalog_detached_replay_inputs()
+    inputs["request_receipts"] = tuple(inputs["request_receipts"])
+
+    receipt = validate_detached_catalog_replay(**inputs)
+    assert (
+        receipt["schema_version"]
+        == DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION
+    )
+
+    assert receipt["authorizing"] is False
+    assert receipt["fresh_network_provenance_verified"] is False
+    assert receipt["network_receipt_claims_replayed_not_observed"] is True
+    assert receipt["catalog_artifact_sha256"] == inputs[
+        "expected_catalog_artifact_sha256"
+    ]
+    assert receipt["corpus_universe_sha256"] == inputs[
+        "expected_corpus_universe_sha256"
+    ]
+    assert receipt["source_payload_sha256s"] == inputs[
+        "expected_source_payload_sha256s"
+    ]
+    with pytest.raises(TypeError):
+        receipt["source_payload_sha256s"]["CIK0000320193.json"] = "0" * 64
+
+
+def test_detached_catalog_replay_rejects_byte_substitution_omission_and_order() -> None:
+    inputs = _catalog_detached_replay_inputs()
+    attacks: list[dict[str, Any]] = []
+
+    one_byte = deepcopy(inputs)
+    historical = one_byte["source_payloads"][1]["payload"]
+    one_byte["source_payloads"][1]["payload"] = historical.replace(
+        b"10-K", b"10-Q", 1
+    )
+    attacks.append(one_byte)
+
+    substitution = deepcopy(inputs)
+    substitution["source_payloads"][1]["payload"], substitution[
+        "source_payloads"
+    ][2]["payload"] = (
+        substitution["source_payloads"][2]["payload"],
+        substitution["source_payloads"][1]["payload"],
+    )
+    attacks.append(substitution)
+
+    omission = deepcopy(inputs)
+    omission["source_payloads"].pop()
+    attacks.append(omission)
+
+    source_order = deepcopy(inputs)
+    source_order["source_payloads"][1:] = reversed(
+        source_order["source_payloads"][1:]
+    )
+    attacks.append(source_order)
+
+    receipt_order = deepcopy(inputs)
+    receipt_order["request_receipts"][0], receipt_order["request_receipts"][1] = (
+        receipt_order["request_receipts"][1],
+        receipt_order["request_receipts"][0],
+    )
+    attacks.append(receipt_order)
+
+    for attacked in attacks:
+        with pytest.raises(SecFilingGemmaCorpusError):
+            validate_detached_catalog_replay(**attacked)
+
+
+def test_detached_catalog_replay_rejects_adversarial_containers() -> None:
+    class AdversarialList(list):
+        pass
+
+    class AdversarialDict(dict):
+        pass
+
+    list_attack = _catalog_detached_replay_inputs()
+    list_attack["source_payloads"] = AdversarialList(list_attack["source_payloads"])
+    with pytest.raises(SecFilingGemmaCorpusError, match="exact ordered"):
+        validate_detached_catalog_replay(**list_attack)
+
+    dict_attack = _catalog_detached_replay_inputs()
+    dict_attack["catalog_artifact"] = AdversarialDict(
+        dict_attack["catalog_artifact"]
+    )
+    with pytest.raises(SecFilingGemmaCorpusError, match="plain JSON"):
+        validate_detached_catalog_replay(**dict_attack)
+
+    cycle_attack = _catalog_detached_replay_inputs()
+    cycle_attack["catalog_artifact"]["cycle"] = cycle_attack["catalog_artifact"]
+    with pytest.raises(SecFilingGemmaCorpusError, match="cyclic"):
+        validate_detached_catalog_replay(**cycle_attack)
+
+    depth_attack = _catalog_detached_replay_inputs()
+    nested: list[Any] = []
+    for _index in range(70):
+        nested = [nested]
+    depth_attack["catalog_artifact"]["deep"] = nested
+    with pytest.raises(SecFilingGemmaCorpusError, match="nesting limit"):
+        validate_detached_catalog_replay(**depth_attack)
+
+
+def test_detached_replay_rejects_internally_impossible_transport_caps() -> None:
+    catalog_inputs = _catalog_detached_replay_inputs()
+    catalog_artifact = catalog_inputs["catalog_artifact"]
+    catalog_artifact["transport_security"]["transport_max_requests"] = 1
+    catalog_body = {
+        key: value
+        for key, value in catalog_artifact.items()
+        if key != "catalog_artifact_sha256"
+    }
+    catalog_hash = canonical_sha256(catalog_body)
+    catalog_artifact["catalog_artifact_sha256"] = catalog_hash
+    catalog_inputs["expected_catalog_artifact_sha256"] = catalog_hash
+    with pytest.raises(SecFilingGemmaCorpusError, match="transport ceilings"):
+        validate_detached_catalog_replay(**catalog_inputs)
+
+    stage_inputs = _stage_detached_replay_inputs()
+    stage_artifact = stage_inputs["stage_artifact"]
+    stage_artifact["transport_security"]["transport_max_bytes"] = 1
+    stage_body = {
+        key: value
+        for key, value in stage_artifact.items()
+        if key != "stage_artifact_sha256"
+    }
+    stage_hash = canonical_sha256(stage_body)
+    stage_artifact["stage_artifact_sha256"] = stage_hash
+    stage_inputs["expected_stage_artifact_sha256"] = stage_hash
+    with pytest.raises(SecFilingGemmaCorpusError, match="transport ceilings"):
+        validate_detached_stage_content_replay(**stage_inputs)
+
+
+def test_detached_stage_replay_rebuilds_hashes_and_manifests_from_bytes() -> None:
+    inputs = _stage_detached_replay_inputs()
+
+    receipt = validate_detached_stage_content_replay(**inputs)
+    assert (
+        receipt["schema_version"]
+        == DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION
+    )
+
+    assert receipt["authorizing"] is False
+    assert receipt["fresh_network_provenance_verified"] is False
+    assert receipt["network_receipt_claims_replayed_not_observed"] is True
+    assert receipt["content_manifest_sha256"] == inputs[
+        "expected_content_manifest_sha256"
+    ]
+    assert receipt["stage_artifact_sha256"] == inputs[
+        "expected_stage_artifact_sha256"
+    ]
+    assert receipt["primary_document_sha256s"] == inputs[
+        "expected_document_sha256s"
+    ]
+    assert receipt["normalized_text_sha256s"] == inputs[
+        "expected_normalized_text_sha256s"
+    ]
+
+
+def test_detached_stage_replay_rejects_byte_substitution_omission_and_order() -> None:
+    inputs = _stage_detached_replay_inputs()
+    attacks: list[dict[str, Any]] = []
+
+    one_byte = deepcopy(inputs)
+    payload = one_byte["document_payloads"][0]["payload"]
+    one_byte["document_payloads"][0]["payload"] = payload.replace(
+        b"Exact", b"Exabt", 1
+    )
+    attacks.append(one_byte)
+
+    substitution = deepcopy(inputs)
+    substitution["document_payloads"][0]["payload"], substitution[
+        "document_payloads"
+    ][1]["payload"] = (
+        substitution["document_payloads"][1]["payload"],
+        substitution["document_payloads"][0]["payload"],
+    )
+    attacks.append(substitution)
+
+    omission = deepcopy(inputs)
+    omission["document_payloads"].pop()
+    attacks.append(omission)
+
+    document_order = deepcopy(inputs)
+    document_order["document_payloads"][0], document_order["document_payloads"][1] = (
+        document_order["document_payloads"][1],
+        document_order["document_payloads"][0],
+    )
+    attacks.append(document_order)
+
+    receipt_order = deepcopy(inputs)
+    receipt_order["request_receipts"][0], receipt_order["request_receipts"][1] = (
+        receipt_order["request_receipts"][1],
+        receipt_order["request_receipts"][0],
+    )
+    attacks.append(receipt_order)
+
+    forged_count = deepcopy(inputs)
+    forged_count["content_manifest"]["document_count"] -= 1
+    attacks.append(forged_count)
+
+    for attacked in attacks:
+        with pytest.raises(SecFilingGemmaCorpusError):
+            validate_detached_stage_content_replay(**attacked)
+
+
+def test_detached_stage_replay_rejects_adversarial_containers() -> None:
+    class AdversarialList(list):
+        pass
+
+    class AdversarialDict(dict):
+        pass
+
+    list_attack = _stage_detached_replay_inputs()
+    list_attack["document_payloads"] = AdversarialList(
+        list_attack["document_payloads"]
+    )
+    with pytest.raises(SecFilingGemmaCorpusError, match="exact ordered"):
+        validate_detached_stage_content_replay(**list_attack)
+
+    dict_attack = _stage_detached_replay_inputs()
+    dict_attack["stage_artifact"] = AdversarialDict(dict_attack["stage_artifact"])
+    with pytest.raises(SecFilingGemmaCorpusError, match="plain JSON"):
+        validate_detached_stage_content_replay(**dict_attack)
 
 
 def test_catalog_fetches_main_and_every_reference_and_builds_universe_rows() -> None:

@@ -16,10 +16,13 @@ consumption increments the separate actual-final-touch counter exactly once.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import base64
 import copy
 from dataclasses import dataclass
+import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
@@ -50,6 +53,19 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     authoritative_prerequisite_validator,
+    detach_untrusted_stage_json,
+    preflight_untrusted_stage_json,
+)
+from agent_benchmark.sec_filing_gemma_stage_authorization import (
+    CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+    SecFilingGemmaStageAuthorizationError,
+    build_reveal_store_current_tip_anchor,
+    build_consumed_stage_authorization_grant,
+    derive_consumed_stage_store_state_pin,
+    validate_consumed_stage_authorization_grant,
+    validate_reveal_store_current_tip_anchor,
+    validate_reveal_store_current_tip_anchor_structure,
+    validate_reveal_store_current_tip_anchor_transition,
 )
 
 
@@ -68,6 +84,12 @@ INITIAL_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-initial-external-registry-pin-v1"
 )
 STATE_FILENAME: Final[str] = "sec_gemma_reveal_store.json"
+CURRENT_TIP_ANCHOR_FILENAME: Final[str] = (
+    "sec_gemma_reveal_store_current_tip.json"
+)
+RESTORE_PENDING_FILENAME: Final[str] = (
+    "sec_gemma_reveal_store_restore_pending.json"
+)
 LOCK_FILENAME: Final[str] = ".sec_gemma_reveal_store.lock"
 INITIAL_PIN_RELATIVE_PATH: Final[str] = (
     "docs/protocol_evidence/sec_gemma_reveal_registry_initial_pin.json"
@@ -81,8 +103,21 @@ AUTHORITATIVE_VALIDATOR_ID: Final[str] = (
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+CURRENT_TIP_PENDING_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-reveal-store-current-tip-pending-v1"
+)
+RESTORE_PENDING_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-reveal-store-restore-pending-v1"
+)
+AUTHORITATIVE_STAGE_PROMOTION_ENABLED: Final[bool] = False
+MAX_STATE_FILE_BYTES: Final[int] = 16 * 1024 * 1024
+MAX_CURRENT_TIP_ANCHOR_FILE_BYTES: Final[int] = 64 * 1024 * 1024
+MAX_TRACKED_ANCHOR_FILE_BYTES: Final[int] = 8 * 1024 * 1024
+MAX_RESTORE_PENDING_FILE_BYTES: Final[int] = 128 * 1024 * 1024
 _TEMP_RE = re.compile(
-    rf"\.{re.escape(STATE_FILENAME)}\.[0-9a-f]{{32}}\.tmp\Z"
+    rf"\.(?:{re.escape(STATE_FILENAME)}|"
+    rf"{re.escape(CURRENT_TIP_ANCHOR_FILENAME)}|"
+    rf"{re.escape(RESTORE_PENDING_FILENAME)})\.[0-9a-f]{{32}}\.tmp\Z"
 )
 _WINDOWS_REPARSE_POINT = 0x400
 _BINARY = getattr(os, "O_BINARY", 0)
@@ -193,6 +228,60 @@ def _json_value_copy(value: Any, location: str) -> Any:
         ) from exc
 
 
+def _exact_builtin_json_copy(value: Any, location: str) -> Any:
+    """Detach an authorization-critical caller value without invoking hooks.
+
+    Only exact built-in containers and scalar types are traversed.  In
+    particular, a ``Mapping`` implementation or a ``dict`` subclass is
+    rejected before any caller-controlled iterator, item accessor, encoder,
+    comparison, or representation method can execute.
+    """
+
+    if value is None or type(value) in {str, bool, int}:
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} contains a non-finite float"
+            )
+        return value
+    if type(value) is list:
+        return [
+            _exact_builtin_json_copy(child, f"{location}[{index}]")
+            for index, child in enumerate(value)
+        ]
+    if type(value) is tuple:
+        return [
+            _exact_builtin_json_copy(child, f"{location}[{index}]")
+            for index, child in enumerate(value)
+        ]
+    if type(value) is dict:
+        detached: dict[str, Any] = {}
+        for key, child in value.items():
+            if type(key) is not str:
+                raise SecFilingGemmaRevealStoreError(
+                    f"{location} contains a non-string key"
+                )
+            detached[key] = _exact_builtin_json_copy(
+                child, f"{location}.{key}"
+            )
+        return detached
+    raise SecFilingGemmaRevealStoreError(
+        f"{location} must contain only exact built-in JSON values"
+    )
+
+
+def _exact_caller_dict(value: Any, location: str) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} must be an exact built-in dict"
+        )
+    detached = _exact_builtin_json_copy(value, location)
+    if type(detached) is not dict:  # pragma: no cover - guaranteed above
+        raise SecFilingGemmaRevealStoreError(f"{location} must be an object")
+    return detached
+
+
 def _strict_json_bytes(payload: bytes, location: str) -> Any:
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -218,7 +307,7 @@ def _strict_json_bytes(payload: bytes, location: str) -> Any:
         )
     except SecFilingGemmaRevealStoreError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise SecFilingGemmaRevealStoreError(
             f"{location} is not strict UTF-8 JSON"
         ) from exc
@@ -236,7 +325,7 @@ def _encoded_state(value: Mapping[str, Any]) -> bytes:
             )
             + "\n"
         ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+    except (RecursionError, TypeError, ValueError) as exc:
         raise SecFilingGemmaRevealStoreError(
             "Reveal-store state is not finite JSON"
         ) from exc
@@ -308,12 +397,23 @@ def _validate_regular_details(details: os.stat_result, location: str) -> None:
         )
 
 
-def _read_regular_bytes(path: Path, location: str) -> bytes:
+def _read_regular_bytes(
+    path: Path,
+    location: str,
+    *,
+    max_bytes: int = MAX_TRACKED_ANCHOR_FILE_BYTES,
+) -> bytes:
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise SecFilingGemmaRevealStoreError("Regular-file read cap is invalid")
     try:
         before = path.lstat()
     except FileNotFoundError as exc:
         raise SecFilingGemmaRevealStoreError(f"{location} does not exist") from exc
     _validate_regular_details(before, location)
+    if before.st_size > max_bytes:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} exceeds the {max_bytes}-byte safety limit"
+        )
     flags = os.O_RDONLY | _BINARY | _NOFOLLOW
     try:
         descriptor = os.open(path, flags)
@@ -324,21 +424,35 @@ def _read_regular_bytes(path: Path, location: str) -> bytes:
     try:
         opened = os.fstat(descriptor)
         _validate_regular_details(opened, location)
+        if opened.st_size > max_bytes:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} exceeds the {max_bytes}-byte safety limit"
+            )
         if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
             raise SecFilingGemmaRevealStoreError(
                 f"{location} identity changed while opening"
             )
         chunks: list[bytes] = []
+        observed_size = 0
         while True:
-            chunk = os.read(descriptor, 1024 * 1024)
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - observed_size))
             if not chunk:
                 break
+            observed_size += len(chunk)
+            if observed_size > max_bytes:
+                raise SecFilingGemmaRevealStoreError(
+                    f"{location} exceeded the {max_bytes}-byte safety limit while reading"
+                )
             chunks.append(chunk)
         after = path.lstat()
         _validate_regular_details(after, location)
         if (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino):
             raise SecFilingGemmaRevealStoreError(
                 f"{location} identity changed while reading"
+            )
+        if after.st_size > max_bytes or after.st_size != observed_size:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} size changed or exceeded its limit while reading"
             )
         return b"".join(chunks)
     finally:
@@ -695,6 +809,334 @@ def _state_snapshot(
         "consumption_ledger": copy.deepcopy(dict(consumption_ledger)),
     }
     return {**body, "state_sha256": canonical_sha256(body)}
+
+
+def _pending_current_tip_document(
+    *,
+    prior_tip_anchor: Mapping[str, Any] | None,
+    next_tip_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    prior = (
+        None
+        if prior_tip_anchor is None
+        else _exact_caller_dict(dict(prior_tip_anchor), "prior current-tip anchor")
+    )
+    next_anchor = _exact_caller_dict(
+        dict(next_tip_anchor), "next current-tip anchor"
+    )
+    if prior is None:
+        validated_next = validate_reveal_store_current_tip_anchor_structure(
+            next_anchor
+        )
+        if (
+            validated_next["revision"] != 0
+            or validated_next["previous_tip_anchor_sha256"] is not None
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Only the deterministic genesis may omit a prior current-tip anchor"
+            )
+    else:
+        try:
+            prior, validated_next = validate_reveal_store_current_tip_anchor_transition(
+                prior, next_anchor
+            )
+        except SecFilingGemmaStageAuthorizationError as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Current-tip transaction is not a valid monotonic CAS transition"
+            ) from exc
+    body = {
+        "schema_version": CURRENT_TIP_PENDING_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "prior_tip_anchor": prior,
+        "next_tip_anchor": validated_next,
+    }
+    return {**body, "pending_sha256": canonical_sha256(body)}
+
+
+def _validated_pending_current_tip_document(raw: Any) -> dict[str, Any]:
+    try:
+        detached = detach_untrusted_stage_json(
+            raw, "pending current-tip transaction"
+        )
+    except Exception as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Pending current-tip transaction exceeds fixed allocation bounds"
+        ) from exc
+    value = _expect_mapping(detached, "pending current-tip transaction")
+    _expect_keys(
+        value,
+        {
+            "schema_version",
+            "contract_version",
+            "prior_tip_anchor",
+            "next_tip_anchor",
+            "pending_sha256",
+        },
+        "pending current-tip transaction",
+    )
+    if (
+        value["schema_version"] != CURRENT_TIP_PENDING_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Pending current-tip transaction schema or contract changed"
+        )
+    observed = _sha256(value["pending_sha256"], "pending current-tip hash")
+    body = {key: value[key] for key in value if key != "pending_sha256"}
+    if not _same_digest(observed, canonical_sha256(body)):
+        raise SecFilingGemmaRevealStoreError(
+            "Pending current-tip transaction hash is inconsistent"
+        )
+    try:
+        prior_raw = value["prior_tip_anchor"]
+        if prior_raw is None:
+            next_anchor = validate_reveal_store_current_tip_anchor_structure(
+                value["next_tip_anchor"]
+            )
+            if (
+                next_anchor["revision"] != 0
+                or next_anchor["previous_tip_anchor_sha256"] is not None
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Non-genesis pending anchor has no predecessor"
+                )
+            prior = None
+        else:
+            prior, next_anchor = validate_reveal_store_current_tip_anchor_transition(
+                prior_raw,
+                value["next_tip_anchor"],
+            )
+    except SecFilingGemmaStageAuthorizationError as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Pending current-tip transaction is stale, forked, or invalid"
+        ) from exc
+    return {
+        **body,
+        "prior_tip_anchor": prior,
+        "next_tip_anchor": next_anchor,
+        "pending_sha256": observed,
+    }
+
+
+def _restore_pending_document(
+    *,
+    state_bytes: bytes,
+    tip_anchor_bytes: bytes,
+) -> dict[str, Any]:
+    if (
+        type(state_bytes) is not bytes
+        or not state_bytes
+        or len(state_bytes) > MAX_STATE_FILE_BYTES
+        or type(tip_anchor_bytes) is not bytes
+        or not tip_anchor_bytes
+        or len(tip_anchor_bytes) > MAX_CURRENT_TIP_ANCHOR_FILE_BYTES
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Restore transaction target bytes exceed their safety limits"
+        )
+    body = {
+        "schema_version": RESTORE_PENDING_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "state_bytes_base64": base64.b64encode(state_bytes).decode("ascii"),
+        "state_bytes_sha256": hashlib.sha256(state_bytes).hexdigest(),
+        "state_byte_count": len(state_bytes),
+        "tip_anchor_bytes_base64": base64.b64encode(tip_anchor_bytes).decode(
+            "ascii"
+        ),
+        "tip_anchor_bytes_sha256": hashlib.sha256(
+            tip_anchor_bytes
+        ).hexdigest(),
+        "tip_anchor_byte_count": len(tip_anchor_bytes),
+    }
+    document = {**body, "restore_pending_sha256": canonical_sha256(body)}
+    if len(_encoded_state(document)) > MAX_RESTORE_PENDING_FILE_BYTES:
+        raise SecFilingGemmaRevealStoreError(
+            "Restore transaction document exceeds its safety limit"
+        )
+    return document
+
+
+def _decode_restore_bytes(
+    encoded: Any,
+    *,
+    expected_sha256: Any,
+    expected_byte_count: Any,
+    maximum_bytes: int,
+    location: str,
+) -> bytes:
+    if type(encoded) is not str or not encoded:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} must be nonempty canonical Base64"
+        )
+    expected_hash = _sha256(expected_sha256, f"{location} hash")
+    byte_count = _strict_int(
+        expected_byte_count, f"{location} byte count", minimum=1
+    )
+    if byte_count > maximum_bytes:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} exceeds its safety limit"
+        )
+    try:
+        payload = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} is not strict Base64"
+        ) from exc
+    if (
+        len(payload) != byte_count
+        or base64.b64encode(payload).decode("ascii") != encoded
+        or not _same_digest(hashlib.sha256(payload).hexdigest(), expected_hash)
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} bytes do not match their exact recovery pin"
+        )
+    return payload
+
+
+def _validated_restore_pending_document(
+    raw: Any,
+    *,
+    tracked_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        detached = detach_untrusted_stage_json(
+            raw, "reveal-store restore transaction"
+        )
+    except Exception as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Reveal-store restore transaction exceeds fixed allocation bounds"
+        ) from exc
+    value = _expect_mapping(detached, "reveal-store restore transaction")
+    _expect_keys(
+        value,
+        {
+            "schema_version",
+            "contract_version",
+            "state_bytes_base64",
+            "state_bytes_sha256",
+            "state_byte_count",
+            "tip_anchor_bytes_base64",
+            "tip_anchor_bytes_sha256",
+            "tip_anchor_byte_count",
+            "restore_pending_sha256",
+        },
+        "reveal-store restore transaction",
+    )
+    if (
+        value["schema_version"] != RESTORE_PENDING_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Reveal-store restore transaction schema or contract changed"
+        )
+    observed = _sha256(
+        value["restore_pending_sha256"], "restore transaction self-hash"
+    )
+    body = {
+        key: value[key]
+        for key in value
+        if key != "restore_pending_sha256"
+    }
+    if not _same_digest(observed, canonical_sha256(body)):
+        raise SecFilingGemmaRevealStoreError(
+            "Reveal-store restore transaction self-hash is inconsistent"
+        )
+    state_bytes = _decode_restore_bytes(
+        value["state_bytes_base64"],
+        expected_sha256=value["state_bytes_sha256"],
+        expected_byte_count=value["state_byte_count"],
+        maximum_bytes=MAX_STATE_FILE_BYTES,
+        location="restore target state",
+    )
+    tip_bytes = _decode_restore_bytes(
+        value["tip_anchor_bytes_base64"],
+        expected_sha256=value["tip_anchor_bytes_sha256"],
+        expected_byte_count=value["tip_anchor_byte_count"],
+        maximum_bytes=MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+        location="restore target current-tip anchor",
+    )
+    try:
+        target_state = detach_untrusted_stage_json(
+            _strict_json_bytes(state_bytes, "restore target state"),
+            "restore target state",
+        )
+        target_tip = detach_untrusted_stage_json(
+            _strict_json_bytes(tip_bytes, "restore target current-tip anchor"),
+            "restore target current-tip anchor",
+        )
+    except Exception as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Restore targets exceed fixed allocation bounds"
+        ) from exc
+    state = _validate_state(
+        _expect_mapping(target_state, "restore target state"),
+        expected_anchor=tracked_anchor,
+    )
+    tip_mapping = _expect_mapping(
+        target_tip,
+        "restore target current-tip anchor",
+    )
+    try:
+        tip = validate_reveal_store_current_tip_anchor(state, tip_mapping)
+    except SecFilingGemmaStageAuthorizationError as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Restore target tip does not authenticate its target state"
+        ) from exc
+    return {
+        "state": state,
+        "tip_anchor": tip,
+        "state_bytes": state_bytes,
+        "tip_anchor_bytes": tip_bytes,
+        "restore_pending_sha256": observed,
+    }
+
+
+def _state_bytes_match_tip_anchor(
+    state_bytes: bytes, state: Mapping[str, Any], tip_anchor: Mapping[str, Any]
+) -> bool:
+    return (
+        tip_anchor["state_sha256"] == state.get("state_sha256")
+        and tip_anchor["state_snapshot_byte_count"] == len(state_bytes)
+        and _same_digest(
+            tip_anchor["state_snapshot_bytes_sha256"],
+            hashlib.sha256(state_bytes).hexdigest(),
+        )
+    )
+
+
+def _authorization_bundle(
+    *,
+    authenticated_store_snapshot: Mapping[str, Any],
+    expected_new_consumption_entry_sha256: str,
+) -> dict[str, Any]:
+    snapshot = _exact_caller_dict(
+        dict(authenticated_store_snapshot),
+        "authenticated post-consumption store snapshot",
+    )
+    state_bytes = _encoded_state(snapshot)
+    store_pin = derive_consumed_stage_store_state_pin(snapshot)
+    grant = build_consumed_stage_authorization_grant(
+        authenticated_store_snapshot=snapshot,
+        external_store_state_pin=store_pin,
+        expected_new_consumption_entry_sha256=(
+            expected_new_consumption_entry_sha256
+        ),
+    )
+    if (
+        grant["store_snapshot_bytes_sha256"]
+        != hashlib.sha256(state_bytes).hexdigest()
+        or grant["store_snapshot_byte_count"] != len(state_bytes)
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Authorization grant does not bind the exact post-consumption bytes"
+        )
+    body = {
+        "schema_version": CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+        "authenticated_store_snapshot": snapshot,
+        "store_state_pin": store_pin,
+        "authorization_grant": grant,
+    }
+    return {**body, "bundle_sha256": canonical_sha256(body)}
 
 
 def _request_body_hash(request: Mapping[str, Any]) -> str:
@@ -1336,6 +1778,14 @@ class SecFilingGemmaRevealStore:
         return self.store_directory / STATE_FILENAME
 
     @property
+    def current_tip_anchor_path(self) -> Path:
+        return self.store_directory / CURRENT_TIP_ANCHOR_FILENAME
+
+    @property
+    def restore_pending_path(self) -> Path:
+        return self.store_directory / RESTORE_PENDING_FILENAME
+
+    @property
     def lock_path(self) -> Path:
         return self.store_directory / LOCK_FILENAME
 
@@ -1353,10 +1803,77 @@ class SecFilingGemmaRevealStore:
             self.lock_path, timeout_seconds=self._lock_timeout_seconds
         )
 
-    def _read_state_locked(self, anchor: Mapping[str, Any]) -> dict[str, Any]:
+    def _recover_pending_restore_locked(
+        self, tracked_anchor: Mapping[str, Any]
+    ) -> None:
+        path = self.restore_pending_path
+        if not path.exists() and not path.is_symlink():
+            return
+        payload = _read_regular_bytes(
+            path,
+            "pending reveal-store restore transaction",
+            max_bytes=MAX_RESTORE_PENDING_FILE_BYTES,
+        )
+        parsed = _strict_json_bytes(
+            payload, "pending reveal-store restore transaction"
+        )
+        recovery = _validated_restore_pending_document(
+            parsed, tracked_anchor=tracked_anchor
+        )
+        # The recovery file remains authoritative until both target files are
+        # exact. A stop after either replace simply replays this idempotently.
+        _atomic_replace(self.state_path, recovery["state_bytes"])
+        _atomic_replace(
+            self.current_tip_anchor_path, recovery["tip_anchor_bytes"]
+        )
+        if (
+            _read_regular_bytes(
+                self.state_path,
+                "recovered reveal-store state",
+                max_bytes=MAX_STATE_FILE_BYTES,
+            )
+            != recovery["state_bytes"]
+            or _read_regular_bytes(
+                self.current_tip_anchor_path,
+                "recovered reveal-store current-tip anchor",
+                max_bytes=MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+            )
+            != recovery["tip_anchor_bytes"]
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Recovered reveal-store files differ from the restore transaction"
+            )
         try:
-            payload = _read_regular_bytes(
-                self.state_path, "authoritative reveal-store state"
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(
+                metadata.st_mode
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Restore transaction path changed file type"
+                )
+            path.unlink()
+        except OSError as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Completed restore transaction could not be retired"
+            ) from exc
+        if path.exists() or path.is_symlink():
+            raise SecFilingGemmaRevealStoreError(
+                "Completed restore transaction remains present"
+            )
+
+    def _read_state_and_tip_locked(
+        self,
+        tracked_anchor: Mapping[str, Any],
+        *,
+        recover_pending_restore: bool = True,
+    ) -> tuple[dict[str, Any], dict[str, Any], bytes, bytes]:
+        if recover_pending_restore:
+            self._recover_pending_restore_locked(tracked_anchor)
+        try:
+            state_payload = _read_regular_bytes(
+                self.state_path,
+                "authoritative reveal-store state",
+                max_bytes=MAX_STATE_FILE_BYTES,
             )
         except SecFilingGemmaRevealStoreError as exc:
             if not self.state_path.exists() and not self.state_path.is_symlink():
@@ -1364,11 +1881,163 @@ class SecFilingGemmaRevealStore:
                     "Reveal store is not initialized"
                 ) from exc
             raise
-        parsed = _strict_json_bytes(payload, "authoritative reveal-store state")
-        return _validate_state(
-            _expect_mapping(parsed, "authoritative reveal-store state"),
-            expected_anchor=anchor,
+        state_parsed = _strict_json_bytes(
+            state_payload, "authoritative reveal-store state"
         )
+        try:
+            state_parsed = detach_untrusted_stage_json(
+                state_parsed, "authoritative reveal-store state"
+            )
+        except Exception as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Authoritative reveal-store state exceeds fixed allocation bounds"
+            ) from exc
+        state = _validate_state(
+            _expect_mapping(state_parsed, "authoritative reveal-store state"),
+            expected_anchor=tracked_anchor,
+        )
+        try:
+            tip_payload = _read_regular_bytes(
+                self.current_tip_anchor_path,
+                "independent reveal-store current-tip anchor",
+                max_bytes=MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+            )
+        except SecFilingGemmaRevealStoreError as exc:
+            if (
+                not self.current_tip_anchor_path.exists()
+                and not self.current_tip_anchor_path.is_symlink()
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Independent reveal-store current-tip anchor is missing"
+                ) from exc
+            raise
+        tip_parsed = _strict_json_bytes(
+            tip_payload, "independent reveal-store current-tip anchor"
+        )
+        tip_mapping = _expect_mapping(
+            tip_parsed, "independent reveal-store current-tip anchor"
+        )
+        if tip_mapping.get("schema_version") == CURRENT_TIP_PENDING_SCHEMA_VERSION:
+            pending = _validated_pending_current_tip_document(tip_mapping)
+            prior = pending["prior_tip_anchor"]
+            next_anchor = pending["next_tip_anchor"]
+            if _state_bytes_match_tip_anchor(state_payload, state, next_anchor):
+                resolved = next_anchor
+            elif prior is not None and _state_bytes_match_tip_anchor(
+                state_payload, state, prior
+            ):
+                resolved = prior
+            else:
+                raise SecFilingGemmaRevealStoreError(
+                    "Interrupted current-tip transaction matches neither its prior nor next state"
+                )
+            try:
+                resolved = validate_reveal_store_current_tip_anchor(
+                    state, resolved
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Interrupted current-tip transaction cannot authenticate its state"
+                ) from exc
+            _atomic_replace(
+                self.current_tip_anchor_path,
+                _encoded_state(resolved),
+            )
+            tip_payload = _read_regular_bytes(
+                self.current_tip_anchor_path,
+                "resolved reveal-store current-tip anchor",
+                max_bytes=MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+            )
+            if tip_payload != _encoded_state(resolved):
+                raise SecFilingGemmaRevealStoreError(
+                    "Resolved current-tip anchor bytes are inconsistent"
+                )
+            tip = resolved
+        else:
+            try:
+                tip = validate_reveal_store_current_tip_anchor(
+                    state, tip_mapping
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Independent current-tip anchor does not authenticate the latest state"
+                ) from exc
+        return state, tip, state_payload, tip_payload
+
+    def _read_state_locked(self, anchor: Mapping[str, Any]) -> dict[str, Any]:
+        state, _tip, _state_bytes, _tip_bytes = self._read_state_and_tip_locked(
+            anchor
+        )
+        return state
+
+    def _commit_state_and_tip_locked(
+        self,
+        *,
+        tracked_anchor: Mapping[str, Any],
+        prior_tip_anchor: Mapping[str, Any],
+        next_state: Mapping[str, Any],
+        authorization_bundle: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        validated_state = _validate_state(
+            _expect_mapping(next_state, "next reveal-store state"),
+            expected_anchor=tracked_anchor,
+        )
+        bundles = copy.deepcopy(prior_tip_anchor["authorization_bundles"])
+        if authorization_bundle is not None:
+            bundle = _exact_caller_dict(
+                authorization_bundle, "authorization bundle"
+            )
+            request_hash = _sha256(
+                bundle.get("authorization_grant", {}).get("request_sha256"),
+                "authorization bundle request hash",
+            )
+            if request_hash in bundles and bundles[request_hash] != bundle:
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted authorization bundle cannot be replaced"
+                )
+            bundles[request_hash] = bundle
+        try:
+            next_tip = build_reveal_store_current_tip_anchor(
+                validated_state,
+                revision=prior_tip_anchor["revision"] + 1,
+                previous_tip_anchor_sha256=prior_tip_anchor["tip_anchor_sha256"],
+                authorization_bundles=bundles,
+            )
+        except SecFilingGemmaStageAuthorizationError as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Could not build the next independent current-tip anchor"
+            ) from exc
+        pending = _pending_current_tip_document(
+            prior_tip_anchor=prior_tip_anchor,
+            next_tip_anchor=next_tip,
+        )
+        state_bytes = _encoded_state(validated_state)
+        pending_bytes = _encoded_state(pending)
+        next_tip_bytes = _encoded_state(next_tip)
+        if len(state_bytes) > MAX_STATE_FILE_BYTES:
+            raise SecFilingGemmaRevealStoreError(
+                "Next reveal-store state exceeds its safety limit"
+            )
+        if max(len(pending_bytes), len(next_tip_bytes)) > MAX_CURRENT_TIP_ANCHOR_FILE_BYTES:
+            raise SecFilingGemmaRevealStoreError(
+                "Next current-tip transaction exceeds its safety limit"
+            )
+
+        # The pending anchor is a write-ahead CAS record.  A crash before the
+        # state replace resolves to ``prior``; a crash after it resolves to
+        # ``next``.  Thus the consumed entry and exact persisted bundle become
+        # visible as one logical transaction despite using two regular files.
+        _atomic_replace(self.current_tip_anchor_path, pending_bytes)
+        _atomic_replace(self.state_path, state_bytes)
+        _atomic_replace(self.current_tip_anchor_path, next_tip_bytes)
+        committed_state, committed_tip, _state_bytes, _tip_bytes = (
+            self._read_state_and_tip_locked(tracked_anchor)
+        )
+        if committed_state != validated_state or committed_tip != next_tip:
+            raise SecFilingGemmaRevealStoreError(
+                "Committed state/current-tip transaction differs from its CAS target"
+            )
+        return committed_state, committed_tip
 
     def initialize(self) -> dict[str, Any]:
         """Create genesis state once, or validate and return existing state."""
@@ -1376,7 +2045,13 @@ class SecFilingGemmaRevealStore:
         with self._locked():
             _cleanup_interrupted_temporaries(self.store_directory)
             anchor = _load_tracked_anchor(self.repository_root)
-            if self.state_path.exists() or self.state_path.is_symlink():
+            self._recover_pending_restore_locked(anchor)
+            state_exists = self.state_path.exists() or self.state_path.is_symlink()
+            tip_exists = (
+                self.current_tip_anchor_path.exists()
+                or self.current_tip_anchor_path.is_symlink()
+            )
+            if state_exists and tip_exists:
                 return self._read_state_locked(anchor)
             registry = build_initial_reveal_registry()
             pin = derive_registry_pin(registry)
@@ -1386,7 +2061,49 @@ class SecFilingGemmaRevealStore:
                 latest_pin=pin,
                 consumption_ledger=_initial_consumption_ledger(anchor),
             )
+            try:
+                tip = build_reveal_store_current_tip_anchor(
+                    state,
+                    revision=0,
+                    previous_tip_anchor_sha256=None,
+                    authorization_bundles={},
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Could not build the genesis current-tip anchor"
+                ) from exc
+            pending = _pending_current_tip_document(
+                prior_tip_anchor=None,
+                next_tip_anchor=tip,
+            )
+            if state_exists and not tip_exists:
+                raise SecFilingGemmaRevealStoreError(
+                    "Reveal store has state without its genesis write-ahead anchor"
+                )
+            if tip_exists and not state_exists:
+                pending_bytes = _read_regular_bytes(
+                    self.current_tip_anchor_path,
+                    "interrupted genesis current-tip transaction",
+                    max_bytes=MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+                )
+                parsed = _strict_json_bytes(
+                    pending_bytes, "interrupted genesis current-tip transaction"
+                )
+                observed_pending = _validated_pending_current_tip_document(
+                    parsed
+                )
+                if observed_pending != pending:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Incomplete reveal-store pair is not the deterministic genesis transaction"
+                    )
+                _atomic_replace(self.state_path, _encoded_state(state))
+                _atomic_replace(
+                    self.current_tip_anchor_path, _encoded_state(tip)
+                )
+                return self._read_state_locked(anchor)
+            _atomic_replace(self.current_tip_anchor_path, _encoded_state(pending))
             _atomic_replace(self.state_path, _encoded_state(state))
+            _atomic_replace(self.current_tip_anchor_path, _encoded_state(tip))
             return self._read_state_locked(anchor)
 
     def load(self) -> dict[str, Any]:
@@ -1396,6 +2113,17 @@ class SecFilingGemmaRevealStore:
             _cleanup_interrupted_temporaries(self.store_directory)
             anchor = _load_tracked_anchor(self.repository_root)
             return self._read_state_locked(anchor)
+
+    def load_current_tip_anchor(self) -> dict[str, Any]:
+        """Load the independent latest-tip proof for downstream validation."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            _state, tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            return copy.deepcopy(tip)
 
     def compare_and_swap_append(
         self,
@@ -1413,15 +2141,28 @@ class SecFilingGemmaRevealStore:
         with self._locked():
             _cleanup_interrupted_temporaries(self.store_directory)
             anchor = _load_tracked_anchor(self.repository_root)
-            current = self._read_state_locked(anchor)
-            transition_value = _json_value_copy(
-                dict(_expect_mapping(transition, "registry transition")),
-                "registry transition",
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(anchor)
             )
-            appended_value = _json_value_copy(
-                dict(_expect_mapping(appended_registry, "appended registry")),
-                "appended registry",
-            )
+            # Authenticate and capture both files before touching caller data.
+            if type(transition) is not dict or type(appended_registry) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Registry CAS inputs must be exact built-in dicts"
+                )
+            try:
+                detached_cas = detach_untrusted_stage_json(
+                    {
+                        "transition": transition,
+                        "appended_registry": appended_registry,
+                    },
+                    "registry CAS caller bundle",
+                )
+            except Exception as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Registry CAS inputs exceed fixed allocation bounds"
+                ) from exc
+            transition_value = detached_cas["transition"]
+            appended_value = detached_cas["appended_registry"]
             try:
                 validate_registry_pin_transition(
                     transition_value,
@@ -1440,8 +2181,12 @@ class SecFilingGemmaRevealStore:
                 latest_pin=next_pin,
                 consumption_ledger=current["consumption_ledger"],
             )
-            _atomic_replace(self.state_path, _encoded_state(next_state))
-            return self._read_state_locked(anchor)
+            committed, _next_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=anchor,
+                prior_tip_anchor=current_tip,
+                next_state=next_state,
+            )
+            return committed
 
     def consume_request(
         self,
@@ -1451,13 +2196,14 @@ class SecFilingGemmaRevealStore:
         stage: str,
         stage_access_manifest: Mapping[str, Any],
         prerequisite_stage_evidence: Mapping[str, Any],
+        _issue_authorization_grant: bool = False,
     ) -> dict[str, Any]:
         """Validate and atomically consume one non-authorizing stage request.
 
         The fixed candidate-bound verifier executes while the exclusive lock is
-        held. It receives
-        defensive read-only copies of the prerequisite evidence, the actual
-        self-hashed stage-access manifest, and the expected request context.
+        held. It receives bounded detached copies of the prerequisite evidence,
+        the actual self-hashed stage-access manifest, and the expected request
+        context.
         It must return :class:`SemanticPrerequisiteValidation`.  Failure,
         replay, verifier mutation of the state file, or any binding mismatch
         leaves no consumption entry.
@@ -1470,32 +2216,61 @@ class SecFilingGemmaRevealStore:
             locked_repository_root = self._repository_root
             locked_store_directory = self._store_directory
             locked_state_path = self.state_path
+            locked_tip_anchor_path = self.current_tip_anchor_path
+            locked_restore_pending_path = self.restore_pending_path
             locked_lock_path = self.lock_path
             _cleanup_interrupted_temporaries(self.store_directory)
             anchor = _load_tracked_anchor(self.repository_root)
-            current = self._read_state_locked(anchor)
-            request_value = _json_value_copy(
-                dict(_expect_mapping(request, "reveal request")),
-                "reveal request",
-            )
-            candidate_value = _json_value_copy(
-                dict(_expect_mapping(candidate_manifest, "candidate manifest")),
-                "candidate manifest",
-            )
-            access_manifest = _json_value_copy(
-                dict(_expect_mapping(stage_access_manifest, "stage access manifest")),
-                "stage access manifest",
-            )
+            (
+                current,
+                current_tip,
+                original_state_bytes,
+                original_tip_anchor_bytes,
+            ) = self._read_state_and_tip_locked(anchor)
+            # Both independent files are authenticated and captured before any
+            # authorization-critical caller object is examined.
+            if type(_issue_authorization_grant) is not bool:
+                raise SecFilingGemmaRevealStoreError(
+                    "Internal grant-issuance flag must be an exact boolean"
+                )
+            caller_objects = {
+                "request": request,
+                "candidate_manifest": candidate_manifest,
+                "stage_access_manifest": stage_access_manifest,
+                "prerequisite_stage_evidence": prerequisite_stage_evidence,
+            }
+            if any(type(item) is not dict for item in caller_objects.values()):
+                raise SecFilingGemmaRevealStoreError(
+                    "Authorization-critical inputs must be exact built-in dicts"
+                )
+            # One shared no-copy budget rejects an already-oversized bundle
+            # before allocation.  The bounded detacher then rechecks every
+            # limit while copying, so concurrent mutation cannot insert an
+            # unchecked deep or oversized value between check and copy.
+            try:
+                preflight_untrusted_stage_json(
+                    caller_objects, "reveal request caller bundle"
+                )
+                detached_objects = detach_untrusted_stage_json(
+                    caller_objects, "reveal request caller bundle"
+                )
+            except Exception as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Reveal request inputs exceed the fixed verifier allocation bounds"
+                ) from exc
+            if type(detached_objects) is not dict:  # pragma: no cover - fixed wrapper
+                raise SecFilingGemmaRevealStoreError(
+                    "Reveal request inputs could not be detached"
+                )
+            request_value = detached_objects["request"]
+            candidate_value = detached_objects["candidate_manifest"]
+            if type(stage) is not str:
+                raise SecFilingGemmaRevealStoreError(
+                    "requested stage must be an exact built-in string"
+                )
+            access_manifest = detached_objects["stage_access_manifest"]
             access_hash = _stage_access_manifest_sha256(access_manifest)
-            evidence = _json_value_copy(
-                dict(
-                    _expect_mapping(
-                        prerequisite_stage_evidence,
-                        "prerequisite stage evidence",
-                    )
-                ),
-                "prerequisite stage evidence",
-            )
+            evidence = detached_objects["prerequisite_stage_evidence"]
             evidence_hash = _stage_evidence_sha256(evidence)
             try:
                 request_hash = validate_single_candidate_reveal_request(
@@ -1512,14 +2287,60 @@ class SecFilingGemmaRevealStore:
                     "Reveal request is altered, stale, non-authorizing, or not current-tip bound"
                 ) from exc
             ledger = current["consumption_ledger"]
-            if any(
+            matching_entries = [
+                entry
+                for entry in ledger["entries"]
+                if (
                 entry["request_sha256"] == request_hash
                 or (
                     entry["attempt_id"] == request_value["attempt_id"]
                     and entry["stage"] == stage
                 )
-                for entry in ledger["entries"]
-            ):
+                )
+            ]
+            if matching_entries:
+                if _issue_authorization_grant:
+                    existing_entry = matching_entries[0]
+                    existing_bundle = current_tip["authorization_bundles"].get(
+                        request_hash
+                    )
+                    if (
+                        existing_entry["request_sha256"] == request_hash
+                        and existing_entry["entry_sha256"]
+                        == ledger["chain"]["tip_sha256"]
+                        and existing_bundle is not None
+                        and existing_bundle["authenticated_store_snapshot"]
+                        == current
+                    ):
+                        try:
+                            validate_consumed_stage_authorization_grant(
+                                existing_bundle["authorization_grant"],
+                                authenticated_store_snapshot=current,
+                                external_store_state_pin=existing_bundle[
+                                    "store_state_pin"
+                                ],
+                                independent_current_tip_anchor=current_tip,
+                                expected_consumption_entry_sha256=existing_entry[
+                                    "entry_sha256"
+                                ],
+                                expected_request_sha256=request_hash,
+                                expected_candidate_sha256=request_value[
+                                    "candidate_sha256"
+                                ],
+                                expected_stage=stage,
+                                expected_prerequisite_stage_evidence_sha256=(
+                                    evidence_hash
+                                ),
+                                expected_stage_access_manifest_sha256=access_hash,
+                                expected_output_namespace=access_manifest["output"][
+                                    "namespace"
+                                ],
+                            )
+                        except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                            raise SecFilingGemmaRevealStoreError(
+                                "Persisted retry bundle failed current-tip authentication"
+                            ) from exc
+                        return copy.deepcopy(existing_bundle)
                 raise SecFilingGemmaRevealStoreError(
                     "Reveal request or candidate stage was already consumed"
                 )
@@ -1560,17 +2381,43 @@ class SecFilingGemmaRevealStore:
                 "registry_tip_sha256": request_value["registry_tip_sha256"],
             }
             context = MappingProxyType(context_dict)
-            original_state_bytes = _read_regular_bytes(
-                locked_state_path,
-                "authoritative reveal-store state before prerequisite validation",
+            promotion_gate_before = AUTHORITATIVE_STAGE_PROMOTION_ENABLED
+            restore_document = _restore_pending_document(
+                state_bytes=original_state_bytes,
+                tip_anchor_bytes=original_tip_anchor_bytes,
+            )
+            restore_document_bytes = _encoded_state(restore_document)
+            # Persist the authenticated original pair before effectful verifier
+            # code runs. A hard process stop after any verifier-side mutation
+            # is therefore repaired on the next locked load.
+            _atomic_replace(
+                locked_restore_pending_path,
+                restore_document_bytes,
             )
             try:
                 try:
-                    result = authoritative_prerequisite_validator(
-                        MappingProxyType(evidence),
-                        MappingProxyType(access_manifest),
-                        context,
+                    verifier_inputs = detach_untrusted_stage_json(
+                        {
+                            "evidence": evidence,
+                            "stage_access_manifest": access_manifest,
+                            "expected_context": context_dict,
+                        },
+                        "fixed verifier input bundle",
                     )
+                    try:
+                        result = authoritative_prerequisite_validator(
+                            verifier_inputs["evidence"],
+                            verifier_inputs["stage_access_manifest"],
+                            verifier_inputs["expected_context"],
+                        )
+                    finally:
+                        promotion_gate_changed = (
+                            AUTHORITATIVE_STAGE_PROMOTION_ENABLED
+                            is not promotion_gate_before
+                        )
+                        globals()["AUTHORITATIVE_STAGE_PROMOTION_ENABLED"] = (
+                            promotion_gate_before
+                        )
                 except SecFilingGemmaRevealStoreError:
                     raise
                 except Exception as exc:
@@ -1581,6 +2428,8 @@ class SecFilingGemmaRevealStore:
                     self._repository_root != locked_repository_root
                     or self._store_directory != locked_store_directory
                     or self.state_path != locked_state_path
+                    or self.current_tip_anchor_path != locked_tip_anchor_path
+                    or self.restore_pending_path != locked_restore_pending_path
                     or self.lock_path != locked_lock_path
                 ):
                     raise SecFilingGemmaRevealStoreError(
@@ -1594,24 +2443,69 @@ class SecFilingGemmaRevealStore:
                         "source_hashes"
                     ]["stage_verifier"],
                 )
+                if promotion_gate_before is not True:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Reveal-store stage promotion remains independently disabled"
+                    )
+                if promotion_gate_changed:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Reveal-store stage promotion gate changed during validation"
+                    )
+                if (
+                    self._repository_root != locked_repository_root
+                    or self._store_directory != locked_store_directory
+                    or self.state_path != locked_state_path
+                    or self.current_tip_anchor_path != locked_tip_anchor_path
+                    or self.restore_pending_path != locked_restore_pending_path
+                    or self.lock_path != locked_lock_path
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Reveal-store paths changed while validating the verifier result"
+                    )
                 # The verifier is effectful Python. Check exact bytes before
                 # parsing so even a rehashed or differently encoded mutation is
                 # rejected rather than silently replaced by the next state.
                 try:
-                    after_verifier_bytes = _read_regular_bytes(
-                        locked_state_path,
-                        "authoritative reveal-store state after prerequisite validation",
+                    (
+                        after_verifier,
+                        after_verifier_tip,
+                        after_verifier_bytes,
+                        after_verifier_tip_bytes,
+                    ) = self._read_state_and_tip_locked(
+                        anchor,
+                        recover_pending_restore=False,
                     )
-                    after_verifier = self._read_state_locked(anchor)
                 except SecFilingGemmaRevealStoreError as exc:
                     raise SecFilingGemmaRevealStoreError(
                         "Reveal-store state was damaged during prerequisite "
                         "validation; the prior authenticated state will be restored"
                     ) from exc
-                if after_verifier_bytes != original_state_bytes or after_verifier != current:
+                if (
+                    after_verifier_bytes != original_state_bytes
+                    or after_verifier_tip_bytes != original_tip_anchor_bytes
+                    or after_verifier != current
+                    or after_verifier_tip != current_tip
+                ):
                     raise SecFilingGemmaRevealStoreError(
                         "Reveal-store state changed during prerequisite validation; "
                         "the prior authenticated state will be restored"
+                    )
+                persisted_restore = _read_regular_bytes(
+                    locked_restore_pending_path,
+                    "pre-verifier restore transaction",
+                    max_bytes=MAX_RESTORE_PENDING_FILE_BYTES,
+                )
+                if persisted_restore != restore_document_bytes:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Pre-verifier restore transaction changed during validation"
+                    )
+                locked_restore_pending_path.unlink()
+                if (
+                    locked_restore_pending_path.exists()
+                    or locked_restore_pending_path.is_symlink()
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Pre-verifier restore transaction could not be retired"
                     )
             except BaseException:
                 # Cleanup has finally-like semantics: verifier exceptions,
@@ -1620,12 +2514,29 @@ class SecFilingGemmaRevealStore:
                 self._repository_root = locked_repository_root
                 self._store_directory = locked_store_directory
                 try:
-                    _atomic_replace(locked_state_path, original_state_bytes)
+                    restore_document = _restore_pending_document(
+                        state_bytes=original_state_bytes,
+                        tip_anchor_bytes=original_tip_anchor_bytes,
+                    )
+                    _atomic_replace(
+                        locked_restore_pending_path,
+                        _encoded_state(restore_document),
+                    )
+                    self._recover_pending_restore_locked(anchor)
                     restored_state_bytes = _read_regular_bytes(
                         locked_state_path,
                         "restored authoritative reveal-store state",
+                        max_bytes=MAX_STATE_FILE_BYTES,
                     )
-                    if restored_state_bytes != original_state_bytes:
+                    restored_tip_bytes = _read_regular_bytes(
+                        locked_tip_anchor_path,
+                        "restored independent current-tip anchor",
+                        max_bytes=MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
+                    )
+                    if (
+                        restored_state_bytes != original_state_bytes
+                        or restored_tip_bytes != original_tip_anchor_bytes
+                    ):
                         raise SecFilingGemmaRevealStoreError(
                             "Restored reveal-store bytes do not match the authenticated original"
                         )
@@ -1666,18 +2577,113 @@ class SecFilingGemmaRevealStore:
                 latest_pin=current["latest_registry_pin"],
                 consumption_ledger=next_ledger,
             )
-            _atomic_replace(self.state_path, _encoded_state(next_state))
-            return self._read_state_locked(anchor)
+            bundle: dict[str, Any] | None = None
+            if _issue_authorization_grant:
+                try:
+                    bundle = _authorization_bundle(
+                        authenticated_store_snapshot=next_state,
+                        expected_new_consumption_entry_sha256=entry[
+                            "entry_sha256"
+                        ],
+                    )
+                except SecFilingGemmaStageAuthorizationError as exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Authenticated consumption could not produce an exact authorization grant"
+                    ) from exc
+
+            # This transaction is intentionally not rolled back in an outer
+            # exception handler.  If the process stops after the state replace,
+            # the pending CAS anchor makes the exact state+bundle recoverable;
+            # retrying the same request returns that stored bundle rather than
+            # consuming a second entry.
+            try:
+                authenticated_next_state, authenticated_next_tip = (
+                    self._commit_state_and_tip_locked(
+                        tracked_anchor=anchor,
+                        prior_tip_anchor=current_tip,
+                        next_state=next_state,
+                        authorization_bundle=bundle,
+                    )
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "State/current-tip authorization transaction failed closed"
+                ) from exc
+            if bundle is None:
+                return authenticated_next_state
+            persisted = authenticated_next_tip["authorization_bundles"].get(
+                request_hash
+            )
+            if persisted != bundle:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed current tip did not preserve the exact authorization bundle"
+                )
+            try:
+                validate_consumed_stage_authorization_grant(
+                    persisted["authorization_grant"],
+                    authenticated_store_snapshot=authenticated_next_state,
+                    external_store_state_pin=persisted["store_state_pin"],
+                    independent_current_tip_anchor=authenticated_next_tip,
+                    expected_consumption_entry_sha256=entry["entry_sha256"],
+                    expected_request_sha256=request_hash,
+                    expected_candidate_sha256=request_value["candidate_sha256"],
+                    expected_stage=stage,
+                    expected_prerequisite_stage_evidence_sha256=evidence_hash,
+                    expected_stage_access_manifest_sha256=access_hash,
+                    expected_output_namespace=access_manifest["output"]["namespace"],
+                )
+            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed authorization bundle failed independent current-tip validation"
+                ) from exc
+            return copy.deepcopy(persisted)
+
+    def consume_request_and_issue_authorization_grant(
+        self,
+        request: Mapping[str, Any],
+        *,
+        candidate_manifest: Mapping[str, Any],
+        stage: str,
+        stage_access_manifest: Mapping[str, Any],
+        prerequisite_stage_evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Consume one request and return its exact post-consumption grant bundle.
+
+        The grant is derived for the newly appended ledger tip, and its exact
+        bundle is committed in the separate monotonic current-tip anchor as the
+        same recoverable transaction as the consumed state.  The bundled pin
+        is not a trust root: a downstream API must independently load the
+        store's current-tip anchor and pass it to grant validation.  The fixed
+        production verifier still raises, so production cannot reach grant
+        issuance while any prerequisite check remains unsupported.
+        """
+
+        return self.consume_request(
+            request,
+            candidate_manifest=candidate_manifest,
+            stage=stage,
+            stage_access_manifest=stage_access_manifest,
+            prerequisite_stage_evidence=prerequisite_stage_evidence,
+            _issue_authorization_grant=True,
+        )
 
 
 __all__ = [
+    "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
     "AUTHORITATIVE_VALIDATOR_ID",
     "CONSUMPTION_ENTRY_SCHEMA_VERSION",
     "CONSUMPTION_LEDGER_SCHEMA_VERSION",
+    "CURRENT_TIP_ANCHOR_FILENAME",
+    "CURRENT_TIP_PENDING_SCHEMA_VERSION",
     "INITIAL_PIN_RELATIVE_PATH",
     "LOCK_FILENAME",
+    "MAX_CURRENT_TIP_ANCHOR_FILE_BYTES",
+    "MAX_RESTORE_PENDING_FILE_BYTES",
+    "MAX_STATE_FILE_BYTES",
     "REQUIRED_SEMANTIC_CHECKS",
     "SEMANTIC_PREREQUISITE_SCHEMA_VERSION",
+    "RESTORE_PENDING_FILENAME",
+    "RESTORE_PENDING_SCHEMA_VERSION",
     "STATE_FILENAME",
     "STORE_SCHEMA_VERSION",
     "SecFilingGemmaRevealStore",
