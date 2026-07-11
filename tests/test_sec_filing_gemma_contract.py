@@ -85,10 +85,8 @@ IDENTITY_LEXICON_SHA256 = canonical_sha256(IDENTITY_TERMS)
 
 
 def _sources() -> dict[str, str]:
-    characters = "0123456789abcdef"
-    assert len(REQUIRED_SOURCE_HASHES) <= len(characters)
     return {
-        name: _hash(characters[index])
+        name: f"{index + 1:064x}"
         for index, name in enumerate(REQUIRED_SOURCE_HASHES)
     }
 
@@ -435,11 +433,15 @@ def _training_rows(universe: dict, candidate: dict, phase: str) -> list[dict]:
                 "feature_availability_session": record["availability_session"],
                 "label_maturity_session": maturity,
                 "horizon_sessions": 20,
-                "feature_sha256": f"{10_000 + index:064x}",
-                "extraction_output_sha256": f"{20_000 + index:064x}",
+                "feature_row_sha256": f"{10_000 + index:064x}",
+                "extraction_identity_sha256": f"{20_000 + index:064x}",
+                "market_prefix_chain_identity_sha256": f"{25_000 + index:064x}",
                 "market_feature_row_sha256": f"{30_000 + index:064x}",
-                "label_ledger_row_sha256": f"{40_000 + index:064x}",
+                "label_evidence_sha256": f"{40_000 + index:064x}",
                 "semantic_available": True,
+                "market_available": True,
+                "prediction_available": True,
+                "fit_eligible": True,
             }
         )
     return rows
@@ -517,15 +519,62 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
             "live_lessons",
         ],
     }
+    learner = first["predictor"]["learner_configuration"]
+    assert learner["feature_selection"] is False
+    assert learner["interactions"] is False
+    assert learner["intercept_regularized"] is False
+    assert learner["frozen_numerical_constants"] == {
+        "raw_mad_multiplier": 1.4826,
+        "raw_scale_floor": 1e-6,
+        "raw_z_clip": 4.0,
+        "ridge_lambda": 0.1,
+        "logistic_max_iterations": 50,
+        "logistic_tolerance": 1e-10,
+        "newton_line_search_max_steps": 50,
+        "newton_armijo_constant": 1e-4,
+        "logistic_curvature_floor": 1e-15,
+        "huber_delta": 1.5,
+        "huber_max_iterations": 50,
+        "huber_tolerance": 1e-10,
+        "target_mad_multiplier": 1.4826,
+        "target_scale_floor": 1e-6,
+        "edge_clip_lower": -0.5,
+        "edge_clip_upper": 0.5,
+    }
     assert "reveal_registry" in REQUIRED_SOURCE_HASHES
+    assert "stage_verifier" in REQUIRED_SOURCE_HASHES
     assert (
         first["holdout_governance"][
             "candidate_binds_predecessor_registry_snapshot"
         ]
         is True
     )
+    assert first["holdout_governance"][
+        "required_semantic_prerequisite_checks"
+    ] == list(contract_module.REQUIRED_STAGE_VERIFIER_CHECKS)
     assert len(first["predictor"]["price_regime_features"]) == 24
     assert len(first["predictor"]["market_sentiment_features"]) == 15
+    feature_semantics = first["predictor"]["feature_semantics"]
+    assert feature_semantics["adverse_flag_names"] == list(
+        contract_module.FLAG_NAMES[:-1]
+    )
+    assert feature_semantics[
+        "adverse_flag_count_excludes_management_transition"
+    ] is True
+    assert feature_semantics["management_transition_is_separate_feature"] is True
+    assert feature_semantics["invalid_model_output"].startswith("neutral_semantics")
+    assert feature_semantics[
+        "missing_or_unauthenticated_extraction_evidence"
+    ] == "prediction_unavailable_integrity_failure"
+    assert feature_semantics["label_cost_application"].endswith(
+        "entry_and_exit_position_changing_fills"
+    )
+    assert first["model"]["per_call_client_receipt_trust"] == (
+        "unattested_until_stage_runner_replay"
+    )
+    assert first["model"]["runtime_identity_guard"].startswith(
+        "candidate_pins_checked_immediately_before_and_after"
+    )
     assert first["gates"]["final"]["minimum_periods_beating_ablation"] == 2
 
 
@@ -950,6 +999,23 @@ def test_training_rows_require_exact_pinned_session_maturity_and_cutoff() -> Non
     arbitrary[0]["accession_number"] = "not-a-filing"
     with pytest.raises(SecFilingGemmaContractError, match="exact unique"):
         _validate_training("development_fit", arbitrary, universe, candidate)
+
+    changed_support = copy.deepcopy(rows)
+    changed_support[0]["fit_eligible"] = False
+    with pytest.raises(SecFilingGemmaContractError, match="Learner support"):
+        _validate_training(
+            "development_fit", changed_support, universe, candidate
+        )
+
+    invalid_causal_market_identity = copy.deepcopy(rows)
+    invalid_causal_market_identity[0]["market_prefix_chain_identity_sha256"] = "not-a-hash"
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="market_prefix_chain_identity_sha256",
+    ):
+        _validate_training(
+            "development_fit", invalid_causal_market_identity, universe, candidate
+        )
 
     with pytest.raises(SecFilingGemmaContractError, match="forbidden"):
         validate_training_rows(

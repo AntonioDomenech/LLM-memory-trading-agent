@@ -116,6 +116,7 @@ FLAG_NAMES: Final[tuple[str, ...]] = (
     "internal_control_weakness",
     "management_transition",
 )
+ADVERSE_FLAG_NAMES: Final[tuple[str, ...]] = FLAG_NAMES[:-1]
 CURRENT_IMPACTS: Final[frozenset[str]] = frozenset(
     {"favorable", "neutral", "unfavorable", "mixed", "not_stated"}
 )
@@ -155,6 +156,28 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "sec_acquirer",
     "sec_audit_verifier",
     "sec_corpus_selector",
+    "stage_verifier",
+)
+REQUIRED_STAGE_VERIFIER_CHECKS: Final[tuple[str, ...]] = tuple(
+    sorted(
+        {
+            "artifact_replay",
+            "candidate_identity",
+            "chronology",
+            "gate_replay",
+            "ledger_replay",
+            "no_leverage",
+            "prediction_replay",
+            "prerequisite_evidence_identity",
+            "registry_identity",
+            "request_identity",
+            "runtime_budget",
+            "source_identity",
+            "stage_access_identity",
+            "stage_identity",
+            "zero_cost",
+        }
+    )
 )
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -698,6 +721,13 @@ def build_contract_manifest() -> dict[str, Any]:
             "parametric_contamination_risk": "unresolved_but_bounded",
             "direct_trading_authority": False,
             "runtime_template_system_parameters_details_and_version_hash_required": True,
+            "per_call_client_receipt_trust": (
+                "unattested_until_stage_runner_replay"
+            ),
+            "runtime_identity_guard": (
+                "candidate_pins_checked_immediately_before_and_after_complete_"
+                "stage_extraction_batch"
+            ),
         },
         "predictor": {
             "decision_owner": "deterministic_regularized_two_head_model_v1",
@@ -768,6 +798,59 @@ def build_contract_manifest() -> dict[str, Any]:
                 "sessions_since_prior_same_form",
                 "semantic_output_unavailable",
             ],
+            "feature_semantics": {
+                "sessions_since_prior_same_form": (
+                    "difference_between_zero_based_indices_in_the_exact_2000_onward_"
+                    "authoritative_session_calendar_first_same_form_is_zero"
+                ),
+                "group_mean_denominator": "fixed_declared_group_size_not_stated_is_zero",
+                "adverse_flag_names": list(ADVERSE_FLAG_NAMES),
+                "adverse_flag_count_excludes_management_transition": True,
+                "management_transition_is_separate_feature": True,
+                "stated_dimension_fraction": (
+                    "current_impact_not_not_stated_count_divided_by_10"
+                ),
+                "comparable_dimension_fraction": (
+                    "change_not_not_stated_or_not_comparable_count_divided_by_10"
+                ),
+                "document_usable": "one_only_for_validated_quality_usable",
+                "document_thin": "one_only_for_validated_quality_thin",
+                "valid_unusable_output": (
+                    "neutral_semantics_both_document_quality_indicators_zero"
+                ),
+                "invalid_model_output": (
+                    "neutral_semantics_semantic_output_unavailable_one_no_retry"
+                ),
+                "missing_or_unauthenticated_extraction_evidence": (
+                    "prediction_unavailable_integrity_failure"
+                ),
+                "ablation_missingness": (
+                    "identical_semantic_output_unavailable_indicator_semantic_"
+                    "content_features_zero"
+                ),
+                "required_market_support": (
+                    "all_six_symbols_complete_through_decision_close_with_exact_"
+                    "253_session_materialized_slice"
+                ),
+                "label_window": "entry_t_plus_1_adjusted_open_exit_t_plus_21_adjusted_open",
+                "label_cost_application": (
+                    "declared_cost_rate_on_each_of_entry_and_exit_position_changing_fills"
+                ),
+                "causal_event_identities": {
+                    "market_prefix_chain_identity_sha256": (
+                        "row_chain_genesis_count_and_tip_through_decision_session_only"
+                    ),
+                    "market_feature_row_sha256": (
+                        "event_session_causal_market_prefix_identity_complete_support_"
+                        "missingness_and_exact_market_feature_values_only"
+                    ),
+                    "extraction_identity_sha256": (
+                        "event_local_current_and_prior_filing_extraction_status_"
+                        "authentication_evidence_output_and_sentence_identities_only"
+                    ),
+                    "full_stage_provenance_hashes_are_separate": True,
+                },
+            },
             "semantic_encoding": {
                 "current_impact": {
                     "favorable": 1,
@@ -821,6 +904,36 @@ def build_contract_manifest() -> dict[str, Any]:
                 "scaling": "training_median_mad_clip_4_scale_floor_1e-6",
                 "probability_head": "ridge_logistic_lambda_0.1_max_iter_50_tol_1e-10",
                 "edge_head": "ridge_huber_lambda_0.1_delta_1.5_max_iter_50_tol_1e-10",
+                "frozen_numerical_constants": {
+                    "raw_mad_multiplier": 1.4826,
+                    "raw_scale_floor": 1e-6,
+                    "raw_z_clip": 4.0,
+                    "ridge_lambda": 0.1,
+                    "logistic_max_iterations": 50,
+                    "logistic_tolerance": 1e-10,
+                    "newton_line_search_max_steps": 50,
+                    "newton_armijo_constant": 1e-4,
+                    "logistic_curvature_floor": 1e-15,
+                    "huber_delta": 1.5,
+                    "huber_max_iterations": 50,
+                    "huber_tolerance": 1e-10,
+                    "target_mad_multiplier": 1.4826,
+                    "target_scale_floor": 1e-6,
+                    "edge_clip_lower": -0.5,
+                    "edge_clip_upper": 0.5,
+                },
+                "intercept_regularized": False,
+                "edge_target_preprocessing": (
+                    "clip_to_closed_interval_minus_0.5_plus_0.5_then_training_"
+                    "median_mad_scale_1.4826_floor_1e-6"
+                ),
+                "logistic_initialization": "intercept_logit_training_prevalence_others_zero",
+                "logistic_solver": (
+                    "newton_armijo_backtracking_stop_on_max_abs_gradient_or_"
+                    "coefficient_change"
+                ),
+                "huber_initialization": "intercept_training_target_median_others_zero",
+                "huber_solver": "irls_stop_on_max_abs_coefficient_change",
                 "nonfinite_or_missing_required_market_feature": "prediction_unavailable",
                 "fit_order": (
                     "fixed_once_per_development_fold_from_all_and_only_labels_whose_"
@@ -966,7 +1079,10 @@ def build_contract_manifest() -> dict[str, Any]:
             "comparison_tolerance": ACTIVE_EDGE_TOLERANCE,
         },
         "scoring_semantics": {
-            "prediction_invariance": "future_rows_cannot_change_any_earlier_prediction",
+            "prediction_invariance": (
+                "future_only_stage_extensions_cannot_change_earlier_causal_evidence_"
+                "identities_feature_values_probabilities_edges_or_actions"
+            ),
             "brier_target": (
                 "cash_beats_aapl_after_10bps_strictly_above_1e_12"
             ),
@@ -1005,6 +1121,9 @@ def build_contract_manifest() -> dict[str, Any]:
             "winner_selection_across_final_attempts_forbidden": True,
             "globally_pristine_claim_allowed": False,
             "prospective_paper_trading_required_for_pristine_evidence": True,
+            "required_semantic_prerequisite_checks": list(
+                REQUIRED_STAGE_VERIFIER_CHECKS
+            ),
         },
         "runtime": {
             "hard_total_seconds": MAX_RUNTIME_SECONDS,
@@ -2675,11 +2794,15 @@ def validate_training_rows(
         "feature_availability_session",
         "label_maturity_session",
         "horizon_sessions",
-        "feature_sha256",
-        "extraction_output_sha256",
+        "feature_row_sha256",
+        "extraction_identity_sha256",
+        "market_prefix_chain_identity_sha256",
         "market_feature_row_sha256",
-        "label_ledger_row_sha256",
+        "label_evidence_sha256",
         "semantic_available",
+        "market_available",
+        "prediction_available",
+        "fit_eligible",
     }
     observed_ids: set[str] = set()
     previous: tuple[date, str] | None = None
@@ -2736,11 +2859,36 @@ def validate_training_rows(
             raise SecFilingGemmaContractError("Training row uses an outcome beyond its cutoff")
         if _strict_int(row["horizon_sessions"], "horizon_sessions") != HORIZON_SESSIONS:
             raise SecFilingGemmaContractError("Training horizon changed")
-        _sha256(row["feature_sha256"], "feature_sha256")
-        _sha256(row["extraction_output_sha256"], "extraction_output_sha256")
+        _sha256(row["feature_row_sha256"], "feature_row_sha256")
+        _sha256(row["extraction_identity_sha256"], "extraction_identity_sha256")
+        _sha256(
+            row["market_prefix_chain_identity_sha256"],
+            "market_prefix_chain_identity_sha256",
+        )
         _sha256(row["market_feature_row_sha256"], "market_feature_row_sha256")
-        _sha256(row["label_ledger_row_sha256"], "label_ledger_row_sha256")
-        _strict_bool(row["semantic_available"], "semantic_available")
+        _sha256(row["label_evidence_sha256"], "label_evidence_sha256")
+        semantic_available = _strict_bool(
+            row["semantic_available"], "semantic_available"
+        )
+        market_available = _strict_bool(
+            row["market_available"], "market_available"
+        )
+        prediction_available = _strict_bool(
+            row["prediction_available"], "prediction_available"
+        )
+        fit_eligible = _strict_bool(row["fit_eligible"], "fit_eligible")
+        if fit_eligible != prediction_available:
+            raise SecFilingGemmaContractError(
+                "Learner support must equal prediction-available support"
+            )
+        if prediction_available and not market_available:
+            raise SecFilingGemmaContractError(
+                "Prediction availability requires complete market support"
+            )
+        if semantic_available and not prediction_available:
+            raise SecFilingGemmaContractError(
+                "Semantic availability cannot survive an unavailable prediction row"
+            )
         sort_key = (feature_date, accession)
         if previous is not None and sort_key <= previous:
             raise SecFilingGemmaContractError("Training rows must be chronological")
@@ -3266,6 +3414,7 @@ def validate_live_lessons(
 
 __all__ = [
     "ACTIVE_EDGE_TOLERANCE",
+    "ADVERSE_FLAG_NAMES",
     "BRIER_TARGET_COST_BPS",
     "CALENDAR_SOURCE_EVIDENCE_SCHEMA_VERSION",
     "CALENDAR_SOURCE_URLS",
@@ -3286,6 +3435,7 @@ __all__ = [
     "MAX_RUNTIME_SECONDS",
     "PREPROCESSOR_VERSION",
     "REQUIRED_SOURCE_HASHES",
+    "REQUIRED_STAGE_VERIFIER_CHECKS",
     "STAGE_MODEL_CALL_CAPS",
     "STAGE_ORDER",
     "STAGE_WINDOWS",

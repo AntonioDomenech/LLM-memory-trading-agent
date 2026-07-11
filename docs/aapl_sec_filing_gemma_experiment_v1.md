@@ -193,9 +193,15 @@ than hidden inside this result.
 
 ## Point-in-time availability
 
-For each filing, the system reconciles SEC Submissions metadata, the quarterly
-`master.idx`, the raw SGML acceptance timestamp, the accession
-`index.json`, and the primary document.
+The 24-slot production prerequisite audit reconciles its sampled filings
+across SEC Submissions, quarterly `master.idx`, raw SGML acceptance data,
+accession `index.json`, and the primary document. It is parser evidence, not
+an exhaustive proof for the predictive corpus. The complete predictive
+universe is instead authenticated from the exact current SEC Submissions file
+plus every historical Submissions file it references; each selected primary
+document is then fetched from its internally derived official SEC URL and
+bound by exact raw and normalized byte hashes. This v1 approach makes no
+master-index or SGML-reconciliation claim for 2025-2026.
 
 Availability is the first complete AAPL session strictly after the latest
 defensible acceptance date, filing date, or filing-date-change date. The
@@ -270,8 +276,15 @@ Boolean and evidence sentence IDs.
 A current claim needs current-filing evidence. A comparative claim needs both
 current and prior evidence. A true flag needs current evidence; a false flag
 must cite nothing. No extra fields or free text are allowed. An invalid output
-makes the filing unavailable: there is no repair call, retry, or discretionary
-imputation.
+makes Gemma meaning unavailable: there is no repair call, retry, or
+discretionary imputation.
+
+A sealed invalid model output is encoded with neutral semantic content and
+`semantic_output_unavailable = 1`; the identical missingness indicator is
+given to the ablation. A valid `unusable` output is also semantically neutral,
+but remains a validated output and therefore does not set that indicator.
+Missing or unauthenticated extraction evidence is different: it is an
+integrity failure and makes the complete prediction row unavailable.
 
 ## Foundation-model contamination caveat
 
@@ -332,6 +345,44 @@ heads are fixed ridge-regularized linear models with training-only robust
 scaling. There is no feature selection, interaction search, or hyperparameter
 tuning after this contract.
 
+All semantic reductions are exact. Group means use their fixed declared
+denominators, treating `not_stated` as zero. The adverse count covers the five
+adverse flags and excludes `management_transition`, which has its own feature.
+The stated fraction counts current-impact values other than `not_stated`; the
+comparable fraction counts changes other than `not_stated` and
+`not_comparable`. `sessions_since_prior_same_form` is the difference between
+the two zero-based positions in the frozen 2000-onward NYSE session sequence;
+the first filing of a form receives zero.
+
+A feature row requires complete authenticated AAPL/SPY/QQQ/IWM/VIX/TNX
+market support through the completed decision-session close, including the
+exact 253-row slice needed for 252-session calculations. Labels compare the
+next adjusted open with the adjusted open 20 held sessions later. The declared
+5- or 10-basis-point rate is charged on each position-changing fill, at both
+entry and exit.
+
+Prediction and training receipts use event-local causal identities. The market
+chain identity ends at the decision-session row, and the market-feature
+identity covers only that event, complete-support/missingness state, and exact
+feature values. The extraction identity covers only the current and immediate
+prior filing identities plus the authenticated extraction status, evidence,
+output, and supplied-sentence identities for that event. Full stage, source,
+corpus, and proof hashes remain separately preserved for audit, but are not
+part of these causal identities. Appending future-only market rows, filings,
+or stage provenance therefore cannot change an earlier event identity,
+feature value, probability, expected edge, or action.
+
+The numerical recipe is part of the frozen candidate, not an implementation
+choice. Each raw feature is centered on its training median, divided by
+`max(1.4826 * MAD, 1e-6)`, and clipped to `[-4, 4]`. The edge target is first
+clipped to `[-0.5, 0.5]`, then centered and scaled by the same training-only
+median/MAD rule. The intercept is not regularized. The probability head uses
+Newton updates with a frozen Armijo line search; the edge head uses frozen
+Huber IRLS. Their initialization, iteration caps, tolerances, and all remaining
+numerical constants are recorded in the contract manifest. Model-state floats
+are sealed as canonical hexadecimal strings so a replay cannot silently change
+precision or serialization.
+
 The four possible action gates are frozen before development:
 
 | Candidate | Probability gate | Expected-edge gate |
@@ -365,6 +416,14 @@ remain byte-identical throughout the complete test window: outcomes from an
 earlier prediction in a fold cannot update a later prediction in the same
 fold. After candidate selection there is one separate refit using all and only
 development labels matured by 2018-12-31.
+
+The training audit retains every matured eligible filing event, including an
+explicit unavailable row when evidence is incomplete. Learner support is the
+strict subset whose feature row says `prediction_available = true`; it is
+never inferred by silently dropping rows. A sealed invalid Gemma output may
+still be fit-eligible through neutral semantics plus its missingness indicator,
+whereas missing/unauthenticated extraction evidence or incomplete required
+market history is not fit-eligible.
 
 The probability head and every Brier comparison use one binary target: whether
 a 20-session CASH episode beats holding AAPL after 10-basis-point costs by more
@@ -443,6 +502,13 @@ Gemma may be called only through
 `gemma4:12b` digest. Environment proxies, redirects, model pulls, streaming,
 thinking mode, retries, and repair attempts are disabled. Generation uses
 temperature 0, seed 0, context 6144, and output limit 512.
+
+The per-call client receipt is byte-level evidence, not a self-issued claim
+that production transport or model identity is trustworthy. The stage runner
+must independently compare the actual runtime evidence, model digest, and
+runtime fingerprint with the candidate immediately before and after the
+complete extraction batch. Until that guard passes, even the internally
+created hardened loopback session remains explicitly unattested.
 
 Official SEC HTTPS requests are permitted for the free filing corpus. Model
 traffic is loopback-only. Paid API calls and estimated external cost must
