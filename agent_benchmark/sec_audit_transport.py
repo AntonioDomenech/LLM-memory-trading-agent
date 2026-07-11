@@ -137,6 +137,7 @@ class SecAuditTransport:
         max_retries: int = MAX_RETRIES,
         max_redirects: int = MAX_REDIRECTS,
         allow_cache_reads: bool = True,
+        allow_cache_writes: bool = True,
     ) -> None:
         if session is None:
             raise SecAuditTransportError("An injected SEC session is required")
@@ -148,11 +149,14 @@ class SecAuditTransport:
             raise SecAuditTransportError("SEC redirect ceiling may only be tightened")
         if not isinstance(allow_cache_reads, bool):
             raise SecAuditTransportError("allow_cache_reads must be boolean")
+        if not isinstance(allow_cache_writes, bool):
+            raise SecAuditTransportError("allow_cache_writes must be boolean")
         self._user_agent_audit = validate_sec_user_agent(user_agent)
         self._headers = _private_header_factory(user_agent)
         self._session = session
         self._cache_dir = Path(cache_dir).resolve()
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        if allow_cache_reads or allow_cache_writes:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._budget = budget
         self._clock = clock
         self._sleep = sleep
@@ -160,6 +164,7 @@ class SecAuditTransport:
         self._max_retries = int(max_retries)
         self._max_redirects = int(max_redirects)
         self._allow_cache_reads = allow_cache_reads
+        self._allow_cache_writes = allow_cache_writes
         self._last_request_at: float | None = None
 
     def __repr__(self) -> str:
@@ -180,6 +185,7 @@ class SecAuditTransport:
             "max_retries": self._max_retries,
             "max_redirects": self._max_redirects,
             "allow_cache_reads": self._allow_cache_reads,
+            "allow_cache_writes": self._allow_cache_writes,
             "budget": self._budget.snapshot(),
         }
 
@@ -249,6 +255,8 @@ class SecAuditTransport:
         body: bytes,
         audit: ResponseAudit,
     ) -> None:
+        if not self._allow_cache_writes:
+            return
         body_path, metadata_path = self._cache_paths(request_url)
         metadata = {
             "request_url": request_url,

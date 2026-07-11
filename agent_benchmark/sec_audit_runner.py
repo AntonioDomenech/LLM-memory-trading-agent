@@ -12,10 +12,12 @@ import copy
 from dataclasses import asdict
 from importlib import metadata as importlib_metadata
 import json
+import os
 from pathlib import Path
 import platform
 import re
 import ssl
+import stat as stat_module
 import subprocess
 from typing import Any, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
@@ -23,6 +25,7 @@ from urllib.parse import urlsplit
 from .sec_audit_artifact import (
     METADATA_FILENAME,
     ArtifactVerification,
+    read_artifact_file,
     seal_artifact,
     verify_artifact,
 )
@@ -59,6 +62,7 @@ from .sec_session_calendar import EXPECTED_SESSIONS, validate_aapl_session_calen
 CONTRACT_VERSION = "aapl-sec-point-in-time-audit-runner-v1"
 _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+_MAX_GIT_CONTROL_BYTES = 1024 * 1024
 SOURCE_FILES = (
     "agent_benchmark/sec_point_in_time.py",
     "agent_benchmark/sec_audit_selection.py",
@@ -87,6 +91,150 @@ _AUDIT_FIELDS = frozenset(
         "redirects",
     }
 )
+
+
+def _is_link_or_reparse_point(path: Path) -> bool:
+    try:
+        details = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if stat_module.S_ISLNK(details.st_mode):
+        return True
+    reparse_flag = getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(getattr(details, "st_file_attributes", 0) & reparse_flag)
+
+
+def _windows_path_is_local(path: Path) -> bool:
+    if os.name != "nt":
+        return True
+    raw = str(path).replace("/", "\\")
+    if raw.startswith("\\\\"):
+        return False
+    anchor = path.anchor
+    if not anchor:
+        return False
+    try:
+        import ctypes
+
+        drive_type = int(ctypes.windll.kernel32.GetDriveTypeW(str(anchor)))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    # Removable, fixed, optical, and RAM-disk roots are local. Unknown,
+    # missing, and remote roots fail closed.
+    return drive_type in {2, 3, 5, 6}
+
+
+def validate_local_filesystem_path(path: str | Path) -> Path:
+    """Return a lexical absolute path only when it cannot address a network FS."""
+
+    lexical = Path(os.path.abspath(Path(path)))
+    if not _windows_path_is_local(lexical):
+        raise SecPointInTimeError("filesystem path must be on a local device")
+    current = lexical
+    while True:
+        if _is_link_or_reparse_point(current):
+            raise SecPointInTimeError(
+                "filesystem path cannot contain links or reparse points"
+            )
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return lexical
+
+
+def _read_git_control_file(path: Path) -> str:
+    validate_local_filesystem_path(path)
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
+        descriptor = os.open(path, flags)
+        try:
+            details = os.fstat(descriptor)
+            if details.st_size > _MAX_GIT_CONTROL_BYTES:
+                raise SecPointInTimeError("source Git control file is too large")
+            payload = os.read(descriptor, _MAX_GIT_CONTROL_BYTES + 1)
+        finally:
+            os.close(descriptor)
+    except SecPointInTimeError:
+        raise
+    except OSError as exc:
+        raise SecPointInTimeError("source Git control file is unreadable") from exc
+    if len(payload) > _MAX_GIT_CONTROL_BYTES or len(payload) != details.st_size:
+        raise SecPointInTimeError("source Git control file changed during read")
+    validate_local_filesystem_path(path)
+    if payload.startswith(b"\xef\xbb\xbf"):
+        raise SecPointInTimeError(
+            "source Git control file cannot contain a byte-order mark"
+        )
+    try:
+        text = payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise SecPointInTimeError("source Git control file is not UTF-8") from exc
+    if "\ufeff" in text:
+        raise SecPointInTimeError(
+            "source Git control file cannot contain a byte-order mark"
+        )
+    return text
+
+
+def _validate_local_git_metadata(repo: Path) -> None:
+    git_dir = validate_local_filesystem_path(repo / ".git")
+    if not git_dir.is_dir():
+        raise SecPointInTimeError(
+            "source repository must use a local standalone Git directory"
+        )
+
+    # Refuse any reparse point anywhere Git may read. This prevents a local
+    # worktree from silently redirecting objects, refs, or configuration to SMB.
+    pending = [git_dir]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError as exc:
+            raise SecPointInTimeError("source Git metadata is unreadable") from exc
+        for entry in entries:
+            child = Path(entry.path)
+            if _is_link_or_reparse_point(child):
+                raise SecPointInTimeError(
+                    "source Git metadata cannot contain links or reparse points"
+                )
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+            except OSError as exc:
+                raise SecPointInTimeError("source Git metadata is unreadable") from exc
+
+    for forbidden in (
+        git_dir / "commondir",
+        git_dir / "config.worktree",
+        git_dir / "objects" / "info" / "alternates",
+        git_dir / "objects" / "info" / "http-alternates",
+    ):
+        if forbidden.exists():
+            raise SecPointInTimeError(
+                "source Git metadata cannot redirect configuration or objects"
+            )
+
+    config = _read_git_control_file(git_dir / "config")
+    if re.search(r"(?im)^\s*\[\s*include", config):
+        raise SecPointInTimeError("source Git configuration includes are not allowed")
+    if re.search(
+        r"(?im)^\s*(?:worktree|attributesfile|excludesfile|"
+        r"alternaterefscommand|clean|smudge|process|textconv|external)\s*=",
+        config,
+    ):
+        raise SecPointInTimeError(
+            "source Git configuration cannot execute or redirect helpers"
+        )
+    if re.search(r"(?im)^\s*(?:promisor|partialclonefilter)\s*=", config):
+        raise SecPointInTimeError(
+            "partial or promisor source repositories are not allowed"
+        )
 
 
 class TransportLike(Protocol):
@@ -130,9 +278,11 @@ def _runtime_manifest(*, live: bool) -> dict[str, Any]:
 def _read_artifact_json(artifact_dir: Path, name: str) -> Any:
     try:
         return json.loads(
-            (artifact_dir / name).read_text(encoding="utf-8", errors="strict")
+            read_artifact_file(artifact_dir, name).decode(
+                "utf-8", errors="strict"
+            )
         )
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise SecPointInTimeError(
             "sealed SEC audit contains unreadable JSON evidence"
         ) from exc
@@ -322,7 +472,8 @@ def verify_production_sec_audit_artifact(
         if (
             not isinstance(normalized, dict)
             or normalized.get("artifact_file") != name
-            or content_sha256((directory / name).read_bytes()) != normalized.get("sha256")
+            or content_sha256(read_artifact_file(directory, name))
+            != normalized.get("sha256")
         ):
             raise SecPointInTimeError("sealed SEC audit normalized text does not reconcile")
 
@@ -379,36 +530,93 @@ def verify_source_provenance(
 ) -> dict[str, Any]:
     """Bind a run to the clean, existing HEAD of the supplied Git repository."""
 
-    repo = Path(source_repo).resolve()
+    lexical_repo = validate_local_filesystem_path(source_repo)
+    repo = lexical_repo.resolve()
     if not repo.is_dir():
         raise SecPointInTimeError("source repository directory does not exist")
+    _validate_local_git_metadata(repo)
 
-    def git(*arguments: str) -> str:
+    safe_git_environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    safe_git_environment.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PROTOCOL_FROM_USER": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    safe_git_prefix = [
+        "git",
+        "--no-optional-locks",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "core.autocrlf=true",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "submodule.recurse=false",
+        "-C",
+        str(repo),
+    ]
+
+    def run_git(
+        *arguments: str,
+        text: bool,
+        allowed_returncodes: tuple[int, ...] = (0,),
+    ) -> subprocess.CompletedProcess[Any]:
         try:
             completed = subprocess.run(
-                ["git", "-C", str(repo), *arguments],
-                check=True,
+                [*safe_git_prefix, *arguments],
+                check=False,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="strict",
+                text=text,
+                encoding="utf-8" if text else None,
+                errors="strict" if text else None,
+                env=safe_git_environment,
+                stdin=subprocess.DEVNULL,
                 timeout=30,
             )
         except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
             raise SecPointInTimeError("could not verify source Git provenance") from exc
+        if completed.returncode not in allowed_returncodes:
+            raise SecPointInTimeError("could not verify source Git provenance")
+        return completed
+
+    def git(*arguments: str) -> str:
+        completed = run_git(*arguments, text=True)
         return completed.stdout.strip()
 
     def git_bytes(*arguments: str) -> bytes:
-        try:
-            completed = subprocess.run(
-                ["git", "-C", str(repo), *arguments],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise SecPointInTimeError("could not verify source Git provenance") from exc
+        completed = run_git(*arguments, text=False)
         return completed.stdout
+
+    partial_clone = run_git(
+        "config",
+        "--local",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$",
+        text=True,
+        allowed_returncodes=(0, 1),
+    )
+    if partial_clone.returncode == 0 and partial_clone.stdout.strip():
+        raise SecPointInTimeError(
+            "partial or promisor source repositories are not allowed"
+        )
 
     def normalized_source(payload: bytes) -> bytes:
         try:
@@ -1187,6 +1395,7 @@ def run_live_sec_audit(
             clock=time.monotonic,
             sleep=time.sleep,
             allow_cache_reads=False,
+            allow_cache_writes=False,
         )
         return _run_sec_audit(
             transport=transport,

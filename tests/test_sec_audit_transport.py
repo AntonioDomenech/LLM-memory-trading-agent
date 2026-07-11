@@ -97,6 +97,7 @@ def _transport(
     max_retries: int = 3,
     max_redirects: int = 3,
     allow_cache_reads: bool = True,
+    allow_cache_writes: bool = True,
 ) -> tuple[SecAuditTransport, FakeSession, BudgetCounter, FakeClock]:
     clock = FakeClock()
     budget = BudgetCounter(
@@ -116,6 +117,7 @@ def _transport(
         max_retries=max_retries,
         max_redirects=max_redirects,
         allow_cache_reads=allow_cache_reads,
+        allow_cache_writes=allow_cache_writes,
     )
     return client, resolved_session, budget, clock
 
@@ -237,6 +239,29 @@ def test_production_mode_ignores_mutable_cache_and_fetches_fresh_bytes(
     assert audit.cache_hit is False
     assert audit.network_requests == 1
     assert len(session.calls) == 1
+
+
+def test_production_style_transport_performs_no_cache_io(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache-must-not-exist"
+    client, _, _, _ = _transport(
+        cache_dir,
+        [
+            FakeResponse(
+                200,
+                headers={"Content-Type": "application/json"},
+                chunks=[b"{}"],
+            )
+        ],
+        allow_cache_reads=False,
+        allow_cache_writes=False,
+    )
+
+    body, audit = client.fetch("https://www.sec.gov/no-cache")
+
+    assert body == b"{}"
+    assert audit.cache_hit is False
+    assert not cache_dir.exists()
+    assert client.safe_state()["allow_cache_writes"] is False
 
 
 def test_manual_redirect_stays_official_and_is_rate_limited(tmp_path: Path) -> None:

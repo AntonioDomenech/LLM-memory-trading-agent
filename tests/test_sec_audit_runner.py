@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -21,7 +22,9 @@ from agent_benchmark.sec_audit_runner import (
     CONTRACT_VERSION,
     SOURCE_FILES,
     run_sec_audit,
+    validate_local_filesystem_path,
     verify_production_sec_audit_artifact,
+    verify_source_provenance,
 )
 from agent_benchmark.sec_point_in_time import (
     AAPL_CIK,
@@ -130,6 +133,97 @@ def _source_repo(root: Path) -> tuple[Path, str]:
         text=True,
     ).stdout.strip()
     return repo, commit
+
+
+def test_source_provenance_disables_repository_fsmonitor_hook(tmp_path: Path) -> None:
+    repo, commit = _source_repo(tmp_path)
+    marker = repo / ".git" / "fsmonitor-invoked"
+    hook = repo / ".git" / "hooks" / "fsmonitor-test"
+    hook.write_text(
+        "#!/bin/sh\n"
+        "printf invoked > .git/fsmonitor-invoked\n"
+        "printf '0\\n'\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    hook.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.fsmonitor", str(hook)],
+        check=True,
+        capture_output=True,
+    )
+
+    provenance = verify_source_provenance(repo)
+
+    assert provenance["commit"] == commit
+    assert not marker.exists()
+
+
+def test_source_provenance_rejects_promisor_repository_without_fetch(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _source_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "remote.origin.promisor", "true"],
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(SecPointInTimeError, match="partial or promisor"):
+        verify_source_provenance(repo)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows UNC boundary")
+def test_source_provenance_rejects_unc_path_before_filesystem_access() -> None:
+    with pytest.raises(SecPointInTimeError, match="local device"):
+        validate_local_filesystem_path(
+            r"\\127.0.0.1\nonexistent-share\source-repo"
+        )
+
+
+def test_source_provenance_rejects_git_config_includes_before_git(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _source_repo(tmp_path)
+    with (repo / ".git" / "config").open("a", encoding="utf-8", newline="\n") as file:
+        file.write(
+            "\n[include]\n"
+            "\tpath = //127.0.0.1/nonexistent-share/hostile-config\n"
+        )
+
+    with pytest.raises(SecPointInTimeError, match="includes are not allowed"):
+        verify_source_provenance(repo)
+
+
+def test_source_provenance_rejects_bom_hidden_git_include_before_git(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _source_repo(tmp_path)
+    config = repo / ".git" / "config"
+    original = config.read_bytes()
+    config.write_bytes(
+        b"\xef\xbb\xbf[include]\n"
+        b"\tpath = //127.0.0.1/nonexistent-share/hostile-config\n"
+        + original
+    )
+
+    with pytest.raises(SecPointInTimeError, match="byte-order mark"):
+        verify_source_provenance(repo)
+
+
+def test_source_provenance_rejects_object_alternates_before_git(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _source_repo(tmp_path)
+    info = repo / ".git" / "objects" / "info"
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "alternates").write_text(
+        "//127.0.0.1/nonexistent-share/objects\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SecPointInTimeError, match="redirect configuration or objects"):
+        verify_source_provenance(repo)
 
 
 def _record(

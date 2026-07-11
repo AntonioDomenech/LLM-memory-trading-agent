@@ -245,8 +245,29 @@ Both commands read only `secrets.sec_user_agent` from the ignored
 `data/local_config.json`; unrelated API keys are neither loaded into the audit
 nor printed. Preflight performs zero network calls. Live execution is bounded
 to official SEC HTTPS hosts and writes only under
-`e/sec_point_in_time_audit_v1/`, with cache bytes under the ignored
-`data/cache/sec_point_in_time_audit_v1/` directory.
+`e/sec_point_in_time_audit_v1/`. The production path performs no cache reads or
+writes; `data/cache/sec_point_in_time_audit_v1/` is reserved for offline
+diagnostics only.
+
+The zero-network preflight disables repository Git hooks and file-system
+monitors, ignores global/system Git configuration, disables interactive
+credentials and all Git protocols, and rejects partial/promisor repositories,
+Git configuration includes, object alternates, Git-directory indirection, UNC
+paths, device paths, and Windows remote mapped drives.
+It rejects symbolic links, Windows junctions, and other reparse points in every
+configured path component. Caller-provided artifact names are restricted to one
+safe direct child of the frozen artifact root and are represented in command
+output only by a SHA-256 reference, never echoed verbatim. Invalid arguments
+and runtime failures emit fixed JSON reason codes without reproducing raw
+command-line values or private contact text.
+
+On Windows, sealing pins the exact local artifact directory chain with open
+handles and recorded volume/file identities. Payload files are created
+exclusively without following reparse points, the temporary directory cannot be
+renamed while it is written or verified, and final promotion renames that exact
+open directory handle without replacing an existing destination. Verification
+uses the same no-follow reads, preventing a checked path from being swapped to a
+junction between validation and use.
 
 A production pass requires fresh official retrieval for every admitted
 response. Mutable cache entries are ignored by the live path and cannot support

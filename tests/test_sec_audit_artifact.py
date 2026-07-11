@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -300,3 +302,212 @@ def test_inputs_are_closed_and_bytes_only(tmp_path: Path) -> None:
             source_commit=SOURCE_COMMIT,
             audit_contract_version="has spaces",
         )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory leases")
+def test_seal_rejects_existing_junction_parent_without_outside_write(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside-junction-target"
+    outside.mkdir()
+    junction = tmp_path / "artifact-root-junction"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    is_junction = getattr(os.path, "isjunction", lambda _: False)
+    if created.returncode != 0 or not is_junction(junction):
+        pytest.skip("directory junctions are unavailable on this Windows host")
+    try:
+        with pytest.raises(SecAuditArtifactError, match="reparse"):
+            seal_artifact(
+                junction / "sealed",
+                {"payload.bin": b"must-stay-local"},
+                source_commit=SOURCE_COMMIT,
+                audit_contract_version=CONTRACT_VERSION,
+            )
+        assert list(outside.iterdir()) == []
+    finally:
+        junction.rmdir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory leases")
+def test_pinned_artifact_parent_cannot_be_renamed_during_seal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "artifact-root"
+    parent.mkdir()
+    moved = tmp_path / "moved-root"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    observed: list[int | None] = []
+    original = artifact._win_open_directory
+
+    def attempt_rename(path: Path, **kwargs: object):
+        lease = original(path, **kwargs)
+        if Path(path) == parent and not observed:
+            try:
+                parent.rename(moved)
+            except OSError as exc:
+                observed.append(exc.winerror)
+            else:  # pragma: no cover - this is the regression condition
+                observed.append(None)
+        return lease
+
+    monkeypatch.setattr(artifact, "_win_open_directory", attempt_rename)
+    sealed = seal_artifact(
+        parent / "sealed",
+        {"payload.bin": b"safe"},
+        source_commit=SOURCE_COMMIT,
+        audit_contract_version=CONTRACT_VERSION,
+    )
+
+    assert observed and observed[0] in {5, 32}
+    assert sealed.artifact_dir == parent / "sealed"
+    assert not moved.exists()
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory leases")
+def test_pinned_temporary_directory_cannot_be_renamed_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "sealed"
+    moved = tmp_path / "moved-temporary"
+    observed: list[int | None] = []
+    original = artifact._write_bytes
+
+    def attempt_rename(path: Path, payload: bytes) -> None:
+        temporary = path.parent
+        if not observed:
+            try:
+                temporary.rename(moved)
+            except OSError as exc:
+                observed.append(exc.winerror)
+            else:  # pragma: no cover - this is the regression condition
+                observed.append(None)
+        original(path, payload)
+
+    monkeypatch.setattr(artifact, "_write_bytes", attempt_rename)
+    seal_artifact(
+        destination,
+        {"payload.bin": b"safe"},
+        source_commit=SOURCE_COMMIT,
+        audit_contract_version=CONTRACT_VERSION,
+    )
+
+    assert observed and observed[0] in {5, 32}
+    assert destination.is_dir()
+    assert not moved.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle promotion")
+def test_handle_promotion_never_replaces_competing_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "competing"
+    original = artifact._win_rename_open_directory
+
+    def compete(lease: object, target: Path) -> None:
+        target.mkdir()
+        (target / "sentinel.txt").write_bytes(b"keep")
+        original(lease, target)
+
+    monkeypatch.setattr(artifact, "_win_rename_open_directory", compete)
+    with pytest.raises(SecAuditArtifactError, match="promotion"):
+        seal_artifact(
+            destination,
+            {"payload.bin": b"new"},
+            source_commit=SOURCE_COMMIT,
+            audit_contract_version=CONTRACT_VERSION,
+        )
+
+    assert (destination / "sentinel.txt").read_bytes() == b"keep"
+    assert list(tmp_path.glob(".competing.*.sealing")) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows file identity")
+def test_promoted_directory_keeps_exact_temporary_file_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "identity"
+    identities: list[object] = []
+    original = artifact._win_rename_open_directory
+
+    def record(lease: object, target: Path) -> None:
+        identities.append(lease.identity)
+        original(lease, target)
+        identities.append(lease.identity)
+
+    monkeypatch.setattr(artifact, "_win_rename_open_directory", record)
+    seal_artifact(
+        destination,
+        {"payload.bin": b"same-object"},
+        source_commit=SOURCE_COMMIT,
+        audit_contract_version=CONTRACT_VERSION,
+    )
+    reopened = artifact._win_open_directory(destination, delete_access=False)
+    try:
+        identities.append(reopened.identity)
+    finally:
+        reopened.close()
+
+    assert identities[0] == identities[1] == identities[2]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows storage identity")
+def test_storage_identity_change_fails_closed_before_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "identity-change"
+    original = artifact._WindowsDirectoryLease.assert_same
+    injected = False
+
+    def mismatch_once(lease: object) -> None:
+        nonlocal injected
+        if not injected and ".sealing" in lease.path.name:
+            injected = True
+            raise SecAuditArtifactError("artifact storage identity changed")
+        original(lease)
+
+    monkeypatch.setattr(
+        artifact._WindowsDirectoryLease, "assert_same", mismatch_once
+    )
+    with pytest.raises(SecAuditArtifactError, match="storage identity changed"):
+        seal_artifact(
+            destination,
+            {"payload.bin": b"never-promoted"},
+            source_commit=SOURCE_COMMIT,
+            audit_contract_version=CONTRACT_VERSION,
+        )
+
+    assert injected is True
+    assert not destination.exists()
+    assert list(tmp_path.glob(".identity-change.*.sealing")) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle promotion")
+def test_windows_promotion_does_not_use_path_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("Path.replace must not promote a Windows artifact")
+
+    monkeypatch.setattr(Path, "replace", forbidden)
+    result = seal_artifact(
+        tmp_path / "handle-promoted",
+        {"payload.bin": b"safe"},
+        source_commit=SOURCE_COMMIT,
+        audit_contract_version=CONTRACT_VERSION,
+    )
+
+    assert result.artifact_dir.is_dir()

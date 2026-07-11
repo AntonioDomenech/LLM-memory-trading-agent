@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
+import os
 from pathlib import Path
+import pickle
 import shutil
 import subprocess
 from typing import Any
@@ -96,6 +99,8 @@ def test_preflight_is_read_only_and_prints_only_safe_evidence(
     assert payload["llm_or_model_calls"] == 0
     assert payload["sec_user_agent_real_contact_validated"] is True
     assert str(payload["sec_user_agent_sha256"]).startswith("sha256:")
+    assert str(payload["artifact_reference"]).startswith("sha256:")
+    assert "fixed-test-artifact" not in output
     assert PRIVATE_USER_AGENT not in output
     assert UNRELATED_API_SECRET not in output
     assert not (repo / "data").exists()
@@ -211,6 +216,115 @@ def test_invalid_arguments_use_fixed_json_error(capsys: Any) -> None:
     assert payload["network_requests_performed"] == 0
 
 
+def test_invalid_arguments_never_echo_raw_secret(
+    capsys: Any,
+) -> None:
+    raw_secret = "raw-contact-and-api-key-DO-NOT-ECHO"
+
+    result = cli.main(["--sec-user-agent", raw_secret, raw_secret])
+    captured = capsys.readouterr()
+
+    assert result == 2
+    assert json.loads(captured.out)["reason_code"] == "invalid_arguments"
+    assert raw_secret not in captured.out
+    assert raw_secret not in captured.err
+
+
+def test_prepare_state_redacts_private_contact_from_repr(
+    tmp_path: Path,
+) -> None:
+    repo = _source_repo(tmp_path)
+    config = _config(tmp_path / "repr-config.json", user_agent=PRIVATE_USER_AGENT)
+    private_artifact_name = "sk-proj-private-artifact-token-123456"
+
+    prepared = cli._prepare(
+        source_repo=repo,
+        config=config,
+        cache_dir="data/cache/sec_point_in_time_audit_v1",
+        artifact_dir=f"e/sec_point_in_time_audit_v1/{private_artifact_name}",
+    )
+    diagnostics = repr(prepared) + repr(prepared.reveal_user_agent_for_transport)
+
+    assert PRIVATE_USER_AGENT not in diagnostics
+    assert UNRELATED_API_SECRET not in diagnostics
+    assert private_artifact_name not in diagnostics
+    assert "redacted" in diagnostics
+    with pytest.raises(TypeError):
+        asdict(prepared)
+    with pytest.raises(TypeError):
+        pickle.dumps(prepared)
+
+
+def test_malformed_config_exception_retains_no_secret_content(
+    tmp_path: Path,
+) -> None:
+    raw_secret = "PRIVATE-CONTACT-RETAINED-IN-MALFORMED-JSON"
+    config = tmp_path / "malformed-config.json"
+    config.write_text(
+        '{"secrets":{"sec_user_agent":"' + raw_secret + '",',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(cli.SecAuditCliError) as captured:
+        cli._load_sec_user_agent(config)
+
+    error = captured.value
+    assert error.code == "sec_config_unreadable"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    diagnostics = [repr(error)]
+    traceback = error.__traceback__
+    while traceback is not None:
+        if traceback.tb_frame.f_globals.get("__name__") == cli.__name__:
+            diagnostics.extend(
+                repr(value) for value in traceback.tb_frame.f_locals.values()
+            )
+        traceback = traceback.tb_next
+    assert raw_secret not in "\n".join(diagnostics)
+
+
+def test_invalid_contact_exception_retains_no_secret_content(
+    tmp_path: Path,
+) -> None:
+    raw_secret = "PRIVATE-INVALID-CONTACT-WITHOUT-AN-EMAIL"
+    config = _config(tmp_path / "invalid-contact.json", user_agent=raw_secret)
+
+    with pytest.raises(cli.SecAuditCliError) as captured:
+        cli._load_sec_user_agent(config)
+
+    error = captured.value
+    assert error.code == "sec_user_agent_invalid"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    diagnostics: list[str] = [repr(error)]
+    traceback = error.__traceback__
+    while traceback is not None:
+        if traceback.tb_frame.f_globals.get("__name__") == cli.__name__:
+            diagnostics.extend(
+                repr(value) for value in traceback.tb_frame.f_locals.values()
+            )
+        traceback = traceback.tb_next
+    assert raw_secret not in "\n".join(diagnostics)
+
+
+def test_caller_artifact_name_is_never_echoed(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    repo = _source_repo(tmp_path)
+    config = _config(tmp_path / "artifact-config.json", user_agent=PRIVATE_USER_AGENT)
+    raw_secret = "api-key-shaped-secret@private.example"
+    args = _args(repo, config)
+    args[-1] = f"e/sec_point_in_time_audit_v1/{raw_secret}"
+
+    assert cli.main(args) == 2
+    captured = capsys.readouterr()
+
+    assert json.loads(captured.out)["reason_code"] == "artifact_path_invalid"
+    assert raw_secret not in captured.out
+    assert raw_secret not in captured.err
+
+
 def test_preflight_fails_when_live_dependency_is_missing(
     tmp_path: Path,
     capsys: Any,
@@ -266,6 +380,43 @@ def test_cache_root_symlink_cannot_escape_repository(
     assert cli.main(_args(repo, config)) == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["reason_code"] == "cache_path_outside_frozen_root"
+
+
+@pytest.mark.skipif(
+    not (hasattr(Path("."), "is_junction") or hasattr(os.path, "isjunction")),
+    reason="Windows junction detection unavailable",
+)
+def test_cache_root_junction_cannot_escape_repository(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    repo = _source_repo(tmp_path)
+    config = _config(tmp_path / "junction-config.json", user_agent=PRIVATE_USER_AGENT)
+    outside = tmp_path / "outside-junction-cache"
+    outside.mkdir()
+    cache_parent = repo / "data" / "cache"
+    cache_parent.mkdir(parents=True)
+    junction = cache_parent / "sec_point_in_time_audit_v1"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    path_junction = getattr(junction, "is_junction", None)
+    os_junction = getattr(os.path, "isjunction", None)
+    detected = bool(
+        (path_junction is not None and path_junction())
+        or (os_junction is not None and os_junction(junction))
+    )
+    if created.returncode != 0 or not detected:
+        pytest.skip("directory junctions are unavailable on this Windows host")
+    try:
+        assert cli.main(_args(repo, config)) == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["reason_code"] == "cache_path_outside_frozen_root"
+    finally:
+        junction.rmdir()
 
 
 def test_mocked_cache_reparse_point_is_always_rejected(
