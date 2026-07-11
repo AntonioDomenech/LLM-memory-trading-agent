@@ -85,9 +85,18 @@ and the calendar must prove that the full 20-session horizon matured. The
 downstream model may refit before the next filing decision; Gemma's weights,
 prompt, schema, and action thresholds remain fixed.
 
+The cumulative live binding ledger retains every lesson ID, Apple accession,
+decision session, feature hash, prediction receipt, market frame, and both
+ledger slices. A later batch cannot reuse any prior lesson, accession, or
+prediction receipt under a new name.
+
 When the system runs past the current calendar, a new calendar may only be an
 append-only extension whose entire historical session prefix matches the
-previously sealed calendar hash.
+previously sealed calendar hash. The present implementation recognizes the
+exact NYSE trading-session-date sequence only through 2026-07-10 and fails
+closed beyond it; a later live extension requires updated authoritative
+calendar code and newly sealed official-source evidence, not merely a list of
+weekdays.
 
 The live replay is reported separately from the frozen final score. It cannot
 be substituted for a failed frozen test.
@@ -96,7 +105,24 @@ be substituted for a failed frozen test.
 
 Company sentiment comes from the wording of Apple's official filings. Market
 sentiment comes from point-in-time SPY, QQQ, IWM, VIX, and TNX measurements
-from the previous completed close.
+through the completed filing-decision session close. The decision is made only
+after that close and fills at the next adjusted open, so the same-session close
+is known information rather than a future value. Market history is requested
+from 1998-01-01 to support the frozen 252-session lookbacks; where a required
+series does not yet have enough history, that filing's prediction is marked
+unavailable rather than backfilled.
+
+The exchange calendar is versioned. The immutable v1 prefix ends 2025-01-10;
+v2 appends the exact NYSE trading-session dates through 2026-07-10 while
+preserving all 6,295 earlier sessions byte-for-byte. Early-close dates remain
+sessions because this artifact freezes dates, not trading hours. The v2
+calendar and its official NYSE source evidence must be sealed before the SEC
+audit can become a candidate binding.
+
+A separate, equally exact market-feature calendar begins 1998-01-02 and
+contains 504 pre-2000 sessions. It exists only to make the declared
+252-session lookbacks auditable; it does not move the filing-universe or score
+start before 2000.
 
 The large local `news_articles.parquet` file is not used in this version. The
 completed audit found that it contains synthetic GDELT event labels rather
@@ -125,10 +151,11 @@ audit:
 The production audit needs a private, valid SEC user-agent contact in local
 configuration. That contact must never be committed or printed.
 
-The currently frozen session calendar ends in January 2025. Before corpus
-acquisition, a new checksum-bound calendar must cover at least through
-2026-07-10. Scored prices still end on 2026-07-09; the extra session is needed
-to assign conservative availability around the cutoff.
+The versioned v2 session-date calendar now covers through 2026-07-10 and
+preserves the complete v1 prefix ending 2025-01-10. It is code-verified but
+does not become a candidate binding until its official NYSE source bytes and
+external checksum are sealed. Scored prices still end on 2026-07-09; the extra
+session is needed to assign conservative availability around the cutoff.
 
 ## Corpus
 
@@ -190,6 +217,9 @@ The frozen preprocessor is
 - removes issuer, ticker, CIK, executive, product, and exact-date identity;
 - replaces absolute currency, share, percentage, and accounting values with
   typed redaction tokens;
+- requires canonical ASCII and removes calendar-month and weekday language so
+  Unicode digits, currency marks, or identity homoglyphs cannot bypass the
+  scanners;
 - preserves directional language such as improved, declined, withdrawn, and
   uncertain;
 - labels current-filing sentences `C####` and prior same-form sentences
@@ -201,20 +231,25 @@ The frozen preprocessor is
   results.
 
 The exact prompt, schema, preprocessor, model digest, generation options,
-current and prior filing hashes, candidate-wide redacted-input manifest,
 calendar, audit, and implementation sources are part of the candidate
 identity. The identity also binds a checksum-bound contract-specific lexicon
 of known issuer/product/executive/location identities, the Ollama runtime
 template/system/parameter fingerprint, the clean Git source commit, the
-source-tree hash, the sealed corpus universe, and every
-decision/security-critical dependency.
+source-tree hash, official calendar-source evidence, the exact session hash,
+both the reproducibility and semantic hashes of the sealed corpus universe,
+and every
+decision/security-critical dependency. Current/prior filing hashes and each
+exact model-payload hash are bound by a separate per-event redacted-input
+receipt. A fresh preprocessing worker receives only that current filing and
+its immediate prior same-form filing; it never receives the rest of the stage.
+Development cannot read or preprocess intermediate or final filing text.
 
 Filing identity, form, stage, availability, accession, and source hashes live
 only in a validation envelope. They are never serialized to Gemma. The
 dedicated client may serialize only the validated model payload: the fixed
 anonymous system instruction, canonical C/P sentence JSON, exact output
 schema, model name, and frozen generation options. Its byte-equivalent hash
-must match the candidate-bound redacted-input manifest.
+must match the externally pinned receipt for that exact filing event.
 
 ## Gemma output
 
@@ -259,11 +294,21 @@ training cutoff.
 The 2024-2026 result is also a reused historical holdout at the repository
 level because earlier approaches have already reported those years. Before
 stage access is enabled, this candidate must register one immutable attempt ID
-in a repository-wide reveal registry that declares every earlier final
-attempt. Selecting the best branch after repeatedly opening the same final
-years is forbidden. Results are therefore approach-specific retrospective
-evidence; only locked prospective paper trading can be called globally
-pristine.
+in a repository-wide reveal registry. The recoverable history is explicitly a
+lower bound of ten earlier reveals: six entries retain candidate hashes and
+four older reveals are counted but cannot be attributed completely. It is not
+presented as exhaustive. The candidate binds the externally pinned predecessor
+registry snapshot; the appended registry entry then binds the candidate, after
+which the new tip and count must be pinned separately. Selecting the best
+branch after repeatedly opening the same final years is forbidden. Results are
+therefore approach-specific retrospective evidence; only locked prospective
+paper trading can be called globally pristine.
+
+Registration is not itself a reveal and does not increment the historical
+final-reveal count. The pure registry can create only a non-authorizing,
+stage-bound request. A later effectful gate must independently load the latest
+external pin, validate the prerequisite stage evidence, atomically consume the
+request once, and record the actual final-period touch in a separate ledger.
 
 ## Numerical learner and ablation
 
@@ -275,8 +320,9 @@ The downstream model has two frozen heads:
 
 At each filing event it receives the exact frozen AAPL price-regime fields,
 including returns, volatility, drawdown, moving-average distance, gap, and
-relative-strength history, plus the previous-close SPY/QQQ/IWM/VIX/TNX market
-sentiment fields. Gemma enums use one fixed signed/stated encoding. The
+relative-strength history, plus SPY/QQQ/IWM/VIX/TNX market-sentiment fields
+through that completed decision-session close. Gemma enums use one fixed
+signed/stated encoding. The
 calendar-only ablation receives the same AAPL and market history.
 
 To control overfitting with roughly quarterly observations, the ten filing
@@ -311,6 +357,20 @@ Development uses five expanding chronological folds:
 3. train through 2010, test 2011-2013;
 4. train through 2013, test 2014-2016; and
 5. train through 2016, test 2017-2018.
+
+Each fold's semantic model, no-semantics ablation, robust scaler, and smoothed
+climatology are fitted exactly once from all and only labels whose maturity
+session strictly precedes that fold's first test session. Those states must
+remain byte-identical throughout the complete test window: outcomes from an
+earlier prediction in a fold cannot update a later prediction in the same
+fold. After candidate selection there is one separate refit using all and only
+development labels matured by 2018-12-31.
+
+The probability head and every Brier comparison use one binary target: whether
+a 20-session CASH episode beats holding AAPL after 10-basis-point costs by more
+than `1e-12` active log edge. The same tolerance defines episode wins and live
+lesson labels. Candidate actions use exact greater-than-or-equal comparisons
+against the frozen probability and expected-edge thresholds.
 
 Candidate selection is deterministic: keep only candidates passing every
 development gate at both 5 and 10 bps, then rank by lower 10-bps Brier score,
@@ -416,7 +476,7 @@ work.
 
 Later milestones are also committed before the next reveal:
 
-1. production SEC audit and extended calendar;
+1. production SEC audit and sealed official-source calendar evidence;
 2. metadata-only universe, corpus selector, extractor, and model client;
 3. sealed development result and selected candidate;
 4. sealed intermediate result and pre-final refit state; and
@@ -452,8 +512,9 @@ At contract-freeze time:
 - no 2024, 2025, or 2026 performance has been calculated.
 
 The next implementation milestone is to bind the authoritative SEC audit,
-extend and seal the session calendar, implement the deterministic corpus and
-redaction pipeline, implement stage-specific runtime receipts and the global
-reveal registry, and implement the sequential sealed prediction/ledger
-verifier. That machinery must be committed before opening filing meaning or
-any later-stage outcome.
+retrieve and semantically reconcile the official calendar sources, implement
+the deterministic corpus and per-event redaction pipeline, add stage-specific
+runtime receipts and the registry's effectful atomic pin/request-consumption
+store, and implement the sequential sealed prediction/ledger verifier. That
+machinery must be committed before opening filing meaning or any later-stage
+outcome.

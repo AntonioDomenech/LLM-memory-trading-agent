@@ -1,0 +1,12 @@
+{
+  "contract_version": "aapl-sec-filing-gemma-v1",
+  "migration_source_canonical_sha256": "c6efc6de1facd1aed2a0709749219e0a82e862432699d11b24a3eb3ec9bebb4b",
+  "registry_pin": {
+    "historical_final_reveal_count_lower_bound": 10,
+    "registered_entry_count": 0,
+    "registry_sha256": "5853fcfc8f9ddb651981cb4b1c9f9426e57b214898ab6f080c0485eb1b40fe61",
+    "schema_version": "aapl-repository-holdout-pin-v1",
+    "tip_sha256": "10b0ecce18437a9c0e7f03f27882a3d7ba8836c1bcc48a75c3a64d0623de879a"
+  },
+  "schema_version": "aapl-sec-gemma-initial-external-registry-pin-v1"
+}

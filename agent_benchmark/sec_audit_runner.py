@@ -59,7 +59,7 @@ from .sec_point_in_time import (
 from .sec_session_calendar import EXPECTED_SESSIONS, validate_aapl_session_calendar
 
 
-CONTRACT_VERSION = "aapl-sec-point-in-time-audit-runner-v1"
+CONTRACT_VERSION = "aapl-sec-point-in-time-audit-runner-v2"
 _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 _MAX_GIT_CONTROL_BYTES = 1024 * 1024

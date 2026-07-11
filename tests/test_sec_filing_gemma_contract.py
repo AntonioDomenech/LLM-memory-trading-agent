@@ -10,6 +10,7 @@ import pytest
 
 import agent_benchmark.sec_filing_gemma_contract as contract_module
 from agent_benchmark.sec_filing_gemma_contract import (
+    CALENDAR_SOURCE_URLS,
     DIMENSION_NAMES,
     EXTRACTOR_REQUEST_VERSION,
     EXTRACTOR_SCHEMA_VERSION,
@@ -22,14 +23,18 @@ from agent_benchmark.sec_filing_gemma_contract import (
     SecFilingGemmaContractError,
     authorize_stage_access,
     build_calendar_extension_manifest,
+    build_calendar_source_evidence_manifest,
     build_candidate_manifest,
     build_contract_manifest,
     build_corpus_universe_manifest,
     build_extractor_model_payload,
     build_redacted_input_manifest,
+    build_stage_content_manifest,
     canonical_sha256,
     session_calendar_sha256,
     validate_candidate_manifest,
+    validate_calendar_extension_manifest,
+    validate_calendar_source_evidence_manifest,
     validate_complete_corpus,
     validate_contract_manifest,
     validate_corpus_universe_manifest,
@@ -40,7 +45,13 @@ from agent_benchmark.sec_filing_gemma_contract import (
     validate_live_lessons,
     validate_final_runtime_summary,
     validate_stage_extraction_coverage,
+    validate_stage_content_manifest,
     validate_training_rows,
+)
+from agent_benchmark.sec_session_calendar import (
+    EXPECTED_SESSIONS,
+    EXPECTED_MARKET_HISTORY_SESSIONS,
+    LEGACY_EXPECTED_SESSIONS,
 )
 
 
@@ -49,14 +60,7 @@ def _hash(character: str = "a") -> str:
 
 
 def _sessions() -> list[str]:
-    current = date(2000, 1, 3)
-    end = date(2026, 7, 10)
-    result: list[str] = []
-    while current <= end:
-        if current.weekday() < 5:
-            result.append(current.isoformat())
-        current += timedelta(days=1)
-    return result
+    return list(EXPECTED_SESSIONS)
 
 
 SESSIONS = _sessions()
@@ -81,7 +85,7 @@ IDENTITY_LEXICON_SHA256 = canonical_sha256(IDENTITY_TERMS)
 
 
 def _sources() -> dict[str, str]:
-    characters = "123456789abcdef"
+    characters = "0123456789abcdef"
     assert len(REQUIRED_SOURCE_HASHES) <= len(characters)
     return {
         name: _hash(characters[index])
@@ -94,8 +98,6 @@ def _source_record(
     serial: int,
     form: str,
     month: int,
-    *,
-    normalized_text_sha256: str | None = None,
 ) -> dict:
     evidence_date = date(year, month, 15)
     return {
@@ -106,9 +108,6 @@ def _source_record(
         "filing_date": evidence_date.isoformat(),
         "filing_date_change": None,
         "primary_document": f"filing-{serial}.htm",
-        "primary_document_sha256": f"{serial + 2_000:064x}",
-        "normalized_text_sha256": normalized_text_sha256
-        or f"{serial + 4_000:064x}",
         "source_record_sha256": f"{serial + 6_000:064x}",
     }
 
@@ -138,29 +137,54 @@ def _universe(records: list[dict] | None = None) -> dict:
     )
 
 
-def _placeholder_redacted_manifest(universe: dict) -> dict:
-    return build_redacted_input_manifest(
+def _stage_content(universe: dict, stage: str) -> dict:
+    documents = []
+    for index, record in enumerate(universe["records"], start=1):
+        if record["artifact_stage"] != stage:
+            continue
+        documents.append(
+            {
+                "accession_number": record["accession_number"],
+                "primary_document_sha256": f"{20_000 + index:064x}",
+                "normalized_text_sha256": f"{30_000 + index:064x}",
+                "primary_document_bytes": 10_000 + index,
+                "normalized_text_bytes": 8_000 + index,
+            }
+        )
+    return build_stage_content_manifest(
+        artifact_stage=stage,
         corpus_universe_sha256=universe["universe_sha256"],
-        payload_hashes_by_accession={
-            record["accession_number"]: record["normalized_text_sha256"]
-            for record in universe["records"]
-        },
+        documents=documents,
         universe_manifest=universe,
     )
 
 
-def _candidate(universe: dict, redacted_manifest: dict | None = None) -> dict:
-    manifest = redacted_manifest or _placeholder_redacted_manifest(universe)
+def _candidate(
+    universe: dict,
+    *,
+    calendar_source_evidence_sha256: str | None = None,
+    catalog_sha256: str | None = None,
+) -> dict:
     return build_candidate_manifest(
         model_digest=_hash("d"),
         ollama_runtime_fingerprint_sha256=_hash("e"),
-        sec_audit_checksums_sha256=_hash("f"),
+        sec_audit_checksums_json_sha256=_hash("f"),
+        sec_catalog_artifact_sha256=(
+            universe["catalog_artifact_sha256"]
+            if catalog_sha256 is None
+            else catalog_sha256
+        ),
         sec_audit_source_commit="a" * 40,
-        calendar_sha256=_hash("c"),
+        calendar_source_evidence_sha256=(
+            universe["calendar_artifact_sha256"]
+            if calendar_source_evidence_sha256 is None
+            else calendar_source_evidence_sha256
+        ),
+        calendar_sessions_sha256=CALENDAR_SESSIONS_SHA256,
         corpus_universe_sha256=universe["universe_sha256"],
+        corpus_universe_semantic_sha256=universe["universe_semantic_sha256"],
         identity_lexicon_sha256=IDENTITY_LEXICON_SHA256,
-        redacted_input_manifest_sha256=manifest["redacted_input_manifest_sha256"],
-        reveal_registry_sha256=_hash("7"),
+        predecessor_reveal_registry_sha256=_hash("7"),
         holdout_attempt_id="aapl-sec-filing-gemma-v1-attempt-001",
         experiment_source_commit="b" * 40,
         source_tree_sha256=_hash("c"),
@@ -168,7 +192,12 @@ def _candidate(universe: dict, redacted_manifest: dict | None = None) -> dict:
     )
 
 
-def _extractor_context(universe: dict) -> tuple[dict, dict, dict]:
+def _extractor_context(universe: dict) -> tuple[dict, dict, dict, dict]:
+    content_manifest = _stage_content(universe, "development")
+    content_by_accession = {
+        document["accession_number"]: document
+        for document in content_manifest["documents"]
+    }
     current = next(
         record
         for record in universe["records"]
@@ -190,17 +219,15 @@ def _extractor_context(universe: dict) -> tuple[dict, dict, dict]:
     byte_count = len("\n".join(item["text"] for item in sentences).encode("utf-8"))
     model_payload = build_extractor_model_payload(sentences)
     model_payload_sha256 = canonical_sha256(model_payload)
-    payload_hashes = {
-        record["accession_number"]: record["normalized_text_sha256"]
-        for record in universe["records"]
-    }
-    payload_hashes[current["accession_number"]] = model_payload_sha256
     redacted_manifest = build_redacted_input_manifest(
+        artifact_stage=current["artifact_stage"],
+        accession_number=current["accession_number"],
         corpus_universe_sha256=universe["universe_sha256"],
-        payload_hashes_by_accession=payload_hashes,
+        model_payload_sha256=model_payload_sha256,
         universe_manifest=universe,
+        stage_content_manifest=content_manifest,
     )
-    candidate = _candidate(universe, redacted_manifest)
+    candidate = _candidate(universe)
     request = {
         "request_version": EXTRACTOR_REQUEST_VERSION,
         "preprocessor_version": PREPROCESSOR_VERSION,
@@ -213,10 +240,14 @@ def _extractor_context(universe: dict) -> tuple[dict, dict, dict]:
         "current_accession_number": current["accession_number"],
         "current_form": current["form"],
         "current_availability_session": current["availability_session"],
-        "current_filing_sha256": current["normalized_text_sha256"],
+        "current_filing_sha256": content_by_accession[current["accession_number"]][
+            "normalized_text_sha256"
+        ],
         "prior_accession_number": prior["accession_number"],
         "prior_availability_session": prior["availability_session"],
-        "prior_same_form_filing_sha256": prior["normalized_text_sha256"],
+        "prior_same_form_filing_sha256": content_by_accession[prior["accession_number"]][
+            "normalized_text_sha256"
+        ],
         "model_payload": model_payload,
         "model_payload_sha256": model_payload_sha256,
         "redaction_report": {
@@ -229,7 +260,7 @@ def _extractor_context(universe: dict) -> tuple[dict, dict, dict]:
             "maximum_sentence_characters": max(len(item["text"]) for item in sentences),
         },
     }
-    return request, redacted_manifest, candidate
+    return request, redacted_manifest, candidate, {"development": content_manifest}
 
 
 def _validate_request(
@@ -237,15 +268,24 @@ def _validate_request(
     universe: dict,
     redacted_manifest: dict,
     candidate: dict,
+    content_manifests: dict,
 ) -> dict:
     return validate_extractor_request(
         request,
         candidate_manifest=candidate,
         expected_candidate_sha256=candidate["candidate_sha256"],
         universe_manifest=universe,
+        content_manifests_by_stage=content_manifests,
+        expected_content_manifest_sha256s={
+            stage: manifest["content_manifest_sha256"]
+            for stage, manifest in content_manifests.items()
+        },
         session_dates=SESSIONS,
         forbidden_identity_terms=IDENTITY_TERMS,
         redacted_input_manifest=redacted_manifest,
+        expected_redacted_input_manifest_sha256=redacted_manifest[
+            "redacted_input_manifest_sha256"
+        ],
     )
 
 
@@ -253,8 +293,9 @@ def _replace_first_model_sentence(
     request: dict,
     universe: dict,
     redacted_manifest: dict,
+    content_manifests: dict,
     text: str,
-) -> tuple[dict, dict, dict]:
+) -> tuple[dict, dict, dict, dict]:
     changed = copy.deepcopy(request)
     user_content = json.loads(changed["model_payload"]["messages"][1]["content"])
     user_content["sentences"][0]["text"] = text
@@ -268,17 +309,18 @@ def _replace_first_model_sentence(
     changed["redaction_report"]["maximum_sentence_characters"] = max(
         len(item["text"]) for item in sentences
     )
-    payload_hashes = dict(redacted_manifest["payload_hashes_by_accession"])
-    payload_hashes[changed["current_accession_number"]] = payload_hash
     new_manifest = build_redacted_input_manifest(
+        artifact_stage=redacted_manifest["artifact_stage"],
+        accession_number=changed["current_accession_number"],
         corpus_universe_sha256=universe["universe_sha256"],
-        payload_hashes_by_accession=payload_hashes,
+        model_payload_sha256=payload_hash,
         universe_manifest=universe,
+        stage_content_manifest=content_manifests[redacted_manifest["artifact_stage"]],
     )
     changed["redacted_input_manifest_sha256"] = new_manifest[
         "redacted_input_manifest_sha256"
     ]
-    return changed, new_manifest, _candidate(universe, new_manifest)
+    return changed, new_manifest, _candidate(universe), content_manifests
 
 
 def _extractor_output() -> dict:
@@ -432,9 +474,56 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     assert first["objective"]["leverage_allowed"] is False
     assert first["chronology"]["development"]["last_availability_session"] == "2018-12-31"
     assert first["chronology"]["final"]["training_permitted"] is False
+    assert first["chronology"]["calendar_id"].endswith("2026_07_10_v2")
     assert first["model"]["role"] == "grounded_structured_text_extractor_only"
     assert first["model"]["parametric_contamination_risk"] == "unresolved_but_bounded"
     assert first["predictor"]["signal_during_active_episode"] == "ignored_no_extension"
+    assert first["predictor"]["market_history_start"] == "1998-01-01"
+    assert first["predictor"]["market_history_calendar_id"].endswith(
+        "1998_01_01_2026_07_10_v1"
+    )
+    assert sum(value < "2000-01-01" for value in EXPECTED_MARKET_HISTORY_SESSIONS) >= 252
+    assert first["predictor"]["maximum_market_lookback_sessions"] == 252
+    assert (
+        first["predictor"]["market_context_timing"]
+        == "completed_decision_session_close_only"
+    )
+    assert first["predictor"]["prediction_timeline"]["fill_session_offset"] == 1
+    assert (
+        first["predictor"]["prediction_timeline"][
+            "cash_exit_and_label_maturity_session_offset"
+        ]
+        == 21
+    )
+    assert all(
+        fold["state_updates_inside_test_window"] is False
+        for fold in first["predictor"]["development_folds"]
+    )
+    assert all(
+        fold["train_label_maturity_through"] in EXPECTED_SESSIONS
+        and fold["test_first_session"] in EXPECTED_SESSIONS
+        and fold["test_last_session"] in EXPECTED_SESSIONS
+        for fold in first["predictor"]["development_folds"]
+    )
+    assert first["predictor"]["binary_cash_win_target"] == {
+        "cost_bps": 10,
+        "positive_if": "cash_active_log_edge_strictly_above_comparison_tolerance",
+        "comparison_tolerance": 1e-12,
+        "used_by": [
+            "probability_head",
+            "brier_score",
+            "causal_climatology",
+            "episode_win_rate",
+            "live_lessons",
+        ],
+    }
+    assert "reveal_registry" in REQUIRED_SOURCE_HASHES
+    assert (
+        first["holdout_governance"][
+            "candidate_binds_predecessor_registry_snapshot"
+        ]
+        is True
+    )
     assert len(first["predictor"]["price_regime_features"]) == 24
     assert len(first["predictor"]["market_sentiment_features"]) == 15
     assert first["gates"]["final"]["minimum_periods_beating_ablation"] == 2
@@ -454,6 +543,23 @@ def test_stage_access_is_fail_closed_until_authoritative_evidence_exists() -> No
             candidate_manifest={},
             expected_candidate_sha256=_hash("a"),
             prior_receipts=[],
+        )
+
+
+def test_intermediate_structural_receipt_cannot_expose_partial_results() -> None:
+    with pytest.raises(SecFilingGemmaContractError, match="cannot be exposed partially"):
+        contract_module._build_structural_stage_receipt(
+            stage="intermediate",
+            candidate_sha256=_hash("1"),
+            corpus_manifest_sha256=_hash("2"),
+            extraction_artifact_sha256=_hash("3"),
+            input_model_state_sha256=_hash("4"),
+            output_model_state_sha256=_hash("5"),
+            selected_candidate_id="p50_e0",
+            passed=True,
+            parent_receipt_sha256=_hash("6"),
+            design_change_count=0,
+            partial_results_exposed=True,
         )
 
 
@@ -480,15 +586,17 @@ def test_candidate_rejects_missing_transitive_source_hash() -> None:
         build_candidate_manifest(
             model_digest=_hash("d"),
             ollama_runtime_fingerprint_sha256=_hash("e"),
-            sec_audit_checksums_sha256=_hash("f"),
+            sec_audit_checksums_json_sha256=_hash("f"),
+            sec_catalog_artifact_sha256=_hash("a"),
             sec_audit_source_commit="a" * 40,
-            calendar_sha256=_hash("c"),
+            calendar_source_evidence_sha256=_hash("c"),
+            calendar_sessions_sha256=CALENDAR_SESSIONS_SHA256,
             corpus_universe_sha256=universe["universe_sha256"],
-            identity_lexicon_sha256=IDENTITY_LEXICON_SHA256,
-            redacted_input_manifest_sha256=_placeholder_redacted_manifest(universe)[
-                "redacted_input_manifest_sha256"
+            corpus_universe_semantic_sha256=universe[
+                "universe_semantic_sha256"
             ],
-            reveal_registry_sha256=_hash("7"),
+            identity_lexicon_sha256=IDENTITY_LEXICON_SHA256,
+            predecessor_reveal_registry_sha256=_hash("7"),
             holdout_attempt_id="aapl-sec-filing-gemma-v1-attempt-001",
             experiment_source_commit="b" * 40,
             source_tree_sha256=_hash("c"),
@@ -515,16 +623,60 @@ def test_authoritative_universe_recomputes_availability_and_passes_coverage() ->
     )
 
 
-def test_universe_rejects_non_apple_and_cross_stage_document_reuse() -> None:
+def test_universe_semantic_hash_excludes_nonbehavioral_source_wrappers() -> None:
+    records = _universe_source_records()
+    first = _universe(records)
+    changed_records = copy.deepcopy(records)
+    changed_records[0]["source_record_sha256"] = _hash("9")
+    changed_records[0]["acceptance_datetime"] = (
+        changed_records[0]["acceptance_datetime"][:8] + "170000"
+    )
+    second = _universe(changed_records)
+
+    assert first["universe_sha256"] != second["universe_sha256"]
+    assert first["universe_semantic_sha256"] == second[
+        "universe_semantic_sha256"
+    ]
+
+
+def test_universe_rejects_non_apple_and_stage_content_rejects_cross_stage_accession() -> None:
     records = _universe_source_records()
     records[0]["subject_cik"] = "0000000001"
     with pytest.raises(SecFilingGemmaContractError, match="subject CIK"):
         _universe(records)
 
-    records = _universe_source_records()
-    records[-1]["normalized_text_sha256"] = records[0]["normalized_text_sha256"]
-    with pytest.raises(SecFilingGemmaContractError, match="different stage"):
-        _universe(records)
+    universe = _universe()
+    content = _stage_content(universe, "development")
+    assert validate_stage_content_manifest(
+        content,
+        universe_manifest=universe,
+        expected_content_manifest_sha256=content["content_manifest_sha256"],
+    ) == content["content_manifest_sha256"]
+    source_documents = [
+        {
+            key: document[key]
+            for key in (
+                "accession_number",
+                "primary_document_sha256",
+                "normalized_text_sha256",
+                "primary_document_bytes",
+                "normalized_text_bytes",
+            )
+        }
+        for document in content["documents"]
+    ]
+    source_documents[0]["accession_number"] = next(
+        record["accession_number"]
+        for record in universe["records"]
+        if record["artifact_stage"] == "final"
+    )
+    with pytest.raises(SecFilingGemmaContractError, match="authorized accession"):
+        build_stage_content_manifest(
+            artifact_stage="development",
+            corpus_universe_sha256=universe["universe_sha256"],
+            documents=source_documents,
+            universe_manifest=universe,
+        )
 
 
 def test_shortened_universe_cannot_match_the_external_pin() -> None:
@@ -561,8 +713,10 @@ def test_forged_availability_and_missing_yearly_form_fail() -> None:
 
 def test_valid_extractor_request_is_bound_to_exact_current_and_prior_filings() -> None:
     universe = _universe()
-    request, redacted_manifest, candidate = _extractor_context(universe)
-    validated = _validate_request(request, universe, redacted_manifest, candidate)
+    request, redacted_manifest, candidate, contents = _extractor_context(universe)
+    validated = _validate_request(
+        request, universe, redacted_manifest, candidate, contents
+    )
     assert validated["sentence_ids"] == ("C0001", "C0002", "P0001")
     assert set(validated["model_payload"]) == {
         "model",
@@ -574,17 +728,80 @@ def test_valid_extractor_request_is_bound_to_exact_current_and_prior_filings() -
     }
 
 
+@pytest.mark.parametrize("binding", ["calendar", "catalog"])
+def test_extractor_rejects_candidate_universe_provenance_mismatch(
+    binding: str,
+) -> None:
+    universe = _universe()
+    request, redacted_manifest, _, contents = _extractor_context(universe)
+    candidate = _candidate(
+        universe,
+        calendar_source_evidence_sha256=(
+            _hash("9") if binding == "calendar" else None
+        ),
+        catalog_sha256=_hash("8") if binding == "catalog" else None,
+    )
+
+    with pytest.raises(SecFilingGemmaContractError, match="candidate-bound"):
+        _validate_request(
+            request,
+            universe,
+            redacted_manifest,
+            candidate,
+            contents,
+        )
+
+
 def test_extractor_rejects_stage_relabel_and_wrong_or_self_prior() -> None:
     universe = _universe()
-    request, redacted_manifest, candidate = _extractor_context(universe)
+    request, redacted_manifest, candidate, contents = _extractor_context(universe)
     request["stage"] = "final"
     with pytest.raises(SecFilingGemmaContractError, match="stage boundary"):
-        _validate_request(request, universe, redacted_manifest, candidate)
+        _validate_request(request, universe, redacted_manifest, candidate, contents)
 
-    request, redacted_manifest, candidate = _extractor_context(universe)
+    request, redacted_manifest, candidate, contents = _extractor_context(universe)
     request["prior_same_form_filing_sha256"] = request["current_filing_sha256"]
     with pytest.raises(SecFilingGemmaContractError, match="immediately preceding"):
-        _validate_request(request, universe, redacted_manifest, candidate)
+        _validate_request(request, universe, redacted_manifest, candidate, contents)
+
+    request, redacted_manifest, candidate, contents = _extractor_context(universe)
+    with_later_stage = {
+        **contents,
+        "final": _stage_content(universe, "final"),
+    }
+    with pytest.raises(SecFilingGemmaContractError, match="content_manifests_by_stage"):
+        _validate_request(
+            request,
+            universe,
+            redacted_manifest,
+            candidate,
+            with_later_stage,
+        )
+
+    other_accession = next(
+        document["accession_number"]
+        for document in contents["development"]["documents"]
+        if document["accession_number"] != request["current_accession_number"]
+    )
+    other_event_manifest = build_redacted_input_manifest(
+        artifact_stage="development",
+        accession_number=other_accession,
+        corpus_universe_sha256=universe["universe_sha256"],
+        model_payload_sha256=request["model_payload_sha256"],
+        universe_manifest=universe,
+        stage_content_manifest=contents["development"],
+    )
+    request["redacted_input_manifest_sha256"] = other_event_manifest[
+        "redacted_input_manifest_sha256"
+    ]
+    with pytest.raises(SecFilingGemmaContractError, match="another filing event"):
+        _validate_request(
+            request,
+            universe,
+            other_event_manifest,
+            candidate,
+            contents,
+        )
 
 
 @pytest.mark.parametrize(
@@ -597,42 +814,52 @@ def test_extractor_rejects_stage_relabel_and_wrong_or_self_prior() -> None:
         ("App Store and Mac sales improved in Greater China.", "identity"),
         ("Revenue exceeded twelve billion dollars.", "Spelled absolute"),
         ("Revenue increased by 12 percent.", "Absolute numeric"),
-        ("The period ended September thirtieth while demand improved.", "Spelled date"),
+        (
+            "The period ended September thirtieth while demand improved.",
+            "Calendar date language",
+        ),
+        ("Revenue was １２ in the current period.", "canonical ASCII"),
+        ("Revenue was ١٢ in the current period.", "canonical ASCII"),
+        ("A\u0440ple demand improved.", "canonical ASCII"),
+        ("Revenue improved in September.", "Calendar date language"),
+        ("Demand weakened on Tuesday.", "Calendar date language"),
+        ("Revenue improved in May.", "Calendar date language"),
     ],
 )
 def test_extractor_rejects_identity_and_absolute_value_leakage(
     text: str, message: str
 ) -> None:
     universe = _universe()
-    request, redacted_manifest, candidate = _extractor_context(universe)
-    request, redacted_manifest, candidate = _replace_first_model_sentence(
-        request, universe, redacted_manifest, text
+    request, redacted_manifest, candidate, contents = _extractor_context(universe)
+    request, redacted_manifest, candidate, contents = _replace_first_model_sentence(
+        request, universe, redacted_manifest, contents, text
     )
     with pytest.raises(SecFilingGemmaContractError, match=message):
-        _validate_request(request, universe, redacted_manifest, candidate)
+        _validate_request(request, universe, redacted_manifest, candidate, contents)
 
 
 def test_identity_and_date_scanners_do_not_destroy_directional_risk_language() -> None:
     universe = _universe()
-    request, redacted_manifest, _ = _extractor_context(universe)
-    request, redacted_manifest, candidate = _replace_first_model_sentence(
+    request, redacted_manifest, _, contents = _extractor_context(universe)
+    request, redacted_manifest, candidate, contents = _replace_first_model_sentence(
         request,
         universe,
         redacted_manifest,
+        contents,
         "Results may vary as macroeconomic ratios deteriorate.",
     )
-    assert _validate_request(request, universe, redacted_manifest, candidate)[
+    assert _validate_request(request, universe, redacted_manifest, candidate, contents)[
         "model_payload_sha256"
     ] == request["model_payload_sha256"]
 
 
 def test_metadata_cannot_be_injected_into_the_model_payload() -> None:
     universe = _universe()
-    request, redacted_manifest, candidate = _extractor_context(universe)
+    request, redacted_manifest, candidate, contents = _extractor_context(universe)
     request["model_payload"]["stage"] = "development"
     request["model_payload_sha256"] = canonical_sha256(request["model_payload"])
     with pytest.raises(SecFilingGemmaContractError, match="metadata"):
-        _validate_request(request, universe, redacted_manifest, candidate)
+        _validate_request(request, universe, redacted_manifest, candidate, contents)
 
 
 def test_valid_grounded_extractor_output_and_evidence() -> None:
@@ -793,6 +1020,20 @@ def test_runtime_rejects_paid_external_or_over_budget_work() -> None:
     with pytest.raises(SecFilingGemmaContractError, match="loopback"):
         _validate_runtime(external, candidate, universe)
 
+    reused = copy.deepcopy(evidence)
+    reused["artifact_sha256s"]["final_extraction"] = reused[
+        "artifact_sha256s"
+    ]["development_extraction"]
+    with pytest.raises(SecFilingGemmaContractError, match="physically distinct"):
+        _validate_runtime(reused, candidate, universe)
+
+    reused_market = copy.deepcopy(evidence)
+    reused_market["market_data_sha256s_by_stage"]["final"]["AAPL"] = (
+        reused_market["market_data_sha256s_by_stage"]["development"]["AAPL"]
+    )
+    with pytest.raises(SecFilingGemmaContractError, match="stage-bounded"):
+        _validate_runtime(reused_market, candidate, universe)
+
 
 def test_execution_policy_rejects_any_leverage_related_change() -> None:
     policy = build_contract_manifest()["execution"]
@@ -830,9 +1071,44 @@ def _live_lesson(*, edge: float = 0.01, beats: bool = True) -> tuple[dict, str]:
     return {**body, "lesson_sha256": canonical_sha256(body)}, _offset_session(first_use, 5)
 
 
+def _lesson_binding(lesson: dict) -> dict:
+    return {
+        key: lesson[key]
+        for key in (
+            "lesson_id",
+            "accession_number",
+            "decision_session",
+            "feature_sha256",
+            "prediction_receipt_sha256",
+            "market_data_manifest_sha256",
+            "strategy_ledger_slice_sha256",
+            "benchmark_ledger_slice_sha256",
+        )
+    }
+
+
+def _lesson_binding_args(
+    *, prior: list[dict], eligible: list[dict]
+) -> dict:
+    normalized_prior = sorted(prior, key=lambda item: item["lesson_id"])
+    normalized_eligible = sorted(eligible, key=lambda item: item["lesson_id"])
+    return {
+        "prior_lesson_bindings": normalized_prior,
+        "expected_prior_lesson_bindings_sha256": canonical_sha256(
+            normalized_prior
+        ),
+        "eligible_lesson_bindings": normalized_eligible,
+        "expected_eligible_lesson_bindings_sha256": canonical_sha256(
+            normalized_eligible
+        ),
+    }
+
+
 def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
     lesson, as_of = _live_lesson()
-    eligible_ids = ["lesson-one"]
+    initial_binding_args = _lesson_binding_args(
+        prior=[], eligible=[_lesson_binding(lesson)]
+    )
     anchor = validate_live_lessons(
         [lesson],
         as_of_session=as_of,
@@ -842,8 +1118,7 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
         expected_prior_count=0,
         expected_prior_model_state_sha256=_hash("8"),
         expected_prior_last_sort_key=None,
-        eligible_lesson_ids=eligible_ids,
-        expected_eligible_lesson_set_sha256=canonical_sha256(eligible_ids),
+        **initial_binding_args,
     )
     assert anchor["lesson_count"] == 1
     assert anchor["tip_sha256"] == lesson["lesson_sha256"]
@@ -857,8 +1132,7 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
         expected_prior_count=anchor["lesson_count"],
         expected_prior_model_state_sha256=anchor["model_state_sha256"],
         expected_prior_last_sort_key=anchor["last_sort_key"],
-        eligible_lesson_ids=[],
-        expected_eligible_lesson_set_sha256=canonical_sha256([]),
+        **_lesson_binding_args(prior=anchor["lesson_bindings"], eligible=[]),
     )
     assert unchanged["lesson_count"] == 1
     assert unchanged["tip_sha256"] == anchor["tip_sha256"]
@@ -868,6 +1142,7 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
         {
             "sequence_number": 2,
             "lesson_id": "lesson-two",
+            "accession_number": "0000320193-01-000002",
             "decision_session": "2001-01-03",
             "label_maturity_session": _offset_session(
                 "2001-01-03", LABEL_MATURITY_OFFSET
@@ -875,6 +1150,11 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
             "parent_lesson_sha256": anchor["tip_sha256"],
             "input_model_state_sha256": anchor["model_state_sha256"],
             "output_model_state_sha256": _hash("a"),
+            "feature_sha256": _hash("b"),
+            "prediction_receipt_sha256": _hash("c"),
+            "market_data_manifest_sha256": _hash("d"),
+            "strategy_ledger_slice_sha256": _hash("e"),
+            "benchmark_ledger_slice_sha256": _hash("f"),
         }
     )
     backdated["ingested_session"] = backdated["label_maturity_session"]
@@ -894,8 +1174,69 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
             expected_prior_count=anchor["lesson_count"],
             expected_prior_model_state_sha256=anchor["model_state_sha256"],
             expected_prior_last_sort_key=anchor["last_sort_key"],
-            eligible_lesson_ids=["lesson-two"],
-            expected_eligible_lesson_set_sha256=canonical_sha256(["lesson-two"]),
+            **_lesson_binding_args(
+                prior=anchor["lesson_bindings"],
+                eligible=[_lesson_binding(backdated)],
+            ),
+        )
+
+
+def test_live_lessons_reject_invalid_accessions_and_cross_batch_replay() -> None:
+    lesson, as_of = _live_lesson()
+    invalid = copy.deepcopy(lesson)
+    invalid["accession_number"] = "0000320193-not-an-accession"
+    invalid["lesson_sha256"] = canonical_sha256(
+        {key: value for key, value in invalid.items() if key != "lesson_sha256"}
+    )
+    with pytest.raises(SecFilingGemmaContractError, match="non-Apple accession"):
+        validate_live_lessons(
+            [invalid],
+            as_of_session=as_of,
+            session_dates=SESSIONS,
+            expected_calendar_sessions_sha256=CALENDAR_SESSIONS_SHA256,
+            expected_prior_tip_sha256=None,
+            expected_prior_count=0,
+            expected_prior_model_state_sha256=_hash("8"),
+            expected_prior_last_sort_key=None,
+            **_lesson_binding_args(
+                prior=[], eligible=[_lesson_binding(invalid)]
+            ),
+        )
+
+    anchor = validate_live_lessons(
+        [lesson],
+        as_of_session=as_of,
+        session_dates=SESSIONS,
+        expected_calendar_sessions_sha256=CALENDAR_SESSIONS_SHA256,
+        expected_prior_tip_sha256=None,
+        expected_prior_count=0,
+        expected_prior_model_state_sha256=_hash("8"),
+        expected_prior_last_sort_key=None,
+        **_lesson_binding_args(prior=[], eligible=[_lesson_binding(lesson)]),
+    )
+    replay = copy.deepcopy(lesson)
+    replay["sequence_number"] = 2
+    replay["lesson_id"] = "lesson-replayed"
+    replay["parent_lesson_sha256"] = anchor["tip_sha256"]
+    replay["input_model_state_sha256"] = anchor["model_state_sha256"]
+    replay["output_model_state_sha256"] = _hash("a")
+    replay["lesson_sha256"] = canonical_sha256(
+        {key: value for key, value in replay.items() if key != "lesson_sha256"}
+    )
+    with pytest.raises(SecFilingGemmaContractError, match="replays a prior"):
+        validate_live_lessons(
+            [replay],
+            as_of_session=as_of,
+            session_dates=SESSIONS,
+            expected_calendar_sessions_sha256=CALENDAR_SESSIONS_SHA256,
+            expected_prior_tip_sha256=anchor["tip_sha256"],
+            expected_prior_count=anchor["lesson_count"],
+            expected_prior_model_state_sha256=anchor["model_state_sha256"],
+            expected_prior_last_sort_key=anchor["last_sort_key"],
+            **_lesson_binding_args(
+                prior=anchor["lesson_bindings"],
+                eligible=[_lesson_binding(replay)],
+            ),
         )
 
     wrong_label, as_of = _live_lesson(edge=-0.01, beats=True)
@@ -909,8 +1250,9 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
             expected_prior_count=0,
             expected_prior_model_state_sha256=_hash("8"),
             expected_prior_last_sort_key=None,
-            eligible_lesson_ids=eligible_ids,
-            expected_eligible_lesson_set_sha256=canonical_sha256(eligible_ids),
+            **_lesson_binding_args(
+                prior=[], eligible=[_lesson_binding(wrong_label)]
+            ),
         )
 
     premature, as_of = _live_lesson()
@@ -930,13 +1272,14 @@ def test_live_lessons_have_exact_maturity_label_and_state_hash_chain() -> None:
             expected_prior_count=0,
             expected_prior_model_state_sha256=_hash("8"),
             expected_prior_last_sort_key=None,
-            eligible_lesson_ids=eligible_ids,
-            expected_eligible_lesson_set_sha256=canonical_sha256(eligible_ids),
+            **_lesson_binding_args(
+                prior=[], eligible=[_lesson_binding(premature)]
+            ),
         )
 
 
 def test_future_calendar_extension_preserves_the_complete_historical_prefix() -> None:
-    legacy = [value for value in SESSIONS if value <= "2025-01-10"]
+    legacy = list(LEGACY_EXPECTED_SESSIONS)
     legacy_manifest = build_calendar_extension_manifest(
         prior_session_dates=legacy,
         extended_session_dates=SESSIONS,
@@ -944,32 +1287,77 @@ def test_future_calendar_extension_preserves_the_complete_historical_prefix() ->
     )
     assert legacy_manifest["prior_last_session"] == "2025-01-10"
     assert legacy_manifest["extended_last_session"] == "2026-07-10"
+    assert legacy_manifest["prior_calendar_id"].endswith("2025_01_10_v1")
+    assert legacy_manifest["extended_calendar_id"].endswith("2026_07_10_v2")
+    assert validate_calendar_extension_manifest(
+        legacy_manifest,
+        expected_prior_sessions_sha256=canonical_sha256(legacy),
+        expected_extension_manifest_sha256=legacy_manifest[
+            "extension_manifest_sha256"
+        ],
+    ) == legacy_manifest["extension_manifest_sha256"]
 
-    extended = list(SESSIONS)
-    current = date.fromisoformat(SESSIONS[-1]) + timedelta(days=1)
-    while len(extended) < len(SESSIONS) + 5:
-        if current.weekday() < 5:
-            extended.append(current.isoformat())
-        current += timedelta(days=1)
-    manifest = build_calendar_extension_manifest(
-        prior_session_dates=SESSIONS,
-        extended_session_dates=extended,
-        expected_prior_sessions_sha256=CALENDAR_SESSIONS_SHA256,
-    )
-    assert manifest["prior_session_count"] == len(SESSIONS)
-    assert manifest["extended_session_count"] == len(SESSIONS) + 5
-
-    rewritten = list(extended)
-    rewritten[100] = rewritten[100 + 1]
+    rewritten = list(SESSIONS)
+    rewritten[100] = rewritten[101]
     with pytest.raises(SecFilingGemmaContractError):
         build_calendar_extension_manifest(
-            prior_session_dates=SESSIONS,
+            prior_session_dates=legacy,
             extended_session_dates=rewritten,
-            expected_prior_sessions_sha256=CALENDAR_SESSIONS_SHA256,
+            expected_prior_sessions_sha256=canonical_sha256(legacy),
+        )
+
+    changed = copy.deepcopy(legacy_manifest)
+    changed["appended_sessions"][0] = "2025-01-14"
+    with pytest.raises(SecFilingGemmaContractError, match="noncanonical"):
+        validate_calendar_extension_manifest(
+            changed,
+            expected_prior_sessions_sha256=canonical_sha256(legacy),
+            expected_extension_manifest_sha256=legacy_manifest[
+                "extension_manifest_sha256"
+            ],
         )
 
 
-def test_contract_module_imports_only_effect_free_standard_library_modules() -> None:
+def test_calendar_source_evidence_binds_exact_official_bytes_and_external_pin() -> None:
+    records = {
+        name: {
+            "url": url,
+            "content_sha256": f"{index + 1:064x}",
+            "byte_count": 1_000 + index,
+        }
+        for index, (name, url) in enumerate(CALENDAR_SOURCE_URLS.items())
+    }
+    evidence = build_calendar_source_evidence_manifest(
+        retrieved_at_utc="2026-07-11T12:00:00Z",
+        source_records=records,
+    )
+    assert evidence["current_session_count"] == len(SESSIONS)
+    assert evidence["market_history_session_count"] == len(
+        EXPECTED_MARKET_HISTORY_SESSIONS
+    )
+    assert evidence["semantic_reconciliation_required_before_candidate_use"] is True
+    assert evidence["authorizes_corpus_or_model_access"] is False
+    assert validate_calendar_source_evidence_manifest(
+        evidence,
+        expected_calendar_source_evidence_sha256=evidence[
+            "calendar_source_evidence_sha256"
+        ],
+    ) == evidence["calendar_source_evidence_sha256"]
+
+    changed = copy.deepcopy(evidence)
+    changed["source_records"]["nyse_2026_calendar_pdf"][
+        "content_sha256"
+    ] = _hash("9")
+    with pytest.raises(SecFilingGemmaContractError, match="noncanonical"):
+        validate_calendar_source_evidence_manifest(
+            changed,
+            expected_calendar_source_evidence_sha256=evidence[
+                "calendar_source_evidence_sha256"
+            ],
+        )
+
+
+def test_contract_module_imports_only_effect_free_modules() -> None:
     tree = ast.parse(inspect.getsource(contract_module))
     imported_roots: set[str] = set()
     for node in ast.walk(tree):
@@ -979,6 +1367,7 @@ def test_contract_module_imports_only_effect_free_standard_library_modules() -> 
             imported_roots.add(node.module.split(".")[0])
     assert imported_roots <= {
         "__future__",
+        "agent_benchmark",
         "collections",
         "copy",
         "datetime",

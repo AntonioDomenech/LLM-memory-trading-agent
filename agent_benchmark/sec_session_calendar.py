@@ -1,18 +1,40 @@
-"""Frozen NYSE full-session calendar used by the SEC availability audit."""
+"""Versioned NYSE trading-session-date calendars for the SEC audit.
+
+This module freezes *dates* on which the NYSE had a trading session.  It does
+not attest to the intraday opening or closing time of any session.  In
+particular, an early-close date is still present as a trading-session date.
+"""
 
 from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date, timedelta
 import hashlib
+import json
 from typing import Sequence
 
 from .sec_point_in_time import SecPointInTimeError
 
 
-CALENDAR_ID = "nyse_full_sessions_2000_01_01_2025_01_10_v1"
-CALENDAR_START = date(2000, 1, 1)
-CALENDAR_END = date(2025, 1, 10)
+# The legacy v1 calendar is part of already-sealed SEC-audit evidence.  Keep
+# its identity, bounds, closures, generated sequence, and validator immutable.
+LEGACY_CALENDAR_ID = "nyse_full_sessions_2000_01_01_2025_01_10_v1"
+LEGACY_CALENDAR_START = date(2000, 1, 1)
+LEGACY_CALENDAR_END = date(2025, 1, 10)
+
+# v2 is the current calendar used by new audits.  It is an append-only
+# extension of v1 through the final requested 2026-YTD session.
+CALENDAR_ID = "nyse_trading_session_dates_2000_01_01_2026_07_10_v2"
+CALENDAR_START = LEGACY_CALENDAR_START
+CALENDAR_END = date(2026, 7, 10)
+
+# A separate market-feature calendar supplies pre-2000 lookback sessions.  It
+# never changes the filing-universe start or the frozen experiment score dates.
+MARKET_HISTORY_CALENDAR_ID = (
+    "nyse_trading_session_dates_1998_01_01_2026_07_10_v1"
+)
+MARKET_HISTORY_CALENDAR_START = date(1998, 1, 1)
+
 SPECIAL_CLOSURES = frozenset(
     date.fromisoformat(value)
     for value in (
@@ -87,39 +109,154 @@ def _holidays(year: int) -> set[date]:
     return values
 
 
-def expected_nyse_sessions() -> tuple[str, ...]:
+def _session_dates(*, start: date, end: date) -> tuple[str, ...]:
     holidays: set[date] = set()
-    for year in range(CALENDAR_START.year, CALENDAR_END.year + 1):
+    for year in range(start.year, end.year + 1):
         holidays.update(_holidays(year))
     result: list[str] = []
-    current = CALENDAR_START
-    while current <= CALENDAR_END:
+    current = start
+    while current <= end:
         if current.weekday() < 5 and current not in holidays:
             result.append(current.isoformat())
         current += timedelta(days=1)
     return tuple(result)
 
 
+def expected_legacy_nyse_sessions() -> tuple[str, ...]:
+    """Return the immutable legacy-v1 trading-session-date sequence."""
+
+    return _session_dates(start=LEGACY_CALENDAR_START, end=LEGACY_CALENDAR_END)
+
+
+LEGACY_EXPECTED_SESSIONS = expected_legacy_nyse_sessions()
+
+
+def expected_nyse_sessions() -> tuple[str, ...]:
+    """Return the current v2 trading-session-date sequence."""
+
+    return _session_dates(start=CALENDAR_START, end=CALENDAR_END)
+
+
 EXPECTED_SESSIONS = expected_nyse_sessions()
 
 
-def validate_aapl_session_calendar(values: Sequence[str]) -> dict[str, object]:
+def expected_market_history_sessions() -> tuple[str, ...]:
+    """Return exact session dates used only for lagged market features."""
+
+    return _session_dates(start=MARKET_HISTORY_CALENDAR_START, end=CALENDAR_END)
+
+
+EXPECTED_MARKET_HISTORY_SESSIONS = expected_market_history_sessions()
+
+
+def _newline_payload(values: Sequence[str]) -> bytes:
+    return "".join(f"{value}\n" for value in values).encode("ascii")
+
+
+def _canonical_json_payload(values: Sequence[str]) -> bytes:
+    return json.dumps(
+        list(values),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+
+def _calendar_evidence(
+    values: tuple[str, ...],
+    *,
+    calendar_id: str,
+    start: date,
+    end: date,
+    include_canonical_json_sha256: bool,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "calendar_id": calendar_id,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "session_count": len(values),
+        "sessions_sha256": (
+            f"sha256:{hashlib.sha256(_newline_payload(values)).hexdigest()}"
+        ),
+        "sessions": list(values),
+    }
+    if include_canonical_json_sha256:
+        evidence["sessions_canonical_json_sha256"] = (
+            "sha256:"
+            f"{hashlib.sha256(_canonical_json_payload(values)).hexdigest()}"
+        )
+    return evidence
+
+
+def _validate_calendar_values(
+    values: Sequence[str],
+    *,
+    expected: tuple[str, ...],
+    error_label: str,
+) -> tuple[str, ...]:
     if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
         raise TypeError("AAPL session calendar must be a sequence of ISO dates")
     observed = tuple(values)
-    if observed != EXPECTED_SESSIONS:
+    if observed != expected:
         raise SecPointInTimeError(
-            "AAPL sessions do not match the frozen NYSE 2000-2025 calendar"
+            f"AAPL sessions do not match the frozen {error_label} calendar"
         )
-    payload = "".join(f"{value}\n" for value in observed).encode("ascii")
-    return {
-        "calendar_id": CALENDAR_ID,
-        "start": CALENDAR_START.isoformat(),
-        "end": CALENDAR_END.isoformat(),
-        "session_count": len(observed),
-        "sessions_sha256": f"sha256:{hashlib.sha256(payload).hexdigest()}",
-        "sessions": list(observed),
-    }
+    return observed
+
+
+def validate_legacy_aapl_session_calendar(
+    values: Sequence[str],
+) -> dict[str, object]:
+    """Validate and describe the exact legacy v1 calendar."""
+
+    observed = _validate_calendar_values(
+        values,
+        expected=LEGACY_EXPECTED_SESSIONS,
+        error_label="NYSE trading-session-date v1",
+    )
+    return _calendar_evidence(
+        observed,
+        calendar_id=LEGACY_CALENDAR_ID,
+        start=LEGACY_CALENDAR_START,
+        end=LEGACY_CALENDAR_END,
+        include_canonical_json_sha256=False,
+    )
+
+
+def validate_aapl_session_calendar(values: Sequence[str]) -> dict[str, object]:
+    """Validate and describe the exact current v2 calendar."""
+
+    observed = _validate_calendar_values(
+        values,
+        expected=EXPECTED_SESSIONS,
+        error_label="NYSE trading-session-date v2",
+    )
+    return _calendar_evidence(
+        observed,
+        calendar_id=CALENDAR_ID,
+        start=CALENDAR_START,
+        end=CALENDAR_END,
+        include_canonical_json_sha256=True,
+    )
+
+
+def validate_market_history_session_calendar(
+    values: Sequence[str],
+) -> dict[str, object]:
+    """Validate the exact prehistory-plus-experiment market-feature calendar."""
+
+    observed = _validate_calendar_values(
+        values,
+        expected=EXPECTED_MARKET_HISTORY_SESSIONS,
+        error_label="NYSE market-feature trading-session-date v1",
+    )
+    return _calendar_evidence(
+        observed,
+        calendar_id=MARKET_HISTORY_CALENDAR_ID,
+        start=MARKET_HISTORY_CALENDAR_START,
+        end=CALENDAR_END,
+        include_canonical_json_sha256=True,
+    )
 
 
 __all__ = [
@@ -127,7 +264,18 @@ __all__ = [
     "CALENDAR_ID",
     "CALENDAR_START",
     "EXPECTED_SESSIONS",
+    "EXPECTED_MARKET_HISTORY_SESSIONS",
+    "LEGACY_CALENDAR_END",
+    "LEGACY_CALENDAR_ID",
+    "LEGACY_CALENDAR_START",
+    "LEGACY_EXPECTED_SESSIONS",
+    "MARKET_HISTORY_CALENDAR_ID",
+    "MARKET_HISTORY_CALENDAR_START",
     "SPECIAL_CLOSURES",
+    "expected_legacy_nyse_sessions",
     "expected_nyse_sessions",
+    "expected_market_history_sessions",
     "validate_aapl_session_calendar",
+    "validate_legacy_aapl_session_calendar",
+    "validate_market_history_session_calendar",
 ]

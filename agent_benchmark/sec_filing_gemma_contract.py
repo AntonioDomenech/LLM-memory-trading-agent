@@ -18,6 +18,16 @@ import math
 import re
 from typing import Any, Final
 
+from agent_benchmark.sec_session_calendar import (
+    CALENDAR_ID as AUTHORITATIVE_CALENDAR_ID,
+    EXPECTED_SESSIONS as AUTHORITATIVE_SESSION_DATES,
+    EXPECTED_MARKET_HISTORY_SESSIONS as AUTHORITATIVE_MARKET_SESSION_DATES,
+    LEGACY_CALENDAR_ID as LEGACY_AUTHORITATIVE_CALENDAR_ID,
+    LEGACY_EXPECTED_SESSIONS as LEGACY_AUTHORITATIVE_SESSION_DATES,
+    MARKET_HISTORY_CALENDAR_ID as AUTHORITATIVE_MARKET_CALENDAR_ID,
+    MARKET_HISTORY_CALENDAR_START as AUTHORITATIVE_MARKET_CALENDAR_START,
+)
+
 
 CONTRACT_VERSION: Final[str] = "aapl-sec-filing-gemma-v1"
 CANDIDATE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-candidate-v1"
@@ -27,6 +37,24 @@ EXTRACTOR_REQUEST_VERSION: Final[str] = "issuer-relative-grounded-request-v1"
 PREPROCESSOR_VERSION: Final[str] = "issuer-relative-period-grounded-sentences-v1"
 LIVE_LESSON_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-live-lesson-v1"
 UNIVERSE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-corpus-universe-v1"
+CONTENT_MANIFEST_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-stage-content-v1"
+CALENDAR_SOURCE_EVIDENCE_SCHEMA_VERSION: Final[str] = (
+    "aapl-nyse-calendar-source-evidence-v1"
+)
+
+CALENDAR_SOURCE_URLS: Final[dict[str, str]] = {
+    "nyse_hours_calendars": "https://www.nyse.com/markets/hours-calendars",
+    "nyse_2025_calendar_pdf": (
+        "https://www.nyse.com/publicdocs/ICE_NYSE_2025_Yearly_Trading_Calendar.pdf"
+    ),
+    "nyse_2026_calendar_pdf": (
+        "https://www.nyse.com/publicdocs/nyse/ICE_NYSE_2026_Yearly_Trading_Calendar.pdf"
+    ),
+    "carter_closure_notice": (
+        "https://www.nyse.com/publicdocs/nyse/markets/american-options/"
+        "rule-interpretations/2025/National_Day_of_Mourning_20250102.pdf"
+    ),
+}
 
 MAX_RUNTIME_SECONDS: Final[int] = 3_600
 MAX_SEC_SECONDS: Final[int] = 720
@@ -39,6 +67,18 @@ MAX_SENTENCES: Final[int] = 72
 MAX_SENTENCE_CHARACTERS: Final[int] = 220
 HORIZON_SESSIONS: Final[int] = 20
 LABEL_MATURITY_OFFSET: Final[int] = HORIZON_SESSIONS + 1
+ACTIVE_EDGE_TOLERANCE: Final[float] = 1e-12
+BRIER_TARGET_COST_BPS: Final[int] = 10
+MARKET_HISTORY_START: Final[str] = AUTHORITATIVE_MARKET_CALENDAR_START.isoformat()
+MARKET_LOOKBACK_SESSIONS: Final[int] = 252
+
+DEVELOPMENT_FOLD_SPECS: Final[tuple[tuple[str, str, str, str], ...]] = (
+    ("fold_1", "2004-12-31", "2005-01-03", "2007-12-31"),
+    ("fold_2", "2007-12-31", "2008-01-02", "2010-12-31"),
+    ("fold_3", "2010-12-31", "2011-01-03", "2013-12-31"),
+    ("fold_4", "2013-12-31", "2014-01-02", "2016-12-30"),
+    ("fold_5", "2016-12-30", "2017-01-03", "2018-12-31"),
+)
 
 STAGE_ORDER: Final[tuple[str, ...]] = (
     "development",
@@ -109,6 +149,7 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "ledger",
     "market_features",
     "preprocessor",
+    "reveal_registry",
     "runner",
     "scorer",
     "sec_acquirer",
@@ -448,26 +489,49 @@ def build_extractor_model_payload(sentences: Sequence[Mapping[str, str]]) -> dic
 
 def build_redacted_input_manifest(
     *,
+    artifact_stage: str,
+    accession_number: str,
     corpus_universe_sha256: str,
-    payload_hashes_by_accession: Mapping[str, str],
+    model_payload_sha256: str,
     universe_manifest: Mapping[str, Any],
+    stage_content_manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if artifact_stage not in STAGE_ORDER:
+        raise SecFilingGemmaContractError("Redacted-input artifact stage is invalid")
     universe_hash = _sha256(corpus_universe_sha256, "corpus_universe_sha256")
     if universe_manifest.get("universe_sha256") != universe_hash:
         raise SecFilingGemmaContractError("Redacted-input manifest universe is not bound")
-    hashes = _expect_mapping(payload_hashes_by_accession, "payload_hashes_by_accession")
-    expected_accessions = {
-        record["accession_number"] for record in universe_manifest["records"]
+    if (
+        stage_content_manifest.get("artifact_stage") != artifact_stage
+        or stage_content_manifest.get("corpus_universe_sha256") != universe_hash
+    ):
+        raise SecFilingGemmaContractError("Redacted inputs are not bound to stage content")
+    content_hash = _sha256(
+        stage_content_manifest.get("content_manifest_sha256"),
+        "content_manifest_sha256",
+    )
+    validate_stage_content_manifest(
+        stage_content_manifest,
+        universe_manifest=universe_manifest,
+        expected_content_manifest_sha256=content_hash,
+    )
+    stage_accessions = {
+        document["accession_number"]
+        for document in stage_content_manifest["documents"]
     }
-    _expect_keys(hashes, expected_accessions, "payload_hashes_by_accession")
-    normalized_hashes = {
-        accession: _sha256(hashes[accession], f"payload hash {accession}")
-        for accession in sorted(expected_accessions)
-    }
+    if accession_number not in stage_accessions:
+        raise SecFilingGemmaContractError(
+            "Redacted-input event accession is outside its authorized stage"
+        )
+    payload_hash = _sha256(model_payload_sha256, "model_payload_sha256")
     body = {
-        "schema_version": "aapl-sec-gemma-redacted-input-manifest-v1",
+        "schema_version": "aapl-sec-gemma-redacted-input-event-v2",
+        "artifact_stage": artifact_stage,
+        "accession_number": accession_number,
         "corpus_universe_sha256": universe_hash,
-        "payload_hashes_by_accession": normalized_hashes,
+        "content_manifest_sha256": content_hash,
+        "model_payload_sha256": payload_hash,
+        "isolation_scope": "one_current_filing_and_its_immediate_prior_only",
     }
     return {**body, "redacted_input_manifest_sha256": canonical_sha256(body)}
 
@@ -476,6 +540,7 @@ def validate_redacted_input_manifest(
     manifest: Mapping[str, Any],
     *,
     universe_manifest: Mapping[str, Any],
+    stage_content_manifest: Mapping[str, Any],
     expected_manifest_sha256: str,
 ) -> str:
     value = _expect_mapping(manifest, "redacted-input manifest")
@@ -483,22 +548,30 @@ def validate_redacted_input_manifest(
         value,
         {
             "schema_version",
+            "artifact_stage",
+            "accession_number",
             "corpus_universe_sha256",
-            "payload_hashes_by_accession",
+            "content_manifest_sha256",
+            "model_payload_sha256",
+            "isolation_scope",
             "redacted_input_manifest_sha256",
         },
         "redacted-input manifest",
     )
     rebuilt = build_redacted_input_manifest(
+        artifact_stage=value["artifact_stage"],
+        accession_number=value["accession_number"],
         corpus_universe_sha256=value["corpus_universe_sha256"],
-        payload_hashes_by_accession=_expect_mapping(
-            value["payload_hashes_by_accession"], "payload_hashes_by_accession"
-        ),
+        model_payload_sha256=value["model_payload_sha256"],
         universe_manifest=universe_manifest,
+        stage_content_manifest=stage_content_manifest,
     )
     if value != rebuilt:
         raise SecFilingGemmaContractError("Redacted-input manifest is not canonical")
-    observed = value["redacted_input_manifest_sha256"]
+    observed = _sha256(
+        value["redacted_input_manifest_sha256"],
+        "redacted_input_manifest_sha256",
+    )
     if not hmac.compare_digest(
         observed, _sha256(expected_manifest_sha256, "expected_manifest_sha256")
     ):
@@ -550,6 +623,13 @@ def build_contract_manifest() -> dict[str, Any]:
             "decision_time": "after_completed_availability_session_close",
             "execution_time": "next_adjusted_open",
             "calendar_required_through": "2026-07-10",
+            "calendar_id": AUTHORITATIVE_CALENDAR_ID,
+            "calendar_semantics": "exact_nyse_trading_session_dates_not_hours",
+            "calendar_source_evidence_required": True,
+            "calendar_source_semantic_reconciliation_required": True,
+            "calendar_authoritative_source_urls": copy.deepcopy(
+                CALENDAR_SOURCE_URLS
+            ),
         },
         "corpus": {
             "subject_cik": "0000320193",
@@ -590,7 +670,10 @@ def build_contract_manifest() -> dict[str, Any]:
             "evidence_required": True,
             "metadata_envelope_sent_to_model": False,
             "model_payload": "exact_system_user_schema_and_generation_payload_only",
-            "candidate_bound_redacted_input_manifest_required": True,
+            "per_event_stage_bound_redacted_input_manifest_required": True,
+            "preprocessor_process_scope": (
+                "fresh_worker_receives_only_current_and_immediate_prior_text"
+            ),
         },
         "model": {
             "role": "grounded_structured_text_extractor_only",
@@ -623,7 +706,20 @@ def build_contract_manifest() -> dict[str, Any]:
             "cash_episode_sessions": HORIZON_SESSIONS,
             "signal_during_active_episode": "ignored_no_extension",
             "market_context": ["SPY", "QQQ", "IWM", "VIX", "TNX"],
-            "market_context_timing": "previous_completed_close_only",
+            "market_history_start": MARKET_HISTORY_START,
+            "market_history_calendar_id": AUTHORITATIVE_MARKET_CALENDAR_ID,
+            "maximum_market_lookback_sessions": MARKET_LOOKBACK_SESSIONS,
+            "market_context_timing": "completed_decision_session_close_only",
+            "prediction_timeline": {
+                "decision_session": "filing_availability_session",
+                "market_feature_cutoff": "decision_session_adjusted_close",
+                "fill_session_offset": 1,
+                "cash_exit_and_label_maturity_session_offset": LABEL_MATURITY_OFFSET,
+                "label_eligible_for_prediction": (
+                    "only_if_maturity_session_strictly_precedes_decision_session"
+                ),
+                "missing_prehistory": "prediction_unavailable_no_backfill",
+            },
             "price_regime_features": [
                 "aapl_lr_1",
                 "aapl_lr_5",
@@ -726,7 +822,17 @@ def build_contract_manifest() -> dict[str, Any]:
                 "probability_head": "ridge_logistic_lambda_0.1_max_iter_50_tol_1e-10",
                 "edge_head": "ridge_huber_lambda_0.1_delta_1.5_max_iter_50_tol_1e-10",
                 "nonfinite_or_missing_required_market_feature": "prediction_unavailable",
-                "fit_order": "strictly_chronological_labels_matured_before_prediction",
+                "fit_order": (
+                    "fixed_once_per_development_fold_from_all_and_only_labels_whose_"
+                    "maturity_session_strictly_precedes_the_fold_test_first_session"
+                ),
+                "development_fold_state": (
+                    "semantic_ablation_scalers_heads_and_climatology_fit_once_at_fold_"
+                    "start_and_held_byte_identical_through_the_complete_test_window"
+                ),
+                "post_selection_refit": (
+                    "fit_once_from_all_and_only_development_labels_matured_by_2018_12_31"
+                ),
             },
             "semantic_predictor": "gemma_dimensions_flags_plus_market_context",
             "ablation_predictor": "filing_calendar_plus_market_context_semantics_neutral",
@@ -756,12 +862,30 @@ def build_contract_manifest() -> dict[str, Any]:
                 "pass_all_development_gates_then_lowest_10bps_brier_then_highest_"
                 "10bps_active_edge_then_frozen_candidate_order"
             ),
+            "candidate_gate_comparison": "probability_gte_and_expected_edge_gte",
+            "binary_cash_win_target": {
+                "cost_bps": BRIER_TARGET_COST_BPS,
+                "positive_if": (
+                    "cash_active_log_edge_strictly_above_comparison_tolerance"
+                ),
+                "comparison_tolerance": ACTIVE_EDGE_TOLERANCE,
+                "used_by": [
+                    "probability_head",
+                    "brier_score",
+                    "causal_climatology",
+                    "episode_win_rate",
+                    "live_lessons",
+                ],
+            },
             "development_folds": [
-                {"train_through": "2004-12-31", "test": "2005-2007"},
-                {"train_through": "2007-12-31", "test": "2008-2010"},
-                {"train_through": "2010-12-31", "test": "2011-2013"},
-                {"train_through": "2013-12-31", "test": "2014-2016"},
-                {"train_through": "2016-12-31", "test": "2017-2018"},
+                {
+                    "fold_id": fold_id,
+                    "train_label_maturity_through": train_through,
+                    "test_first_session": test_first,
+                    "test_last_session": test_last,
+                    "state_updates_inside_test_window": False,
+                }
+                for fold_id, train_through, test_first, test_last in DEVELOPMENT_FOLD_SPECS
             ],
         },
         "gates": {
@@ -839,14 +963,21 @@ def build_contract_manifest() -> dict[str, Any]:
             "open_episode_at_cutoff": "terminal_valued_and_never_used_as_training",
             "period_attribution": "sum_daily_active_log_increments_on_one_continuous_ledger",
             "brier_rows": "only_predictions_with_full_horizon_matured_by_score_cutoff",
-            "comparison_tolerance": 1e-12,
+            "comparison_tolerance": ACTIVE_EDGE_TOLERANCE,
         },
         "scoring_semantics": {
             "prediction_invariance": "future_rows_cannot_change_any_earlier_prediction",
-            "causal_climatology": (
-                "beta_1_1_smoothed_cash_win_rate_from_labels_matured_before_prediction"
+            "brier_target": (
+                "cash_beats_aapl_after_10bps_strictly_above_1e_12"
             ),
-            "fold_prediction_state": "fit_only_on_labels_matured_before_each_prediction",
+            "causal_climatology": (
+                "beta_1_1_smoothed_cash_win_rate_from_the_exact_frozen_fold_training_set"
+            ),
+            "fold_prediction_state": (
+                "one_state_per_declared_fold_fit_before_test_and_immutable_inside_test"
+            ),
+            "same_fold_test_outcomes_can_update_state": False,
+            "semantic_ablation_and_climatology_training_support_identical": True,
             "fold_score_rows": "only_labels_matured_by_the_phase_cutoff",
             "annual_win": "active_log_edge_strictly_above_1e-12",
             "rolling_win": "month_end_sum_strictly_above_1e-12",
@@ -867,7 +998,10 @@ def build_contract_manifest() -> dict[str, Any]:
             "evidence_class": "approach_specific_reused_historical_holdout",
             "repository_wide_reveal_registry_required": True,
             "one_registered_attempt_id_per_candidate": True,
-            "earlier_2024_plus_attempts_must_be_declared": True,
+            "historical_final_reveal_count_lower_bound_required": True,
+            "known_hash_identities_plus_unattributed_count_not_exhaustive": True,
+            "candidate_binds_predecessor_registry_snapshot": True,
+            "appended_entry_binds_candidate_then_new_tip_and_count_are_externally_pinned": True,
             "winner_selection_across_final_attempts_forbidden": True,
             "globally_pristine_claim_allowed": False,
             "prospective_paper_trading_required_for_pristine_evidence": True,
@@ -895,6 +1029,8 @@ def build_contract_manifest() -> dict[str, Any]:
             "lesson_must_mature_before_ingestion": True,
             "lesson_first_use": "strictly_after_ingestion_session",
             "append_only_chronological_lessons": True,
+            "cumulative_prediction_binding_ledger_required": True,
+            "cross_batch_lesson_accession_or_prediction_replay_forbidden": True,
             "refit_timing": (
                 "before_each_new_filing_decision_using_all_and_only_matured_lessons"
             ),
@@ -920,13 +1056,15 @@ def _candidate_body(
     *,
     model_digest: str,
     ollama_runtime_fingerprint_sha256: str,
-    sec_audit_checksums_sha256: str,
+    sec_audit_checksums_json_sha256: str,
+    sec_catalog_artifact_sha256: str,
     sec_audit_source_commit: str,
-    calendar_sha256: str,
+    calendar_source_evidence_sha256: str,
+    calendar_sessions_sha256: str,
     corpus_universe_sha256: str,
+    corpus_universe_semantic_sha256: str,
     identity_lexicon_sha256: str,
-    redacted_input_manifest_sha256: str,
-    reveal_registry_sha256: str,
+    predecessor_reveal_registry_sha256: str,
     holdout_attempt_id: str,
     experiment_source_commit: str,
     source_tree_sha256: str,
@@ -937,15 +1075,39 @@ def _candidate_body(
         ollama_runtime_fingerprint_sha256,
         "ollama_runtime_fingerprint_sha256",
     )
-    audit_hash = _sha256(sec_audit_checksums_sha256, "sec_audit_checksums_sha256")
-    source_commit = _commit(sec_audit_source_commit, "sec_audit_source_commit")
-    calendar_hash = _sha256(calendar_sha256, "calendar_sha256")
-    universe_hash = _sha256(corpus_universe_sha256, "corpus_universe_sha256")
-    lexicon_hash = _sha256(identity_lexicon_sha256, "identity_lexicon_sha256")
-    redacted_manifest_hash = _sha256(
-        redacted_input_manifest_sha256, "redacted_input_manifest_sha256"
+    audit_hash = _sha256(
+        sec_audit_checksums_json_sha256,
+        "sec_audit_checksums_json_sha256",
     )
-    registry_hash = _sha256(reveal_registry_sha256, "reveal_registry_sha256")
+    catalog_hash = _sha256(
+        sec_catalog_artifact_sha256,
+        "sec_catalog_artifact_sha256",
+    )
+    source_commit = _commit(sec_audit_source_commit, "sec_audit_source_commit")
+    calendar_evidence_hash = _sha256(
+        calendar_source_evidence_sha256,
+        "calendar_source_evidence_sha256",
+    )
+    calendar_sessions_hash = _sha256(
+        calendar_sessions_sha256,
+        "calendar_sessions_sha256",
+    )
+    if calendar_sessions_hash != canonical_sha256(
+        list(AUTHORITATIVE_SESSION_DATES)
+    ):
+        raise SecFilingGemmaContractError(
+            "Candidate calendar sessions are not the frozen authoritative sequence"
+        )
+    universe_hash = _sha256(corpus_universe_sha256, "corpus_universe_sha256")
+    universe_semantic_hash = _sha256(
+        corpus_universe_semantic_sha256,
+        "corpus_universe_semantic_sha256",
+    )
+    lexicon_hash = _sha256(identity_lexicon_sha256, "identity_lexicon_sha256")
+    predecessor_registry_hash = _sha256(
+        predecessor_reveal_registry_sha256,
+        "predecessor_reveal_registry_sha256",
+    )
     if not isinstance(holdout_attempt_id, str) or _ATTEMPT_RE.fullmatch(holdout_attempt_id) is None:
         raise SecFilingGemmaContractError("holdout_attempt_id is not canonical")
     experiment_commit = _commit(experiment_source_commit, "experiment_source_commit")
@@ -969,13 +1131,15 @@ def _candidate_body(
             "transport": copy.deepcopy(contract["model"]["transport"]),
         },
         "bindings": {
-            "sec_audit_checksums_sha256": audit_hash,
+            "sec_audit_checksums_json_sha256": audit_hash,
+            "sec_catalog_artifact_sha256": catalog_hash,
             "sec_audit_source_commit": source_commit,
-            "calendar_sha256": calendar_hash,
+            "calendar_source_evidence_sha256": calendar_evidence_hash,
+            "calendar_sessions_sha256": calendar_sessions_hash,
             "corpus_universe_sha256": universe_hash,
+            "corpus_universe_semantic_sha256": universe_semantic_hash,
             "identity_lexicon_sha256": lexicon_hash,
-            "redacted_input_manifest_sha256": redacted_manifest_hash,
-            "reveal_registry_sha256": registry_hash,
+            "predecessor_reveal_registry_sha256": predecessor_registry_hash,
             "holdout_attempt_id": holdout_attempt_id,
             "experiment_source_commit": experiment_commit,
             "source_tree_sha256": tree_hash,
@@ -988,13 +1152,15 @@ def build_candidate_manifest(
     *,
     model_digest: str,
     ollama_runtime_fingerprint_sha256: str,
-    sec_audit_checksums_sha256: str,
+    sec_audit_checksums_json_sha256: str,
+    sec_catalog_artifact_sha256: str,
     sec_audit_source_commit: str,
-    calendar_sha256: str,
+    calendar_source_evidence_sha256: str,
+    calendar_sessions_sha256: str,
     corpus_universe_sha256: str,
+    corpus_universe_semantic_sha256: str,
     identity_lexicon_sha256: str,
-    redacted_input_manifest_sha256: str,
-    reveal_registry_sha256: str,
+    predecessor_reveal_registry_sha256: str,
     holdout_attempt_id: str,
     experiment_source_commit: str,
     source_tree_sha256: str,
@@ -1005,13 +1171,15 @@ def build_candidate_manifest(
     body = _candidate_body(
         model_digest=model_digest,
         ollama_runtime_fingerprint_sha256=ollama_runtime_fingerprint_sha256,
-        sec_audit_checksums_sha256=sec_audit_checksums_sha256,
+        sec_audit_checksums_json_sha256=sec_audit_checksums_json_sha256,
+        sec_catalog_artifact_sha256=sec_catalog_artifact_sha256,
         sec_audit_source_commit=sec_audit_source_commit,
-        calendar_sha256=calendar_sha256,
+        calendar_source_evidence_sha256=calendar_source_evidence_sha256,
+        calendar_sessions_sha256=calendar_sessions_sha256,
         corpus_universe_sha256=corpus_universe_sha256,
+        corpus_universe_semantic_sha256=corpus_universe_semantic_sha256,
         identity_lexicon_sha256=identity_lexicon_sha256,
-        redacted_input_manifest_sha256=redacted_input_manifest_sha256,
-        reveal_registry_sha256=reveal_registry_sha256,
+        predecessor_reveal_registry_sha256=predecessor_reveal_registry_sha256,
         holdout_attempt_id=holdout_attempt_id,
         experiment_source_commit=experiment_source_commit,
         source_tree_sha256=source_tree_sha256,
@@ -1046,13 +1214,15 @@ def validate_candidate_manifest(
     _expect_keys(
         bindings,
         {
-            "sec_audit_checksums_sha256",
+            "sec_audit_checksums_json_sha256",
+            "sec_catalog_artifact_sha256",
             "sec_audit_source_commit",
-            "calendar_sha256",
+            "calendar_source_evidence_sha256",
+            "calendar_sessions_sha256",
             "corpus_universe_sha256",
+            "corpus_universe_semantic_sha256",
             "identity_lexicon_sha256",
-            "redacted_input_manifest_sha256",
-            "reveal_registry_sha256",
+            "predecessor_reveal_registry_sha256",
             "holdout_attempt_id",
             "experiment_source_commit",
             "source_tree_sha256",
@@ -1063,13 +1233,23 @@ def validate_candidate_manifest(
     rebuilt = build_candidate_manifest(
         model_digest=model["digest"],
         ollama_runtime_fingerprint_sha256=model["runtime_fingerprint_sha256"],
-        sec_audit_checksums_sha256=bindings["sec_audit_checksums_sha256"],
+        sec_audit_checksums_json_sha256=bindings[
+            "sec_audit_checksums_json_sha256"
+        ],
+        sec_catalog_artifact_sha256=bindings["sec_catalog_artifact_sha256"],
         sec_audit_source_commit=bindings["sec_audit_source_commit"],
-        calendar_sha256=bindings["calendar_sha256"],
+        calendar_source_evidence_sha256=bindings[
+            "calendar_source_evidence_sha256"
+        ],
+        calendar_sessions_sha256=bindings["calendar_sessions_sha256"],
         corpus_universe_sha256=bindings["corpus_universe_sha256"],
+        corpus_universe_semantic_sha256=bindings[
+            "corpus_universe_semantic_sha256"
+        ],
         identity_lexicon_sha256=bindings["identity_lexicon_sha256"],
-        redacted_input_manifest_sha256=bindings["redacted_input_manifest_sha256"],
-        reveal_registry_sha256=bindings["reveal_registry_sha256"],
+        predecessor_reveal_registry_sha256=bindings[
+            "predecessor_reveal_registry_sha256"
+        ],
         holdout_attempt_id=bindings["holdout_attempt_id"],
         experiment_source_commit=bindings["experiment_source_commit"],
         source_tree_sha256=bindings["source_tree_sha256"],
@@ -1089,6 +1269,40 @@ def validate_candidate_manifest(
                 "Candidate manifest does not match the externally pinned hash"
             )
     return candidate_hash
+
+
+def _validate_candidate_universe_provenance(
+    candidate_manifest: Mapping[str, Any],
+    universe_manifest: Mapping[str, Any],
+) -> None:
+    """Require the candidate's SEC catalog and calendar to be the universe's."""
+
+    bindings = _expect_mapping(candidate_manifest["bindings"], "candidate bindings")
+    universe = _expect_mapping(universe_manifest, "corpus universe manifest")
+    if universe.get("calendar_artifact_sha256") != bindings[
+        "calendar_source_evidence_sha256"
+    ]:
+        raise SecFilingGemmaContractError(
+            "Corpus universe calendar is not the candidate-bound calendar artifact"
+        )
+    if universe.get("calendar_sessions_sha256") != bindings[
+        "calendar_sessions_sha256"
+    ]:
+        raise SecFilingGemmaContractError(
+            "Corpus universe sessions are not the candidate-bound calendar sequence"
+        )
+    if universe.get("catalog_artifact_sha256") != bindings[
+        "sec_catalog_artifact_sha256"
+    ]:
+        raise SecFilingGemmaContractError(
+            "Corpus universe catalog is not the candidate-bound SEC catalog artifact"
+        )
+    if universe.get("universe_semantic_sha256") != bindings[
+        "corpus_universe_semantic_sha256"
+    ]:
+        raise SecFilingGemmaContractError(
+            "Corpus universe semantics are not the candidate-bound design universe"
+        )
 
 
 def _stage_receipt_body(
@@ -1153,6 +1367,10 @@ def _stage_receipt_body(
             raise SecFilingGemmaContractError(
                 "Final-year partial results cannot be exposed"
             )
+    if stage == "intermediate" and partial:
+        raise SecFilingGemmaContractError(
+            "The one-shot intermediate result cannot be exposed partially"
+        )
     return {
         "schema_version": STAGE_RECEIPT_SCHEMA_VERSION,
         "contract_sha256": canonical_sha256(build_contract_manifest()),
@@ -1279,14 +1497,30 @@ def _canonical_session_sequence(session_dates: Sequence[str]) -> tuple[str, ...]
 
 def canonical_session_calendar(session_dates: Sequence[str]) -> tuple[str, ...]:
     canonical = _canonical_session_sequence(session_dates)
-    parsed = [_iso_date(value, "session calendar") for value in canonical]
-    if parsed[0] > date(2000, 1, 3) or parsed[-1] < date(2026, 7, 10):
-        raise SecFilingGemmaContractError("Session calendar does not cover the frozen experiment")
+    if canonical != AUTHORITATIVE_SESSION_DATES:
+        raise SecFilingGemmaContractError(
+            "Session calendar is not the exact frozen authoritative NYSE sequence"
+        )
     return canonical
 
 
 def session_calendar_sha256(session_dates: Sequence[str]) -> str:
     return canonical_sha256(list(canonical_session_calendar(session_dates)))
+
+
+def canonical_market_session_calendar(
+    session_dates: Sequence[str],
+) -> tuple[str, ...]:
+    canonical = _canonical_session_sequence(session_dates)
+    if canonical != AUTHORITATIVE_MARKET_SESSION_DATES:
+        raise SecFilingGemmaContractError(
+            "Market-feature calendar is not the exact frozen authoritative NYSE sequence"
+        )
+    return canonical
+
+
+def market_session_calendar_sha256(session_dates: Sequence[str]) -> str:
+    return canonical_sha256(list(canonical_market_session_calendar(session_dates)))
 
 
 def build_calendar_extension_manifest(
@@ -1297,6 +1531,10 @@ def build_calendar_extension_manifest(
 ) -> dict[str, Any]:
     prior = _canonical_session_sequence(prior_session_dates)
     extended = canonical_session_calendar(extended_session_dates)
+    if prior != LEGACY_AUTHORITATIVE_SESSION_DATES:
+        raise SecFilingGemmaContractError(
+            "Prior calendar is not the exact immutable legacy NYSE sequence"
+        )
     prior_hash = canonical_sha256(list(prior))
     if not hmac.compare_digest(
         prior_hash,
@@ -1308,7 +1546,10 @@ def build_calendar_extension_manifest(
             "Calendar extension must preserve the complete historical prefix"
         )
     body = {
-        "schema_version": "aapl-session-calendar-extension-v1",
+        "schema_version": "aapl-session-calendar-extension-v2",
+        "prior_calendar_id": LEGACY_AUTHORITATIVE_CALENDAR_ID,
+        "extended_calendar_id": AUTHORITATIVE_CALENDAR_ID,
+        "hash_serialization": "canonical_json_utf8_sha256_bare_hex",
         "prior_sessions_sha256": prior_hash,
         "prior_session_count": len(prior),
         "prior_last_session": prior[-1],
@@ -1318,6 +1559,177 @@ def build_calendar_extension_manifest(
         "appended_sessions": list(extended[len(prior) :]),
     }
     return {**body, "extension_manifest_sha256": canonical_sha256(body)}
+
+
+def validate_calendar_extension_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    expected_prior_sessions_sha256: str,
+    expected_extension_manifest_sha256: str,
+) -> str:
+    """Validate the one frozen v1-to-v2 authoritative calendar extension."""
+
+    observed = _expect_mapping(manifest, "calendar extension manifest")
+    expected = build_calendar_extension_manifest(
+        prior_session_dates=LEGACY_AUTHORITATIVE_SESSION_DATES,
+        extended_session_dates=AUTHORITATIVE_SESSION_DATES,
+        expected_prior_sessions_sha256=expected_prior_sessions_sha256,
+    )
+    _expect_keys(observed, set(expected), "calendar extension manifest")
+    expected_hash = _sha256(
+        expected_extension_manifest_sha256,
+        "expected_extension_manifest_sha256",
+    )
+    observed_hash = _sha256(
+        observed["extension_manifest_sha256"],
+        "calendar extension manifest extension_manifest_sha256",
+    )
+    if (
+        observed != expected
+        or canonical_sha256(
+            {
+                key: observed[key]
+                for key in observed
+                if key != "extension_manifest_sha256"
+            }
+        )
+        != expected["extension_manifest_sha256"]
+        or not hmac.compare_digest(
+            observed_hash, expected_hash
+        )
+    ):
+        raise SecFilingGemmaContractError(
+            "Calendar extension is noncanonical or not externally pinned"
+        )
+    return expected["extension_manifest_sha256"]
+
+
+def build_calendar_source_evidence_manifest(
+    *,
+    retrieved_at_utc: str,
+    source_records: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Bind exact official NYSE source bytes to all frozen calendar sequences."""
+
+    if not isinstance(retrieved_at_utc, str) or not retrieved_at_utc.endswith("Z"):
+        raise SecFilingGemmaContractError(
+            "Calendar source retrieval time must be canonical UTC"
+        )
+    try:
+        parsed = datetime.fromisoformat(retrieved_at_utc[:-1] + "+00:00")
+    except ValueError as exc:
+        raise SecFilingGemmaContractError(
+            "Calendar source retrieval time must be canonical UTC"
+        ) from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != retrieved_at_utc:
+        raise SecFilingGemmaContractError(
+            "Calendar source retrieval time must have whole-second UTC form"
+        )
+    records = _expect_mapping(source_records, "calendar source records")
+    _expect_keys(records, set(CALENDAR_SOURCE_URLS), "calendar source records")
+    normalized_records: dict[str, dict[str, Any]] = {}
+    for name, expected_url in CALENDAR_SOURCE_URLS.items():
+        record = _expect_mapping(records[name], f"calendar source {name}")
+        _expect_keys(record, {"url", "content_sha256", "byte_count"}, f"calendar source {name}")
+        if record["url"] != expected_url:
+            raise SecFilingGemmaContractError(
+                "Calendar evidence did not use the frozen official source URL"
+            )
+        normalized_records[name] = {
+            "url": expected_url,
+            "content_sha256": _sha256(
+                record["content_sha256"], f"calendar source {name} content_sha256"
+            ),
+            "byte_count": _strict_int(
+                record["byte_count"], f"calendar source {name} byte_count", minimum=1
+            ),
+        }
+    legacy_hash = canonical_sha256(list(LEGACY_AUTHORITATIVE_SESSION_DATES))
+    current_hash = canonical_sha256(list(AUTHORITATIVE_SESSION_DATES))
+    market_hash = canonical_sha256(list(AUTHORITATIVE_MARKET_SESSION_DATES))
+    extension = build_calendar_extension_manifest(
+        prior_session_dates=LEGACY_AUTHORITATIVE_SESSION_DATES,
+        extended_session_dates=AUTHORITATIVE_SESSION_DATES,
+        expected_prior_sessions_sha256=legacy_hash,
+    )
+    body = {
+        "schema_version": CALENDAR_SOURCE_EVIDENCE_SCHEMA_VERSION,
+        "retrieved_at_utc": retrieved_at_utc,
+        "source_records": normalized_records,
+        "legacy_calendar_id": LEGACY_AUTHORITATIVE_CALENDAR_ID,
+        "legacy_sessions_sha256": legacy_hash,
+        "legacy_session_count": len(LEGACY_AUTHORITATIVE_SESSION_DATES),
+        "current_calendar_id": AUTHORITATIVE_CALENDAR_ID,
+        "current_sessions_sha256": current_hash,
+        "current_session_count": len(AUTHORITATIVE_SESSION_DATES),
+        "market_history_calendar_id": AUTHORITATIVE_MARKET_CALENDAR_ID,
+        "market_history_sessions_sha256": market_hash,
+        "market_history_session_count": len(AUTHORITATIVE_MARKET_SESSION_DATES),
+        "extension_manifest_sha256": extension["extension_manifest_sha256"],
+        "calendar_semantics": "trading_session_dates_not_intraday_hours",
+        "pre_2024_independent_reference_sessions_sha256": (
+            "af8ca7c0efc6c1e39df40eeb0dce47482077704041befbf12c6c188f2c706369"
+        ),
+        "pre_2024_independent_reference_session_count": 6_037,
+        "semantic_reconciliation_required_before_candidate_use": True,
+        "authorizes_corpus_or_model_access": False,
+    }
+    return {**body, "calendar_source_evidence_sha256": canonical_sha256(body)}
+
+
+def validate_calendar_source_evidence_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    expected_calendar_source_evidence_sha256: str,
+) -> str:
+    observed = _expect_mapping(manifest, "calendar source evidence")
+    expected_keys = {
+        "schema_version",
+        "retrieved_at_utc",
+        "source_records",
+        "legacy_calendar_id",
+        "legacy_sessions_sha256",
+        "legacy_session_count",
+        "current_calendar_id",
+        "current_sessions_sha256",
+        "current_session_count",
+        "market_history_calendar_id",
+        "market_history_sessions_sha256",
+        "market_history_session_count",
+        "extension_manifest_sha256",
+        "calendar_semantics",
+        "pre_2024_independent_reference_sessions_sha256",
+        "pre_2024_independent_reference_session_count",
+        "semantic_reconciliation_required_before_candidate_use",
+        "authorizes_corpus_or_model_access",
+        "calendar_source_evidence_sha256",
+    }
+    _expect_keys(observed, expected_keys, "calendar source evidence")
+    rebuilt = build_calendar_source_evidence_manifest(
+        retrieved_at_utc=observed["retrieved_at_utc"],
+        source_records=_expect_mapping(
+            observed["source_records"], "calendar source records"
+        ),
+    )
+    observed_hash = _sha256(
+        observed["calendar_source_evidence_sha256"],
+        "calendar_source_evidence_sha256",
+    )
+    expected_hash = _sha256(
+        expected_calendar_source_evidence_sha256,
+        "expected_calendar_source_evidence_sha256",
+    )
+    if (
+        observed != rebuilt
+        or not hmac.compare_digest(observed_hash, expected_hash)
+        or not hmac.compare_digest(
+            observed_hash, rebuilt["calendar_source_evidence_sha256"]
+        )
+    ):
+        raise SecFilingGemmaContractError(
+            "Calendar source evidence is noncanonical or not externally pinned"
+        )
+    return observed_hash
 
 
 def _next_session_after(value: date, sessions: Sequence[str]) -> date:
@@ -1388,8 +1800,6 @@ def build_corpus_universe_manifest(
         "filing_date",
         "filing_date_change",
         "primary_document",
-        "primary_document_sha256",
-        "normalized_text_sha256",
         "source_record_sha256",
     }
     normalized: list[dict[str, Any]] = []
@@ -1446,12 +1856,6 @@ def build_corpus_universe_manifest(
                 "filing_date": filing_date.isoformat(),
                 "filing_date_change": None if change_date is None else change_date.isoformat(),
                 "primary_document": primary_document,
-                "primary_document_sha256": _sha256(
-                    record["primary_document_sha256"], "primary_document_sha256"
-                ),
-                "normalized_text_sha256": _sha256(
-                    record["normalized_text_sha256"], "normalized_text_sha256"
-                ),
                 "source_record_sha256": _sha256(
                     record["source_record_sha256"], "source_record_sha256"
                 ),
@@ -1470,15 +1874,6 @@ def build_corpus_universe_manifest(
     acceptance_rate = exact_acceptance_count / len(normalized)
     if acceptance_rate < 0.95:
         raise SecFilingGemmaContractError("Exact SGML acceptance coverage is below 95 percent")
-    for left_index, left in enumerate(normalized):
-        for right in normalized[left_index + 1 :]:
-            if (
-                left["artifact_stage"] != right["artifact_stage"]
-                and left["normalized_text_sha256"] == right["normalized_text_sha256"]
-            ):
-                raise SecFilingGemmaContractError(
-                    "The same normalized document hash appears in different stage artifacts"
-                )
     body = {
         "schema_version": UNIVERSE_SCHEMA_VERSION,
         "contract_sha256": canonical_sha256(build_contract_manifest()),
@@ -1492,6 +1887,22 @@ def build_corpus_universe_manifest(
         "stage_counts": stage_counts,
         "records": normalized,
     }
+    semantic_records = [
+        {
+            "accession_number": record["accession_number"],
+            "form": record["form"],
+            "availability_session": record["availability_session"],
+            "artifact_stage": record["artifact_stage"],
+        }
+        for record in normalized
+    ]
+    semantic_body = {
+        "schema_version": "aapl-sec-gemma-corpus-universe-semantic-v1",
+        "contract_sha256": body["contract_sha256"],
+        "calendar_sessions_sha256": body["calendar_sessions_sha256"],
+        "behavioral_records": semantic_records,
+    }
+    body["universe_semantic_sha256"] = canonical_sha256(semantic_body)
     return {**body, "universe_sha256": canonical_sha256(body)}
 
 
@@ -1517,6 +1928,7 @@ def validate_corpus_universe_manifest(
             "exact_acceptance_timestamp_rate",
             "stage_counts",
             "records",
+            "universe_semantic_sha256",
             "universe_sha256",
         },
         "corpus universe manifest",
@@ -1535,8 +1947,6 @@ def validate_corpus_universe_manifest(
                     "filing_date",
                     "filing_date_change",
                     "primary_document",
-                    "primary_document_sha256",
-                    "normalized_text_sha256",
                     "source_record_sha256",
                 )
             }
@@ -1588,15 +1998,154 @@ def validate_complete_corpus(universe_manifest: Mapping[str, Any]) -> None:
             )
 
 
+def build_stage_content_manifest(
+    *,
+    artifact_stage: str,
+    corpus_universe_sha256: str,
+    documents: Sequence[Mapping[str, Any]],
+    universe_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind only one authorized stage's filing bytes and normalized text."""
+
+    if artifact_stage not in STAGE_ORDER:
+        raise SecFilingGemmaContractError("Stage content artifact has an invalid stage")
+    universe_hash = _sha256(corpus_universe_sha256, "corpus_universe_sha256")
+    if universe_manifest.get("universe_sha256") != universe_hash:
+        raise SecFilingGemmaContractError("Stage content universe is not bound")
+    if isinstance(documents, (str, bytes)) or not isinstance(documents, Sequence):
+        raise SecFilingGemmaContractError("Stage content documents must be a sequence")
+    universe_records = {
+        record["accession_number"]: record
+        for record in universe_manifest["records"]
+        if record["artifact_stage"] == artifact_stage
+    }
+    expected_keys = {
+        "accession_number",
+        "primary_document_sha256",
+        "normalized_text_sha256",
+        "primary_document_bytes",
+        "normalized_text_bytes",
+    }
+    normalized: list[dict[str, Any]] = []
+    observed: set[str] = set()
+    for index, raw in enumerate(documents):
+        document = _expect_mapping(raw, f"stage content documents[{index}]")
+        _expect_keys(document, expected_keys, f"stage content documents[{index}]")
+        accession = document["accession_number"]
+        if accession not in universe_records or accession in observed:
+            raise SecFilingGemmaContractError(
+                "Stage content must contain each authorized accession exactly once"
+            )
+        observed.add(accession)
+        universe_record = universe_records[accession]
+        normalized.append(
+            {
+                "accession_number": accession,
+                "form": universe_record["form"],
+                "availability_session": universe_record["availability_session"],
+                "primary_document": universe_record["primary_document"],
+                "primary_document_sha256": _sha256(
+                    document["primary_document_sha256"], "primary_document_sha256"
+                ),
+                "normalized_text_sha256": _sha256(
+                    document["normalized_text_sha256"], "normalized_text_sha256"
+                ),
+                "primary_document_bytes": _strict_int(
+                    document["primary_document_bytes"],
+                    "primary_document_bytes",
+                    minimum=1,
+                ),
+                "normalized_text_bytes": _strict_int(
+                    document["normalized_text_bytes"],
+                    "normalized_text_bytes",
+                    minimum=1,
+                ),
+            }
+        )
+    if observed != set(universe_records):
+        raise SecFilingGemmaContractError(
+            "Stage content omits one or more metadata-eligible accessions"
+        )
+    normalized.sort(key=lambda item: (item["availability_session"], item["accession_number"]))
+    body = {
+        "schema_version": CONTENT_MANIFEST_SCHEMA_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "artifact_stage": artifact_stage,
+        "corpus_universe_sha256": universe_hash,
+        "document_count": len(normalized),
+        "documents": normalized,
+    }
+    return {**body, "content_manifest_sha256": canonical_sha256(body)}
+
+
+def validate_stage_content_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    universe_manifest: Mapping[str, Any],
+    expected_content_manifest_sha256: str,
+) -> str:
+    value = _expect_mapping(manifest, "stage content manifest")
+    _expect_keys(
+        value,
+        {
+            "schema_version",
+            "contract_sha256",
+            "artifact_stage",
+            "corpus_universe_sha256",
+            "document_count",
+            "documents",
+            "content_manifest_sha256",
+        },
+        "stage content manifest",
+    )
+    source_documents = [
+        {
+            key: document[key]
+            for key in (
+                "accession_number",
+                "primary_document_sha256",
+                "normalized_text_sha256",
+                "primary_document_bytes",
+                "normalized_text_bytes",
+            )
+        }
+        for document in value["documents"]
+    ]
+    rebuilt = build_stage_content_manifest(
+        artifact_stage=value["artifact_stage"],
+        corpus_universe_sha256=value["corpus_universe_sha256"],
+        documents=source_documents,
+        universe_manifest=universe_manifest,
+    )
+    if value != rebuilt:
+        raise SecFilingGemmaContractError("Stage content manifest is not canonical")
+    observed = _sha256(
+        value["content_manifest_sha256"],
+        "content_manifest_sha256",
+    )
+    if not hmac.compare_digest(
+        observed,
+        _sha256(
+            expected_content_manifest_sha256,
+            "expected_content_manifest_sha256",
+        ),
+    ):
+        raise SecFilingGemmaContractError("Stage content manifest is not externally pinned")
+    return observed
+
+
 def validate_extractor_request(
     request: Mapping[str, Any],
     *,
     candidate_manifest: Mapping[str, Any],
     expected_candidate_sha256: str,
     universe_manifest: Mapping[str, Any],
+    content_manifests_by_stage: Mapping[str, Mapping[str, Any]],
+    expected_content_manifest_sha256s: Mapping[str, str],
     session_dates: Sequence[str],
     forbidden_identity_terms: Sequence[str],
     redacted_input_manifest: Mapping[str, Any],
+    expected_redacted_input_manifest_sha256: str,
 ) -> dict[str, Any]:
     """Validate a metadata envelope and return only the safe Ollama payload."""
 
@@ -1636,6 +2185,7 @@ def validate_extractor_request(
         session_dates=session_dates,
         expected_universe_sha256=bindings["corpus_universe_sha256"],
     )
+    _validate_candidate_universe_provenance(candidate_manifest, universe_manifest)
     if value["corpus_universe_sha256"] != universe_hash:
         raise SecFilingGemmaContractError("Extractor request is not bound to the corpus universe")
     if isinstance(forbidden_identity_terms, (str, bytes)) or not isinstance(
@@ -1661,15 +2211,6 @@ def validate_extractor_request(
         bindings["identity_lexicon_sha256"],
     ) or value["identity_lexicon_sha256"] != lexicon_hash:
         raise SecFilingGemmaContractError("Extractor identity lexicon is not externally pinned")
-    redacted_manifest_hash = validate_redacted_input_manifest(
-        redacted_input_manifest,
-        universe_manifest=universe_manifest,
-        expected_manifest_sha256=bindings["redacted_input_manifest_sha256"],
-    )
-    if value["redacted_input_manifest_sha256"] != redacted_manifest_hash:
-        raise SecFilingGemmaContractError(
-            "Extractor envelope is not bound to the redacted-input manifest"
-        )
     records = list(universe_manifest["records"])
     current_accession = value["current_accession_number"]
     current = next(
@@ -1680,11 +2221,62 @@ def validate_extractor_request(
         raise SecFilingGemmaContractError("Extractor current filing is absent from the universe")
     if value["stage"] != current["artifact_stage"]:
         raise SecFilingGemmaContractError("Extractor current filing crossed a stage boundary")
+    allowed_stages = set(STAGE_ORDER[: STAGE_ORDER.index(current["artifact_stage"]) + 1])
+    manifests = _expect_mapping(content_manifests_by_stage, "content_manifests_by_stage")
+    expected_content_hashes = _expect_mapping(
+        expected_content_manifest_sha256s,
+        "expected_content_manifest_sha256s",
+    )
+    _expect_keys(manifests, allowed_stages, "content_manifests_by_stage")
+    _expect_keys(
+        expected_content_hashes,
+        allowed_stages,
+        "expected_content_manifest_sha256s",
+    )
+    content_by_accession: dict[str, Mapping[str, Any]] = {}
+    for stage in STAGE_ORDER:
+        if stage not in allowed_stages:
+            continue
+        manifest = _expect_mapping(manifests[stage], f"content manifest {stage}")
+        if manifest.get("artifact_stage") != stage:
+            raise SecFilingGemmaContractError("Content manifest stage key is inconsistent")
+        validate_stage_content_manifest(
+            manifest,
+            universe_manifest=universe_manifest,
+            expected_content_manifest_sha256=expected_content_hashes[stage],
+        )
+        for document in manifest["documents"]:
+            content_by_accession[document["accession_number"]] = document
+    current_content = content_by_accession.get(current_accession)
+    if current_content is None:
+        raise SecFilingGemmaContractError("Extractor current filing content is unavailable")
+    redacted_manifest = _expect_mapping(
+        redacted_input_manifest,
+        "redacted-input manifest",
+    )
+    if redacted_manifest.get("artifact_stage") != current["artifact_stage"]:
+        raise SecFilingGemmaContractError(
+            "Extractor redacted-input artifact crossed a stage boundary"
+        )
+    if redacted_manifest.get("accession_number") != current_accession:
+        raise SecFilingGemmaContractError(
+            "Extractor redacted-input artifact belongs to another filing event"
+        )
+    redacted_manifest_hash = validate_redacted_input_manifest(
+        redacted_manifest,
+        universe_manifest=universe_manifest,
+        stage_content_manifest=manifests[current["artifact_stage"]],
+        expected_manifest_sha256=expected_redacted_input_manifest_sha256,
+    )
+    if value["redacted_input_manifest_sha256"] != redacted_manifest_hash:
+        raise SecFilingGemmaContractError(
+            "Extractor envelope is not bound to the redacted-input manifest"
+        )
     if value["current_form"] != current["form"]:
         raise SecFilingGemmaContractError("Extractor current form differs from the universe")
     if value["current_availability_session"] != current["availability_session"]:
         raise SecFilingGemmaContractError("Extractor availability differs from the universe")
-    if value["current_filing_sha256"] != current["normalized_text_sha256"]:
+    if value["current_filing_sha256"] != current_content["normalized_text_sha256"]:
         raise SecFilingGemmaContractError("Extractor current text hash differs from the universe")
     same_form_before = [
         record
@@ -1704,10 +2296,15 @@ def validate_extractor_request(
         if any(item is not None for item in (prior_accession, prior_availability, prior_hash)):
             raise SecFilingGemmaContractError("First same-form filing cannot claim a prior filing")
     else:
+        prior_content = content_by_accession.get(expected_prior["accession_number"])
+        if prior_content is None:
+            raise SecFilingGemmaContractError(
+                "Extractor prior same-form content is unavailable"
+            )
         if (
             prior_accession != expected_prior["accession_number"]
             or prior_availability != expected_prior["availability_session"]
-            or prior_hash != expected_prior["normalized_text_sha256"]
+            or prior_hash != prior_content["normalized_text_sha256"]
         ):
             raise SecFilingGemmaContractError(
                 "Extractor prior filing is not the immediately preceding same-form filing"
@@ -1747,6 +2344,10 @@ def validate_extractor_request(
             raise SecFilingGemmaContractError("Redacted sentence text cannot be blank")
         if text != text.strip() or len(text) > MAX_SENTENCE_CHARACTERS:
             raise SecFilingGemmaContractError("Redacted sentence text is not canonical")
+        if not text.isascii():
+            raise SecFilingGemmaContractError(
+                "Redacted sentence text must be canonical ASCII"
+            )
         lowered = text.casefold()
         if any(
             re.search(
@@ -1765,50 +2366,58 @@ def validate_extractor_request(
             raise SecFilingGemmaContractError(
                 "Spelled absolute numeric information survived redaction"
             )
+        unambiguous_calendar_words = {
+            "january",
+            "february",
+            "march",
+            "april",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        }
+        if words.intersection(unambiguous_calendar_words):
+            raise SecFilingGemmaContractError("Calendar date language survived redaction")
+        for position, word in enumerate(ordered_words):
+            if word != "may":
+                continue
+            previous_word = ordered_words[position - 1] if position else None
+            next_word = (
+                ordered_words[position + 1]
+                if position + 1 < len(ordered_words)
+                else None
+            )
+            if previous_word in {
+                "by",
+                "during",
+                "from",
+                "in",
+                "on",
+                "since",
+                "through",
+                "until",
+            } or next_word in _SPELLED_DATE_TERMS:
+                raise SecFilingGemmaContractError(
+                    "Calendar date language survived redaction"
+                )
         month_positions = [
-            index
-            for index, word in enumerate(ordered_words)
-            if word in {
-                "january",
-                "february",
-                "march",
-                "april",
-                "may",
-                "june",
-                "july",
-                "august",
-                "september",
-                "october",
-                "november",
-                "december",
-            }
+            index for index, word in enumerate(ordered_words) if word == "may"
         ]
         ordinal_positions = [
             index
             for index, word in enumerate(ordered_words)
             if word in _SPELLED_DATE_TERMS
-            and word
-            not in {
-                "january",
-                "february",
-                "march",
-                "april",
-                "may",
-                "june",
-                "july",
-                "august",
-                "september",
-                "october",
-                "november",
-                "december",
-                "monday",
-                "tuesday",
-                "wednesday",
-                "thursday",
-                "friday",
-                "saturday",
-                "sunday",
-            }
+            and word not in unambiguous_calendar_words | {"may"}
         ]
         if any(abs(month - ordinal) <= 3 for month in month_positions for ordinal in ordinal_positions):
             raise SecFilingGemmaContractError("Spelled date information survived redaction")
@@ -1838,12 +2447,10 @@ def validate_extractor_request(
     payload_hash = canonical_sha256(model_payload)
     if value["model_payload_sha256"] != payload_hash:
         raise SecFilingGemmaContractError("Model payload hash does not reconcile")
-    expected_payload_hash = redacted_input_manifest["payload_hashes_by_accession"][
-        current_accession
-    ]
+    expected_payload_hash = redacted_manifest["model_payload_sha256"]
     if payload_hash != expected_payload_hash:
         raise SecFilingGemmaContractError(
-            "Model payload does not match the candidate-bound redacted-input manifest"
+            "Model payload does not match the externally pinned redacted-input manifest"
         )
     byte_count = len("\n".join(texts).encode("utf-8"))
     if byte_count > MAX_INPUT_BYTES:
@@ -2045,6 +2652,7 @@ def validate_training_rows(
         session_dates=session_dates,
         expected_universe_sha256=expected_universe_sha256,
     )
+    _validate_candidate_universe_provenance(candidate_manifest, universe_manifest)
     if universe_hash != candidate_manifest["bindings"]["corpus_universe_sha256"]:
         raise SecFilingGemmaContractError("Training universe is not candidate-bound")
     extraction_hash = _sha256(
@@ -2171,11 +2779,12 @@ def validate_final_runtime_summary(
         session_dates=session_dates,
         expected_universe_sha256=expected_universe_sha256,
     )
+    _validate_candidate_universe_provenance(candidate_manifest, universe_manifest)
     if universe_hash != candidate_manifest["bindings"]["corpus_universe_sha256"]:
         raise SecFilingGemmaContractError("Runtime corpus universe is not candidate-bound")
     if (
         universe_manifest["calendar_artifact_sha256"]
-        != candidate_manifest["bindings"]["calendar_sha256"]
+        != candidate_manifest["bindings"]["calendar_source_evidence_sha256"]
     ):
         raise SecFilingGemmaContractError("Runtime calendar is not candidate-bound")
     value = _expect_mapping(evidence, "runtime evidence")
@@ -2284,11 +2893,16 @@ def validate_final_runtime_summary(
     )
     for name, digest in artifacts.items():
         _sha256(digest, f"artifact_sha256s.{name}")
+    if len(set(artifacts.values())) != len(artifacts):
+        raise SecFilingGemmaContractError(
+            "Runtime stage artifacts must be physically distinct"
+        )
     market_data = _expect_mapping(
         value["market_data_sha256s_by_stage"], "market_data_sha256s_by_stage"
     )
     _expect_keys(market_data, set(STAGE_ORDER), "market_data_sha256s_by_stage")
     required_market_keys = {"AAPL", "SPY", "QQQ", "IWM", "VIX", "TNX", "canonical_frame"}
+    observed_market_hashes: list[str] = []
     for stage in STAGE_ORDER:
         stage_hashes = _expect_mapping(
             market_data[stage], f"market_data_sha256s_by_stage.{stage}"
@@ -2299,7 +2913,13 @@ def validate_final_runtime_summary(
             f"market_data_sha256s_by_stage.{stage}",
         )
         for name, digest in stage_hashes.items():
-            _sha256(digest, f"market_data_sha256s_by_stage.{stage}.{name}")
+            observed_market_hashes.append(
+                _sha256(digest, f"market_data_sha256s_by_stage.{stage}.{name}")
+            )
+    if len(set(observed_market_hashes)) != len(observed_market_hashes):
+        raise SecFilingGemmaContractError(
+            "Runtime market artifacts must be distinct stage-bounded slices"
+        )
     if value["model_endpoint"] != "http://127.0.0.1:11434/api/chat":
         raise SecFilingGemmaContractError("Model endpoint is not the frozen loopback endpoint")
     if value["model_name"] != "gemma4:12b":
@@ -2337,8 +2957,10 @@ def validate_live_lessons(
     expected_prior_count: int,
     expected_prior_model_state_sha256: str,
     expected_prior_last_sort_key: Sequence[str] | None,
-    eligible_lesson_ids: Sequence[str],
-    expected_eligible_lesson_set_sha256: str,
+    prior_lesson_bindings: Sequence[Mapping[str, Any]],
+    expected_prior_lesson_bindings_sha256: str,
+    eligible_lesson_bindings: Sequence[Mapping[str, Any]],
+    expected_eligible_lesson_bindings_sha256: str,
 ) -> dict[str, Any]:
     as_of = _iso_date(as_of_session, "as_of_session")
     observed_calendar_hash = session_calendar_sha256(session_dates)
@@ -2376,22 +2998,121 @@ def validate_live_lessons(
     prior_state = _sha256(
         expected_prior_model_state_sha256, "expected_prior_model_state_sha256"
     )
-    if isinstance(eligible_lesson_ids, (str, bytes)) or not isinstance(
-        eligible_lesson_ids, Sequence
+    binding_keys = {
+        "lesson_id",
+        "accession_number",
+        "decision_session",
+        "feature_sha256",
+        "prediction_receipt_sha256",
+        "market_data_manifest_sha256",
+        "strategy_ledger_slice_sha256",
+        "benchmark_ledger_slice_sha256",
+    }
+
+    def normalize_bindings(
+        records: Sequence[Mapping[str, Any]], location: str
+    ) -> list[dict[str, Any]]:
+        if isinstance(records, (str, bytes)) or not isinstance(records, Sequence):
+            raise SecFilingGemmaContractError(f"{location} must be a sequence")
+        normalized: list[dict[str, Any]] = []
+        for index, raw in enumerate(records):
+            record = _expect_mapping(raw, f"{location}[{index}]")
+            _expect_keys(record, binding_keys, f"{location}[{index}]")
+            lesson_id = record["lesson_id"]
+            if not isinstance(lesson_id, str) or not lesson_id:
+                raise SecFilingGemmaContractError(
+                    f"{location} lesson ids must be nonblank strings"
+                )
+            accession = record["accession_number"]
+            if (
+                not isinstance(accession, str)
+                or _ACCESSION_RE.fullmatch(accession) is None
+                or not accession.startswith("0000320193-")
+            ):
+                raise SecFilingGemmaContractError(
+                    f"{location} contains a non-Apple accession"
+                )
+            decision = _iso_date(record["decision_session"], "decision_session")
+            _session_offset(decision, 0, session_dates)
+            normalized.append(
+                {
+                    "lesson_id": lesson_id,
+                    "accession_number": accession,
+                    "decision_session": decision.isoformat(),
+                    **{
+                        field: _sha256(record[field], field)
+                        for field in binding_keys
+                        if field.endswith("_sha256")
+                    },
+                }
+            )
+        normalized.sort(key=lambda item: item["lesson_id"])
+        if len({item["lesson_id"] for item in normalized}) != len(normalized):
+            raise SecFilingGemmaContractError(f"{location} lesson ids are duplicated")
+        if len({item["accession_number"] for item in normalized}) != len(normalized):
+            raise SecFilingGemmaContractError(f"{location} accessions are duplicated")
+        if len({item["prediction_receipt_sha256"] for item in normalized}) != len(
+            normalized
+        ):
+            raise SecFilingGemmaContractError(
+                f"{location} prediction receipts are duplicated"
+            )
+        return normalized
+
+    normalized_prior_bindings = normalize_bindings(
+        prior_lesson_bindings,
+        "prior_lesson_bindings",
+    )
+    if len(normalized_prior_bindings) != prior_count:
+        raise SecFilingGemmaContractError(
+            "Prior live lesson bindings do not reconcile to the prior count"
+        )
+    prior_bindings_hash = canonical_sha256(normalized_prior_bindings)
+    if not hmac.compare_digest(
+        prior_bindings_hash,
+        _sha256(
+            expected_prior_lesson_bindings_sha256,
+            "expected_prior_lesson_bindings_sha256",
+        ),
     ):
-        raise SecFilingGemmaContractError("Eligible live lesson ids must be a sequence")
-    normalized_eligible = list(eligible_lesson_ids)
+        raise SecFilingGemmaContractError(
+            "Prior live lesson bindings are not externally pinned"
+        )
+    normalized_eligible = normalize_bindings(
+        eligible_lesson_bindings,
+        "eligible_lesson_bindings",
+    )
+    prior_ids = {item["lesson_id"] for item in normalized_prior_bindings}
+    prior_accessions = {
+        item["accession_number"] for item in normalized_prior_bindings
+    }
+    prior_receipts = {
+        item["prediction_receipt_sha256"] for item in normalized_prior_bindings
+    }
     if (
-        any(not isinstance(item, str) or not item for item in normalized_eligible)
-        or normalized_eligible != sorted(set(normalized_eligible))
+        prior_ids.intersection(item["lesson_id"] for item in normalized_eligible)
+        or prior_accessions.intersection(
+            item["accession_number"] for item in normalized_eligible
+        )
+        or prior_receipts.intersection(
+            item["prediction_receipt_sha256"] for item in normalized_eligible
+        )
     ):
-        raise SecFilingGemmaContractError("Eligible live lesson ids must be sorted and unique")
+        raise SecFilingGemmaContractError(
+            "Live extension replays a prior lesson, accession, or prediction receipt"
+        )
     eligible_hash = canonical_sha256(normalized_eligible)
     if not hmac.compare_digest(
         eligible_hash,
-        _sha256(expected_eligible_lesson_set_sha256, "expected_eligible_lesson_set_sha256"),
+        _sha256(
+            expected_eligible_lesson_bindings_sha256,
+            "expected_eligible_lesson_bindings_sha256",
+        ),
     ):
-        raise SecFilingGemmaContractError("Eligible live lesson set is not externally pinned")
+        raise SecFilingGemmaContractError(
+            "Eligible live lesson bindings are not externally pinned"
+        )
+    eligible_by_id = {item["lesson_id"]: item for item in normalized_eligible}
     expected_keys = {
         "schema_version",
         "sequence_number",
@@ -2428,11 +3149,20 @@ def validate_live_lessons(
         ):
             raise SecFilingGemmaContractError("Live lesson sequence does not extend the prior ledger")
         lesson_id = lesson["lesson_id"]
-        if not isinstance(lesson_id, str) or not lesson_id or lesson_id in lesson_ids:
+        if (
+            not isinstance(lesson_id, str)
+            or not lesson_id
+            or lesson_id in lesson_ids
+            or lesson_id in prior_ids
+        ):
             raise SecFilingGemmaContractError("Live lesson ids must be unique strings")
         lesson_ids.add(lesson_id)
         accession = lesson["accession_number"]
-        if not isinstance(accession, str) or not accession.startswith("0000320193-"):
+        if (
+            not isinstance(accession, str)
+            or _ACCESSION_RE.fullmatch(accession) is None
+            or not accession.startswith("0000320193-")
+        ):
             raise SecFilingGemmaContractError("Live lesson is not bound to an Apple filing")
         decision = _iso_date(lesson["decision_session"], "decision_session")
         maturity = _iso_date(lesson["label_maturity_session"], "label_maturity_session")
@@ -2441,6 +3171,15 @@ def validate_live_lessons(
             lesson["first_eligible_decision_session"],
             "first_eligible_decision_session",
         )
+        binding = eligible_by_id.get(lesson_id)
+        if binding is None or any(
+            lesson[field] != binding[field]
+            for field in binding_keys
+            if field != "lesson_id"
+        ):
+            raise SecFilingGemmaContractError(
+                "Live lesson does not match its externally sealed prediction binding"
+            )
         required_maturity = _session_offset(
             decision, LABEL_MATURITY_OFFSET, session_dates
         )
@@ -2474,7 +3213,7 @@ def validate_live_lessons(
         edge = _finite_number(
             lesson["cash_active_log_edge_10bps"], "cash_active_log_edge_10bps"
         )
-        if beats != (edge > 1e-12):
+        if beats != (edge > ACTIVE_EDGE_TOLERANCE):
             raise SecFilingGemmaContractError(
                 "Live lesson Boolean does not reconcile to its 10-bps edge"
             )
@@ -2497,15 +3236,22 @@ def validate_live_lessons(
             raise SecFilingGemmaContractError("Live lesson hash is not canonical")
         previous_lesson_hash = lesson_hash
         previous_output_state = output_state
-    if sorted(lesson_ids) != normalized_eligible:
+    if sorted(lesson_ids) != sorted(eligible_by_id):
         raise SecFilingGemmaContractError(
             "Live extension does not contain all and only externally eligible lessons"
         )
+    combined_bindings = sorted(
+        normalized_prior_bindings + normalized_eligible,
+        key=lambda item: item["lesson_id"],
+    )
     return {
         "lesson_count": prior_count + len(lessons),
         "tip_sha256": previous_lesson_hash,
         "model_state_sha256": previous_output_state,
-        "eligible_lesson_set_sha256": eligible_hash,
+        "prior_lesson_bindings_sha256": prior_bindings_hash,
+        "eligible_lesson_bindings_sha256": eligible_hash,
+        "lesson_bindings": combined_bindings,
+        "lesson_bindings_sha256": canonical_sha256(combined_bindings),
         "last_sort_key": (
             None
             if previous_sort_key is None
@@ -2519,9 +3265,15 @@ def validate_live_lessons(
 
 
 __all__ = [
+    "ACTIVE_EDGE_TOLERANCE",
+    "BRIER_TARGET_COST_BPS",
+    "CALENDAR_SOURCE_EVIDENCE_SCHEMA_VERSION",
+    "CALENDAR_SOURCE_URLS",
     "CANDIDATE_IDS",
+    "CONTENT_MANIFEST_SCHEMA_VERSION",
     "CONTRACT_VERSION",
     "DIMENSION_NAMES",
+    "DEVELOPMENT_FOLD_SPECS",
     "EXTRACTOR_REQUEST_VERSION",
     "EXTRACTOR_SCHEMA_VERSION",
     "FLAG_NAMES",
@@ -2529,6 +3281,8 @@ __all__ = [
     "LABEL_MATURITY_OFFSET",
     "LIVE_LESSON_SCHEMA_VERSION",
     "MANDATORY_IDENTITY_TERMS",
+    "MARKET_HISTORY_START",
+    "MARKET_LOOKBACK_SESSIONS",
     "MAX_RUNTIME_SECONDS",
     "PREPROCESSOR_VERSION",
     "REQUIRED_SOURCE_HASHES",
@@ -2539,15 +3293,20 @@ __all__ = [
     "SecFilingGemmaContractError",
     "authorize_stage_access",
     "build_calendar_extension_manifest",
+    "build_calendar_source_evidence_manifest",
     "build_candidate_manifest",
     "build_contract_manifest",
     "build_corpus_universe_manifest",
     "build_extractor_json_schema",
     "build_extractor_model_payload",
     "build_redacted_input_manifest",
+    "build_stage_content_manifest",
     "canonical_session_calendar",
+    "canonical_market_session_calendar",
     "canonical_sha256",
     "validate_candidate_manifest",
+    "validate_calendar_extension_manifest",
+    "validate_calendar_source_evidence_manifest",
     "validate_complete_corpus",
     "validate_contract_manifest",
     "validate_corpus_universe_manifest",
@@ -2559,6 +3318,8 @@ __all__ = [
     "validate_live_lessons",
     "validate_redacted_input_manifest",
     "validate_stage_extraction_coverage",
+    "validate_stage_content_manifest",
     "validate_training_rows",
+    "market_session_calendar_sha256",
     "session_calendar_sha256",
 ]
