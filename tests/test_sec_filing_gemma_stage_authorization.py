@@ -20,6 +20,7 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
     CONSUMED_STAGE_AUTHORIZATION_GRANT_SCHEMA_VERSION,
+    CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION,
     CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION,
     CONSUMPTION_ENTRY_SCHEMA_VERSION,
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
@@ -31,9 +32,11 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     authenticate_reveal_store_trusted_stage_content_pin,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
+    build_consumed_stage_output_receipt,
     derive_consumed_stage_store_state_pin,
     derive_reveal_store_trusted_stage_content_pin,
     validate_consumed_stage_authorization_grant,
+    validate_consumed_stage_output_receipt,
     validate_consumed_stage_store_state_pin,
     validate_reveal_store_current_tip_anchor_transition,
     validate_trusted_stage_content_authentication_receipt,
@@ -326,6 +329,20 @@ def _validate(
     )
 
 
+def _output_binding(grant: dict, *, salt: str = "first output") -> dict:
+    return {
+        "output_stage_evidence_schema_version": "stage-evidence-test-v1",
+        "output_stage_evidence_sha256": _h(f"{salt}:evidence"),
+        "output_stage_evidence_document_sha256": _h(f"{salt}:document"),
+        "output_stage_evidence_canonical_byte_count": 4096,
+        "output_stage_evidence_prerequisite_stage": grant["stage"],
+        "output_parent_stage_evidence_sha256": grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "output_candidate_sha256": grant["candidate_sha256"],
+    }
+
+
 def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     state, pin, entry, grant, current_tip = _grant_context()
     assert pin["schema_version"] == CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION
@@ -341,6 +358,123 @@ def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     assert _validate(state, pin, entry, grant, current_tip) == grant[
         "authorization_grant_sha256"
     ]
+
+
+def test_first_output_receipt_is_exact_current_tip_append_and_replays() -> None:
+    state, _pin, entry, grant, current_tip = _grant_context()
+    request_hash = entry["request_sha256"]
+    bundle = current_tip["authorization_bundles"][request_hash]
+    output_binding = _output_binding(grant)
+    receipt = build_consumed_stage_output_receipt(bundle, **output_binding)
+    next_tip = build_reveal_store_current_tip_anchor(
+        state,
+        revision=current_tip["revision"] + 1,
+        previous_tip_anchor_sha256=current_tip["tip_anchor_sha256"],
+        authorization_bundles=current_tip["authorization_bundles"],
+        trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
+        consumed_stage_output_receipts={request_hash: receipt},
+    )
+    prior, validated_next = validate_reveal_store_current_tip_anchor_transition(
+        current_tip,
+        next_tip,
+    )
+    assert prior == current_tip
+    assert validated_next == next_tip
+    assert receipt["schema_version"] == CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION
+    assert receipt["consumption_entry_sha256"] == entry["entry_sha256"]
+    assert receipt["authorization_grant_sha256"] == grant[
+        "authorization_grant_sha256"
+    ]
+    assert receipt["output_namespace"] == grant["output_namespace"]
+    assert validate_consumed_stage_output_receipt(
+        receipt,
+        authenticated_store_snapshot=state,
+        independent_current_tip_anchor=next_tip,
+        authorization_bundle=bundle,
+        **output_binding,
+    ) == receipt["output_receipt_sha256"]
+
+
+def test_output_receipt_rejects_substitution_and_non_dedicated_append() -> None:
+    state, _pin, entry, grant, current_tip = _grant_context()
+    request_hash = entry["request_sha256"]
+    bundle = current_tip["authorization_bundles"][request_hash]
+    output_binding = _output_binding(grant)
+    receipt = build_consumed_stage_output_receipt(bundle, **output_binding)
+    persisted_tip = build_reveal_store_current_tip_anchor(
+        state,
+        revision=current_tip["revision"] + 1,
+        previous_tip_anchor_sha256=current_tip["tip_anchor_sha256"],
+        authorization_bundles=current_tip["authorization_bundles"],
+        trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
+        consumed_stage_output_receipts={request_hash: receipt},
+    )
+    changed_binding = dict(output_binding)
+    changed_binding["output_stage_evidence_document_sha256"] = _h(
+        "substituted document"
+    )
+    with pytest.raises(SecFilingGemmaStageAuthorizationError, match="differs"):
+        validate_consumed_stage_output_receipt(
+            receipt,
+            authenticated_store_snapshot=state,
+            independent_current_tip_anchor=persisted_tip,
+            authorization_bundle=bundle,
+            **changed_binding,
+        )
+
+    # A receipt may not hitchhike on a state/consumption transition.
+    newer_state = _snapshot(entry_count=2)
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="dedicated tip-only",
+    ):
+        mixed_tip = build_reveal_store_current_tip_anchor(
+            newer_state,
+            revision=current_tip["revision"] + 1,
+            previous_tip_anchor_sha256=current_tip["tip_anchor_sha256"],
+            authorization_bundles=current_tip["authorization_bundles"],
+            trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
+            consumed_stage_output_receipts={request_hash: receipt},
+        )
+        validate_reveal_store_current_tip_anchor_transition(current_tip, mixed_tip)
+
+
+def test_output_receipt_cannot_append_after_its_grant_tip_is_stale() -> None:
+    state, _pin, entry, grant, current_tip = _grant_context()
+    request_hash = entry["request_sha256"]
+    bundle = current_tip["authorization_bundles"][request_hash]
+    receipt = build_consumed_stage_output_receipt(
+        bundle,
+        **_output_binding(grant),
+    )
+
+    advanced_state = _snapshot(entry_count=2)
+    advanced_tip = build_reveal_store_current_tip_anchor(
+        advanced_state,
+        revision=current_tip["revision"] + 1,
+        previous_tip_anchor_sha256=current_tip["tip_anchor_sha256"],
+        authorization_bundles=current_tip["authorization_bundles"],
+        trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
+        consumed_stage_output_receipts={},
+    )
+    validate_reveal_store_current_tip_anchor_transition(current_tip, advanced_tip)
+
+    polluted_tip = build_reveal_store_current_tip_anchor(
+        advanced_state,
+        revision=advanced_tip["revision"] + 1,
+        previous_tip_anchor_sha256=advanced_tip["tip_anchor_sha256"],
+        authorization_bundles=advanced_tip["authorization_bundles"],
+        trusted_stage_content_pins=advanced_tip["trusted_stage_content_pins"],
+        consumed_stage_output_receipts={request_hash: receipt},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exact current grant tip",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            advanced_tip,
+            polluted_tip,
+        )
 
 
 def test_pin_snapshot_and_grant_tampering_fail_closed() -> None:

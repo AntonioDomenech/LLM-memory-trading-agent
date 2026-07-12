@@ -626,13 +626,22 @@ At the current implementation checkpoint:
   uses a write-ahead pending transaction for state-plus-grant changes, and can
   return the exact persisted grant bundle on an identical crash retry without
   rerunning the verifier or consuming a request twice. Interrupted genesis
-  creation is also recoverable. Current-tip schema v2 additionally stores an
-  append-only request-keyed trusted-content pin before the verifier runs. A
-  failed verifier retains that non-authorizing pin, and an exact retry reuses it
-  without another revision. The anchor is a second file in the same store
-  directory: it detects state-only rollback, but it is not an external trust
-  domain and cannot by itself defeat coordinated replacement of both files;
-- the fixed verifier now produces a version-4 canonical non-authorizing audit
+  creation is also recoverable. Current-tip schema v3 stores both append-only
+  request-keyed trusted-content pins and consumed-stage first-recorded-evidence
+  receipts.
+  A failed verifier retains its non-authorizing content pin, and an exact retry
+  reuses it without another revision. After a grant is issued, the first exact
+  caller-supplied stage-evidence candidate can be bound to that request, grant,
+  authorization bundle, candidate, parent evidence, namespace, document hash,
+  and canonical byte count. Re-recording that identical candidate is
+  idempotent and creates no new revision; attempting to substitute a different
+  first-recorded candidate is rejected. A
+  final-stage transition must find the exact persisted parent-output receipt
+  before its own trusted-content pin is committed. The anchor is a second file
+  in the same store directory: it detects state-only rollback, but it is not an
+  external trust domain and cannot by itself defeat coordinated replacement of
+  both files;
+- the fixed verifier now produces a version-5 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
   learner arithmetic, raw scores, gates, ranking, no-leverage proof, runtime
@@ -640,9 +649,14 @@ At the current implementation checkpoint:
   untrusted envelopes before decoding or copying, replays the complete parent
   evidence and receipt recursively, and binds final-stage lineage to the exact
   authenticated intermediate consumption-ledger tip, semantic audit, persisted
-  trusted-content pin, authorization bundle, grant, and current store tip. It
-  rejects altered-and-rehashed evidence, access, context, audit, pin, entry,
-  bundle, grant, tip, and child identities;
+  trusted-content pin, authorization bundle, grant, consumed first-recorded
+  receipt, exact parent membership in the reveal-store-supplied receipt map,
+  and current store tip. The verifier recomputes
+  the parent evidence's canonical document hash and byte count and cross-binds
+  them to that exact receipt. It rejects altered-and-rehashed evidence, access,
+  context, audit, pin, entry, bundle, grant, parent output receipt, parent map
+  membership or declared map hash, tip, and child identities. It does not
+  independently authenticate unrelated entries in that supplied map;
 - runtime source identity now checks the current regular files at the canonical
   paths of modules that were already loaded; the audit refuses to import an
   absent module and accepts no caller-supplied root, path, or runtime bytes. Eleven
@@ -664,9 +678,15 @@ At the current implementation checkpoint:
   successful verifier cannot consume a request. The reveal store derives and
   persists the trusted stage-content pin itself, authenticates its current-tip
   membership, and requires the audit receipt to return the exact pin and store
-  context hashes. The verifier cross-binds those claims but does not
-  independently load the store files, attest its executing Python code object,
-  or turn the same mutable directory into an external trust domain;
+  context hashes. It also persists and recursively verifies the exact first
+  recorded evidence candidate associated with a consumed grant. Nevertheless,
+  `stage_access_identity` remains `BLOCKED`: no production SEC, market, model,
+  or artifact reader is yet forced through one owned grant-aware runner. The
+  receipt therefore authenticates protocol lineage for supplied evidence, but
+  does not yet prove that the authorized reader produced those bytes. The
+  verifier also does not independently load the store files, attest its
+  executing Python code object, or turn the same mutable directory into an
+  external trust domain;
 - stage-specific runtime receipts are structurally reconciled, but the final
   all-stage summary remains diagnostic until owned-transport and monotonic-time
   attestations plus the five-development-filing latency preflight exist;
@@ -682,7 +702,7 @@ At the current implementation checkpoint:
 - no predictive filing corpus has been downloaded;
 - Gemma has not processed a filing for this experiment;
 - no 2019-2023 confirmation result has been opened; and
-- no 2024, 2025, or 2026 performance has been calculated.
+- no 2024, 2025, or 2026 holdout run or performance calculation has occurred.
 
 Market reconciliation currently proves the complete presealed canonical
 snapshot-to-stage transformation. It does not by itself prove where the
@@ -690,16 +710,19 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is the remainder of the authoritative
-raw-evidence chain that can turn the fixed fail-closed audit into a complete
-verifier. It must rebuild preprocessing, extraction, feature rows, matured
-labels, and training membership from the replayed SEC catalogue and normalized
-document bytes; parse official calendar semantics; bind market-provider
-responses to the canonical snapshots; chain every artifact from genesis; bind
-the development winner/output state to the intermediate learner input; and
-require the consumed authorization-entry hash in every downstream reader that
-produces the next stage evidence. A production trust domain must retain the
-current store tip outside the mutable store directory, and a fresh owned process
-must attest the executing verifier rather than only the current source files.
-That machinery must be committed and pass the five-filing preflight before any
+The next implementation milestone is a fixed owned runner that validates the
+exact current-tip grant before any effectful read, routes every SEC, market,
+model, and artifact access through that grant-aware path, hashes the actual
+  bytes returned by those readers, and finalizes the first-recorded receipt from
+those bytes. This is required to turn the newly authenticated protocol lineage
+into evidence of actual authorized execution. The remainder of the
+authoritative raw-evidence chain must then rebuild preprocessing, extraction,
+feature rows, matured labels, and training membership from the replayed SEC
+catalogue and normalized document bytes; parse official calendar semantics;
+bind market-provider responses to the canonical snapshots; chain every
+artifact from genesis; and bind the development winner/output state to the
+intermediate learner input. A production trust domain must retain the current
+store tip outside the mutable store directory, and a fresh owned process must
+attest the executing verifier rather than only the current source files. That
+machinery must be committed and pass the five-filing preflight before any
 filing meaning or later-stage outcome is opened.

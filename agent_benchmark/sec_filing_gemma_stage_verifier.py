@@ -97,7 +97,7 @@ STAGE_EVIDENCE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-evidence-audit-v3"
 )
 STAGE_AUDIT_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-evidence-audit-receipt-v4"
+    "aapl-sec-gemma-stage-evidence-audit-receipt-v5"
 )
 STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-runtime-receipt-v1"
@@ -118,7 +118,10 @@ AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-authenticated-store-verifier-context-v1"
 )
 PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-parent-consumption-binding-v1"
+    "aapl-sec-gemma-parent-consumption-binding-v2"
+)
+CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-consumed-stage-output-receipt-v1"
 )
 
 # These are parser/allocation ceilings, not acquisition budgets.  The SEC
@@ -222,6 +225,8 @@ _PARENT_BINDING_PARENT_KEYS: Final[frozenset[str]] = frozenset(
         "authorization_bundle_sha256",
         "authorization_grant_sha256",
         "store_pin_sha256",
+        "consumed_stage_output_receipt",
+        "consumed_stage_output_receipt_sha256",
     }
 )
 _PARENT_BINDING_TIP_KEYS: Final[frozenset[str]] = frozenset(
@@ -234,6 +239,42 @@ _PARENT_BINDING_TIP_KEYS: Final[frozenset[str]] = frozenset(
         "consumed_request_count",
         "current_tip_anchor_sha256",
         "current_tip_revision",
+        "consumed_stage_output_receipts",
+        "consumed_stage_output_receipts_sha256",
+    }
+)
+_CONSUMED_STAGE_OUTPUT_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "consumption_entry_sha256",
+        "consumption_entry_sequence",
+        "request_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "registry_entry_sha256",
+        "input_prerequisite_stage",
+        "output_stage",
+        "input_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "output_namespace",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "grant_store_state_sha256",
+        "grant_consumption_ledger_sha256",
+        "grant_consumption_ledger_tip_sha256",
+        "output_kind",
+        "output_stage_evidence_schema_version",
+        "output_stage_evidence_sha256",
+        "output_stage_evidence_document_sha256",
+        "output_stage_evidence_canonical_byte_count",
+        "output_stage_evidence_prerequisite_stage",
+        "output_parent_stage_evidence_sha256",
+        "output_candidate_sha256",
+        "cross_stage_output_permitted",
+        "grant_reuse_for_different_output_permitted",
+        "output_receipt_sha256",
     }
 )
 _BLOCKING_GAPS: Final[dict[str, str]] = {
@@ -286,8 +327,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "that created the executing code objects"
     ),
     "stage_access_identity": (
-        "the plan binds carry-in content reconstructed from exact normalized bytes, "
-        "but downstream data readers do not require the consumed authorization-entry hash"
+        "the reveal store now persists and recursively requires the first recorded "
+        "stage-evidence candidate for the consumed grant, but SEC, market, model, and "
+        "artifact readers are not yet all forced through one owned grant-aware runner"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "
@@ -2725,6 +2767,150 @@ def validate_authenticated_store_context(
     }
 
 
+def _validate_parent_consumed_stage_output_receipt(
+    receipt: Mapping[str, Any],
+    receipt_map: Mapping[str, Any],
+    *,
+    parent_consumption: Mapping[str, Any],
+    authenticated_tip: Mapping[str, Any],
+    current_stage_evidence: Mapping[str, Any],
+    current_stage_evidence_sha256: str,
+    current_candidate_sha256: str,
+    declared_parent_stage_evidence_sha256: str,
+) -> str:
+    value = _mapping_snapshot(receipt, "parent consumed-stage output receipt")
+    _expect_keys(
+        value,
+        set(_CONSUMED_STAGE_OUTPUT_RECEIPT_KEYS),
+        "parent consumed-stage output receipt",
+    )
+    receipt_hash = _sha256(
+        value["output_receipt_sha256"],
+        "parent consumed-stage output receipt hash",
+    )
+    receipt_body = {
+        key: value[key] for key in value if key != "output_receipt_sha256"
+    }
+    if (
+        value["schema_version"] != CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["receipt_kind"]
+        != "first_output_for_exact_consumed_stage_grant"
+        or value["output_kind"] != "next_stage_evidence"
+        or value["cross_stage_output_permitted"] is not False
+        or value["grant_reuse_for_different_output_permitted"] is not False
+        or not hmac.compare_digest(receipt_hash, canonical_sha256(receipt_body))
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent consumed-stage output receipt is not canonical"
+        )
+    receipts = _mapping_snapshot(
+        receipt_map,
+        "authenticated consumed-stage output receipt map",
+    )
+    for request_hash in receipts:
+        _sha256(request_hash, "authenticated output-receipt map request hash")
+    if (
+        canonical_sha256(receipts)
+        != authenticated_tip["consumed_stage_output_receipts_sha256"]
+        or receipts.get(parent_consumption["request_sha256"]) != value
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent output receipt is not an exact member of the authenticated tip"
+        )
+    evidence = _mapping_snapshot(
+        current_stage_evidence,
+        "current stage evidence for output receipt",
+    )
+    try:
+        evidence_bytes = json.dumps(
+            evidence,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:  # pragma: no cover - detached above
+        raise SecFilingGemmaStageVerifierError(
+            "Current stage evidence is not canonical finite JSON"
+        ) from exc
+    expected = {
+        "consumption_entry_sha256": parent_consumption["entry_sha256"],
+        "consumption_entry_sequence": parent_consumption["sequence"],
+        "request_sha256": parent_consumption["request_sha256"],
+        "attempt_id": parent_consumption["attempt_id"],
+        "candidate_sha256": parent_consumption["candidate_sha256"],
+        "registry_entry_sha256": parent_consumption["registry_entry_sha256"],
+        "input_prerequisite_stage": parent_consumption["prerequisite_stage"],
+        "output_stage": parent_consumption["stage"],
+        "input_stage_evidence_sha256": parent_consumption[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": parent_consumption[
+            "stage_access_manifest_sha256"
+        ],
+        "authorization_bundle_sha256": parent_consumption[
+            "authorization_bundle_sha256"
+        ],
+        "authorization_grant_sha256": parent_consumption[
+            "authorization_grant_sha256"
+        ],
+        "grant_store_state_sha256": authenticated_tip["store_state_sha256"],
+        "grant_consumption_ledger_sha256": authenticated_tip[
+            "consumption_ledger_sha256"
+        ],
+        "grant_consumption_ledger_tip_sha256": authenticated_tip[
+            "consumption_ledger_tip_sha256"
+        ],
+        "output_stage_evidence_schema_version": evidence["schema_version"],
+        "output_stage_evidence_sha256": current_stage_evidence_sha256,
+        "output_stage_evidence_document_sha256": hashlib.sha256(
+            evidence_bytes
+        ).hexdigest(),
+        "output_stage_evidence_canonical_byte_count": len(evidence_bytes),
+        "output_stage_evidence_prerequisite_stage": evidence[
+            "prerequisite_stage"
+        ],
+        "output_parent_stage_evidence_sha256": (
+            declared_parent_stage_evidence_sha256
+        ),
+        "output_candidate_sha256": current_candidate_sha256,
+    }
+    for field, expected_value in expected.items():
+        if value[field] != expected_value:
+            raise SecFilingGemmaStageVerifierError(
+                f"Parent output receipt crossed {field}"
+            )
+    if (
+        value["output_namespace"]
+        != f"aapl-sec-gemma-{parent_consumption['attempt_id']}-intermediate"
+        or type(value["output_stage_evidence_canonical_byte_count"]) is not int
+        or value["output_stage_evidence_canonical_byte_count"] < 2
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent output receipt namespace or byte count is invalid"
+        )
+    for field in (
+        "consumption_entry_sha256",
+        "request_sha256",
+        "candidate_sha256",
+        "registry_entry_sha256",
+        "input_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "grant_store_state_sha256",
+        "grant_consumption_ledger_sha256",
+        "grant_consumption_ledger_tip_sha256",
+        "output_stage_evidence_sha256",
+        "output_stage_evidence_document_sha256",
+        "output_parent_stage_evidence_sha256",
+        "output_candidate_sha256",
+    ):
+        _sha256(value[field], f"parent output receipt {field}")
+    return receipt_hash
+
+
 def validate_parent_stage_lineage(
     parent_stage_lineage: Mapping[str, Any] | None,
     *,
@@ -2734,6 +2920,8 @@ def validate_parent_stage_lineage(
     current_expected_context: Mapping[str, Any],
     current_trusted_stage_content_pin: Mapping[str, Any],
     parent_consumption_binding: Mapping[str, Any] | None,
+    current_stage_evidence: Mapping[str, Any] | None = None,
+    current_stage_evidence_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Replay lineage bound to the exact consumed parent entry and grant."""
 
@@ -2829,6 +3017,7 @@ def validate_parent_stage_lineage(
         "consumption_ledger_sha256",
         "consumption_ledger_tip_sha256",
         "current_tip_anchor_sha256",
+        "consumed_stage_output_receipts_sha256",
     ):
         _sha256(tip[field], f"bound preconsumption tip {field}")
     if (
@@ -2882,6 +3071,7 @@ def validate_parent_stage_lineage(
         "authorization_bundle_sha256",
         "authorization_grant_sha256",
         "store_pin_sha256",
+        "consumed_stage_output_receipt_sha256",
     ):
         _sha256(parent[field], f"bound parent consumption {field}")
     # The reveal store derived the entry/bundle/grant/tip hashes from its locked
@@ -2910,10 +3100,33 @@ def validate_parent_stage_lineage(
                 f"Parent consumption crossed child identity {field}"
             )
 
+    if current_stage_evidence is None or current_stage_evidence_sha256 is None:
+        raise SecFilingGemmaStageVerifierError(
+            "Intermediate evidence requires its exact consumed-stage output document"
+        )
+    current_evidence_hash = _sha256(
+        current_stage_evidence_sha256,
+        "current stage evidence hash for parent output receipt",
+    )
     declared_hash = _sha256(
         declared_parent_stage_evidence_sha256,
         "parent stage evidence hash",
     )
+    output_receipt_hash = _validate_parent_consumed_stage_output_receipt(
+        parent["consumed_stage_output_receipt"],
+        tip["consumed_stage_output_receipts"],
+        parent_consumption=parent,
+        authenticated_tip=tip,
+        current_stage_evidence=current_stage_evidence,
+        current_stage_evidence_sha256=current_evidence_hash,
+        current_candidate_sha256=current_candidate_sha256,
+        declared_parent_stage_evidence_sha256=declared_hash,
+    )
+    if output_receipt_hash != parent["consumed_stage_output_receipt_sha256"]:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent consumed-stage output receipt hash changed"
+        )
+
     if parent_stage_lineage is None:
         raise SecFilingGemmaStageVerifierError(
             "Intermediate evidence requires its complete parent lineage"
@@ -3097,6 +3310,10 @@ def validate_parent_stage_lineage(
             "authorization_grant_sha256"
         ],
         "parent_store_pin_sha256": parent["store_pin_sha256"],
+        "parent_consumed_stage_output_receipt_sha256": output_receipt_hash,
+        "parent_output_stage_evidence_document_sha256": parent[
+            "consumed_stage_output_receipt"
+        ]["output_stage_evidence_document_sha256"],
         "trusted_stage_content_pin": {
             "stage": "development",
             "content_manifest_sha256": parent_content_pin[
@@ -3211,6 +3428,8 @@ def audit_stage_evidence(
         parent_consumption_binding=authenticated_context[
             "parent_consumption_binding"
         ],
+        current_stage_evidence=value,
+        current_stage_evidence_sha256=evidence_hash,
     )
     current_content_pin = authenticated_context["trusted_stage_content_pin"]
     identities = validate_candidate_source_bytes(
@@ -3458,6 +3677,9 @@ def audit_stage_evidence(
         "pin_membership_authenticated_by_reveal_store": True,
         "pin_and_stage_access_cross_bound_by_verifier": True,
         "parent_consumption_cross_bound_by_verifier": parent_lineage is not None,
+        "parent_first_output_receipt_cross_bound_by_verifier": (
+            parent_lineage is not None
+        ),
         "trusted_store_state_authenticated_by_verifier": False,
         "store_files_independently_loaded_by_verifier": False,
         "same_directory_is_external_trust_domain": False,
@@ -3490,6 +3712,13 @@ def audit_stage_evidence(
             canonical_sha256(None)
             if parent_lineage is None
             else parent_lineage["parent_consumption_binding_sha256"]
+        ),
+        "parent_consumed_stage_output": (
+            canonical_sha256(None)
+            if parent_lineage is None
+            else parent_lineage[
+                "parent_consumed_stage_output_receipt_sha256"
+            ]
         ),
         "calendar_and_universe": canonical_sha256(calendar),
         "catalog_replay": catalog_replay["replay_validation_sha256"],
@@ -3611,6 +3840,20 @@ def audit_stage_evidence(
             None
             if parent_lineage is None
             else parent_lineage["parent_store_pin_sha256"]
+        ),
+        "parent_consumed_stage_output_receipt_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage[
+                "parent_consumed_stage_output_receipt_sha256"
+            ]
+        ),
+        "parent_output_stage_evidence_document_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage[
+                "parent_output_stage_evidence_document_sha256"
+            ]
         ),
         "catalog_replay_receipt_sha256": catalog_replay[
             "replay_validation_sha256"

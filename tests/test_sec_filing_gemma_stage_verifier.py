@@ -1466,8 +1466,9 @@ def test_audit_lists_every_required_check_and_never_claims_authorization(monkeyp
         "stage_access_pin_cross_bound": True,
         "store_state_and_tip_authenticated_by_reveal_store": True,
         "pin_membership_authenticated_by_reveal_store": True,
-        "pin_and_stage_access_cross_bound_by_verifier": True,
-        "parent_consumption_cross_bound_by_verifier": False,
+            "pin_and_stage_access_cross_bound_by_verifier": True,
+            "parent_consumption_cross_bound_by_verifier": False,
+            "parent_first_output_receipt_cross_bound_by_verifier": False,
         "trusted_store_state_authenticated_by_verifier": False,
         "store_files_independently_loaded_by_verifier": False,
         "same_directory_is_external_trust_domain": False,
@@ -1625,7 +1626,17 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
 
     current_store_state_hash = _h("current final preconsumption store state")
     current_tip_anchor_hash = _h("current final preconsumption tip")
-    child_evidence_hash = _h("current intermediate evidence")
+    current_stage_evidence_body = {
+        "schema_version": verifier_module.STAGE_EVIDENCE_SCHEMA_VERSION,
+        "prerequisite_stage": "intermediate",
+        "parent_stage_evidence_sha256": parent_evidence_hash,
+        "candidate_sha256": candidate_hash,
+    }
+    child_evidence_hash = canonical_sha256(current_stage_evidence_body)
+    current_stage_evidence = {
+        **current_stage_evidence_body,
+        "stage_evidence_sha256": child_evidence_hash,
+    }
     child_access, child_pin = _trusted_content_pin(
         "intermediate",
         content_hash=_h("intermediate content"),
@@ -1667,6 +1678,73 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
         "current_tip_anchor_sha256": current_tip_anchor_hash,
         "current_tip_revision": 7,
     }
+    current_stage_evidence_bytes = json.dumps(
+        current_stage_evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    output_receipt_body = {
+        "schema_version": (
+            verifier_module.CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "first_output_for_exact_consumed_stage_grant",
+        "consumption_entry_sha256": parent_entry_hash,
+        "consumption_entry_sequence": 1,
+        "request_sha256": parent_consumption["request_sha256"],
+        "attempt_id": attempt_id,
+        "candidate_sha256": candidate_hash,
+        "registry_entry_sha256": registry_entry_hash,
+        "input_prerequisite_stage": "development",
+        "output_stage": "intermediate",
+        "input_stage_evidence_sha256": parent_evidence_hash,
+        "stage_access_manifest_sha256": parent_consumption[
+            "stage_access_manifest_sha256"
+        ],
+        "output_namespace": f"aapl-sec-gemma-{attempt_id}-intermediate",
+        "authorization_bundle_sha256": parent_consumption[
+            "authorization_bundle_sha256"
+        ],
+        "authorization_grant_sha256": parent_consumption[
+            "authorization_grant_sha256"
+        ],
+        "grant_store_state_sha256": current_store_state_hash,
+        "grant_consumption_ledger_sha256": current_tip[
+            "consumption_ledger_sha256"
+        ],
+        "grant_consumption_ledger_tip_sha256": parent_entry_hash,
+        "output_kind": "next_stage_evidence",
+        "output_stage_evidence_schema_version": current_stage_evidence[
+            "schema_version"
+        ],
+        "output_stage_evidence_sha256": child_evidence_hash,
+        "output_stage_evidence_document_sha256": hashlib.sha256(
+            current_stage_evidence_bytes
+        ).hexdigest(),
+        "output_stage_evidence_canonical_byte_count": len(
+            current_stage_evidence_bytes
+        ),
+        "output_stage_evidence_prerequisite_stage": "intermediate",
+        "output_parent_stage_evidence_sha256": parent_evidence_hash,
+        "output_candidate_sha256": candidate_hash,
+        "cross_stage_output_permitted": False,
+        "grant_reuse_for_different_output_permitted": False,
+    }
+    output_receipt = {
+        **output_receipt_body,
+        "output_receipt_sha256": canonical_sha256(output_receipt_body),
+    }
+    parent_consumption["consumed_stage_output_receipt"] = output_receipt
+    parent_consumption["consumed_stage_output_receipt_sha256"] = output_receipt[
+        "output_receipt_sha256"
+    ]
+    output_receipts = {parent_consumption["request_sha256"]: output_receipt}
+    current_tip["consumed_stage_output_receipts"] = output_receipts
+    current_tip["consumed_stage_output_receipts_sha256"] = canonical_sha256(
+        output_receipts
+    )
     binding_body = {
         "schema_version": verifier_module.PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION,
         "contract_version": CONTRACT_VERSION,
@@ -1724,6 +1802,8 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
         "current_expected_context": child_context,
         "current_trusted_stage_content_pin": child_pin_summary,
         "authenticated_store_context": child_store_context,
+        "current_stage_evidence": current_stage_evidence,
+        "current_stage_evidence_sha256": child_evidence_hash,
     }
 
 
@@ -1740,6 +1820,10 @@ def _validate_exact_parent_binding(fixture: dict) -> dict:
             "current_trusted_stage_content_pin"
         ],
         parent_consumption_binding=fixture["binding"],
+        current_stage_evidence=fixture["current_stage_evidence"],
+        current_stage_evidence_sha256=fixture[
+            "current_stage_evidence_sha256"
+        ],
     )
 
 
@@ -1846,7 +1930,7 @@ def _stub_development_audit_replays(monkeypatch, candidate: dict) -> None:
     )
 
 
-def test_parent_lineage_recursively_replays_real_v4_audit_context(monkeypatch) -> None:
+def test_parent_lineage_recursively_replays_real_v5_audit_context(monkeypatch) -> None:
     def build_parent_audit(evidence, access, context, store_context):
         _stub_development_audit_replays(
             monkeypatch,
@@ -1903,6 +1987,252 @@ def test_parent_lineage_replays_exact_consumed_parent_and_receipt(monkeypatch) -
     assert summary["parent_authorization_grant_sha256"] == parent[
         "authorization_grant_sha256"
     ]
+    output_receipt = parent["consumed_stage_output_receipt"]
+    receipt_map = fixture["binding"]["authenticated_preconsumption_tip"][
+        "consumed_stage_output_receipts"
+    ]
+    assert receipt_map[parent["request_sha256"]] == output_receipt
+    assert summary["parent_consumed_stage_output_receipt_sha256"] == (
+        output_receipt["output_receipt_sha256"]
+    )
+    assert summary["parent_output_stage_evidence_document_sha256"] == (
+        output_receipt["output_stage_evidence_document_sha256"]
+    )
+
+
+def test_intermediate_audit_propagates_exact_validated_output_receipt_binding(
+    monkeypatch,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(fixture["parent_audit"]),
+    )
+    parent_summary = _validate_exact_parent_binding(fixture)
+    output_receipt = fixture["binding"]["parent_consumption"][
+        "consumed_stage_output_receipt"
+    ]
+
+    parent_evidence = fixture["lineage"]["evidence"]
+    candidate = parent_evidence["candidate_manifest"]
+    intermediate_content = {
+        "content_manifest_sha256": _h("intermediate content")
+    }
+    evidence_body = {
+        key: copy.deepcopy(value)
+        for key, value in parent_evidence.items()
+        if key != "stage_evidence_sha256"
+    }
+    evidence_body.update(
+        {
+            "prerequisite_stage": "intermediate",
+            "parent_stage_evidence_sha256": fixture[
+                "parent_evidence_sha256"
+            ],
+            "parent_stage_lineage": copy.deepcopy(fixture["lineage"]),
+            "content_replays_by_stage": {
+                "development": copy.deepcopy(
+                    parent_evidence["content_replays_by_stage"]["development"]
+                ),
+                "intermediate": {
+                    "stage": "intermediate",
+                    "content_manifest": intermediate_content,
+                },
+            },
+            "prerequisite_content_manifest": intermediate_content,
+            "model_batches_by_stage": {
+                "development": {"_test_stage": "development"},
+                "intermediate": {"_test_stage": "intermediate"},
+            },
+            "market_replays_by_stage": {
+                "development": {
+                    "_test_stage": "development",
+                    "market_stage_manifest": {},
+                },
+                "intermediate": {
+                    "_test_stage": "intermediate",
+                    "market_stage_manifest": {},
+                },
+            },
+            "prediction_replay": {"_test_stage": "intermediate"},
+        }
+    )
+    evidence = {
+        **evidence_body,
+        "stage_evidence_sha256": canonical_sha256(evidence_body),
+    }
+    parent = fixture["binding"]["parent_consumption"]
+    (
+        stage_access,
+        _trusted_pin,
+        _authentication,
+        expected_context,
+        authenticated_store_context,
+    ) = _authenticated_store_fixture(
+        "intermediate",
+        content_hash=intermediate_content["content_manifest_sha256"],
+        evidence_hash=evidence["stage_evidence_sha256"],
+        attempt_id=parent["attempt_id"],
+        candidate_hash=candidate["candidate_sha256"],
+        candidate_design_hash=parent["candidate_design_sha256"],
+        registry_entry_hash=parent["registry_entry_sha256"],
+        registry_hash=parent["registry_sha256"],
+        registry_tip_hash=parent["registry_tip_sha256"],
+        parent_binding=fixture["binding"],
+    )
+
+    _stub_development_audit_replays(monkeypatch, candidate)
+    monkeypatch.setattr(
+        verifier_module,
+        "validate_parent_stage_lineage",
+        lambda *args, **kwargs: copy.deepcopy(parent_summary),
+    )
+    monkeypatch.setattr(
+        verifier_module,
+        "validate_model_attempt_batch",
+        lambda value, *args, **kwargs: {
+            "stage": value["_test_stage"],
+            "model_attempt_receipt_sha256s": [_h("attempt")],
+            "runtime_guard_sha256": _h("guard"),
+            "model_elapsed_nanoseconds": 1,
+        },
+    )
+    monkeypatch.setattr(
+        verifier_module,
+        "validate_market_snapshot_stage_replay",
+        lambda value: {"artifact_stage": value["_test_stage"]},
+    )
+    monkeypatch.setattr(
+        verifier_module,
+        "validate_prediction_artifact_replay",
+        lambda value, *args, **kwargs: {
+            "stage": value["_test_stage"],
+            "prefix": {},
+        },
+    )
+    audit = audit_stage_evidence(
+        evidence,
+        stage_access,
+        expected_context,
+        authenticated_store_context=authenticated_store_context,
+    )
+
+    assert audit["parent_consumed_stage_output_receipt_sha256"] == (
+        output_receipt["output_receipt_sha256"]
+    )
+    assert audit["parent_output_stage_evidence_document_sha256"] == (
+        output_receipt["output_stage_evidence_document_sha256"]
+    )
+    assert audit["component_receipt_sha256s"][
+        "parent_consumed_stage_output"
+    ] == output_receipt["output_receipt_sha256"]
+    assert audit["trusted_content_pin_boundary"][
+        "parent_first_output_receipt_cross_bound_by_verifier"
+    ] is True
+
+
+def _replace_bound_output_receipt(
+    fixture: dict,
+    *,
+    field: str,
+    value: object,
+) -> None:
+    binding = fixture["binding"]
+    parent = binding["parent_consumption"]
+    tip = binding["authenticated_preconsumption_tip"]
+    receipt = parent["consumed_stage_output_receipt"]
+    receipt[field] = value
+    _rehash(receipt, "output_receipt_sha256")
+    parent["consumed_stage_output_receipt_sha256"] = receipt[
+        "output_receipt_sha256"
+    ]
+    tip["consumed_stage_output_receipts"] = {
+        parent["request_sha256"]: copy.deepcopy(receipt)
+    }
+    tip["consumed_stage_output_receipts_sha256"] = canonical_sha256(
+        tip["consumed_stage_output_receipts"]
+    )
+    _rehash(binding, "parent_consumption_binding_sha256")
+    fixture["current_expected_context"][
+        "parent_consumption_binding_sha256"
+    ] = binding["parent_consumption_binding_sha256"]
+
+
+@pytest.mark.parametrize(
+    "field, value, expected_error",
+    [
+        ("candidate_sha256", _h("substituted output candidate"), "crossed candidate_sha256"),
+        ("output_stage", "final", "crossed output_stage"),
+        (
+            "output_namespace",
+            "aapl-sec-gemma-substituted-intermediate",
+            "namespace or byte count",
+        ),
+        (
+            "consumption_entry_sha256",
+            _h("substituted output entry"),
+            "crossed consumption_entry_sha256",
+        ),
+        (
+            "output_stage_evidence_document_sha256",
+            _h("substituted output document"),
+            "crossed output_stage_evidence_document_sha256",
+        ),
+    ],
+)
+def test_parent_output_receipt_rejects_fully_rehashed_field_substitutions(
+    monkeypatch,
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    original_audit = copy.deepcopy(fixture["parent_audit"])
+    _replace_bound_output_receipt(fixture, field=field, value=value)
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(original_audit),
+    )
+    with pytest.raises(SecFilingGemmaStageVerifierError, match=expected_error):
+        _validate_exact_parent_binding(fixture)
+
+
+@pytest.mark.parametrize("target", ["membership", "map_hash"])
+def test_parent_output_receipt_rejects_authenticated_tip_map_substitution(
+    monkeypatch,
+    target: str,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    binding = fixture["binding"]
+    tip = binding["authenticated_preconsumption_tip"]
+    if target == "membership":
+        receipt = next(iter(tip["consumed_stage_output_receipts"].values()))
+        tip["consumed_stage_output_receipts"] = {
+            _h("substituted receipt-map request"): receipt
+        }
+        tip["consumed_stage_output_receipts_sha256"] = canonical_sha256(
+            tip["consumed_stage_output_receipts"]
+        )
+    else:
+        tip["consumed_stage_output_receipts_sha256"] = _h(
+            "substituted receipt map hash"
+        )
+    _rehash(binding, "parent_consumption_binding_sha256")
+    fixture["current_expected_context"][
+        "parent_consumption_binding_sha256"
+    ] = binding["parent_consumption_binding_sha256"]
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(fixture["parent_audit"]),
+    )
+    with pytest.raises(
+        SecFilingGemmaStageVerifierError,
+        match="not an exact member of the authenticated tip",
+    ):
+        _validate_exact_parent_binding(fixture)
 
 
 @pytest.mark.parametrize(

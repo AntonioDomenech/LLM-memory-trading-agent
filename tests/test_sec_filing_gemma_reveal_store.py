@@ -384,6 +384,35 @@ def _consume_with_grant(
         )
 
 
+def _issued_intermediate_grant(
+    store: SecFilingGemmaRevealStore,
+    *,
+    salt: str,
+) -> tuple[dict, dict, dict]:
+    store.initialize()
+    registered, candidate = _register(store, salt=salt)
+    development_evidence = _evidence(
+        "development",
+        candidate,
+        salt=f"{salt}-development",
+    )
+    request, access_manifest = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=development_evidence,
+    )
+    bundle = _consume_with_grant(
+        store,
+        request,
+        candidate,
+        development_evidence,
+        stage="intermediate",
+        access_manifest=access_manifest,
+    )
+    return candidate, request, bundle
+
+
 def test_fresh_store_uses_only_tracked_genesis_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -1054,6 +1083,223 @@ def test_state_write_crash_recovers_exact_bundle_and_retry_is_idempotent(
     current_tip = store.load_current_tip_anchor()
     assert current_tip["schema_version"] != CURRENT_TIP_PENDING_SCHEMA_VERSION
     assert current_tip["authorization_bundles"][request["request_sha256"]] == recovered
+
+
+def test_first_consumed_stage_output_is_persisted_once_and_exact_retry_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt="first-stage-output",
+    )
+    stage_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt="first-stage-output-evidence",
+    )
+    state_bytes_before = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    receipt = store.record_consumed_stage_output_evidence(
+        request_sha256=request["request_sha256"],
+        stage_evidence=stage_evidence,
+    )
+
+    tip_after_first = store.load_current_tip_anchor()
+    assert store.state_path.read_bytes() == state_bytes_before
+    assert tip_after_first["revision"] == tip_before["revision"] + 1
+    assert tip_after_first["previous_tip_anchor_sha256"] == tip_before[
+        "tip_anchor_sha256"
+    ]
+    assert tip_after_first["consumed_stage_output_receipts"] == {
+        request["request_sha256"]: receipt
+    }
+    assert receipt["request_sha256"] == request["request_sha256"]
+    assert receipt["output_stage"] == "intermediate"
+    assert receipt["output_stage_evidence_sha256"] == canonical_sha256(
+        stage_evidence
+    )
+    tip_bytes_after_first = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store.record_consumed_stage_output_evidence(
+        request_sha256=request["request_sha256"],
+        stage_evidence=stage_evidence,
+    )
+
+    assert repeated == receipt
+    assert store.state_path.read_bytes() == state_bytes_before
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes_after_first
+    assert store.load_current_tip_anchor()["revision"] == tip_after_first["revision"]
+
+
+def test_different_second_consumed_stage_output_is_rejected_without_mutation(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt="different-second-stage-output",
+    )
+    first_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt="different-second-stage-output-first",
+    )
+    first_receipt = store.record_consumed_stage_output_evidence(
+        request_sha256=request["request_sha256"],
+        stage_evidence=first_evidence,
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    tip_before_rejection = store.load_current_tip_anchor()
+    different_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt="different-second-stage-output-second",
+    )
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="already has a different first output",
+    ):
+        store.record_consumed_stage_output_evidence(
+            request_sha256=request["request_sha256"],
+            stage_evidence=different_evidence,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    tip_after_rejection = store.load_current_tip_anchor()
+    assert tip_after_rejection == tip_before_rejection
+    assert tip_after_rejection["consumed_stage_output_receipts"] == {
+        request["request_sha256"]: first_receipt
+    }
+
+
+@pytest.mark.parametrize("tamper_kind", ("receipt", "map_key"))
+def test_rehashed_consumed_stage_output_receipt_or_map_tamper_fails_load(
+    tmp_path: Path,
+    tamper_kind: str,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt=f"output-tamper-{tamper_kind}",
+    )
+    stage_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt=f"output-tamper-{tamper_kind}-evidence",
+    )
+    store.record_consumed_stage_output_evidence(
+        request_sha256=request["request_sha256"],
+        stage_evidence=stage_evidence,
+    )
+    tip = store.load_current_tip_anchor()
+    receipts = tip["consumed_stage_output_receipts"]
+    request_hash = request["request_sha256"]
+
+    if tamper_kind == "receipt":
+        receipt = receipts[request_hash]
+        receipt["output_candidate_sha256"] = _digest(
+            "forged-output-candidate"
+        )
+        receipt["output_receipt_sha256"] = canonical_sha256(
+            {
+                key: value
+                for key, value in receipt.items()
+                if key != "output_receipt_sha256"
+            }
+        )
+    else:
+        receipts[_digest("forged-output-map-key")] = receipts.pop(request_hash)
+    tip["tip_anchor_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in tip.items()
+            if key != "tip_anchor_sha256"
+        }
+    )
+    store.current_tip_anchor_path.write_text(
+        json.dumps(tip, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store.load_current_tip_anchor()
+
+
+@pytest.mark.parametrize("crash_point", ("pending_tip", "state_replace"))
+def test_consumed_stage_output_receipt_cas_crash_recovers_once(
+    tmp_path: Path,
+    crash_point: str,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt=f"output-crash-{crash_point}",
+    )
+    stage_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt=f"output-crash-{crash_point}-evidence",
+    )
+    state_bytes_before = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+    real_atomic_replace = reveal_store_module._atomic_replace
+    crashed = False
+
+    def crash_during_output_receipt_cas(path: Path, payload: bytes) -> None:
+        nonlocal crashed
+        real_atomic_replace(path, payload)
+        parsed = json.loads(payload)
+        is_target = (
+            crash_point == "pending_tip"
+            and path == store.current_tip_anchor_path
+            and parsed.get("schema_version") == CURRENT_TIP_PENDING_SCHEMA_VERSION
+        ) or (
+            crash_point == "state_replace"
+            and path == store.state_path
+        )
+        if is_target and not crashed:
+            crashed = True
+            raise RuntimeError(f"simulated output receipt crash at {crash_point}")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
+        crash_during_output_receipt_cas,
+    ), pytest.raises(RuntimeError, match="simulated output receipt crash"):
+        store.record_consumed_stage_output_evidence(
+            request_sha256=request["request_sha256"],
+            stage_evidence=stage_evidence,
+        )
+
+    pending = json.loads(store.current_tip_anchor_path.read_bytes())
+    assert pending["schema_version"] == CURRENT_TIP_PENDING_SCHEMA_VERSION
+    expected_receipt = pending["next_tip_anchor"][
+        "consumed_stage_output_receipts"
+    ][request["request_sha256"]]
+
+    recovered = store.record_consumed_stage_output_evidence(
+        request_sha256=request["request_sha256"],
+        stage_evidence=stage_evidence,
+    )
+
+    assert recovered == expected_receipt
+    assert store.state_path.read_bytes() == state_bytes_before
+    recovered_tip = store.load_current_tip_anchor()
+    assert recovered_tip["schema_version"] != CURRENT_TIP_PENDING_SCHEMA_VERSION
+    assert recovered_tip["revision"] == tip_before["revision"] + 1
+    assert recovered_tip["consumed_stage_output_receipts"] == {
+        request["request_sha256"]: expected_receipt
+    }
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    assert store.record_consumed_stage_output_evidence(
+        request_sha256=request["request_sha256"],
+        stage_evidence=stage_evidence,
+    ) == expected_receipt
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
 
 
 def test_old_snapshot_and_bundled_pin_fail_after_any_newer_store_tip(
@@ -1956,6 +2202,10 @@ def test_final_consumption_increments_actual_touch_exactly_once(
     intermediate_evidence = _evidence(
         "intermediate", candidate, salt="final-count-final"
     )
+    store.record_consumed_stage_output_evidence(
+        request_sha256=intermediate_request["request_sha256"],
+        stage_evidence=intermediate_evidence,
+    )
     final_request, final_access = _request(
         after_intermediate,
         candidate,
@@ -2022,6 +2272,10 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
     intermediate_state = intermediate_bundle["authenticated_store_snapshot"]
     intermediate_evidence = _evidence(
         "intermediate", candidate, salt="final-parent-context-final"
+    )
+    intermediate_output_receipt = store.record_consumed_stage_output_evidence(
+        request_sha256=intermediate_request["request_sha256"],
+        stage_evidence=intermediate_evidence,
     )
     final_request, final_access = _request(
         intermediate_state,
@@ -2230,6 +2484,10 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
             "authorization_grant_sha256"
         ],
         "store_pin_sha256": parent_store_pin["store_pin_sha256"],
+        "consumed_stage_output_receipt": intermediate_output_receipt,
+        "consumed_stage_output_receipt_sha256": intermediate_output_receipt[
+            "output_receipt_sha256"
+        ],
     }
     expected_authenticated_tip = {
         "store_state_sha256": post_pin_state["state_sha256"],
@@ -2250,6 +2508,12 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
         ]["consumed_request_count"],
         "current_tip_anchor_sha256": post_pin_tip["tip_anchor_sha256"],
         "current_tip_revision": post_pin_tip["revision"],
+        "consumed_stage_output_receipts": post_pin_tip[
+            "consumed_stage_output_receipts"
+        ],
+        "consumed_stage_output_receipts_sha256": canonical_sha256(
+            post_pin_tip["consumed_stage_output_receipts"]
+        ),
     }
     expected_binding_body = {
         "schema_version": (
@@ -2270,6 +2534,65 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
     assert binding == expected_binding
     assert expected_context["parent_consumption_binding_sha256"] == binding[
         "parent_consumption_binding_sha256"
+    ]
+
+
+def test_final_requires_parent_first_output_receipt_before_verifier_or_pin(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    candidate, intermediate_request, intermediate_bundle = (
+        _issued_intermediate_grant(
+            store,
+            salt="final-parent-output-receipt",
+        )
+    )
+    intermediate_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt="final-parent-output-receipt-evidence",
+    )
+    final_request, final_access = _request(
+        intermediate_bundle["authenticated_store_snapshot"],
+        candidate,
+        stage="final",
+        evidence=intermediate_evidence,
+        salt="final-parent-output-receipt-final",
+    )
+    tip_before = store.load_current_tip_anchor()
+    assert intermediate_request["request_sha256"] in tip_before[
+        "authorization_bundles"
+    ]
+    assert intermediate_request["request_sha256"] not in tip_before[
+        "consumed_stage_output_receipts"
+    ]
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    def verifier_must_not_run(*_args, **_kwargs):
+        raise AssertionError(
+            "missing parent output receipt must fail before verifier execution"
+        )
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="persisted first-output receipt",
+    ):
+        _consume(
+            store,
+            final_request,
+            candidate,
+            intermediate_evidence,
+            stage="final",
+            access_hash=final_access,
+            validator=verifier_must_not_run,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert store.load_current_tip_anchor() == tip_before
+    assert final_request["request_sha256"] not in tip_before[
+        "trusted_stage_content_pins"
     ]
 
 

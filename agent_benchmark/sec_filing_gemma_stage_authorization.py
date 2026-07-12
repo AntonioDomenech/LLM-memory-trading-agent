@@ -57,8 +57,11 @@ CONSUMED_STAGE_AUTHORIZATION_GRANT_SCHEMA_VERSION: Final[str] = (
 CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-consumed-stage-authorization-bundle-v1"
 )
+CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-consumed-stage-output-receipt-v1"
+)
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v2"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v3"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -221,6 +224,40 @@ _BUNDLE_KEYS: Final[frozenset[str]] = frozenset(
         "bundle_sha256",
     }
 )
+_STAGE_OUTPUT_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "consumption_entry_sha256",
+        "consumption_entry_sequence",
+        "request_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "registry_entry_sha256",
+        "input_prerequisite_stage",
+        "output_stage",
+        "input_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "output_namespace",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "grant_store_state_sha256",
+        "grant_consumption_ledger_sha256",
+        "grant_consumption_ledger_tip_sha256",
+        "output_kind",
+        "output_stage_evidence_schema_version",
+        "output_stage_evidence_sha256",
+        "output_stage_evidence_document_sha256",
+        "output_stage_evidence_canonical_byte_count",
+        "output_stage_evidence_prerequisite_stage",
+        "output_parent_stage_evidence_sha256",
+        "output_candidate_sha256",
+        "cross_stage_output_permitted",
+        "grant_reuse_for_different_output_permitted",
+        "output_receipt_sha256",
+    }
+)
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -237,6 +274,7 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "consumed_request_count",
         "trusted_stage_content_pins",
         "authorization_bundles",
+        "consumed_stage_output_receipts",
         "tip_anchor_sha256",
     }
 )
@@ -931,6 +969,147 @@ def _validated_authorization_bundles(raw: Any) -> dict[str, dict[str, Any]]:
     return validated
 
 
+def _validated_consumed_stage_output_receipts(
+    raw: Any,
+    *,
+    authorization_bundles: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip consumed-stage output receipts")
+    bundles = _mapping(
+        authorization_bundles,
+        "current-tip authorization bundles for output receipts",
+    )
+    validated: dict[str, dict[str, Any]] = {}
+    for request_sha256, raw_receipt in receipts.items():
+        request_hash = _sha256(
+            request_sha256,
+            "current-tip consumed-stage output-receipt key",
+        )
+        receipt = _mapping(
+            raw_receipt,
+            f"current-tip consumed-stage output receipt {request_hash}",
+        )
+        _expect_keys(
+            receipt,
+            _STAGE_OUTPUT_RECEIPT_KEYS,
+            f"current-tip consumed-stage output receipt {request_hash}",
+        )
+        if (
+            receipt["schema_version"]
+            != CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "first_output_for_exact_consumed_stage_grant"
+            or receipt["output_kind"] != "next_stage_evidence"
+            or receipt["cross_stage_output_permitted"] is not False
+            or receipt["grant_reuse_for_different_output_permitted"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt semantics changed"
+            )
+        _self_hash(
+            receipt,
+            "output_receipt_sha256",
+            f"current-tip consumed-stage output receipt {request_hash}",
+        )
+        for field in (
+            "consumption_entry_sha256",
+            "request_sha256",
+            "candidate_sha256",
+            "registry_entry_sha256",
+            "input_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "authorization_bundle_sha256",
+            "authorization_grant_sha256",
+            "grant_store_state_sha256",
+            "grant_consumption_ledger_sha256",
+            "grant_consumption_ledger_tip_sha256",
+            "output_stage_evidence_sha256",
+            "output_stage_evidence_document_sha256",
+            "output_parent_stage_evidence_sha256",
+            "output_candidate_sha256",
+        ):
+            _sha256(receipt[field], f"consumed-stage output receipt {field}")
+        _strict_int(
+            receipt["consumption_entry_sequence"],
+            "consumed-stage output receipt entry sequence",
+            minimum=1,
+        )
+        _strict_int(
+            receipt["output_stage_evidence_canonical_byte_count"],
+            "consumed-stage output receipt evidence byte count",
+            minimum=2,
+        )
+        for field in (
+            "attempt_id",
+            "input_prerequisite_stage",
+            "output_stage",
+            "output_stage_evidence_schema_version",
+            "output_stage_evidence_prerequisite_stage",
+        ):
+            _safe_id(receipt[field], f"consumed-stage output receipt {field}")
+        namespace = receipt["output_namespace"]
+        if (
+            type(namespace) is not str
+            or _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt namespace is invalid"
+            )
+        if receipt["request_sha256"] != request_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt is stored under another request"
+            )
+        bundle = bundles.get(request_hash)
+        if type(bundle) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt lacks its persisted authorization bundle"
+            )
+        grant = _mapping(
+            bundle.get("authorization_grant"),
+            "consumed-stage output receipt authorization grant",
+        )
+        expected_bindings = {
+            "consumption_entry_sha256": grant.get("consumption_entry_sha256"),
+            "consumption_entry_sequence": grant.get("consumption_entry_sequence"),
+            "request_sha256": grant.get("request_sha256"),
+            "attempt_id": grant.get("attempt_id"),
+            "candidate_sha256": grant.get("candidate_sha256"),
+            "registry_entry_sha256": grant.get("registry_entry_sha256"),
+            "input_prerequisite_stage": grant.get("prerequisite_stage"),
+            "output_stage": grant.get("stage"),
+            "input_stage_evidence_sha256": grant.get(
+                "prerequisite_stage_evidence_sha256"
+            ),
+            "stage_access_manifest_sha256": grant.get(
+                "stage_access_manifest_sha256"
+            ),
+            "output_namespace": grant.get("output_namespace"),
+            "authorization_bundle_sha256": bundle.get("bundle_sha256"),
+            "authorization_grant_sha256": grant.get(
+                "authorization_grant_sha256"
+            ),
+            "grant_store_state_sha256": grant.get("store_state_sha256"),
+            "grant_consumption_ledger_sha256": grant.get(
+                "consumption_ledger_sha256"
+            ),
+            "grant_consumption_ledger_tip_sha256": grant.get(
+                "consumption_ledger_tip_sha256"
+            ),
+            "output_stage_evidence_prerequisite_stage": grant.get("stage"),
+            "output_parent_stage_evidence_sha256": grant.get(
+                "prerequisite_stage_evidence_sha256"
+            ),
+            "output_candidate_sha256": grant.get("candidate_sha256"),
+        }
+        if any(receipt[field] != expected for field, expected in expected_bindings.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt crossed its grant or output boundary"
+            )
+        validated[request_hash] = receipt
+    return validated
+
+
 def validate_reveal_store_current_tip_anchor_structure(
     current_tip_anchor: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -985,6 +1164,12 @@ def validate_reveal_store_current_tip_anchor_structure(
     anchor["authorization_bundles"] = _validated_authorization_bundles(
         anchor["authorization_bundles"]
     )
+    anchor["consumed_stage_output_receipts"] = (
+        _validated_consumed_stage_output_receipts(
+            anchor["consumed_stage_output_receipts"],
+            authorization_bundles=anchor["authorization_bundles"],
+        )
+    )
     _self_hash(anchor, "tip_anchor_sha256", "independent current-tip anchor")
     return anchor
 
@@ -996,6 +1181,7 @@ def build_reveal_store_current_tip_anchor(
     previous_tip_anchor_sha256: str | None,
     authorization_bundles: Mapping[str, Any],
     trusted_stage_content_pins: Mapping[str, Any] | None = None,
+    consumed_stage_output_receipts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the separately persisted CAS anchor for one exact store state."""
 
@@ -1015,6 +1201,14 @@ def build_reveal_store_current_tip_anchor(
     pins = _validated_trusted_stage_content_pins(
         {} if trusted_stage_content_pins is None else trusted_stage_content_pins
     )
+    output_receipts = _validated_consumed_stage_output_receipts(
+        (
+            {}
+            if consumed_stage_output_receipts is None
+            else consumed_stage_output_receipts
+        ),
+        authorization_bundles=bundles,
+    )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -1031,6 +1225,7 @@ def build_reveal_store_current_tip_anchor(
         "consumed_request_count": ledger["chain"]["consumed_request_count"],
         "trusted_stage_content_pins": pins,
         "authorization_bundles": bundles,
+        "consumed_stage_output_receipts": output_receipts,
     }
     return {**body, "tip_anchor_sha256": canonical_sha256(body)}
 
@@ -1110,6 +1305,66 @@ def validate_reveal_store_current_tip_anchor_transition(
         raise SecFilingGemmaStageAuthorizationError(
             "Consumption transition changed trusted content pin membership"
         )
+    prior_outputs = prior["consumed_stage_output_receipts"]
+    next_outputs = next_anchor["consumed_stage_output_receipts"]
+    if any(next_outputs.get(key) != value for key, value in prior_outputs.items()):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip anchor transition removed or changed a consumed-stage output receipt"
+        )
+    output_delta = len(next_outputs) - len(prior_outputs)
+    if output_delta not in {0, 1}:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one consumed-stage output receipt"
+        )
+    if output_delta:
+        if consumption_delta != 0 or bundle_delta != 0 or pin_delta != 0:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt append changed the authenticated store state"
+            )
+        new_request_hash = next(iter(set(next_outputs) - set(prior_outputs)))
+        if new_request_hash not in prior_bundles:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt was appended before its grant bundle"
+            )
+        new_receipt = next_outputs[new_request_hash]
+        current_grant_bindings = {
+            "grant_store_state_sha256": prior["state_sha256"],
+            "grant_consumption_ledger_sha256": prior[
+                "consumption_ledger_sha256"
+            ],
+            "grant_consumption_ledger_tip_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sequence": prior["consumed_request_count"],
+        }
+        if any(
+            new_receipt[field] != expected
+            for field, expected in current_grant_bindings.items()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt does not bind the exact current grant tip"
+            )
+    elif set(next_outputs) != set(prior_outputs):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Non-output transition changed consumed-stage output receipt membership"
+        )
     return prior, next_anchor
 
 
@@ -1129,6 +1384,9 @@ def validate_reveal_store_current_tip_anchor(
         previous_tip_anchor_sha256=observed["previous_tip_anchor_sha256"],
         authorization_bundles=observed["authorization_bundles"],
         trusted_stage_content_pins=observed["trusted_stage_content_pins"],
+        consumed_stage_output_receipts=observed[
+            "consumed_stage_output_receipts"
+        ],
     )
     if observed != expected:
         raise SecFilingGemmaStageAuthorizationError(
@@ -1453,9 +1711,204 @@ def validate_consumed_stage_authorization_grant(
     return grant_hash
 
 
+def build_consumed_stage_output_receipt(
+    authorization_bundle: Mapping[str, Any],
+    *,
+    output_stage_evidence_schema_version: str,
+    output_stage_evidence_sha256: str,
+    output_stage_evidence_document_sha256: str,
+    output_stage_evidence_canonical_byte_count: int,
+    output_stage_evidence_prerequisite_stage: str,
+    output_parent_stage_evidence_sha256: str,
+    output_candidate_sha256: str,
+) -> dict[str, Any]:
+    """Bind the first recorded next-stage evidence document to one consumed grant.
+
+    This pure builder does not authorize I/O.  The effectful reveal store must
+    first validate the bundle at its independently loaded current tip and then
+    persist the resulting receipt with an append-only CAS transition.  Until an
+    owned runner supplies the document, this records caller-supplied evidence;
+    it does not attest which code or reader produced those bytes.
+    """
+
+    raw_bundle = _mapping(authorization_bundle, "stage-output authorization bundle")
+    raw_grant = _mapping(
+        raw_bundle.get("authorization_grant"),
+        "stage-output authorization grant",
+    )
+    request_hash = _sha256(
+        raw_grant.get("request_sha256"),
+        "stage-output authorization request hash",
+    )
+    bundle = _validated_authorization_bundles({request_hash: raw_bundle})[
+        request_hash
+    ]
+    grant = bundle["authorization_grant"]
+    schema_version = _safe_id(
+        output_stage_evidence_schema_version,
+        "output stage-evidence schema version",
+    )
+    evidence_hash = _sha256(
+        output_stage_evidence_sha256,
+        "output stage-evidence hash",
+    )
+    document_hash = _sha256(
+        output_stage_evidence_document_sha256,
+        "output stage-evidence document hash",
+    )
+    byte_count = _strict_int(
+        output_stage_evidence_canonical_byte_count,
+        "output stage-evidence canonical byte count",
+        minimum=2,
+    )
+    output_prerequisite = _safe_id(
+        output_stage_evidence_prerequisite_stage,
+        "output stage-evidence prerequisite stage",
+    )
+    output_parent_hash = _sha256(
+        output_parent_stage_evidence_sha256,
+        "output parent stage-evidence hash",
+    )
+    output_candidate_hash = _sha256(
+        output_candidate_sha256,
+        "output candidate hash",
+    )
+    if (
+        output_prerequisite != grant["stage"]
+        or output_parent_hash != grant["prerequisite_stage_evidence_sha256"]
+        or output_candidate_hash != grant["candidate_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage-output evidence crossed its consumed grant boundary"
+        )
+    body = {
+        "schema_version": CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "first_output_for_exact_consumed_stage_grant",
+        "consumption_entry_sha256": grant["consumption_entry_sha256"],
+        "consumption_entry_sequence": grant["consumption_entry_sequence"],
+        "request_sha256": grant["request_sha256"],
+        "attempt_id": grant["attempt_id"],
+        "candidate_sha256": grant["candidate_sha256"],
+        "registry_entry_sha256": grant["registry_entry_sha256"],
+        "input_prerequisite_stage": grant["prerequisite_stage"],
+        "output_stage": grant["stage"],
+        "input_stage_evidence_sha256": grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": grant["stage_access_manifest_sha256"],
+        "output_namespace": grant["output_namespace"],
+        "authorization_bundle_sha256": bundle["bundle_sha256"],
+        "authorization_grant_sha256": grant["authorization_grant_sha256"],
+        "grant_store_state_sha256": grant["store_state_sha256"],
+        "grant_consumption_ledger_sha256": grant[
+            "consumption_ledger_sha256"
+        ],
+        "grant_consumption_ledger_tip_sha256": grant[
+            "consumption_ledger_tip_sha256"
+        ],
+        "output_kind": "next_stage_evidence",
+        "output_stage_evidence_schema_version": schema_version,
+        "output_stage_evidence_sha256": evidence_hash,
+        "output_stage_evidence_document_sha256": document_hash,
+        "output_stage_evidence_canonical_byte_count": byte_count,
+        "output_stage_evidence_prerequisite_stage": output_prerequisite,
+        "output_parent_stage_evidence_sha256": output_parent_hash,
+        "output_candidate_sha256": output_candidate_hash,
+        "cross_stage_output_permitted": False,
+        "grant_reuse_for_different_output_permitted": False,
+    }
+    return {**body, "output_receipt_sha256": canonical_sha256(body)}
+
+
+def validate_consumed_stage_output_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    authenticated_store_snapshot: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    authorization_bundle: Mapping[str, Any],
+    output_stage_evidence_schema_version: str,
+    output_stage_evidence_sha256: str,
+    output_stage_evidence_document_sha256: str,
+    output_stage_evidence_canonical_byte_count: int,
+    output_stage_evidence_prerequisite_stage: str,
+    output_parent_stage_evidence_sha256: str,
+    output_candidate_sha256: str,
+) -> str:
+    """Require exact current-tip membership for one first-output receipt."""
+
+    bundle = _mapping(authorization_bundle, "stage-output authorization bundle")
+    grant = _mapping(
+        bundle.get("authorization_grant"),
+        "stage-output authorization grant",
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        authenticated_store_snapshot,
+        independent_current_tip_anchor,
+    )
+    request_hash = _sha256(
+        grant.get("request_sha256"),
+        "stage-output authorization request hash",
+    )
+    if current_tip["authorization_bundles"].get(request_hash) != bundle:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage-output authorization bundle is not persisted at the current tip"
+        )
+    validate_consumed_stage_authorization_grant(
+        grant,
+        authenticated_store_snapshot=authenticated_store_snapshot,
+        external_store_state_pin=bundle["store_state_pin"],
+        independent_current_tip_anchor=current_tip,
+        expected_consumption_entry_sha256=grant["consumption_entry_sha256"],
+        expected_request_sha256=request_hash,
+        expected_candidate_sha256=output_candidate_sha256,
+        expected_stage=output_stage_evidence_prerequisite_stage,
+        expected_prerequisite_stage_evidence_sha256=(
+            output_parent_stage_evidence_sha256
+        ),
+        expected_stage_access_manifest_sha256=grant[
+            "stage_access_manifest_sha256"
+        ],
+        expected_output_namespace=grant["output_namespace"],
+    )
+    expected = build_consumed_stage_output_receipt(
+        bundle,
+        output_stage_evidence_schema_version=output_stage_evidence_schema_version,
+        output_stage_evidence_sha256=output_stage_evidence_sha256,
+        output_stage_evidence_document_sha256=(
+            output_stage_evidence_document_sha256
+        ),
+        output_stage_evidence_canonical_byte_count=(
+            output_stage_evidence_canonical_byte_count
+        ),
+        output_stage_evidence_prerequisite_stage=(
+            output_stage_evidence_prerequisite_stage
+        ),
+        output_parent_stage_evidence_sha256=output_parent_stage_evidence_sha256,
+        output_candidate_sha256=output_candidate_sha256,
+    )
+    observed = _mapping(receipt, "consumed-stage output receipt")
+    _expect_keys(observed, _STAGE_OUTPUT_RECEIPT_KEYS, "consumed-stage output receipt")
+    _self_hash(
+        observed,
+        "output_receipt_sha256",
+        "consumed-stage output receipt",
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Consumed-stage output receipt differs from the exact grant or evidence"
+        )
+    if current_tip["consumed_stage_output_receipts"].get(request_hash) != observed:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Consumed-stage output receipt is not persisted at the current tip"
+        )
+    return observed["output_receipt_sha256"]
+
+
 __all__ = [
     "CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION",
     "CONSUMED_STAGE_AUTHORIZATION_GRANT_SCHEMA_VERSION",
+    "CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION",
     "CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
     "TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION",
@@ -1463,10 +1916,12 @@ __all__ = [
     "SecFilingGemmaStageAuthorizationError",
     "authenticate_reveal_store_trusted_stage_content_pin",
     "build_consumed_stage_authorization_grant",
+    "build_consumed_stage_output_receipt",
     "build_reveal_store_current_tip_anchor",
     "derive_consumed_stage_store_state_pin",
     "derive_reveal_store_trusted_stage_content_pin",
     "validate_consumed_stage_authorization_grant",
+    "validate_consumed_stage_output_receipt",
     "validate_consumed_stage_store_state_pin",
     "validate_reveal_store_current_tip_anchor",
     "validate_reveal_store_current_tip_anchor_structure",

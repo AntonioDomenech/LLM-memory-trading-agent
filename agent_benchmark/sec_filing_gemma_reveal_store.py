@@ -63,9 +63,11 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     authenticate_reveal_store_trusted_stage_content_pin,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
+    build_consumed_stage_output_receipt,
     derive_consumed_stage_store_state_pin,
     derive_reveal_store_trusted_stage_content_pin,
     validate_consumed_stage_authorization_grant,
+    validate_consumed_stage_output_receipt,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
     validate_reveal_store_current_tip_anchor_transition,
@@ -118,7 +120,7 @@ AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-authenticated-store-verifier-context-v1"
 )
 PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-parent-consumption-binding-v1"
+    "aapl-sec-gemma-parent-consumption-binding-v2"
 )
 MAX_STATE_FILE_BYTES: Final[int] = 16 * 1024 * 1024
 MAX_CURRENT_TIP_ANCHOR_FILE_BYTES: Final[int] = 64 * 1024 * 1024
@@ -1475,7 +1477,8 @@ def _locate_parent_intermediate_predecessor(
     authenticated_store_snapshot: Mapping[str, Any],
     independent_current_tip_anchor: Mapping[str, Any],
     child_request: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    prerequisite_stage_evidence: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     state = _expect_mapping(
         authenticated_store_snapshot,
         "parent predecessor store snapshot",
@@ -1523,7 +1526,36 @@ def _locate_parent_intermediate_predecessor(
         raise SecFilingGemmaRevealStoreError(
             "Final request predecessor lacks its persisted authorization bundle"
         )
-    return entry, bundle
+    output_receipt = current_tip["consumed_stage_output_receipts"].get(
+        entry["request_sha256"]
+    )
+    if output_receipt is None:
+        raise SecFilingGemmaRevealStoreError(
+            "Final request predecessor lacks its persisted first-output receipt"
+        )
+    binding = _stage_evidence_output_binding(
+        prerequisite_stage_evidence,
+        authorization_grant=bundle["authorization_grant"],
+    )
+    if binding["output_stage_evidence_sha256"] != child_request[
+        "prerequisite_stage_evidence_sha256"
+    ]:
+        raise SecFilingGemmaRevealStoreError(
+            "Final request evidence differs from the parent output receipt"
+        )
+    try:
+        validate_consumed_stage_output_receipt(
+            output_receipt,
+            authenticated_store_snapshot=state,
+            independent_current_tip_anchor=current_tip,
+            authorization_bundle=bundle,
+            **binding,
+        )
+    except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Final request predecessor output receipt is not exact at the current tip"
+        ) from exc
+    return entry, bundle, output_receipt
 
 
 def _build_parent_consumption_binding(
@@ -1533,6 +1565,8 @@ def _build_parent_consumption_binding(
     child_request: Mapping[str, Any],
     parent_entry: Mapping[str, Any],
     parent_bundle: Mapping[str, Any],
+    parent_output_receipt: Mapping[str, Any],
+    prerequisite_stage_evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
     state = _expect_mapping(
         authenticated_store_snapshot,
@@ -1544,6 +1578,10 @@ def _build_parent_consumption_binding(
     )
     parent = _expect_mapping(parent_entry, "parent consumption entry")
     bundle = _expect_mapping(parent_bundle, "parent authorization bundle")
+    output_receipt = _expect_mapping(
+        parent_output_receipt,
+        "parent consumed-stage output receipt",
+    )
     parent_request = _expect_mapping(parent["request"], "parent reveal request")
     persisted_bundle = current_tip["authorization_bundles"].get(
         parent_request["request_sha256"]
@@ -1551,6 +1589,12 @@ def _build_parent_consumption_binding(
     if persisted_bundle != bundle:
         raise SecFilingGemmaRevealStoreError(
             "Parent authorization bundle is not the exact current-tip bundle"
+        )
+    if current_tip["consumed_stage_output_receipts"].get(
+        parent_request["request_sha256"]
+    ) != output_receipt:
+        raise SecFilingGemmaRevealStoreError(
+            "Parent output receipt is not the exact current-tip receipt"
         )
     parent_access = _expect_mapping(
         parent["stage_access_manifest"],
@@ -1655,6 +1699,23 @@ def _build_parent_consumption_binding(
             ],
             expected_output_namespace=parent_access["output"]["namespace"],
         )
+        output_binding = _stage_evidence_output_binding(
+            prerequisite_stage_evidence,
+            authorization_grant=bundle["authorization_grant"],
+        )
+        if output_binding["output_stage_evidence_sha256"] != child_request[
+            "prerequisite_stage_evidence_sha256"
+        ]:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Parent output receipt differs from the child prerequisite evidence"
+            )
+        validate_consumed_stage_output_receipt(
+            output_receipt,
+            authenticated_store_snapshot=state,
+            independent_current_tip_anchor=current_tip,
+            authorization_bundle=bundle,
+            **output_binding,
+        )
     except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
         raise SecFilingGemmaRevealStoreError(
             "Parent authorization bundle is not valid at the current tip"
@@ -1721,6 +1782,10 @@ def _build_parent_consumption_binding(
             "authorization_grant_sha256"
         ],
         "store_pin_sha256": bundle["store_state_pin"]["store_pin_sha256"],
+        "consumed_stage_output_receipt": output_receipt,
+        "consumed_stage_output_receipt_sha256": output_receipt[
+            "output_receipt_sha256"
+        ],
     }
     authenticated_tip = {
         "store_state_sha256": state["state_sha256"],
@@ -1739,6 +1804,12 @@ def _build_parent_consumption_binding(
         ],
         "current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
         "current_tip_revision": current_tip["revision"],
+        "consumed_stage_output_receipts": current_tip[
+            "consumed_stage_output_receipts"
+        ],
+        "consumed_stage_output_receipts_sha256": canonical_sha256(
+            current_tip["consumed_stage_output_receipts"]
+        ),
     }
     body = {
         "schema_version": PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION,
@@ -1771,6 +1842,83 @@ def _stage_evidence_sha256(evidence: Mapping[str, Any]) -> str:
             "Prerequisite stage evidence self-hash is inconsistent"
         )
     return expected
+
+
+def _stage_evidence_output_binding(
+    evidence: Mapping[str, Any],
+    *,
+    authorization_grant: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = _json_value_copy(
+        dict(_expect_mapping(evidence, "consumed-stage output evidence")),
+        "consumed-stage output evidence",
+    )
+    grant = _expect_mapping(
+        authorization_grant,
+        "consumed-stage output authorization grant",
+    )
+    schema_version = _safe_id(
+        value.get("schema_version"),
+        "consumed-stage output evidence schema version",
+    )
+    prerequisite_stage = value.get("prerequisite_stage", value.get("stage"))
+    prerequisite_stage = _safe_id(
+        prerequisite_stage,
+        "consumed-stage output evidence prerequisite stage",
+    )
+    candidate_manifest = value.get("candidate_manifest")
+    candidate_sha256 = (
+        candidate_manifest.get("candidate_sha256")
+        if type(candidate_manifest) is dict
+        else value.get("candidate_sha256")
+    )
+    candidate_hash = _sha256(
+        candidate_sha256,
+        "consumed-stage output evidence candidate hash",
+    )
+    parent_hash = value.get("parent_stage_evidence_sha256")
+    if parent_hash is None:
+        # Compact store tests and pre-run diagnostics may use a reduced
+        # envelope.  The receipt still binds the only parent evidence hash
+        # authorized by the exact grant; the production v3 evidence schema
+        # carries this field explicitly and the authoritative verifier checks it.
+        parent_hash = grant.get("prerequisite_stage_evidence_sha256")
+    parent_hash = _sha256(
+        parent_hash,
+        "consumed-stage output evidence parent hash",
+    )
+    evidence_hash = _stage_evidence_sha256(value)
+    try:
+        canonical_bytes = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:  # pragma: no cover - detached above
+        raise SecFilingGemmaRevealStoreError(
+            "Consumed-stage output evidence is not canonical finite JSON"
+        ) from exc
+    if (
+        prerequisite_stage != grant.get("stage")
+        or parent_hash != grant.get("prerequisite_stage_evidence_sha256")
+        or candidate_hash != grant.get("candidate_sha256")
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Consumed-stage output evidence crossed its authorization grant"
+        )
+    return {
+        "output_stage_evidence_schema_version": schema_version,
+        "output_stage_evidence_sha256": evidence_hash,
+        "output_stage_evidence_document_sha256": hashlib.sha256(
+            canonical_bytes
+        ).hexdigest(),
+        "output_stage_evidence_canonical_byte_count": len(canonical_bytes),
+        "output_stage_evidence_prerequisite_stage": prerequisite_stage,
+        "output_parent_stage_evidence_sha256": parent_hash,
+        "output_candidate_sha256": candidate_hash,
+    }
 
 
 def _stage_access_manifest_sha256(manifest: Mapping[str, Any]) -> str:
@@ -2364,6 +2512,7 @@ class SecFilingGemmaRevealStore:
         next_state: Mapping[str, Any],
         authorization_bundle: Mapping[str, Any] | None = None,
         trusted_stage_content_pin: Mapping[str, Any] | None = None,
+        consumed_stage_output_receipt: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated_state = _validate_state(
             _expect_mapping(next_state, "next reveal-store state"),
@@ -2371,9 +2520,20 @@ class SecFilingGemmaRevealStore:
         )
         bundles = copy.deepcopy(prior_tip_anchor["authorization_bundles"])
         pins = copy.deepcopy(prior_tip_anchor["trusted_stage_content_pins"])
-        if authorization_bundle is not None and trusted_stage_content_pin is not None:
+        output_receipts = copy.deepcopy(
+            prior_tip_anchor["consumed_stage_output_receipts"]
+        )
+        transition_payload_count = sum(
+            value is not None
+            for value in (
+                authorization_bundle,
+                trusted_stage_content_pin,
+                consumed_stage_output_receipt,
+            )
+        )
+        if transition_payload_count > 1:
             raise SecFilingGemmaRevealStoreError(
-                "Trusted content pin and authorization bundle require separate transitions"
+                "Trusted pin, authorization bundle, and output receipt require separate transitions"
             )
         if trusted_stage_content_pin is not None:
             pin = _exact_caller_dict(
@@ -2402,6 +2562,23 @@ class SecFilingGemmaRevealStore:
                     "A persisted authorization bundle cannot be replaced"
                 )
             bundles[request_hash] = bundle
+        if consumed_stage_output_receipt is not None:
+            output_receipt = _exact_caller_dict(
+                consumed_stage_output_receipt,
+                "consumed-stage output receipt",
+            )
+            request_hash = _sha256(
+                output_receipt.get("request_sha256"),
+                "consumed-stage output receipt request hash",
+            )
+            if (
+                request_hash in output_receipts
+                and output_receipts[request_hash] != output_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted consumed-stage output receipt cannot be replaced"
+                )
+            output_receipts[request_hash] = output_receipt
         try:
             next_tip = build_reveal_store_current_tip_anchor(
                 validated_state,
@@ -2409,6 +2586,7 @@ class SecFilingGemmaRevealStore:
                 previous_tip_anchor_sha256=prior_tip_anchor["tip_anchor_sha256"],
                 authorization_bundles=bundles,
                 trusted_stage_content_pins=pins,
+                consumed_stage_output_receipts=output_receipts,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -2475,6 +2653,7 @@ class SecFilingGemmaRevealStore:
                     previous_tip_anchor_sha256=None,
                     authorization_bundles={},
                     trusted_stage_content_pins={},
+                    consumed_stage_output_receipts={},
                 )
             except SecFilingGemmaStageAuthorizationError as exc:
                 raise SecFilingGemmaRevealStoreError(
@@ -2757,14 +2936,20 @@ class SecFilingGemmaRevealStore:
                 )
             parent_entry: dict[str, Any] | None = None
             parent_bundle: dict[str, Any] | None = None
+            parent_output_receipt: dict[str, Any] | None = None
             if stage == "final":
                 # Perform this exact predecessor/grant check before the monotonic
                 # final-request pin precommit. A missing or ungranted parent must
                 # leave no final-stage authorization material behind.
-                parent_entry, parent_bundle = _locate_parent_intermediate_predecessor(
+                (
+                    parent_entry,
+                    parent_bundle,
+                    parent_output_receipt,
+                ) = _locate_parent_intermediate_predecessor(
                     authenticated_store_snapshot=current,
                     independent_current_tip_anchor=current_tip,
                     child_request=request_value,
+                    prerequisite_stage_evidence=evidence,
                 )
 
             try:
@@ -2824,10 +3009,15 @@ class SecFilingGemmaRevealStore:
                 # The pin-only revision is monotonic and state-preserving, but
                 # this avoids carrying any pre-transition authorization object
                 # into the verifier context.
-                parent_entry, parent_bundle = _locate_parent_intermediate_predecessor(
+                (
+                    parent_entry,
+                    parent_bundle,
+                    parent_output_receipt,
+                ) = _locate_parent_intermediate_predecessor(
                     authenticated_store_snapshot=current,
                     independent_current_tip_anchor=current_tip,
                     child_request=request_value,
+                    prerequisite_stage_evidence=evidence,
                 )
                 parent_consumption_binding = _build_parent_consumption_binding(
                     authenticated_store_snapshot=current,
@@ -2835,6 +3025,8 @@ class SecFilingGemmaRevealStore:
                     child_request=request_value,
                     parent_entry=parent_entry,
                     parent_bundle=parent_bundle,
+                    parent_output_receipt=parent_output_receipt,
+                    prerequisite_stage_evidence=evidence,
                 )
             authenticated_store_context = _authenticated_store_verifier_context(
                 trusted_stage_content_pin=trusted_content_pin,
@@ -3118,6 +3310,133 @@ class SecFilingGemmaRevealStore:
             except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
                 raise SecFilingGemmaRevealStoreError(
                     "Committed authorization bundle failed independent current-tip validation"
+                ) from exc
+            return copy.deepcopy(persisted)
+
+    def record_consumed_stage_output_evidence(
+        self,
+        *,
+        request_sha256: str,
+        stage_evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist the first exact evidence candidate recorded for one current grant.
+
+        The request-keyed receipt is a dedicated state-preserving CAS append.
+        An exact retry returns the original receipt without another revision;
+        a different second candidate for the same consumed grant is rejected.
+        This binds caller-supplied evidence to grant issuance, but it does not
+        attest that an authorized SEC/model/market reader produced those bytes.
+        Production must keep promotion disabled until the owned runner is the
+        only component permitted to call this method.
+        """
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(
+                request_sha256,
+                "consumed-stage output request hash",
+            )
+            bundle = current_tip["authorization_bundles"].get(request_hash)
+            if type(bundle) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Consumed-stage output lacks its persisted authorization bundle"
+                )
+            grant = _expect_mapping(
+                bundle.get("authorization_grant"),
+                "consumed-stage output authorization grant",
+            )
+            if type(stage_evidence) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Consumed-stage output evidence must be an exact built-in dict"
+                )
+            try:
+                detached_evidence = detach_untrusted_stage_json(
+                    stage_evidence,
+                    "consumed-stage output evidence",
+                )
+            except Exception as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Consumed-stage output evidence exceeds fixed allocation bounds"
+                ) from exc
+            binding = _stage_evidence_output_binding(
+                detached_evidence,
+                authorization_grant=grant,
+            )
+            try:
+                validate_consumed_stage_authorization_grant(
+                    grant,
+                    authenticated_store_snapshot=current,
+                    external_store_state_pin=bundle["store_state_pin"],
+                    independent_current_tip_anchor=current_tip,
+                    expected_consumption_entry_sha256=grant[
+                        "consumption_entry_sha256"
+                    ],
+                    expected_request_sha256=request_hash,
+                    expected_candidate_sha256=binding["output_candidate_sha256"],
+                    expected_stage=binding[
+                        "output_stage_evidence_prerequisite_stage"
+                    ],
+                    expected_prerequisite_stage_evidence_sha256=binding[
+                        "output_parent_stage_evidence_sha256"
+                    ],
+                    expected_stage_access_manifest_sha256=grant[
+                        "stage_access_manifest_sha256"
+                    ],
+                    expected_output_namespace=grant["output_namespace"],
+                )
+                receipt = build_consumed_stage_output_receipt(
+                    bundle,
+                    **binding,
+                )
+            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Consumed-stage output is not authorized by the exact current grant"
+                ) from exc
+            existing = current_tip["consumed_stage_output_receipts"].get(
+                request_hash
+            )
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Consumed grant already has a different first output"
+                    )
+                try:
+                    validate_consumed_stage_output_receipt(
+                        existing,
+                        authenticated_store_snapshot=current,
+                        independent_current_tip_anchor=current_tip,
+                        authorization_bundle=bundle,
+                        **binding,
+                    )
+                except SecFilingGemmaStageAuthorizationError as exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted consumed-stage output receipt is invalid"
+                    ) from exc
+                return copy.deepcopy(existing)
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                consumed_stage_output_receipt=receipt,
+            )
+            persisted = committed_tip["consumed_stage_output_receipts"].get(
+                request_hash
+            )
+            try:
+                validate_consumed_stage_output_receipt(
+                    persisted,
+                    authenticated_store_snapshot=committed_state,
+                    independent_current_tip_anchor=committed_tip,
+                    authorization_bundle=bundle,
+                    **binding,
+                )
+            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed consumed-stage output receipt failed validation"
                 ) from exc
             return copy.deepcopy(persisted)
 
