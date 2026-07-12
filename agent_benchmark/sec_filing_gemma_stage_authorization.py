@@ -26,6 +26,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
     REQUIRED_STAGE_VERIFIER_CHECKS,
     canonical_sha256,
+    validate_candidate_manifest,
 )
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
@@ -35,6 +36,9 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     detach_untrusted_stage_json,
+)
+from agent_benchmark.sec_filing_gemma_source_identity import (
+    CANONICAL_SOURCE_ROLE_PATHS,
 )
 
 
@@ -60,8 +64,17 @@ CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION: Final[str] = (
 CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-consumed-stage-output-receipt-v1"
 )
+STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-sec-execution-claim-v2"
+)
+STAGE_SEC_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-sec-reader-receipt-v2"
+)
+STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-sec-execution-abort-v1"
+)
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v3"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v4"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -71,8 +84,27 @@ TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION: Final[str] = (
 )
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _OUTPUT_NAMESPACE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
+_AAPL_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+STAGE_RUNNER_REPOSITORY_PATH: Final[str] = (
+    "agent_benchmark/sec_filing_gemma_stage_runner.py"
+)
+SEC_CORPUS_REPOSITORY_PATH: Final[str] = (
+    "agent_benchmark/sec_filing_gemma_corpus.py"
+)
+SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID: Final[str] = "sec_stage_document_batch"
+# A Latin-1 source byte can expand to at most two UTF-8 bytes.  Keeping the
+# complete raw batch at 64 MiB therefore guarantees that each normalized file
+# remains inside the reveal store's fixed 128 MiB per-file ceiling, while the
+# raw and normalized batch plus canonical JSON stays far below its total cap.
+OWNED_SEC_RAW_BATCH_MAX_BYTES: Final[int] = 64 * 1024 * 1024
+SEC_EXECUTION_RESOLVED_SOURCE_PATHS: Final[tuple[tuple[str, str], ...]] = tuple(
+    (role, path)
+    for role, path in CANONICAL_SOURCE_ROLE_PATHS.items()
+    if path is not None
+)
 _STAGE_PREREQUISITES: Final[dict[str, str]] = {
     "intermediate": "development",
     "final": "intermediate",
@@ -258,6 +290,85 @@ _STAGE_OUTPUT_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
         "output_receipt_sha256",
     }
 )
+_STAGE_SEC_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "claim_kind",
+        "request_sha256",
+        "consumption_entry_sha256",
+        "consumption_entry_sequence",
+        "attempt_id",
+        "candidate_sha256",
+        "registry_entry_sha256",
+        "input_prerequisite_stage",
+        "authorized_stage",
+        "input_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "output_namespace",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "grant_store_state_sha256",
+        "grant_consumption_ledger_sha256",
+        "grant_consumption_ledger_tip_sha256",
+        "start_current_tip_anchor_sha256",
+        "runner_repository_path",
+        "runner_source_sha256",
+        "sec_corpus_repository_path",
+        "sec_corpus_source_sha256",
+        "execution_source_hashes",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "sec_user_agent_sha256",
+        "sec_component_id",
+        "sec_component_plan_sha256",
+        "effect_may_be_repeated_after_indeterminate_crash",
+        "claim_sha256",
+    }
+)
+_STAGE_SEC_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "request_sha256",
+        "claim_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "sec_component_id",
+        "sec_component_plan_sha256",
+        "runner_source_sha256",
+        "sec_corpus_source_sha256",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "sec_user_agent_sha256",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
+        "complete_marker_sha256",
+        "fresh_network_provenance_claimed",
+        "reader_output_recomputed_by_store",
+        "receipt_sha256",
+    }
+)
+_STAGE_SEC_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "abort_kind",
+        "request_sha256",
+        "claim_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "reason",
+        "external_effect_retry_permitted",
+        "abort_sha256",
+    }
+)
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -275,6 +386,9 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "trusted_stage_content_pins",
         "authorization_bundles",
         "consumed_stage_output_receipts",
+        "stage_sec_execution_claims",
+        "stage_sec_reader_receipts",
+        "stage_sec_execution_aborts",
         "tip_anchor_sha256",
     }
 )
@@ -361,6 +475,14 @@ def _sha256(value: Any, location: str) -> str:
     if type(value) is not str or _SHA256_RE.fullmatch(value) is None:
         raise SecFilingGemmaStageAuthorizationError(
             f"{location} must be a lowercase SHA-256 digest"
+        )
+    return value
+
+
+def _tagged_sha256(value: Any, location: str) -> str:
+    if type(value) is not str or _TAGGED_SHA256_RE.fullmatch(value) is None:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must be a tagged lowercase SHA-256 digest"
         )
     return value
 
@@ -1110,6 +1232,384 @@ def _validated_consumed_stage_output_receipts(
     return validated
 
 
+def _validated_sec_byte_index(raw: Any) -> list[dict[str, Any]]:
+    if type(raw) is not list or not raw:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC reader byte index must be a non-empty exact list"
+        )
+    validated: list[dict[str, Any]] = []
+    logical_ids: set[str] = set()
+    relative_paths: set[str] = set()
+    for ordinal, raw_item in enumerate(raw, start=1):
+        item = _mapping(raw_item, f"SEC reader byte index item {ordinal}")
+        _expect_keys(
+            item,
+            {"ordinal", "logical_id", "relative_path", "byte_count", "sha256"},
+            f"SEC reader byte index item {ordinal}",
+        )
+        if _strict_int(item["ordinal"], "SEC byte ordinal", minimum=1) != ordinal:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader byte index ordinals are not contiguous"
+            )
+        logical_id = _safe_id(item["logical_id"], "SEC byte logical id")
+        path = item["relative_path"]
+        if (
+            type(path) is not str
+            or not path
+            or len(path) > 240
+            or "\\" in path
+            or path.startswith("/")
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or any(
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", part) is None
+                for part in path.split("/")
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader byte index contains an unsafe relative path"
+            )
+        if logical_id in logical_ids or path.casefold() in relative_paths:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader byte index contains a duplicate or case-colliding item"
+            )
+        logical_ids.add(logical_id)
+        relative_paths.add(path.casefold())
+        validated.append(
+            {
+                "ordinal": ordinal,
+                "logical_id": logical_id,
+                "relative_path": path,
+                "byte_count": _strict_int(
+                    item["byte_count"], "SEC byte count", minimum=1
+                ),
+                "sha256": _sha256(item["sha256"], "SEC byte SHA-256"),
+            }
+        )
+    return validated
+
+
+def _validated_stage_sec_execution_claims(
+    raw: Any,
+    *,
+    authorization_bundles: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    claims = _mapping(raw, "current-tip SEC execution claims")
+    bundles = _mapping(
+        authorization_bundles,
+        "current-tip authorization bundles for SEC execution claims",
+    )
+    validated: dict[str, dict[str, Any]] = {}
+    for request_sha256, raw_claim in claims.items():
+        request_hash = _sha256(request_sha256, "SEC execution claim map key")
+        claim = _mapping(raw_claim, f"SEC execution claim {request_hash}")
+        _expect_keys(
+            claim,
+            _STAGE_SEC_EXECUTION_CLAIM_KEYS,
+            f"SEC execution claim {request_hash}",
+        )
+        if (
+            claim["schema_version"] != STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION
+            or claim["contract_version"] != CONTRACT_VERSION
+            or claim["claim_kind"] != "owned_sec_stage_document_batch"
+            or claim["runner_repository_path"] != STAGE_RUNNER_REPOSITORY_PATH
+            or claim["sec_corpus_repository_path"] != SEC_CORPUS_REPOSITORY_PATH
+            or claim["sec_component_id"]
+            != SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID
+            or claim["effect_may_be_repeated_after_indeterminate_crash"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim semantics changed"
+            )
+        _self_hash(claim, "claim_sha256", "SEC execution claim")
+        raw_execution_sources = _mapping(
+            claim["execution_source_hashes"],
+            "SEC execution claim source hashes",
+        )
+        expected_source_roles = {
+            role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+        }
+        if set(raw_execution_sources) != expected_source_roles:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim does not bind the complete resolved source set"
+            )
+        execution_sources = {
+            role: _sha256(
+                raw_execution_sources[role],
+                f"SEC execution claim source hash {role}",
+            )
+            for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+        }
+        if (
+            claim["execution_source_hashes"] != execution_sources
+            or claim["execution_source_hashes_sha256"]
+            != canonical_sha256(execution_sources)
+            or claim["execution_source_role_count"] != len(execution_sources)
+            or claim["runner_source_sha256"] != execution_sources["runner"]
+            or claim["sec_corpus_source_sha256"]
+            != execution_sources["sec_corpus_selector"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim source closure is inconsistent"
+            )
+        for field in (
+            "request_sha256",
+            "consumption_entry_sha256",
+            "candidate_sha256",
+            "registry_entry_sha256",
+            "input_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "authorization_bundle_sha256",
+            "authorization_grant_sha256",
+            "grant_store_state_sha256",
+            "grant_consumption_ledger_sha256",
+            "grant_consumption_ledger_tip_sha256",
+            "start_current_tip_anchor_sha256",
+            "runner_source_sha256",
+            "sec_corpus_source_sha256",
+            "execution_source_hashes_sha256",
+            "sec_component_plan_sha256",
+        ):
+            _sha256(claim[field], f"SEC execution claim {field}")
+        _tagged_sha256(
+            claim["sec_user_agent_sha256"],
+            "SEC execution claim sec_user_agent_sha256",
+        )
+        _strict_int(
+            claim["consumption_entry_sequence"],
+            "SEC execution claim entry sequence",
+            minimum=1,
+        )
+        _strict_int(
+            claim["execution_source_role_count"],
+            "SEC execution claim source-role count",
+            minimum=1,
+        )
+        for field in (
+            "attempt_id",
+            "input_prerequisite_stage",
+            "authorized_stage",
+        ):
+            _safe_id(claim[field], f"SEC execution claim {field}")
+        namespace = claim["output_namespace"]
+        if (
+            type(namespace) is not str
+            or _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim namespace is invalid"
+            )
+        if claim["request_sha256"] != request_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim is stored under another request"
+            )
+        bundle = bundles.get(request_hash)
+        if type(bundle) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim lacks its persisted grant bundle"
+            )
+        grant = _mapping(
+            bundle.get("authorization_grant"),
+            "SEC execution claim grant",
+        )
+        expected = {
+            "request_sha256": grant.get("request_sha256"),
+            "consumption_entry_sha256": grant.get("consumption_entry_sha256"),
+            "consumption_entry_sequence": grant.get("consumption_entry_sequence"),
+            "attempt_id": grant.get("attempt_id"),
+            "candidate_sha256": grant.get("candidate_sha256"),
+            "registry_entry_sha256": grant.get("registry_entry_sha256"),
+            "input_prerequisite_stage": grant.get("prerequisite_stage"),
+            "authorized_stage": grant.get("stage"),
+            "input_stage_evidence_sha256": grant.get(
+                "prerequisite_stage_evidence_sha256"
+            ),
+            "stage_access_manifest_sha256": grant.get(
+                "stage_access_manifest_sha256"
+            ),
+            "output_namespace": grant.get("output_namespace"),
+            "authorization_bundle_sha256": bundle.get("bundle_sha256"),
+            "authorization_grant_sha256": grant.get(
+                "authorization_grant_sha256"
+            ),
+            "grant_store_state_sha256": grant.get("store_state_sha256"),
+            "grant_consumption_ledger_sha256": grant.get(
+                "consumption_ledger_sha256"
+            ),
+            "grant_consumption_ledger_tip_sha256": grant.get(
+                "consumption_ledger_tip_sha256"
+            ),
+        }
+        if any(claim[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim crossed its persisted grant"
+            )
+        validated[request_hash] = claim
+    return validated
+
+
+def _validated_stage_sec_reader_receipts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip SEC reader receipts")
+    validated: dict[str, dict[str, Any]] = {}
+    for request_sha256, raw_receipt in receipts.items():
+        request_hash = _sha256(request_sha256, "SEC reader receipt map key")
+        receipt = _mapping(raw_receipt, f"SEC reader receipt {request_hash}")
+        _expect_keys(
+            receipt,
+            _STAGE_SEC_READER_RECEIPT_KEYS,
+            f"SEC reader receipt {request_hash}",
+        )
+        if (
+            receipt["schema_version"] != STAGE_SEC_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "store_rehashed_owned_sec_stage_document_batch"
+            or receipt["sec_component_id"]
+            != SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID
+            or receipt["fresh_network_provenance_claimed"] is not False
+            or receipt["reader_output_recomputed_by_store"] is not True
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader receipt semantics changed"
+            )
+        _self_hash(receipt, "receipt_sha256", "SEC reader receipt")
+        byte_index = _validated_sec_byte_index(receipt["byte_index"])
+        if (
+            receipt["byte_index"] != byte_index
+            or receipt["byte_index_sha256"] != canonical_sha256(byte_index)
+            or receipt["byte_count_total"]
+            != sum(item["byte_count"] for item in byte_index)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader receipt byte index is inconsistent"
+            )
+        _strict_int(
+            receipt["byte_count_total"],
+            "SEC reader receipt total byte count",
+            minimum=1,
+        )
+        _strict_int(
+            receipt["execution_source_role_count"],
+            "SEC reader receipt source-role count",
+            minimum=1,
+        )
+        for field in (
+            "request_sha256",
+            "claim_sha256",
+            "candidate_sha256",
+            "authorization_bundle_sha256",
+            "authorization_grant_sha256",
+            "sec_component_plan_sha256",
+            "runner_source_sha256",
+            "sec_corpus_source_sha256",
+            "execution_source_hashes_sha256",
+            "byte_index_sha256",
+            "complete_marker_sha256",
+        ):
+            _sha256(receipt[field], f"SEC reader receipt {field}")
+        _tagged_sha256(
+            receipt["sec_user_agent_sha256"],
+            "SEC reader receipt sec_user_agent_sha256",
+        )
+        claim = claims.get(request_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader receipt lacks its execution claim"
+            )
+        expected = {
+            "request_sha256": request_hash,
+            "claim_sha256": claim.get("claim_sha256"),
+            "authorized_stage": claim.get("authorized_stage"),
+            "candidate_sha256": claim.get("candidate_sha256"),
+            "output_namespace": claim.get("output_namespace"),
+            "authorization_bundle_sha256": claim.get(
+                "authorization_bundle_sha256"
+            ),
+            "authorization_grant_sha256": claim.get(
+                "authorization_grant_sha256"
+            ),
+            "sec_component_id": claim.get("sec_component_id"),
+            "sec_component_plan_sha256": claim.get(
+                "sec_component_plan_sha256"
+            ),
+            "runner_source_sha256": claim.get("runner_source_sha256"),
+            "sec_corpus_source_sha256": claim.get("sec_corpus_source_sha256"),
+            "execution_source_hashes_sha256": claim.get(
+                "execution_source_hashes_sha256"
+            ),
+            "execution_source_role_count": claim.get(
+                "execution_source_role_count"
+            ),
+            "sec_user_agent_sha256": claim.get("sec_user_agent_sha256"),
+        }
+        if any(receipt[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC reader receipt crossed its execution claim"
+            )
+        validated[request_hash] = receipt
+    return validated
+
+
+def _validated_stage_sec_execution_aborts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    aborts = _mapping(raw, "current-tip SEC execution aborts")
+    validated: dict[str, dict[str, Any]] = {}
+    for request_sha256, raw_abort in aborts.items():
+        request_hash = _sha256(request_sha256, "SEC execution abort map key")
+        abort = _mapping(raw_abort, f"SEC execution abort {request_hash}")
+        _expect_keys(
+            abort,
+            _STAGE_SEC_EXECUTION_ABORT_KEYS,
+            f"SEC execution abort {request_hash}",
+        )
+        if (
+            abort["schema_version"] != STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION
+            or abort["contract_version"] != CONTRACT_VERSION
+            or abort["abort_kind"] != "indeterminate_owned_sec_stage_execution"
+            or abort["reason"]
+            not in {
+                "claim_recovered_without_terminal_receipt",
+                "external_effect_failed_or_completion_unknown",
+                "durable_output_verification_failed",
+            }
+            or abort["external_effect_retry_permitted"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution abort semantics changed"
+            )
+        _self_hash(abort, "abort_sha256", "SEC execution abort")
+        for field in (
+            "request_sha256",
+            "claim_sha256",
+            "candidate_sha256",
+        ):
+            _sha256(abort[field], f"SEC execution abort {field}")
+        claim = claims.get(request_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution abort lacks its execution claim"
+            )
+        expected = {
+            "request_sha256": request_hash,
+            "claim_sha256": claim.get("claim_sha256"),
+            "authorized_stage": claim.get("authorized_stage"),
+            "candidate_sha256": claim.get("candidate_sha256"),
+            "output_namespace": claim.get("output_namespace"),
+        }
+        if any(abort[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution abort crossed its claim"
+            )
+        validated[request_hash] = abort
+    return validated
+
+
 def validate_reveal_store_current_tip_anchor_structure(
     current_tip_anchor: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1170,6 +1670,31 @@ def validate_reveal_store_current_tip_anchor_structure(
             authorization_bundles=anchor["authorization_bundles"],
         )
     )
+    anchor["stage_sec_execution_claims"] = _validated_stage_sec_execution_claims(
+        anchor["stage_sec_execution_claims"],
+        authorization_bundles=anchor["authorization_bundles"],
+    )
+    anchor["stage_sec_reader_receipts"] = _validated_stage_sec_reader_receipts(
+        anchor["stage_sec_reader_receipts"],
+        claims=anchor["stage_sec_execution_claims"],
+    )
+    anchor["stage_sec_execution_aborts"] = _validated_stage_sec_execution_aborts(
+        anchor["stage_sec_execution_aborts"],
+        claims=anchor["stage_sec_execution_claims"],
+    )
+    if set(anchor["stage_sec_reader_receipts"]) & set(
+        anchor["stage_sec_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution cannot be both completed and aborted"
+        )
+    active_claims = set(anchor["stage_sec_execution_claims"]) - set(
+        anchor["stage_sec_reader_receipts"]
+    ) - set(anchor["stage_sec_execution_aborts"])
+    if len(active_claims) > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one SEC execution claim may be active"
+        )
     _self_hash(anchor, "tip_anchor_sha256", "independent current-tip anchor")
     return anchor
 
@@ -1182,6 +1707,9 @@ def build_reveal_store_current_tip_anchor(
     authorization_bundles: Mapping[str, Any],
     trusted_stage_content_pins: Mapping[str, Any] | None = None,
     consumed_stage_output_receipts: Mapping[str, Any] | None = None,
+    stage_sec_execution_claims: Mapping[str, Any] | None = None,
+    stage_sec_reader_receipts: Mapping[str, Any] | None = None,
+    stage_sec_execution_aborts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the separately persisted CAS anchor for one exact store state."""
 
@@ -1209,6 +1737,26 @@ def build_reveal_store_current_tip_anchor(
         ),
         authorization_bundles=bundles,
     )
+    sec_claims = _validated_stage_sec_execution_claims(
+        {} if stage_sec_execution_claims is None else stage_sec_execution_claims,
+        authorization_bundles=bundles,
+    )
+    sec_receipts = _validated_stage_sec_reader_receipts(
+        {} if stage_sec_reader_receipts is None else stage_sec_reader_receipts,
+        claims=sec_claims,
+    )
+    sec_aborts = _validated_stage_sec_execution_aborts(
+        {} if stage_sec_execution_aborts is None else stage_sec_execution_aborts,
+        claims=sec_claims,
+    )
+    if set(sec_receipts) & set(sec_aborts):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution cannot be both completed and aborted"
+        )
+    if len(set(sec_claims) - set(sec_receipts) - set(sec_aborts)) > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one SEC execution claim may be active"
+        )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -1226,6 +1774,9 @@ def build_reveal_store_current_tip_anchor(
         "trusted_stage_content_pins": pins,
         "authorization_bundles": bundles,
         "consumed_stage_output_receipts": output_receipts,
+        "stage_sec_execution_claims": sec_claims,
+        "stage_sec_reader_receipts": sec_receipts,
+        "stage_sec_execution_aborts": sec_aborts,
     }
     return {**body, "tip_anchor_sha256": canonical_sha256(body)}
 
@@ -1365,6 +1916,120 @@ def validate_reveal_store_current_tip_anchor_transition(
         raise SecFilingGemmaStageAuthorizationError(
             "Non-output transition changed consumed-stage output receipt membership"
         )
+
+    prior_sec_claims = prior["stage_sec_execution_claims"]
+    next_sec_claims = next_anchor["stage_sec_execution_claims"]
+    prior_sec_receipts = prior["stage_sec_reader_receipts"]
+    next_sec_receipts = next_anchor["stage_sec_reader_receipts"]
+    prior_sec_aborts = prior["stage_sec_execution_aborts"]
+    next_sec_aborts = next_anchor["stage_sec_execution_aborts"]
+    for prior_map, next_map, label in (
+        (prior_sec_claims, next_sec_claims, "SEC execution claim"),
+        (prior_sec_receipts, next_sec_receipts, "SEC reader receipt"),
+        (prior_sec_aborts, next_sec_aborts, "SEC execution abort"),
+    ):
+        if any(next_map.get(key) != value for key, value in prior_map.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                f"Current-tip transition removed or changed a persisted {label}"
+            )
+    claim_delta = len(next_sec_claims) - len(prior_sec_claims)
+    reader_delta = len(next_sec_receipts) - len(prior_sec_receipts)
+    abort_delta = len(next_sec_aborts) - len(prior_sec_aborts)
+    if any(delta not in {0, 1} for delta in (claim_delta, reader_delta, abort_delta)):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one SEC execution artifact"
+        )
+    sec_delta_count = claim_delta + reader_delta + abort_delta
+    if sec_delta_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC claim, reader receipt, and abort require separate transitions"
+        )
+    prior_active = set(prior_sec_claims) - set(prior_sec_receipts) - set(
+        prior_sec_aborts
+    )
+    if prior_active:
+        active_request = next(iter(prior_active))
+        terminal_request: str | None = None
+        if reader_delta:
+            terminal_request = next(
+                iter(set(next_sec_receipts) - set(prior_sec_receipts))
+            )
+        elif abort_delta:
+            terminal_request = next(iter(set(next_sec_aborts) - set(prior_sec_aborts)))
+        if (
+            claim_delta
+            or sec_delta_count != 1
+            or terminal_request != active_request
+            or consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Active SEC execution claim blocks every transition except its exact terminal receipt"
+            )
+    if sec_delta_count:
+        if consumption_delta or bundle_delta or pin_delta or output_delta:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution artifact append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution artifact append changed authenticated store state"
+            )
+    if claim_delta:
+        request_hash = next(iter(set(next_sec_claims) - set(prior_sec_claims)))
+        claim = next_sec_claims[request_hash]
+        current_bindings = {
+            "start_current_tip_anchor_sha256": prior["tip_anchor_sha256"],
+            "grant_store_state_sha256": prior["state_sha256"],
+            "grant_consumption_ledger_sha256": prior[
+                "consumption_ledger_sha256"
+            ],
+            "grant_consumption_ledger_tip_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sequence": prior["consumed_request_count"],
+        }
+        if request_hash not in prior_bundles or any(
+            claim[field] != expected
+            for field, expected in current_bindings.items()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim does not bind the exact current grant tip"
+            )
+        expected_claim = build_stage_sec_execution_claim(
+            prior_bundles[request_hash],
+            independent_current_tip_anchor=prior,
+            execution_source_hashes=claim["execution_source_hashes"],
+            sec_user_agent_sha256=claim["sec_user_agent_sha256"],
+        )
+        if claim != expected_claim:
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution claim differs from the exact authenticated component plan"
+            )
+    if not sec_delta_count:
+        if (
+            set(next_sec_claims) != set(prior_sec_claims)
+            or set(next_sec_receipts) != set(prior_sec_receipts)
+            or set(next_sec_aborts) != set(prior_sec_aborts)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Non-SEC transition changed SEC execution membership"
+            )
     return prior, next_anchor
 
 
@@ -1387,6 +2052,9 @@ def validate_reveal_store_current_tip_anchor(
         consumed_stage_output_receipts=observed[
             "consumed_stage_output_receipts"
         ],
+        stage_sec_execution_claims=observed["stage_sec_execution_claims"],
+        stage_sec_reader_receipts=observed["stage_sec_reader_receipts"],
+        stage_sec_execution_aborts=observed["stage_sec_execution_aborts"],
     )
     if observed != expected:
         raise SecFilingGemmaStageAuthorizationError(
@@ -1711,6 +2379,400 @@ def validate_consumed_stage_authorization_grant(
     return grant_hash
 
 
+def _sec_component_plan_from_bundle(
+    authorization_bundle: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    raw_bundle = _mapping(authorization_bundle, "SEC execution authorization bundle")
+    raw_grant = _mapping(
+        raw_bundle.get("authorization_grant"),
+        "SEC execution authorization grant",
+    )
+    request_hash = _sha256(
+        raw_grant.get("request_sha256"),
+        "SEC execution authorization request hash",
+    )
+    bundle = _validated_authorization_bundles({request_hash: raw_bundle})[
+        request_hash
+    ]
+    grant = bundle["authorization_grant"]
+    snapshot = bundle["authenticated_store_snapshot"]
+    entry, _request, _access = _validated_latest_consumption(
+        snapshot,
+        expected_entry_sha256=grant["consumption_entry_sha256"],
+    )
+    access = _mapping(entry["stage_access_manifest"], "SEC execution stage access")
+    access_body = {
+        key: access[key]
+        for key in access
+        if key != "stage_access_manifest_sha256"
+    }
+    if (
+        access.get("stage_access_manifest_sha256")
+        != grant["stage_access_manifest_sha256"]
+        or canonical_sha256(access_body) != grant["stage_access_manifest_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution stage-access manifest lost its self-hash"
+        )
+    sec_plan = _mapping(access.get("sec_access_plan"), "SEC execution access plan")
+    _expect_keys(
+        sec_plan,
+        {
+            "selection_policy",
+            "method",
+            "network_scope",
+            "redirects_permitted",
+            "retries_permitted",
+            "cache_substitution_permitted",
+            "document_count",
+            "accessions_sha256",
+            "official_urls_sha256",
+            "documents",
+        },
+        "SEC execution access plan",
+    )
+    if (
+        sec_plan["selection_policy"]
+        != "all_and_only_requested_stage_universe_primary_documents"
+        or sec_plan["method"] != "GET"
+        or sec_plan["network_scope"] != "official_sec_https_only"
+        or sec_plan["redirects_permitted"] is not False
+        or sec_plan["retries_permitted"] is not False
+        or sec_plan["cache_substitution_permitted"] is not False
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution access plan permits an unsafe transport"
+        )
+    documents = sec_plan["documents"]
+    if type(documents) is not list or not documents:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution access plan has no exact document list"
+        )
+    normalized_documents: list[dict[str, str]] = []
+    for index, raw_document in enumerate(documents):
+        document = _mapping(raw_document, f"SEC execution document {index}")
+        _expect_keys(
+            document,
+            {"accession_number", "official_url"},
+            f"SEC execution document {index}",
+        )
+        accession = _safe_id(
+            document["accession_number"], f"SEC execution accession {index}"
+        )
+        url = document["official_url"]
+        expected_prefix = (
+            "https://www.sec.gov/Archives/edgar/data/320193/"
+            f"{accession.replace('-', '')}/"
+        )
+        if (
+            _AAPL_ACCESSION_RE.fullmatch(accession) is None
+            or type(url) is not str
+            or not url.startswith(expected_prefix)
+            or len(url) <= len(expected_prefix)
+            or any(token in url for token in ("?", "#", "\\", ".."))
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "SEC execution document URL is outside the fixed Apple archive"
+            )
+        normalized_documents.append(
+            {"accession_number": accession, "official_url": url}
+        )
+    accessions = [document["accession_number"] for document in normalized_documents]
+    official_urls = [document["official_url"] for document in normalized_documents]
+    if (
+        sec_plan["documents"] != normalized_documents
+        or sec_plan["document_count"] != len(normalized_documents)
+        or accessions != sorted(accessions)
+        or official_urls != sorted(official_urls)
+        or len(accessions) != len(set(accessions))
+        or len(official_urls) != len(set(official_urls))
+        or sec_plan["accessions_sha256"] != canonical_sha256(accessions)
+        or sec_plan["official_urls_sha256"] != canonical_sha256(official_urls)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution document plan is not canonical"
+        )
+    budgets = _mapping(access.get("budgets"), "SEC execution budgets")
+    authorized_max_response_bytes = _strict_int(
+        budgets.get("max_sec_response_bytes"),
+        "SEC execution byte budget",
+        minimum=1,
+    )
+    component_plan = {
+        "authorized_stage": grant["stage"],
+        "sec_access_plan": sec_plan,
+        "max_sec_requests": _strict_int(
+            budgets.get("max_sec_requests"),
+            "SEC execution request budget",
+            minimum=1,
+        ),
+        "authorized_max_sec_response_bytes": authorized_max_response_bytes,
+        "owned_sec_raw_batch_max_bytes": OWNED_SEC_RAW_BATCH_MAX_BYTES,
+        "max_sec_response_bytes": min(
+            authorized_max_response_bytes,
+            OWNED_SEC_RAW_BATCH_MAX_BYTES,
+        ),
+        "max_sec_acquisition_seconds": budgets.get(
+            "max_sec_acquisition_seconds"
+        ),
+    }
+    if component_plan["max_sec_requests"] != len(normalized_documents):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution request budget differs from its document plan"
+        )
+    return bundle, grant, component_plan
+
+
+def build_stage_sec_execution_claim(
+    authorization_bundle: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+    execution_source_hashes: Mapping[str, Any],
+    sec_user_agent_sha256: str,
+) -> dict[str, Any]:
+    """Claim the exact latest grant before the owned SEC reader may run."""
+
+    bundle, grant, component_plan = _sec_component_plan_from_bundle(
+        authorization_bundle
+    )
+    registry = _mapping(
+        bundle["authenticated_store_snapshot"].get("latest_registry"),
+        "SEC execution candidate registry",
+    )
+    raw_entries = registry.get("entries")
+    if type(raw_entries) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution candidate registry has no exact entries"
+        )
+    candidate_matches: list[dict[str, Any]] = []
+    for index, raw_entry in enumerate(raw_entries):
+        registry_entry = _mapping(
+            raw_entry,
+            f"SEC execution candidate registry entry {index}",
+        )
+        candidate = registry_entry.get("candidate_manifest")
+        if (
+            registry_entry.get("entry_sha256") == grant["registry_entry_sha256"]
+            and type(candidate) is dict
+            and candidate.get("candidate_sha256") == grant["candidate_sha256"]
+        ):
+            candidate_matches.append(candidate)
+    if len(candidate_matches) != 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution grant lacks exactly one registry-pinned candidate"
+        )
+    candidate = candidate_matches[0]
+    try:
+        validated_candidate_hash = validate_candidate_manifest(
+            candidate,
+            expected_candidate_sha256=grant["candidate_sha256"],
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution candidate source pins are not canonical"
+        ) from exc
+    if validated_candidate_hash != grant["candidate_sha256"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution candidate identity changed"
+        )
+    candidate_sources = _mapping(
+        _mapping(candidate.get("bindings"), "SEC execution candidate bindings").get(
+            "source_hashes"
+        ),
+        "SEC execution candidate source hashes",
+    )
+    raw_execution_sources = _mapping(
+        execution_source_hashes,
+        "owned SEC execution source hashes",
+    )
+    expected_source_roles = {
+        role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    }
+    if set(raw_execution_sources) != expected_source_roles:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned SEC execution source closure is incomplete"
+        )
+    execution_sources = {
+        role: _sha256(
+            raw_execution_sources[role],
+            f"owned SEC execution source hash {role}",
+        )
+        for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    }
+    if any(
+        candidate_sources.get(role) != source_hash
+        for role, source_hash in execution_sources.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned SEC execution bytes differ from the registered candidate"
+        )
+    runner_source_hash = execution_sources["runner"]
+    corpus_source_hash = execution_sources["sec_corpus_selector"]
+    user_agent_hash = _tagged_sha256(
+        sec_user_agent_sha256,
+        "owned SEC execution User-Agent hash",
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        bundle["authenticated_store_snapshot"],
+        independent_current_tip_anchor,
+    )
+    request_hash = grant["request_sha256"]
+    if current_tip["authorization_bundles"].get(request_hash) != bundle:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution grant bundle is not exact at the current tip"
+        )
+    validate_consumed_stage_authorization_grant(
+        grant,
+        authenticated_store_snapshot=bundle["authenticated_store_snapshot"],
+        external_store_state_pin=bundle["store_state_pin"],
+        independent_current_tip_anchor=current_tip,
+        expected_consumption_entry_sha256=grant["consumption_entry_sha256"],
+        expected_request_sha256=request_hash,
+        expected_candidate_sha256=grant["candidate_sha256"],
+        expected_stage=grant["stage"],
+        expected_prerequisite_stage_evidence_sha256=grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        expected_stage_access_manifest_sha256=grant[
+            "stage_access_manifest_sha256"
+        ],
+        expected_output_namespace=grant["output_namespace"],
+    )
+    body = {
+        "schema_version": STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "claim_kind": "owned_sec_stage_document_batch",
+        "request_sha256": request_hash,
+        "consumption_entry_sha256": grant["consumption_entry_sha256"],
+        "consumption_entry_sequence": grant["consumption_entry_sequence"],
+        "attempt_id": grant["attempt_id"],
+        "candidate_sha256": grant["candidate_sha256"],
+        "registry_entry_sha256": grant["registry_entry_sha256"],
+        "input_prerequisite_stage": grant["prerequisite_stage"],
+        "authorized_stage": grant["stage"],
+        "input_stage_evidence_sha256": grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": grant["stage_access_manifest_sha256"],
+        "output_namespace": grant["output_namespace"],
+        "authorization_bundle_sha256": bundle["bundle_sha256"],
+        "authorization_grant_sha256": grant["authorization_grant_sha256"],
+        "grant_store_state_sha256": grant["store_state_sha256"],
+        "grant_consumption_ledger_sha256": grant[
+            "consumption_ledger_sha256"
+        ],
+        "grant_consumption_ledger_tip_sha256": grant[
+            "consumption_ledger_tip_sha256"
+        ],
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "runner_repository_path": STAGE_RUNNER_REPOSITORY_PATH,
+        "runner_source_sha256": runner_source_hash,
+        "sec_corpus_repository_path": SEC_CORPUS_REPOSITORY_PATH,
+        "sec_corpus_source_sha256": corpus_source_hash,
+        "execution_source_hashes": execution_sources,
+        "execution_source_hashes_sha256": canonical_sha256(execution_sources),
+        "execution_source_role_count": len(execution_sources),
+        "sec_user_agent_sha256": user_agent_hash,
+        "sec_component_id": SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
+        "sec_component_plan_sha256": canonical_sha256(component_plan),
+        "effect_may_be_repeated_after_indeterminate_crash": False,
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def build_stage_sec_reader_receipt(
+    claim: Mapping[str, Any],
+    *,
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+) -> dict[str, Any]:
+    """Bind store-rehashed durable SEC bytes to one execution claim."""
+
+    claim_value = _mapping(claim, "SEC reader receipt claim")
+    _expect_keys(
+        claim_value,
+        _STAGE_SEC_EXECUTION_CLAIM_KEYS,
+        "SEC reader receipt claim",
+    )
+    _self_hash(claim_value, "claim_sha256", "SEC reader receipt claim")
+    index = _validated_sec_byte_index(byte_index)
+    body = {
+        "schema_version": STAGE_SEC_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "store_rehashed_owned_sec_stage_document_batch",
+        "request_sha256": claim_value["request_sha256"],
+        "claim_sha256": claim_value["claim_sha256"],
+        "authorized_stage": claim_value["authorized_stage"],
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "authorization_bundle_sha256": claim_value[
+            "authorization_bundle_sha256"
+        ],
+        "authorization_grant_sha256": claim_value[
+            "authorization_grant_sha256"
+        ],
+        "sec_component_id": claim_value["sec_component_id"],
+        "sec_component_plan_sha256": claim_value[
+            "sec_component_plan_sha256"
+        ],
+        "runner_source_sha256": claim_value["runner_source_sha256"],
+        "sec_corpus_source_sha256": claim_value["sec_corpus_source_sha256"],
+        "execution_source_hashes_sha256": claim_value[
+            "execution_source_hashes_sha256"
+        ],
+        "execution_source_role_count": claim_value[
+            "execution_source_role_count"
+        ],
+        "sec_user_agent_sha256": claim_value["sec_user_agent_sha256"],
+        "byte_index": index,
+        "byte_index_sha256": canonical_sha256(index),
+        "byte_count_total": sum(item["byte_count"] for item in index),
+        "complete_marker_sha256": _sha256(
+            complete_marker_sha256, "SEC complete marker hash"
+        ),
+        "fresh_network_provenance_claimed": False,
+        "reader_output_recomputed_by_store": True,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_stage_sec_execution_abort(
+    claim: Mapping[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Terminally refuse any retry after a possibly executed SEC effect."""
+
+    claim_value = _mapping(claim, "SEC execution abort claim")
+    _expect_keys(
+        claim_value,
+        _STAGE_SEC_EXECUTION_CLAIM_KEYS,
+        "SEC execution abort claim",
+    )
+    _self_hash(claim_value, "claim_sha256", "SEC execution abort claim")
+    if reason not in {
+        "claim_recovered_without_terminal_receipt",
+        "external_effect_failed_or_completion_unknown",
+        "durable_output_verification_failed",
+    }:
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC execution abort reason is not canonical"
+        )
+    body = {
+        "schema_version": STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "abort_kind": "indeterminate_owned_sec_stage_execution",
+        "request_sha256": claim_value["request_sha256"],
+        "claim_sha256": claim_value["claim_sha256"],
+        "authorized_stage": claim_value["authorized_stage"],
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "reason": reason,
+        "external_effect_retry_permitted": False,
+    }
+    return {**body, "abort_sha256": canonical_sha256(body)}
+
+
 def build_consumed_stage_output_receipt(
     authorization_bundle: Mapping[str, Any],
     *,
@@ -1911,12 +2973,23 @@ __all__ = [
     "CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION",
     "CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
+    "OWNED_SEC_RAW_BATCH_MAX_BYTES",
+    "SEC_EXECUTION_RESOLVED_SOURCE_PATHS",
+    "SEC_CORPUS_REPOSITORY_PATH",
+    "SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID",
+    "STAGE_RUNNER_REPOSITORY_PATH",
+    "STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
+    "STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",
+    "STAGE_SEC_READER_RECEIPT_SCHEMA_VERSION",
     "TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION",
     "TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION",
     "SecFilingGemmaStageAuthorizationError",
     "authenticate_reveal_store_trusted_stage_content_pin",
     "build_consumed_stage_authorization_grant",
     "build_consumed_stage_output_receipt",
+    "build_stage_sec_execution_abort",
+    "build_stage_sec_execution_claim",
+    "build_stage_sec_reader_receipt",
     "build_reveal_store_current_tip_anchor",
     "derive_consumed_stage_store_state_pin",
     "derive_reveal_store_trusted_stage_content_pin",

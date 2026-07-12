@@ -28,6 +28,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 import subprocess
+import sys
 import time
 from types import MappingProxyType
 from typing import Any, Final
@@ -38,6 +39,10 @@ from agent_benchmark.sec_filing_gemma_contract import (
     REQUIRED_STAGE_VERIFIER_CHECKS,
     SecFilingGemmaContractError,
     canonical_sha256,
+)
+from agent_benchmark.sec_filing_gemma_corpus import (
+    SecFilingGemmaCorpusError,
+    _validate_persisted_authenticated_stage_access_batch,
 )
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     HISTORICAL_FINAL_REVEAL_COUNT_LOWER_BOUND,
@@ -59,11 +64,16 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
 )
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+    SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
+    SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
+    build_stage_sec_execution_abort,
+    build_stage_sec_execution_claim,
+    build_stage_sec_reader_receipt,
     derive_consumed_stage_store_state_pin,
     derive_reveal_store_trusted_stage_content_pin,
     validate_consumed_stage_authorization_grant,
@@ -72,6 +82,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_reveal_store_current_tip_anchor_structure,
     validate_reveal_store_current_tip_anchor_transition,
     validate_trusted_stage_content_authentication_receipt,
+    _sec_component_plan_from_bundle,
 )
 
 
@@ -97,6 +108,15 @@ RESTORE_PENDING_FILENAME: Final[str] = (
     "sec_gemma_reveal_store_restore_pending.json"
 )
 LOCK_FILENAME: Final[str] = ".sec_gemma_reveal_store.lock"
+STAGE_OUTPUTS_DIRECTORY_NAME: Final[str] = "stage_outputs"
+SEC_STAGE_COMPONENT_DIRECTORY_NAME: Final[str] = "sec"
+SEC_BATCH_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
+SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-sec-batch-complete-v1"
+)
+MAX_SEC_BATCH_FILES: Final[int] = 4_096
+MAX_SEC_BATCH_FILE_BYTES: Final[int] = 128 * 1024 * 1024
+MAX_SEC_BATCH_TOTAL_BYTES: Final[int] = 1536 * 1024 * 1024
 INITIAL_PIN_RELATIVE_PATH: Final[str] = (
     "docs/protocol_evidence/sec_gemma_reveal_registry_initial_pin.json"
 )
@@ -108,6 +128,7 @@ AUTHORITATIVE_VALIDATOR_ID: Final[str] = (
 )
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 CURRENT_TIP_PENDING_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-pending-v1"
@@ -195,6 +216,14 @@ def _sha256(value: Any, location: str) -> str:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise SecFilingGemmaRevealStoreError(
             f"{location} must be a lowercase SHA-256 digest"
+        )
+    return value
+
+
+def _tagged_sha256(value: Any, location: str) -> str:
+    if type(value) is not str or _TAGGED_SHA256_RE.fullmatch(value) is None:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} must be a tagged lowercase SHA-256 digest"
         )
     return value
 
@@ -469,6 +498,47 @@ def _read_regular_bytes(
         return b"".join(chunks)
     finally:
         os.close(descriptor)
+
+
+def _execution_source_hashes(repository_root: Path) -> dict[str, str]:
+    """Hash every resolved candidate source and reject loaded-path substitution."""
+
+    root = repository_root.resolve(strict=True)
+    observed: dict[str, str] = {}
+    for role, relative_path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS:
+        expected_path = repository_root / Path(relative_path)
+        try:
+            resolved_path = expected_path.resolve(strict=True)
+            resolved_path.relative_to(root)
+        except Exception:
+            raise SecFilingGemmaRevealStoreError(
+                "SEC execution source path escaped its canonical repository"
+            ) from None
+        module_name = (
+            "agent_benchmark"
+            if relative_path == "agent_benchmark/__init__.py"
+            else relative_path[:-3].replace("/", ".")
+        )
+        loaded = sys.modules.get(module_name)
+        if loaded is not None:
+            loaded_file = getattr(loaded, "__file__", None)
+            try:
+                loaded_path = Path(loaded_file).resolve(strict=True)
+            except Exception:
+                raise SecFilingGemmaRevealStoreError(
+                    "Loaded SEC execution module has no canonical source path"
+                ) from None
+            if loaded_path != resolved_path:
+                raise SecFilingGemmaRevealStoreError(
+                    "Loaded SEC execution module differs from its repository source"
+                )
+        payload = _read_regular_bytes(
+            expected_path,
+            f"SEC execution source {role}",
+            max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+        )
+        observed[role] = hashlib.sha256(payload).hexdigest()
+    return observed
 
 
 def _git(repo_root: Path, *arguments: str) -> bytes:
@@ -2513,6 +2583,9 @@ class SecFilingGemmaRevealStore:
         authorization_bundle: Mapping[str, Any] | None = None,
         trusted_stage_content_pin: Mapping[str, Any] | None = None,
         consumed_stage_output_receipt: Mapping[str, Any] | None = None,
+        stage_sec_execution_claim: Mapping[str, Any] | None = None,
+        stage_sec_reader_receipt: Mapping[str, Any] | None = None,
+        stage_sec_execution_abort: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated_state = _validate_state(
             _expect_mapping(next_state, "next reveal-store state"),
@@ -2523,17 +2596,25 @@ class SecFilingGemmaRevealStore:
         output_receipts = copy.deepcopy(
             prior_tip_anchor["consumed_stage_output_receipts"]
         )
+        sec_claims = copy.deepcopy(prior_tip_anchor["stage_sec_execution_claims"])
+        sec_reader_receipts = copy.deepcopy(
+            prior_tip_anchor["stage_sec_reader_receipts"]
+        )
+        sec_aborts = copy.deepcopy(prior_tip_anchor["stage_sec_execution_aborts"])
         transition_payload_count = sum(
             value is not None
             for value in (
                 authorization_bundle,
                 trusted_stage_content_pin,
                 consumed_stage_output_receipt,
+                stage_sec_execution_claim,
+                stage_sec_reader_receipt,
+                stage_sec_execution_abort,
             )
         )
         if transition_payload_count > 1:
             raise SecFilingGemmaRevealStoreError(
-                "Trusted pin, authorization bundle, and output receipt require separate transitions"
+                "Trusted pin, authorization bundle, output receipt, and SEC execution artifacts require separate transitions"
             )
         if trusted_stage_content_pin is not None:
             pin = _exact_caller_dict(
@@ -2579,6 +2660,51 @@ class SecFilingGemmaRevealStore:
                     "A persisted consumed-stage output receipt cannot be replaced"
                 )
             output_receipts[request_hash] = output_receipt
+        if stage_sec_execution_claim is not None:
+            sec_claim = _exact_caller_dict(
+                stage_sec_execution_claim,
+                "stage SEC execution claim",
+            )
+            request_hash = _sha256(
+                sec_claim.get("request_sha256"),
+                "stage SEC execution claim request hash",
+            )
+            if request_hash in sec_claims and sec_claims[request_hash] != sec_claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage SEC execution claim cannot be replaced"
+                )
+            sec_claims[request_hash] = sec_claim
+        if stage_sec_reader_receipt is not None:
+            sec_receipt = _exact_caller_dict(
+                stage_sec_reader_receipt,
+                "stage SEC reader receipt",
+            )
+            request_hash = _sha256(
+                sec_receipt.get("request_sha256"),
+                "stage SEC reader receipt request hash",
+            )
+            if (
+                request_hash in sec_reader_receipts
+                and sec_reader_receipts[request_hash] != sec_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage SEC reader receipt cannot be replaced"
+                )
+            sec_reader_receipts[request_hash] = sec_receipt
+        if stage_sec_execution_abort is not None:
+            sec_abort = _exact_caller_dict(
+                stage_sec_execution_abort,
+                "stage SEC execution abort",
+            )
+            request_hash = _sha256(
+                sec_abort.get("request_sha256"),
+                "stage SEC execution abort request hash",
+            )
+            if request_hash in sec_aborts and sec_aborts[request_hash] != sec_abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage SEC execution abort cannot be replaced"
+                )
+            sec_aborts[request_hash] = sec_abort
         try:
             next_tip = build_reveal_store_current_tip_anchor(
                 validated_state,
@@ -2587,6 +2713,9 @@ class SecFilingGemmaRevealStore:
                 authorization_bundles=bundles,
                 trusted_stage_content_pins=pins,
                 consumed_stage_output_receipts=output_receipts,
+                stage_sec_execution_claims=sec_claims,
+                stage_sec_reader_receipts=sec_reader_receipts,
+                stage_sec_execution_aborts=sec_aborts,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -2654,6 +2783,9 @@ class SecFilingGemmaRevealStore:
                     authorization_bundles={},
                     trusted_stage_content_pins={},
                     consumed_stage_output_receipts={},
+                    stage_sec_execution_claims={},
+                    stage_sec_reader_receipts={},
+                    stage_sec_execution_aborts={},
                 )
             except SecFilingGemmaStageAuthorizationError as exc:
                 raise SecFilingGemmaRevealStoreError(
@@ -2711,6 +2843,424 @@ class SecFilingGemmaRevealStore:
                 self._read_state_and_tip_locked(tracked_anchor)
             )
             return copy.deepcopy(tip)
+
+    def claim_authorized_sec_stage_execution(
+        self,
+        *,
+        request_sha256: str,
+        sec_user_agent_sha256: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one exact current grant before any SEC reader I/O.
+
+        A recovered active claim is deliberately returned with ``created=False``;
+        callers must not repeat the external effect because the prior process may
+        have completed it without persisting its durable byte receipt.
+        """
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(
+                request_sha256,
+                "authorized SEC execution request hash",
+            )
+            user_agent_hash = _tagged_sha256(
+                sec_user_agent_sha256,
+                "authorized SEC execution User-Agent hash",
+            )
+            existing_claim = current_tip["stage_sec_execution_claims"].get(
+                request_hash
+            )
+            if existing_claim is not None:
+                if existing_claim.get("sec_user_agent_sha256") != user_agent_hash:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Authorized SEC execution contact differs from its durable claim"
+                    )
+                return {
+                    "claim": copy.deepcopy(existing_claim),
+                    "created": False,
+                    "reader_receipt": copy.deepcopy(
+                        current_tip["stage_sec_reader_receipts"].get(request_hash)
+                    ),
+                    "abort": copy.deepcopy(
+                        current_tip["stage_sec_execution_aborts"].get(request_hash)
+                    ),
+                }
+            bundle = current_tip["authorization_bundles"].get(request_hash)
+            if type(bundle) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Authorized SEC execution lacks its current grant bundle"
+                )
+            execution_sources = _execution_source_hashes(self.repository_root)
+            try:
+                claim = build_stage_sec_execution_claim(
+                    bundle,
+                    independent_current_tip_anchor=current_tip,
+                    execution_source_hashes=execution_sources,
+                    sec_user_agent_sha256=user_agent_hash,
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Could not claim the exact current SEC stage grant"
+                ) from exc
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_sec_execution_claim=claim,
+            )
+            if committed_state != current:
+                raise SecFilingGemmaRevealStoreError(
+                    "SEC execution claim changed reveal-store state"
+                )
+            persisted = committed_tip["stage_sec_execution_claims"].get(
+                request_hash
+            )
+            if persisted != claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed SEC execution claim differs from its CAS target"
+                )
+            return {
+                "claim": copy.deepcopy(persisted),
+                "created": True,
+                "reader_receipt": None,
+                "abort": None,
+            }
+
+    def _revalidate_authorized_sec_execution_sources(
+        self,
+        claim: Mapping[str, Any],
+    ) -> None:
+        """Reject disk-source substitution after an execution claim was minted."""
+
+        if type(claim) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "SEC execution source revalidation requires an exact claim"
+            )
+        if _execution_source_hashes(self.repository_root) != claim.get(
+            "execution_source_hashes"
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "SEC execution sources changed after the durable claim"
+            )
+
+    def abort_authorized_sec_stage_execution(
+        self,
+        *,
+        request_sha256: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Terminally close an indeterminate SEC claim without repeating I/O."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(request_sha256, "SEC abort request hash")
+            claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "SEC execution cannot abort before its durable claim"
+                )
+            if request_hash in current_tip["stage_sec_reader_receipts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Completed SEC execution cannot be aborted"
+                )
+            existing = current_tip["stage_sec_execution_aborts"].get(request_hash)
+            try:
+                abort = build_stage_sec_execution_abort(claim, reason=reason)
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "SEC execution abort is not canonical"
+                ) from exc
+            if existing is not None:
+                if existing != abort:
+                    raise SecFilingGemmaRevealStoreError(
+                        "SEC execution already has another terminal abort"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_sec_execution_abort=abort,
+            )
+            persisted = committed_tip["stage_sec_execution_aborts"].get(
+                request_hash
+            )
+            if persisted != abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed SEC execution abort differs from its CAS target"
+                )
+            return copy.deepcopy(persisted)
+
+    def _record_authorized_sec_stage_reader_output(
+        self,
+        *,
+        request_sha256: str,
+    ) -> dict[str, Any]:
+        """Re-read owned durable SEC bytes and append their exact receipt once."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(request_sha256, "SEC reader output request hash")
+            claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "SEC reader output lacks its durable execution claim"
+                )
+            if request_hash in current_tip["stage_sec_execution_aborts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Aborted SEC execution cannot publish reader bytes"
+                )
+            existing = current_tip["stage_sec_reader_receipts"].get(request_hash)
+            self._revalidate_authorized_sec_execution_sources(claim)
+            component_directory = (
+                self.store_directory
+                / STAGE_OUTPUTS_DIRECTORY_NAME
+                / claim["claim_sha256"]
+                / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+            )
+            secured = _secure_directory(
+                component_directory,
+                create=False,
+                location="owned SEC stage batch directory",
+            )
+            marker_path = secured / SEC_BATCH_COMPLETE_MARKER_FILENAME
+            marker_bytes = _read_regular_bytes(
+                marker_path,
+                "owned SEC stage batch complete marker",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            marker = _strict_json_bytes(
+                marker_bytes,
+                "owned SEC stage batch complete marker",
+            )
+            if type(marker) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch complete marker must be an object"
+                )
+            expected_marker_keys = {
+                "schema_version",
+                "request_sha256",
+                "claim_sha256",
+                "component_id",
+                "byte_index",
+                "byte_index_sha256",
+                "marker_sha256",
+            }
+            if set(marker) != expected_marker_keys:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch marker keys changed"
+                )
+            marker_body = {
+                key: marker[key] for key in marker if key != "marker_sha256"
+            }
+            if (
+                marker["schema_version"]
+                != SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION
+                or marker["request_sha256"] != request_hash
+                or marker["claim_sha256"] != claim["claim_sha256"]
+                or marker["component_id"]
+                != SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID
+                or marker["marker_sha256"] != canonical_sha256(marker_body)
+                or marker_bytes != _encoded_state(marker)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch marker is not canonical or claim-bound"
+                )
+            raw_index = marker["byte_index"]
+            if type(raw_index) is not list or not raw_index:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch marker has no byte index"
+                )
+            observed_names = [item.name for item in secured.iterdir()]
+            if len(observed_names) > MAX_SEC_BATCH_FILES:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch contains too many files"
+                )
+            if len({name.casefold() for name in observed_names}) != len(observed_names):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch contains a case-colliding file"
+                )
+            byte_index: list[dict[str, Any]] = []
+            payloads_by_name: dict[str, bytes] = {}
+            total_bytes = 0
+            expected_names = {SEC_BATCH_COMPLETE_MARKER_FILENAME}
+            for ordinal, raw_item in enumerate(raw_index, start=1):
+                if type(raw_item) is not dict or set(raw_item) != {
+                    "ordinal",
+                    "logical_id",
+                    "relative_path",
+                    "byte_count",
+                    "sha256",
+                }:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned SEC stage byte-index item is not exact"
+                    )
+                relative = raw_item["relative_path"]
+                if (
+                    type(relative) is not str
+                    or not relative
+                    or "/" in relative
+                    or "\\" in relative
+                    or relative in {".", "..", SEC_BATCH_COMPLETE_MARKER_FILENAME}
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned SEC stage byte-index path is unsafe"
+                    )
+                payload = _read_regular_bytes(
+                    secured / relative,
+                    f"owned SEC stage byte {relative}",
+                    max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+                )
+                total_bytes += len(payload)
+                if total_bytes > MAX_SEC_BATCH_TOTAL_BYTES:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned SEC stage byte bundle exceeds its total limit"
+                    )
+                observed = {
+                    "ordinal": ordinal,
+                    "logical_id": raw_item["logical_id"],
+                    "relative_path": relative,
+                    "byte_count": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                }
+                if observed != raw_item:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned SEC stage bytes differ from their complete marker"
+                    )
+                byte_index.append(observed)
+                payloads_by_name[relative] = payload
+                expected_names.add(relative)
+            if (
+                set(observed_names) != expected_names
+                or marker["byte_index_sha256"] != canonical_sha256(byte_index)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage directory has missing, extra, or reordered bytes"
+                )
+            bundle = current_tip["authorization_bundles"].get(request_hash)
+            if type(bundle) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch lost its authorization bundle"
+                )
+            try:
+                _exact_bundle, _grant, component_plan = (
+                    _sec_component_plan_from_bundle(bundle)
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch cannot recover its component plan"
+                ) from exc
+            if canonical_sha256(component_plan) != claim["sec_component_plan_sha256"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch crossed its claimed component plan"
+                )
+            sec_plan = component_plan["sec_access_plan"]
+            documents_plan = sec_plan["documents"]
+            expected_layout: list[tuple[str, str]] = []
+            for document_ordinal in range(1, len(documents_plan) + 1):
+                prefix = f"document-{document_ordinal:04d}"
+                expected_layout.extend(
+                    (
+                        (f"{prefix}-raw", f"{prefix}.raw"),
+                        (
+                            f"{prefix}-normalized",
+                            f"{prefix}.normalized.txt",
+                        ),
+                    )
+                )
+            expected_layout.extend(
+                (
+                    ("request-receipts-json", "request-receipts.json"),
+                    ("byte-manifest-json", "byte-manifest.json"),
+                )
+            )
+            observed_layout = [
+                (item["logical_id"], item["relative_path"])
+                for item in byte_index
+            ]
+            if observed_layout != expected_layout:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch does not contain the exact granted evidence layout"
+                )
+            try:
+                _validate_persisted_authenticated_stage_access_batch(
+                    authenticated_document_plan=documents_plan,
+                    raw_documents=tuple(
+                        payloads_by_name[f"document-{ordinal:04d}.raw"]
+                        for ordinal in range(1, len(documents_plan) + 1)
+                    ),
+                    normalized_documents=tuple(
+                        payloads_by_name[
+                            f"document-{ordinal:04d}.normalized.txt"
+                        ]
+                        for ordinal in range(1, len(documents_plan) + 1)
+                    ),
+                    request_receipts_json=payloads_by_name["request-receipts.json"],
+                    byte_manifest_json=payloads_by_name["byte-manifest.json"],
+                    expected_max_requests=component_plan["max_sec_requests"],
+                    expected_max_bytes=component_plan["max_sec_response_bytes"],
+                    expected_max_seconds=float(
+                        component_plan["max_sec_acquisition_seconds"]
+                    ),
+                    expected_user_agent_sha256=claim["sec_user_agent_sha256"],
+                )
+            except (
+                KeyError,
+                SecFilingGemmaCorpusError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage batch bytes fail independent semantic replay"
+                ) from exc
+            try:
+                self._revalidate_authorized_sec_execution_sources(claim)
+            except SecFilingGemmaRevealStoreError:
+                raise SecFilingGemmaRevealStoreError(
+                    "SEC execution sources changed before reader receipt finalization"
+                ) from None
+            try:
+                receipt = build_stage_sec_reader_receipt(
+                    claim,
+                    byte_index=byte_index,
+                    complete_marker_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC stage reader receipt could not be built"
+                ) from exc
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted SEC reader receipt differs from replayed durable bytes"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_sec_reader_receipt=receipt,
+            )
+            persisted = committed_tip["stage_sec_reader_receipts"].get(
+                request_hash
+            )
+            if persisted != receipt:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed SEC reader receipt differs from rehashed durable bytes"
+                )
+            return copy.deepcopy(persisted)
 
     def compare_and_swap_append(
         self,

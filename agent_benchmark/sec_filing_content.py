@@ -526,17 +526,45 @@ class _VisibleTextParser(HTMLParser):
             self.parts.append(data)
 
 
-def normalize_filing_text(value: str) -> NormalizedText:
+def normalize_filing_text(
+    value: str,
+    *,
+    max_utf8_bytes: int | None = None,
+) -> NormalizedText:
     """Return deterministic visible text with scripts/styles excluded."""
 
     if not isinstance(value, str):
         raise TypeError("filing document text must be a string")
+    if max_utf8_bytes is not None and (
+        type(max_utf8_bytes) is not int or max_utf8_bytes < 1
+    ):
+        raise ValueError("normalized filing byte limit must be a positive integer")
     parser = _VisibleTextParser()
     try:
         parser.feed(value)
         parser.close()
     except Exception as exc:  # pragma: no cover - HTMLParser is deliberately lenient
         raise SecPointInTimeError("Could not normalize filing document text") from exc
+    if max_utf8_bytes is not None:
+        # NFKC can expand a single input character into several Unicode
+        # characters.  Bound the encoded decomposition before materializing
+        # the complete normalized string.  Cross-character canonical
+        # composition can only preserve or reduce this per-character bound.
+        expansion_sizes: dict[str, int] = {}
+        upper_bound = 0
+        for part in parser.parts:
+            for character in part:
+                size = expansion_sizes.get(character)
+                if size is None:
+                    size = len(
+                        unicodedata.normalize("NFKC", character).encode("utf-8")
+                    )
+                    expansion_sizes[character] = size
+                upper_bound += size
+                if upper_bound > max_utf8_bytes:
+                    raise SecPointInTimeError(
+                        "Normalized filing text exceeds its UTF-8 byte limit"
+                    )
     visible = unicodedata.normalize("NFKC", "".join(parser.parts))
     visible = visible.replace("\r\n", "\n").replace("\r", "\n")
     lines: list[str] = []
@@ -549,10 +577,15 @@ def normalize_filing_text(value: str) -> NormalizedText:
         if cleaned:
             lines.append(cleaned)
     normalized = "\n".join(lines)
+    normalized_bytes = normalized.encode("utf-8")
+    if max_utf8_bytes is not None and len(normalized_bytes) > max_utf8_bytes:
+        raise SecPointInTimeError(
+            "Normalized filing text exceeds its UTF-8 byte limit"
+        )
     character_count = len(normalized)
     return NormalizedText(
         text=normalized,
-        sha256=content_sha256(normalized.encode("utf-8")),
+        sha256=content_sha256(normalized_bytes),
         character_count=character_count,
         usable=character_count >= MINIMUM_USABLE_TEXT_CHARACTERS,
     )

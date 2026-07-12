@@ -8,9 +8,13 @@ import pytest
 
 from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
+    REQUIRED_SOURCE_HASHES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
+    build_candidate_manifest,
     canonical_sha256,
+    session_calendar_sha256,
 )
+from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
 )
@@ -24,6 +28,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION,
     CONSUMPTION_ENTRY_SCHEMA_VERSION,
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
+    OWNED_SEC_RAW_BATCH_MAX_BYTES,
+    SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
+    SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     SEMANTIC_PREREQUISITE_SCHEMA_VERSION,
     STORE_SCHEMA_VERSION,
     TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION,
@@ -33,6 +40,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
+    build_stage_sec_execution_abort,
+    build_stage_sec_execution_claim,
+    build_stage_sec_reader_receipt,
     derive_consumed_stage_store_state_pin,
     derive_reveal_store_trusted_stage_content_pin,
     validate_consumed_stage_authorization_grant,
@@ -40,11 +50,55 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_consumed_stage_store_state_pin,
     validate_reveal_store_current_tip_anchor_transition,
     validate_trusted_stage_content_authentication_receipt,
+    _sec_component_plan_from_bundle,
 )
 
 
 def _h(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+SEC_USER_AGENT_SHA256 = f"sha256:{_h('private SEC contact')}"
+
+
+def _commit(label: str) -> str:
+    return hashlib.sha1(label.encode("utf-8")).hexdigest()
+
+
+def _sec_source_hashes(sequence: int) -> dict[str, str]:
+    source_hashes = {name: _h(f"source:{sequence}:{name}") for name in REQUIRED_SOURCE_HASHES}
+    source_hashes["runner"] = _h("runner source")
+    source_hashes["sec_corpus_selector"] = _h("corpus source")
+    return source_hashes
+
+
+def _execution_source_hashes(sequence: int = 1) -> dict[str, str]:
+    source_hashes = _sec_source_hashes(sequence)
+    return {
+        role: source_hashes[role]
+        for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    }
+
+
+def _sec_candidate(sequence: int) -> dict:
+    source_hashes = _sec_source_hashes(sequence)
+    return build_candidate_manifest(
+        model_digest=_h(f"model:{sequence}"),
+        ollama_runtime_fingerprint_sha256=_h(f"runtime:{sequence}"),
+        sec_audit_checksums_json_sha256=_h(f"audit:{sequence}"),
+        sec_catalog_artifact_sha256=_h(f"catalog:{sequence}"),
+        sec_audit_source_commit=_commit(f"audit-source:{sequence}"),
+        calendar_source_evidence_sha256=_h(f"calendar:{sequence}"),
+        calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
+        corpus_universe_sha256=_h(f"universe:{sequence}"),
+        corpus_universe_semantic_sha256=_h(f"universe-semantic:{sequence}"),
+        identity_lexicon_sha256=_h(f"lexicon:{sequence}"),
+        predecessor_reveal_registry_sha256=_h("registry"),
+        holdout_attempt_id=f"{CONTRACT_VERSION}-attempt-{sequence:03d}",
+        experiment_source_commit=_commit(f"experiment:{sequence}"),
+        source_tree_sha256=_h(f"source-tree:{sequence}"),
+        source_hashes=source_hashes,
+    )
 
 
 def _genesis(anchor: dict) -> str:
@@ -57,7 +111,13 @@ def _genesis(anchor: dict) -> str:
     )
 
 
-def _access(*, attempt: str, candidate: str, stage: str) -> dict:
+def _access(
+    *,
+    attempt: str,
+    candidate: str,
+    stage: str,
+    include_sec_plan: bool = False,
+) -> dict:
     prerequisite = "development" if stage == "intermediate" else "intermediate"
     body = {
         "schema_version": STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
@@ -98,6 +158,34 @@ def _access(*, attempt: str, candidate: str, stage: str) -> dict:
             "outcome_access_before_atomic_request_consumption_permitted": False,
         },
     }
+    if include_sec_plan:
+        accession = "0000320193-24-000123"
+        official_url = (
+            "https://www.sec.gov/Archives/edgar/data/320193/"
+            "000032019324000123/aapl-20240928.htm"
+        )
+        documents = [
+            {"accession_number": accession, "official_url": official_url}
+        ]
+        body["sec_access_plan"] = {
+            "selection_policy": (
+                "all_and_only_requested_stage_universe_primary_documents"
+            ),
+            "method": "GET",
+            "network_scope": "official_sec_https_only",
+            "redirects_permitted": False,
+            "retries_permitted": False,
+            "cache_substitution_permitted": False,
+            "document_count": 1,
+            "accessions_sha256": canonical_sha256([accession]),
+            "official_urls_sha256": canonical_sha256([official_url]),
+            "documents": documents,
+        }
+        body["budgets"] = {
+            "max_sec_requests": 1,
+            "max_sec_response_bytes": 1_000_000,
+            "max_sec_acquisition_seconds": 30.0,
+        }
     return {**body, "stage_access_manifest_sha256": canonical_sha256(body)}
 
 
@@ -106,10 +194,21 @@ def _entry(
     sequence: int,
     prior_tip: str,
     stage: str = "intermediate",
+    include_sec_plan: bool = False,
+    candidate_sha256_override: str | None = None,
 ) -> dict:
     attempt = f"{CONTRACT_VERSION}-attempt-{sequence:03d}"
-    candidate = _h(f"candidate:{sequence}")
-    access = _access(attempt=attempt, candidate=candidate, stage=stage)
+    candidate = (
+        _h(f"candidate:{sequence}")
+        if candidate_sha256_override is None
+        else candidate_sha256_override
+    )
+    access = _access(
+        attempt=attempt,
+        candidate=candidate,
+        stage=stage,
+        include_sec_plan=include_sec_plan,
+    )
     prerequisite = "development" if stage == "intermediate" else "intermediate"
     request_body = {
         "schema_version": REVEAL_REQUEST_SCHEMA_VERSION,
@@ -191,13 +290,31 @@ def _entry(
     return {**entry_body, "entry_sha256": canonical_sha256(entry_body)}
 
 
-def _snapshot(*, entry_count: int = 1) -> dict:
+def _snapshot(*, entry_count: int = 1, include_sec_plan: bool = False) -> dict:
     anchor = {"schema_version": "synthetic-store-anchor-v1", "root": _h("anchor")}
     current_tip = _genesis(anchor)
     entries: list[dict] = []
+    registry_entries: list[dict] = []
     for sequence in range(1, entry_count + 1):
-        entry = _entry(sequence=sequence, prior_tip=current_tip)
+        candidate_manifest = _sec_candidate(sequence) if include_sec_plan else None
+        entry = _entry(
+            sequence=sequence,
+            prior_tip=current_tip,
+            include_sec_plan=include_sec_plan,
+            candidate_sha256_override=(
+                None
+                if candidate_manifest is None
+                else candidate_manifest["candidate_sha256"]
+            ),
+        )
         entries.append(entry)
+        if candidate_manifest is not None:
+            registry_entries.append(
+                {
+                    "entry_sha256": entry["registry_entry_sha256"],
+                    "candidate_manifest": candidate_manifest,
+                }
+            )
         current_tip = entry["entry_sha256"]
     ledger_body = {
         "schema_version": CONSUMPTION_LEDGER_SCHEMA_VERSION,
@@ -214,6 +331,7 @@ def _snapshot(*, entry_count: int = 1) -> dict:
     ledger = {**ledger_body, "ledger_sha256": canonical_sha256(ledger_body)}
     registry = {
         "schema_version": "synthetic-registry-v1",
+        "entries": registry_entries,
         "chain": {
             "tip_sha256": _h("registry tip"),
             "registered_entry_count": max(1, entry_count),
@@ -237,8 +355,15 @@ def _snapshot(*, entry_count: int = 1) -> dict:
     return {**state_body, "state_sha256": canonical_sha256(state_body)}
 
 
-def _grant_context(entry_count: int = 1) -> tuple[dict, dict, dict, dict, dict]:
-    state = _snapshot(entry_count=entry_count)
+def _grant_context(
+    entry_count: int = 1,
+    *,
+    include_sec_plan: bool = False,
+) -> tuple[dict, dict, dict, dict, dict]:
+    state = _snapshot(
+        entry_count=entry_count,
+        include_sec_plan=include_sec_plan,
+    )
     pin = derive_consumed_stage_store_state_pin(state)
     entry = state["consumption_ledger"]["entries"][-1]
     grant = build_consumed_stage_authorization_grant(
@@ -341,6 +466,31 @@ def _output_binding(grant: dict, *, salt: str = "first output") -> dict:
         ],
         "output_candidate_sha256": grant["candidate_sha256"],
     }
+
+
+def _next_tip(
+    state: dict,
+    prior_tip: dict,
+    **map_overrides: dict,
+) -> dict:
+    maps = {
+        name: copy.deepcopy(prior_tip[name])
+        for name in (
+            "authorization_bundles",
+            "trusted_stage_content_pins",
+            "consumed_stage_output_receipts",
+            "stage_sec_execution_claims",
+            "stage_sec_reader_receipts",
+            "stage_sec_execution_aborts",
+        )
+    }
+    maps.update(map_overrides)
+    return build_reveal_store_current_tip_anchor(
+        state,
+        revision=prior_tip["revision"] + 1,
+        previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
+        **maps,
+    )
 
 
 def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
@@ -995,3 +1145,258 @@ def test_current_tip_transition_rejects_pin_append_with_consumption() -> None:
         match="dedicated tip-only transition",
     ):
         validate_reveal_store_current_tip_anchor_transition(prior_tip, combined)
+
+
+def test_sec_execution_claim_is_an_exact_dedicated_current_grant_transition() -> None:
+    state, _pin, entry, grant, prior_tip = _grant_context(
+        include_sec_plan=True
+    )
+    request_hash = entry["request_sha256"]
+    bundle = prior_tip["authorization_bundles"][request_hash]
+    claim = build_stage_sec_execution_claim(
+        bundle,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=_execution_source_hashes(),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        stage_sec_execution_claims={request_hash: claim},
+    )
+
+    validated_prior, validated_claimed = (
+        validate_reveal_store_current_tip_anchor_transition(
+            prior_tip,
+            claimed_tip,
+        )
+    )
+
+    assert validated_prior == prior_tip
+    assert validated_claimed == claimed_tip
+    assert claimed_tip["revision"] == prior_tip["revision"] + 1
+    assert claimed_tip["state_sha256"] == prior_tip["state_sha256"]
+    assert claimed_tip["stage_sec_execution_claims"] == {
+        request_hash: claim
+    }
+    assert claim["request_sha256"] == request_hash
+    assert claim["start_current_tip_anchor_sha256"] == prior_tip[
+        "tip_anchor_sha256"
+    ]
+    assert claim["authorization_grant_sha256"] == grant[
+        "authorization_grant_sha256"
+    ]
+    assert claim["sec_component_id"] == SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID
+    assert claim["sec_user_agent_sha256"] == SEC_USER_AGENT_SHA256
+    assert claim["effect_may_be_repeated_after_indeterminate_crash"] is False
+
+    _exact_bundle, _exact_grant, component_plan = _sec_component_plan_from_bundle(
+        bundle
+    )
+    assert component_plan["authorized_max_sec_response_bytes"] == 1_000_000
+    assert component_plan["owned_sec_raw_batch_max_bytes"] == (
+        OWNED_SEC_RAW_BATCH_MAX_BYTES
+    )
+    assert component_plan["max_sec_response_bytes"] == 1_000_000
+
+
+@pytest.mark.parametrize("substituted_role", ("runner", "sec_corpus_selector", "sec_acquirer"))
+def test_sec_execution_claim_rejects_source_bytes_outside_candidate_pins(
+    substituted_role: str,
+) -> None:
+    _state, _pin, entry, _grant, prior_tip = _grant_context(
+        include_sec_plan=True
+    )
+    bundle = prior_tip["authorization_bundles"][entry["request_sha256"]]
+
+    source_hashes = _execution_source_hashes()
+    source_hashes[substituted_role] = _h(f"substituted {substituted_role}")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="differ from the registered candidate",
+    ):
+        build_stage_sec_execution_claim(
+            bundle,
+            independent_current_tip_anchor=prior_tip,
+            execution_source_hashes=source_hashes,
+            sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+        )
+
+
+def test_active_sec_claim_blocks_nonterminal_and_second_claim_transitions() -> None:
+    state, _pin, entry, _grant, prior_tip = _grant_context(
+        include_sec_plan=True
+    )
+    request_hash = entry["request_sha256"]
+    bundle = prior_tip["authorization_bundles"][request_hash]
+    claim = build_stage_sec_execution_claim(
+        bundle,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=_execution_source_hashes(),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        stage_sec_execution_claims={request_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, claimed_tip)
+
+    nonterminal_tip = _next_tip(state, claimed_tip)
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="Active SEC execution claim blocks every transition",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            claimed_tip,
+            nonterminal_tip,
+        )
+
+    output_receipt = build_consumed_stage_output_receipt(
+        bundle,
+        **_output_binding(bundle["authorization_grant"], salt="active claim"),
+    )
+    output_tip = _next_tip(
+        state,
+        claimed_tip,
+        consumed_stage_output_receipts={request_hash: output_receipt},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="Active SEC execution claim blocks every transition",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            claimed_tip,
+            output_tip,
+        )
+
+    second_claim = copy.deepcopy(claim)
+    second_request_hash = _h("cross-request second claim")
+    second_claim["request_sha256"] = second_request_hash
+    _rehash(second_claim, "claim_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="lacks its persisted grant bundle|stored under another request",
+    ):
+        _next_tip(
+            state,
+            claimed_tip,
+            stage_sec_execution_claims={
+                request_hash: claim,
+                second_request_hash: second_claim,
+            },
+        )
+
+
+def test_sec_claim_rejects_a_stale_start_tip_and_cross_request_substitution() -> None:
+    state, _pin, entry, _grant, prior_tip = _grant_context(
+        include_sec_plan=True
+    )
+    request_hash = entry["request_sha256"]
+    bundle = prior_tip["authorization_bundles"][request_hash]
+    stale_claim = build_stage_sec_execution_claim(
+        bundle,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=_execution_source_hashes(),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    advanced_tip = _next_tip(state, prior_tip)
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, advanced_tip)
+    stale_claim_tip = _next_tip(
+        state,
+        advanced_tip,
+        stage_sec_execution_claims={request_hash: stale_claim},
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="does not bind the exact current grant tip",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            advanced_tip,
+            stale_claim_tip,
+        )
+
+    crossed = copy.deepcopy(stale_claim)
+    crossed["request_sha256"] = _h("other request")
+    _rehash(crossed, "claim_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="stored under another request|lacks its persisted grant bundle",
+    ):
+        _next_tip(
+            state,
+            prior_tip,
+            stage_sec_execution_claims={request_hash: crossed},
+        )
+
+
+def test_active_sec_claim_allows_only_its_exact_terminal_receipt_or_abort() -> None:
+    state, _pin, entry, _grant, prior_tip = _grant_context(
+        include_sec_plan=True
+    )
+    request_hash = entry["request_sha256"]
+    bundle = prior_tip["authorization_bundles"][request_hash]
+    claim = build_stage_sec_execution_claim(
+        bundle,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=_execution_source_hashes(),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        stage_sec_execution_claims={request_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, claimed_tip)
+    payload = b"fixed SEC filing bytes"
+    byte_index = [
+        {
+            "ordinal": 1,
+            "logical_id": "0000320193-24-000123",
+            "relative_path": "0001-primary.htm",
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    ]
+    receipt = build_stage_sec_reader_receipt(
+        claim,
+        byte_index=byte_index,
+        complete_marker_sha256=_h("canonical complete marker"),
+    )
+    assert receipt["sec_user_agent_sha256"] == SEC_USER_AGENT_SHA256
+    completed_tip = _next_tip(
+        state,
+        claimed_tip,
+        stage_sec_reader_receipts={request_hash: receipt},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        claimed_tip,
+        completed_tip,
+    )
+    assert completed_tip["stage_sec_reader_receipts"][request_hash] == receipt
+
+    abort = build_stage_sec_execution_abort(
+        claim,
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    aborted_tip = _next_tip(
+        state,
+        claimed_tip,
+        stage_sec_execution_aborts={request_hash: abort},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        claimed_tip,
+        aborted_tip,
+    )
+    assert abort["external_effect_retry_permitted"] is False
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="cannot be both completed and aborted",
+    ):
+        _next_tip(
+            state,
+            completed_tip,
+            stage_sec_execution_aborts={request_hash: abort},
+        )

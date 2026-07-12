@@ -335,7 +335,7 @@ def test_source_byte_omission_mutation_and_cross_candidate_pin_fail_closed() -> 
         )
 
 
-def test_source_role_audit_uses_frozen_mapping_and_keeps_five_roles_unresolved() -> None:
+def test_source_role_audit_uses_frozen_mapping_and_keeps_four_roles_unresolved() -> None:
     candidate, sources = _candidate_fixture()
     receipt = validate_candidate_source_role_audit(
         candidate_manifest=candidate,
@@ -344,13 +344,12 @@ def test_source_role_audit_uses_frozen_mapping_and_keeps_five_roles_unresolved()
     )
     assert receipt["complete"] is False
     assert receipt["authorizes"] is False
-    assert receipt["unresolved_role_count"] == 5
+    assert receipt["unresolved_role_count"] == 4
     assert receipt["unresolved_roles"] == [
         "extractor_prompt",
         "extractor_schema",
         "ledger",
         "market_acquirer",
-        "runner",
     ]
 
 
@@ -1930,7 +1929,10 @@ def _stub_development_audit_replays(monkeypatch, candidate: dict) -> None:
     )
 
 
-def test_parent_lineage_recursively_replays_real_v5_audit_context(monkeypatch) -> None:
+def test_parent_lineage_recursively_replays_real_v6_audit_context(monkeypatch) -> None:
+    assert verifier_module.STAGE_AUDIT_RECEIPT_SCHEMA_VERSION == (
+        "aapl-sec-gemma-stage-evidence-audit-receipt-v6"
+    )
     def build_parent_audit(evidence, access, context, store_context):
         _stub_development_audit_replays(
             monkeypatch,

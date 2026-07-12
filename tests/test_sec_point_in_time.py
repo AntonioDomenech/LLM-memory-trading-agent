@@ -111,6 +111,7 @@ def test_user_agent_validation_returns_only_hash_and_never_contact() -> None:
         "contact@example.com",
         "Sample Company Name AdminContact@sample-company.com",
         "Research Bot <person@real-domain.com>",
+        " Antonio Research antonio-private@antoniodomenech.dev ",
     ),
 )
 def test_user_agent_rejects_blank_or_placeholder_without_echo(value: str) -> None:

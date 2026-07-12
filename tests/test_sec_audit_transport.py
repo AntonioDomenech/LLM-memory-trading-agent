@@ -17,6 +17,7 @@ from agent_benchmark.sec_audit_transport import (
 from agent_benchmark.sec_point_in_time import (
     BudgetCounter,
     SecAuditLimitError,
+    SecPointInTimeError,
 )
 
 
@@ -160,6 +161,25 @@ def test_private_user_agent_is_used_but_never_exposed_in_state_or_errors(
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
     assert session.calls[0]["headers"]["User-Agent"] == PRIVATE_USER_AGENT
+
+
+def test_transport_rejects_noncanonical_contact_before_cache_or_request(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    session = FakeSession(clock=clock)
+    cache_dir = tmp_path / "must-not-exist"
+    with pytest.raises(SecPointInTimeError):
+        SecAuditTransport(
+            session=session,
+            cache_dir=cache_dir,
+            user_agent=f"{PRIVATE_USER_AGENT} ",
+            budget=BudgetCounter(clock=clock),
+            clock=clock,
+            sleep=clock.sleep,
+        )
+    assert session.calls == []
+    assert not cache_dir.exists()
 
 
 def test_success_streams_caches_and_returns_only_safe_audit_metadata(

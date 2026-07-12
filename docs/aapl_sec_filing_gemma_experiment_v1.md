@@ -544,8 +544,15 @@ The complete experiment has a hard one-hour limit:
 - total wall-clock time: at most 3,600 seconds.
 
 The 1.5-GiB SEC number is an aggregate network-transport ceiling, not an
-in-memory evidence allowance. Each stage may carry at most 128 MiB of decoded
-normalized filing content into the verifier. The complete caller bundle,
+in-memory evidence allowance. The owned stage-document runner binds a stricter
+64-MiB aggregate raw-response ceiling into each execution claim; the original
+access-manifest allowance is retained separately as evidence and cannot widen
+that effective cap. HTML parsing and NFKC can expand text by more than two
+times, so the normalizer computes a conservative per-character NFKC UTF-8
+upper bound and rejects the batch before materializing normalized output if it
+would exceed the remaining 128-MiB aggregate allowance. The exact final UTF-8
+length is checked again, and every durable file is independently limited to
+128 MiB before the first file is written. The complete caller bundle,
 including source evidence and recursively embedded parent evidence, is capped
 at 192 MiB of decoded Base64 and an estimated 256 MiB of canonical JSON. A
 size-only evidence preflight must pass after corpus acquisition and before the
@@ -626,9 +633,20 @@ At the current implementation checkpoint:
   uses a write-ahead pending transaction for state-plus-grant changes, and can
   return the exact persisted grant bundle on an identical crash retry without
   rerunning the verifier or consuming a request twice. Interrupted genesis
-  creation is also recoverable. Current-tip schema v3 stores both append-only
-  request-keyed trusted-content pins and consumed-stage first-recorded-evidence
-  receipts.
+  creation is also recoverable. Current-tip schema v4 stores append-only
+  request-keyed trusted-content pins, consumed-stage first-recorded-evidence
+  receipts, and bounded SEC execution claims/reader receipts/terminal aborts.
+  An active SEC claim blocks every registry, consumption, output, or competing
+  execution transition until the store independently re-reads the exact granted
+  layout and semantically replays every raw document, deterministic normalized
+  document, request receipt, byte-manifest row, transport budget, contact hash,
+  and self-hash, or records a non-retriable indeterminate abort. The owned
+  runner does not accept or return an already committed receipt until it calls
+  the store finalizer and the same durable replay succeeds again. A recovered
+  complete marker is finalized without another network call;
+  a recovered claim without such a marker is never retried. The receipt sets
+  `fresh_network_provenance_claimed=false`: this proves internal consistency and
+  grant binding, not external attestation of a fresh SEC response.
   A failed verifier retains its non-authorizing content pin, and an exact retry
   reuses it without another revision. After a grant is issued, the first exact
   caller-supplied stage-evidence candidate can be bound to that request, grant,
@@ -641,7 +659,7 @@ At the current implementation checkpoint:
   in the same store directory: it detects state-only rollback, but it is not an
   external trust domain and cannot by itself defeat coordinated replacement of
   both files;
-- the fixed verifier now produces a version-5 canonical non-authorizing audit
+- the fixed verifier now produces a version-6 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
   learner arithmetic, raw scores, gates, ranking, no-leverage proof, runtime
@@ -657,15 +675,21 @@ At the current implementation checkpoint:
   context, audit, pin, entry, bundle, grant, parent output receipt, parent map
   membership or declared map hash, tip, and child identities. It does not
   independently authenticate unrelated entries in that supplied map;
-- runtime source identity now checks the current regular files at the canonical
+- source-identity receipt version 4 now checks the current regular files at the canonical
   paths of modules that were already loaded; the audit refuses to import an
   absent module and accepts no caller-supplied root, path, or runtime bytes. Eleven
   previously omitted local dependencies are now separately pinned, and an AST
   closure check rejects any future static local import that is not in the
-  declared source tree. This still cannot prove that current disk bytes created
-  every already-running Python code object, so a fresh owned startup/import
-  attestation remains blocked. Five conceptual owners also remain unresolved:
-  extractor prompt, extractor schema, ledger, market acquirer, and runner;
+  declared source tree. At claim time the store re-reads every resolved source-
+  role file at its canonical repository path, rejects a loaded module whose
+  path differs, compares the complete role map with the candidate pins, and
+  binds its map hash and count into both the claim and reader receipt. It checks
+  the disk-source map again immediately before SEC I/O and receipt finalization.
+  The new bounded stage runner is a distinct resolved and candidate-pinned
+  source owner. This still cannot prove that current disk bytes created every
+  already-running Python code object or exclude monkeypatching, so a fresh
+  owned startup/import attestation remains blocked. Four conceptual owners also remain unresolved:
+  extractor prompt, extractor schema, ledger, and market acquirer;
 - supplied learner matrices and targets must match the fold-bound feature,
   target, membership, count, and maturity identities before any deterministic
   refit. Intermediate stage identity remains explicitly blocked: recursive
@@ -679,17 +703,30 @@ At the current implementation checkpoint:
   persists the trusted stage-content pin itself, authenticates its current-tip
   membership, and requires the audit receipt to return the exact pin and store
   context hashes. It also persists and recursively verifies the exact first
-  recorded evidence candidate associated with a consumed grant. Nevertheless,
-  `stage_access_identity` remains `BLOCKED`: no production SEC, market, model,
-  or artifact reader is yet forced through one owned grant-aware runner. The
-  receipt therefore authenticates protocol lineage for supplied evidence, but
-  does not yet prove that the authorized reader produced those bytes. The
-  verifier also does not independently load the store files, attest its
+  recorded evidence candidate associated with a consumed grant. The bounded
+  owned runner now claims the exact current grant before the SEC document batch,
+  derives the document plan and budgets only from the persisted access manifest,
+  binds the validated private-contact hash into that pre-effect claim,
+  seals the actual raw/normalized bytes and canonical receipts into a fixed
+  create-new directory, and has the reveal store independently replay the exact
+  files and semantics before committing the SEC reader receipt. It is the only exported production
+  stage-document network entry point; the older universe-derived fetch helper is
+  private and test-only. A noncanonical or invalid private SEC contact is rejected
+  before the claim transition, so its hash and transmitted header cannot diverge
+  and a typo cannot consume a grant. Tests use synthetic transports only;
+  no SEC request was made. `stage_access_identity` remains `BLOCKED` because
+  market, model, carry-in, artifact, and final stage-evidence reads/writes are not
+  yet forced through the runner, and the separate final `stage_evidence.json`
+  first-recorded receipt still accepts caller-supplied stage evidence. The
+  final component directory creation rejects even a pre-existing empty
+  directory, but the same-user mutable Windows path namespace is still not an
+  external trust domain. The verifier also does not independently load the store files, attest its
   executing Python code object, or turn the same mutable directory into an
   external trust domain;
 - stage-specific runtime receipts are structurally reconciled, but the final
-  all-stage summary remains diagnostic until owned-transport and monotonic-time
-  attestations plus the five-development-filing latency preflight exist;
+  all-stage summary remains diagnostic until the remaining owned market/model
+  transports, monotonic-time attestations, and five-development-filing latency
+  preflight exist;
 - the future verifier must derive the eligible universe from the sealed SEC
   catalogue, bind exact AAPL/SPY/QQQ/IWM/VIX/TNX input hashes, and prove that
   every training row is one exact matured filing event tied to its extraction
@@ -710,12 +747,15 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is a fixed owned runner that validates the
-exact current-tip grant before any effectful read, routes every SEC, market,
-model, and artifact access through that grant-aware path, hashes the actual
-  bytes returned by those readers, and finalizes the first-recorded receipt from
-those bytes. This is required to turn the newly authenticated protocol lineage
-into evidence of actual authorized execution. The remainder of the
+The next implementation milestone is to extend the now-owned SEC runner across
+presealed market and carry-in reads, every Ollama attempt, prediction sealing,
+and canonical stage-evidence assembly. The runner-owned finalizer must read the
+sealed `stage_evidence.json` bytes itself and make the first-recorded receipt
+bind the SEC claim and reader receipt rather than accepting a caller mapping.
+A distinct zero-cost market acquirer must also preserve upstream provider bytes
+and a deterministic normalization receipt. This is required to turn the
+partially authenticated SEC execution into complete authorized stage execution.
+The remainder of the
 authoritative raw-evidence chain must then rebuild preprocessing, extraction,
 feature rows, matured labels, and training membership from the replayed SEC
 catalogue and normalized document bytes; parse official calendar semantics;

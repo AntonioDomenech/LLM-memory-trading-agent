@@ -42,7 +42,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
 
 
 SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-source-identity-audit-v3"
+    "aapl-sec-gemma-source-identity-audit-v4"
 )
 SOURCE_TREE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-source-tree-v1"
 MAX_RUNTIME_SOURCE_BYTES_PER_FILE: Final[int] = 8 * 1024 * 1024
@@ -53,8 +53,10 @@ MAX_RUNTIME_SOURCE_BYTES_TOTAL: Final[int] = 64 * 1024 * 1024
 # particular, prompt/schema bytes are embedded in the contract today; assigning
 # all three roles to that file would create aliases rather than distinct source
 # identities.  The trading ledger is split across prediction/scoring/proof
-# components, and production market acquisition and stage running are not yet
-# implemented as single frozen owners.
+# components, and production market acquisition is not yet implemented as one
+# frozen owner.  The bounded owned SEC stage runner now has a distinct source
+# owner, while its market/model/artifact coverage remains intentionally
+# incomplete and non-authorizing.
 _CANONICAL_SOURCE_ROLE_PATH_ITEMS: Final[tuple[tuple[str, str | None], ...]] = (
     (
         "artifact_sealer",
@@ -91,7 +93,7 @@ _CANONICAL_SOURCE_ROLE_PATH_ITEMS: Final[tuple[tuple[str, str | None], ...]] = (
         "agent_benchmark/sec_filing_gemma_reveal_registry.py",
     ),
     ("reveal_store", "agent_benchmark/sec_filing_gemma_reveal_store.py"),
-    ("runner", None),
+    ("runner", "agent_benchmark/sec_filing_gemma_stage_runner.py"),
     ("scorer", "agent_benchmark/sec_filing_gemma_scoring.py"),
     ("sec_acquirer", "agent_benchmark/sec_audit_transport.py"),
     ("sec_audit_artifact", "agent_benchmark/sec_audit_artifact.py"),

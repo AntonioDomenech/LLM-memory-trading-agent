@@ -97,7 +97,7 @@ STAGE_EVIDENCE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-evidence-audit-v3"
 )
 STAGE_AUDIT_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-evidence-audit-receipt-v5"
+    "aapl-sec-gemma-stage-evidence-audit-receipt-v6"
 )
 STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-runtime-receipt-v1"
@@ -122,6 +122,12 @@ PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION: Final[str] = (
 )
 CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-consumed-stage-output-receipt-v1"
+)
+_EXPECTED_UNRESOLVED_SOURCE_ROLES: Final[tuple[str, ...]] = (
+    "extractor_prompt",
+    "extractor_schema",
+    "ledger",
+    "market_acquirer",
 )
 
 # These are parser/allocation ceilings, not acquisition budgets.  The SEC
@@ -313,8 +319,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     "prerequisite_evidence_identity": (
         "the directly invoked verifier replays raw catalogue and content bytes but "
         "still omits preprocessing, feature, label, prelabel-ledger, and full "
-        "seal-chain proofs; the reveal store does not yet issue the separately "
-        "trusted stage-content pin, and downstream APIs do not require the consumed grant"
+        "seal-chain proofs; the reveal store now pins trusted stage content and the "
+        "owned SEC batch requires a consumed grant, but remaining downstream readers "
+        "are not yet grant-bound"
     ),
     "runtime_budget": (
         "stage-specific measurements are internally reconciled but the owned "
@@ -322,14 +329,14 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "source_identity": (
         "resolved source roles replay against frozen paths, but extractor_prompt, "
-        "extractor_schema, ledger, market_acquirer, and runner remain unresolved; "
+        "extractor_schema, ledger, and market_acquirer remain unresolved; "
         "current files at loaded module paths do not yet attest the source bytes "
         "that created the executing code objects"
     ),
     "stage_access_identity": (
-        "the reveal store now persists and recursively requires the first recorded "
-        "stage-evidence candidate for the consumed grant, but SEC, market, model, and "
-        "artifact readers are not yet all forced through one owned grant-aware runner"
+        "the owned runner now claims the exact current grant before the SEC batch and "
+        "the store rehashes its durable actual bytes, but market, model, carry-in, "
+        "artifact, and stage-evidence readers are not yet forced through that runner"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "
@@ -973,7 +980,7 @@ def validate_candidate_source_role_audit(
         receipt.get("candidate_sha256") != expected_candidate_sha256
         or receipt.get("unresolved_roles") != list(UNRESOLVED_SOURCE_ROLES)
         or receipt.get("unresolved_role_count") != len(UNRESOLVED_SOURCE_ROLES)
-        or len(UNRESOLVED_SOURCE_ROLES) != 5
+        or UNRESOLVED_SOURCE_ROLES != _EXPECTED_UNRESOLVED_SOURCE_ROLES
         or receipt.get("complete") is not False
         or receipt.get("authorizes") is not False
     ):

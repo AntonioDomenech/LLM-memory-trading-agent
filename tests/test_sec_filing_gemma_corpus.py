@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 import hashlib
+import inspect
 import json
+from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
 
+import agent_benchmark.sec_filing_gemma_corpus as corpus_module
 from agent_benchmark.sec_audit_transport import ResponseAudit
 from agent_benchmark.sec_filing_content import normalize_filing_text
 from agent_benchmark.sec_filing_gemma_contract import (
@@ -24,7 +27,7 @@ from agent_benchmark.sec_filing_gemma_corpus import (
     MAIN_SUBMISSIONS_URL,
     SecCorpusBudget,
     SecFilingGemmaCorpusError,
-    acquire_authorized_stage_documents,
+    _acquire_stage_documents_from_authenticated_universe_for_tests,
     acquire_official_sec_catalog,
     validate_detached_catalog_replay,
     validate_detached_stage_content_replay,
@@ -252,6 +255,20 @@ def _primary_url(accession: str, filename: str) -> str:
     )
 
 
+def _authenticated_stage_access_document_plan() -> list[dict[str, str]]:
+    identities = (
+        ("0000320193-24-000001", "apple-2024-q1.htm"),
+        ("0000320193-24-000002", "apple-2024-q2.htm"),
+    )
+    return [
+        {
+            "accession_number": accession,
+            "official_url": _primary_url(accession, filename),
+        }
+        for accession, filename in identities
+    ]
+
+
 def _universe() -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     serial = 1
@@ -361,7 +378,7 @@ def _stage_detached_replay_inputs() -> dict[str, Any]:
         ).encode("ascii")
         for record in records
     }
-    result = acquire_authorized_stage_documents(
+    result = _acquire_stage_documents_from_authenticated_universe_for_tests(
         transport=FakeTransport(payloads),
         user_agent=USER_AGENT,
         budget=SecCorpusBudget(clock=Clock()),
@@ -1232,6 +1249,201 @@ def test_catalog_fails_on_request_byte_time_and_missing_reference() -> None:
         _catalog(payloads)
 
 
+def test_authenticated_stage_access_batch_returns_actual_bytes_and_canonical_evidence() -> None:
+    plan = _authenticated_stage_access_document_plan()
+    payloads = {
+        plan[0]["official_url"]: (
+            b"<html><body><p>Demand improved &amp; costs fell.</p></body></html>"
+        ),
+        plan[1]["official_url"]: (
+            b"<html><body><p>Services revenue remained durable.</p></body></html>"
+        ),
+    }
+    transport = FakeTransport(payloads)
+    result = corpus_module._acquire_authenticated_stage_access_document_batch(
+        authenticated_document_plan=plan,
+        transport=transport,
+        user_agent=USER_AGENT,
+        budget=SecCorpusBudget(clock=Clock()),
+    )
+
+    assert transport.calls == [item["official_url"] for item in plan]
+    assert [item.accession_number for item in result.documents] == [
+        item["accession_number"] for item in plan
+    ]
+    for planned, document in zip(plan, result.documents):
+        raw = payloads[planned["official_url"]]
+        normalized = normalize_filing_text(raw.decode("latin-1")).text.encode("utf-8")
+        assert document.raw_primary_document == raw
+        assert document.normalized_text == normalized
+        assert document.primary_document_sha256 == hashlib.sha256(raw).hexdigest()
+        assert document.normalized_text_sha256 == hashlib.sha256(normalized).hexdigest()
+
+    receipts = json.loads(result.request_receipts_json)
+    manifest = json.loads(result.byte_manifest_json)
+    manifest_body = {
+        key: value for key, value in manifest.items() if key != "byte_manifest_sha256"
+    }
+    assert len(result.request_receipts) == len(plan)
+    assert manifest["document_count"] == len(plan)
+    assert manifest["acquisition_request_count"] == len(plan)
+    assert manifest["acquisition_bytes"] == sum(map(len, payloads.values()))
+    assert manifest["request_receipts_sha256"] == canonical_sha256(receipts)
+    assert manifest["byte_manifest_sha256"] == canonical_sha256(manifest_body)
+    assert result.request_receipts_sha256 == canonical_sha256(receipts)
+    assert result.byte_manifest_sha256 == canonical_sha256(manifest_body)
+    assert manifest["caller_stage_candidate_or_digest_authority_accepted"] is False
+    assert tuple(
+        inspect.signature(
+            corpus_module._acquire_authenticated_stage_access_document_batch
+        ).parameters
+    ) == ("authenticated_document_plan", "transport", "user_agent", "budget")
+    assert "_acquire_authenticated_stage_access_document_batch" not in corpus_module.__all__
+    assert (
+        "_acquire_stage_documents_from_authenticated_universe_for_tests"
+        not in corpus_module.__all__
+    )
+    assert "acquire_authorized_stage_documents" not in corpus_module.__all__
+    assert not hasattr(corpus_module, "acquire_authorized_stage_documents")
+    with pytest.raises(TypeError):
+        result.byte_manifest["document_count"] = 0
+    with pytest.raises(TypeError):
+        result.request_receipts[0]["status_code"] = 500
+    with pytest.raises(FrozenInstanceError):
+        result.documents = ()
+
+
+def test_private_legacy_stage_fetch_has_no_production_caller() -> None:
+    package_directory = Path(corpus_module.__file__).resolve().parent
+    helper_name = "_acquire_stage_documents_from_authenticated_universe_for_tests"
+    callers = []
+    for path in package_directory.glob("*.py"):
+        if path.name == "sec_filing_gemma_corpus.py":
+            continue
+        if helper_name in path.read_text(encoding="utf-8"):
+            callers.append(path.name)
+    assert callers == []
+
+
+def test_authenticated_stage_access_batch_rejects_omission_reorder_and_duplicates_before_fetch() -> None:
+    plan = _authenticated_stage_access_document_plan()
+    missing_field = deepcopy(plan)
+    del missing_field[0]["official_url"]
+    attacks: list[Any] = [
+        [],
+        missing_field,
+        list(reversed(deepcopy(plan))),
+        [deepcopy(plan[0]), deepcopy(plan[0])],
+        tuple(deepcopy(plan)),
+    ]
+
+    for attack in attacks:
+        transport = FakeTransport({})
+        with pytest.raises(
+            SecFilingGemmaCorpusError,
+            match="omit|ordered|built-in list",
+        ):
+            corpus_module._acquire_authenticated_stage_access_document_batch(
+                authenticated_document_plan=attack,
+                transport=transport,
+                user_agent=USER_AGENT,
+                budget=SecCorpusBudget(clock=Clock()),
+            )
+        assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "https://evil.invalid/Archives/edgar/data/320193/000032019324000001/apple.htm",
+        "https://data.sec.gov/Archives/edgar/data/320193/000032019324000001/apple.htm",
+        "https://www.sec.gov/Archives/edgar/data/320193/000032019324000001/apple.htm?x=1",
+        "https://www.sec.gov:443/Archives/edgar/data/320193/000032019324000001/apple.htm",
+        "https://www.sec.gov/Archives/edgar/data/320193/000032019324999999/apple.htm",
+        "https://www.sec.gov/Archives/edgar/data/320193/000032019324000001/../apple.htm",
+    ],
+)
+def test_authenticated_stage_access_batch_rejects_unsafe_or_mismatched_url_before_fetch(
+    unsafe_url: str,
+) -> None:
+    plan = _authenticated_stage_access_document_plan()[:1]
+    plan[0]["official_url"] = unsafe_url
+    transport = FakeTransport({})
+    with pytest.raises(SecFilingGemmaCorpusError, match="canonical|exact"):
+        corpus_module._acquire_authenticated_stage_access_document_batch(
+            authenticated_document_plan=plan,
+            transport=transport,
+            user_agent=USER_AGENT,
+            budget=SecCorpusBudget(clock=Clock()),
+        )
+    assert transport.calls == []
+
+
+def test_authenticated_stage_access_batch_rejects_missing_or_nonbyte_response() -> None:
+    plan = _authenticated_stage_access_document_plan()
+    first_only = {plan[0]["official_url"]: b"<html><body>first</body></html>"}
+    missing_transport = FakeTransport(first_only)
+    with pytest.raises(SecFilingGemmaCorpusError, match="fetch failed"):
+        corpus_module._acquire_authenticated_stage_access_document_batch(
+            authenticated_document_plan=plan,
+            transport=missing_transport,
+            user_agent=USER_AGENT,
+            budget=SecCorpusBudget(clock=Clock()),
+        )
+    assert missing_transport.calls == [item["official_url"] for item in plan]
+
+    class NonByteTransport(FakeTransport):
+        def fetch(self, url: str) -> Any:
+            self.calls.append(url)
+            return "not bytes", object()
+
+    nonbyte_transport = NonByteTransport({})
+    with pytest.raises(SecFilingGemmaCorpusError, match="invalid response tuple"):
+        corpus_module._acquire_authenticated_stage_access_document_batch(
+            authenticated_document_plan=plan[:1],
+            transport=nonbyte_transport,
+            user_agent=USER_AGENT,
+            budget=SecCorpusBudget(clock=Clock()),
+        )
+    assert nonbyte_transport.calls == [plan[0]["official_url"]]
+
+
+@pytest.mark.parametrize("forged_field", ["sequence_number", "content_sha256"])
+def test_authenticated_stage_access_batch_reconciles_receipts_to_actual_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    forged_field: str,
+) -> None:
+    plan = _authenticated_stage_access_document_plan()[:1]
+    raw = b"<html><body><p>Exact returned filing bytes.</p></body></html>"
+    transport = FakeTransport({plan[0]["official_url"]: raw})
+    real_fetch_exact = corpus_module._fetch_exact
+
+    def forged_fetch_exact(*args: Any, **kwargs: Any) -> tuple[bytes, dict[str, Any]]:
+        payload, receipt = real_fetch_exact(*args, **kwargs)
+        forged = dict(receipt)
+        if forged_field == "sequence_number":
+            forged[forged_field] = 99
+        else:
+            forged[forged_field] = content_sha256(b"substituted")
+        body = {
+            key: value
+            for key, value in forged.items()
+            if key != "request_receipt_sha256"
+        }
+        forged["request_receipt_sha256"] = canonical_sha256(body)
+        return payload, forged
+
+    monkeypatch.setattr(corpus_module, "_fetch_exact", forged_fetch_exact)
+    with pytest.raises(SecFilingGemmaCorpusError, match="receipt does not reconcile"):
+        corpus_module._acquire_authenticated_stage_access_document_batch(
+            authenticated_document_plan=plan,
+            transport=transport,
+            user_agent=USER_AGENT,
+            budget=SecCorpusBudget(clock=Clock()),
+        )
+    assert transport.calls == [plan[0]["official_url"]]
+
+
 def test_stage_fetches_exact_authorized_bytes_only_and_is_deterministic() -> None:
     universe = _universe()
     expected_hash = universe["universe_sha256"]
@@ -1260,7 +1472,7 @@ def test_stage_fetches_exact_authorized_bytes_only_and_is_deterministic() -> Non
     def run():
         clock = Clock()
         transport = FakeTransport(payloads)
-        result = acquire_authorized_stage_documents(
+        result = _acquire_stage_documents_from_authenticated_universe_for_tests(
             transport=transport,
             user_agent=USER_AGENT,
             budget=SecCorpusBudget(clock=clock),
@@ -1322,7 +1534,7 @@ def test_stage_rejects_stage_and_universe_attacks_before_fetch() -> None:
     transport = FakeTransport({})
     clock = Clock()
     with pytest.raises(SecFilingGemmaCorpusError, match="stage is invalid"):
-        acquire_authorized_stage_documents(
+        _acquire_stage_documents_from_authenticated_universe_for_tests(
             transport=transport,
             user_agent=USER_AGENT,
             budget=SecCorpusBudget(clock=clock),
@@ -1339,7 +1551,7 @@ def test_stage_rejects_stage_and_universe_attacks_before_fetch() -> None:
     )
     final["artifact_stage"] = "development"
     with pytest.raises(Exception, match="canonical|pin|stage|universe"):
-        acquire_authorized_stage_documents(
+        _acquire_stage_documents_from_authenticated_universe_for_tests(
             transport=transport,
             user_agent=USER_AGENT,
             budget=SecCorpusBudget(clock=Clock()),
@@ -1385,7 +1597,7 @@ def test_stage_uses_one_detached_universe_snapshot_without_toctou() -> None:
     payloads[moved_url] = b"<html><body><p>Protected final filing.</p></body></html>"
     transport = FakeTransport(payloads)
 
-    result = acquire_authorized_stage_documents(
+    result = _acquire_stage_documents_from_authenticated_universe_for_tests(
         transport=transport,
         user_agent=USER_AGENT,
         budget=SecCorpusBudget(clock=Clock()),
@@ -1420,7 +1632,7 @@ def test_public_stage_api_rejects_canonical_but_incomplete_universe() -> None:
     )
     transport = FakeTransport({})
     with pytest.raises(SecFilingGemmaContractError, match="fewer than 72"):
-        acquire_authorized_stage_documents(
+        _acquire_stage_documents_from_authenticated_universe_for_tests(
             transport=transport,
             user_agent=USER_AGENT,
             budget=SecCorpusBudget(clock=Clock()),
@@ -1442,7 +1654,7 @@ def test_stage_fails_closed_on_missing_cached_retried_empty_or_over_budget() -> 
     )
 
     def acquire(transport: FakeTransport, budget: SecCorpusBudget | None = None):
-        return acquire_authorized_stage_documents(
+        return _acquire_stage_documents_from_authenticated_universe_for_tests(
             transport=transport,
             user_agent=USER_AGENT,
             budget=budget or SecCorpusBudget(clock=Clock()),

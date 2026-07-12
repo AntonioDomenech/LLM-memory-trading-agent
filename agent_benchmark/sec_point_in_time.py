@@ -46,9 +46,9 @@ def content_sha256(payload: bytes | bytearray | memoryview) -> str:
     return f"sha256:{hashlib.sha256(bytes(payload)).hexdigest()}"
 def validate_sec_user_agent(user_agent: str) -> UserAgentAudit:
     """Return only a hash and validation flag, never the raw contact."""
-    if not isinstance(user_agent, str) or not user_agent.strip():
+    if type(user_agent) is not str or not user_agent or user_agent != user_agent.strip():
         raise SecPointInTimeError("SEC User-Agent must identify a contact")
-    value = user_agent.strip()
+    value = user_agent
     lowered = value.lower()
     matches = list(_EMAIL_RE.finditer(value))
     identity = value[: matches[0].start()].strip(" /;:-") if matches else ""

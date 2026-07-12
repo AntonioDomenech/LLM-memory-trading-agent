@@ -362,6 +362,17 @@ def test_normalization_removes_scripts_styles_and_is_deterministic() -> None:
     assert short.character_count < 500
 
 
+def test_normalization_bounds_nfkc_utf8_expansion_before_materializing_output() -> None:
+    html = "<p>" + ("\u00bc" * 10) + "</p>"
+    normalized = normalize_filing_text(html, max_utf8_bytes=64)
+    assert len(normalized.text.encode("utf-8")) == 50
+
+    with pytest.raises(SecPointInTimeError, match="UTF-8 byte limit"):
+        normalize_filing_text(html, max_utf8_bytes=49)
+    with pytest.raises(ValueError, match="positive integer"):
+        normalize_filing_text(html, max_utf8_bytes=True)
+
+
 def test_reconcile_happy_path_is_json_safe_and_uses_next_session_only() -> None:
     submission = parse_complete_submission(_submission_payload())
     index = parse_sec_index_json(_index_payload())

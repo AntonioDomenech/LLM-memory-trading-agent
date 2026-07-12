@@ -15,12 +15,17 @@ import pytest
 
 import agent_benchmark.sec_filing_gemma_reveal_store as reveal_store_module
 
+from agent_benchmark.sec_audit_transport import ResponseAudit
 from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
     canonical_sha256,
     session_calendar_sha256,
+)
+from agent_benchmark.sec_filing_gemma_corpus import (
+    SecCorpusBudget,
+    _acquire_authenticated_stage_access_document_batch,
 )
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     append_candidate_attempt,
@@ -35,7 +40,11 @@ from agent_benchmark.sec_filing_gemma_reveal_store import (
     MAX_CURRENT_TIP_ANCHOR_FILE_BYTES,
     MAX_STATE_FILE_BYTES,
     REQUIRED_SEMANTIC_CHECKS,
+    SEC_BATCH_COMPLETE_MARKER_FILENAME,
+    SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION,
+    SEC_STAGE_COMPONENT_DIRECTORY_NAME,
     STATE_FILENAME,
+    STAGE_OUTPUTS_DIRECTORY_NAME,
     SecFilingGemmaRevealStore,
     SecFilingGemmaRevealStoreError,
     SemanticPrerequisiteValidation,
@@ -45,19 +54,27 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
 )
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+    SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     SecFilingGemmaStageAuthorizationError,
     build_consumed_stage_authorization_grant,
     validate_consumed_stage_authorization_grant,
+    _sec_component_plan_from_bundle,
+)
+from agent_benchmark.sec_filing_gemma_source_identity import (
+    CANONICAL_SOURCE_ROLE_PATHS,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
+from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_ID = AUTHORITATIVE_VALIDATOR_ID
-VALIDATOR_SOURCE_SHA256 = hashlib.sha256(b"test semantic verifier").hexdigest()
+VALIDATOR_SOURCE_SHA256 = hashlib.sha256(
+    (REPO_ROOT / "agent_benchmark/sec_filing_gemma_stage_verifier.py").read_bytes()
+).hexdigest()
 SEMANTIC_CHECKS = REQUIRED_SEMANTIC_CHECKS
 
 
@@ -88,11 +105,11 @@ def _candidate(registry: dict, sequence: int, *, salt: str) -> dict:
         experiment_source_commit=_commit(f"{salt}:experiment-commit"),
         source_tree_sha256=_digest(f"{salt}:tree"),
         source_hashes={
-            name: (
-                VALIDATOR_SOURCE_SHA256
-                if name == "stage_verifier"
-                else _digest(f"{salt}:source:{name}")
-            )
+            name: hashlib.sha256(
+                (REPO_ROOT / CANONICAL_SOURCE_ROLE_PATHS[name]).read_bytes()
+            ).hexdigest()
+            if CANONICAL_SOURCE_ROLE_PATHS[name] is not None
+            else _digest(f"{salt}:source:{name}")
             for name in REQUIRED_SOURCE_HASHES
         },
     )
@@ -200,6 +217,7 @@ def _grant_request(
     *,
     stage: str,
     evidence: dict,
+    include_sec_plan: bool = False,
 ) -> tuple[dict, dict]:
     prerequisite = "development" if stage == "intermediate" else "intermediate"
     attempt = candidate["bindings"]["holdout_attempt_id"]
@@ -242,6 +260,33 @@ def _grant_request(
             ),
         },
     }
+    if include_sec_plan:
+        accession = "0000320193-24-000123"
+        official_url = (
+            "https://www.sec.gov/Archives/edgar/data/320193/"
+            "000032019324000123/aapl-20240928.htm"
+        )
+        access_body["sec_access_plan"] = {
+            "selection_policy": (
+                "all_and_only_requested_stage_universe_primary_documents"
+            ),
+            "method": "GET",
+            "network_scope": "official_sec_https_only",
+            "redirects_permitted": False,
+            "retries_permitted": False,
+            "cache_substitution_permitted": False,
+            "document_count": 1,
+            "accessions_sha256": canonical_sha256([accession]),
+            "official_urls_sha256": canonical_sha256([official_url]),
+            "documents": [
+                {"accession_number": accession, "official_url": official_url}
+            ],
+        }
+        access_body["budgets"] = {
+            "max_sec_requests": 1,
+            "max_sec_response_bytes": 1_000_000,
+            "max_sec_acquisition_seconds": 30.0,
+        }
     access_manifest = {
         **access_body,
         "stage_access_manifest_sha256": canonical_sha256(access_body),
@@ -388,6 +433,7 @@ def _issued_intermediate_grant(
     store: SecFilingGemmaRevealStore,
     *,
     salt: str,
+    include_sec_plan: bool = False,
 ) -> tuple[dict, dict, dict]:
     store.initialize()
     registered, candidate = _register(store, salt=salt)
@@ -401,6 +447,7 @@ def _issued_intermediate_grant(
         candidate,
         stage="intermediate",
         evidence=development_evidence,
+        include_sec_plan=include_sec_plan,
     )
     bundle = _consume_with_grant(
         store,
@@ -411,6 +458,737 @@ def _issued_intermediate_grant(
         access_manifest=access_manifest,
     )
     return candidate, request, bundle
+
+
+def _issued_sec_claim(
+    store: SecFilingGemmaRevealStore,
+    *,
+    salt: str,
+) -> tuple[dict, dict, dict, dict]:
+    candidate, request, bundle = _issued_intermediate_grant(
+        store,
+        salt=salt,
+        include_sec_plan=True,
+    )
+    claim_result = store.claim_authorized_sec_stage_execution(
+        request_sha256=request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+    assert claim_result["created"] is True
+    return candidate, request, bundle, claim_result["claim"]
+
+
+SEC_TEST_USER_AGENT = "Private Owner owner-contact@real-domain-for-tests.dev"
+SEC_TEST_USER_AGENT_SHA256 = validate_sec_user_agent(SEC_TEST_USER_AGENT).sha256
+
+
+class _FixedSecTransport:
+    def __init__(self, payloads: dict[str, bytes], component_plan: dict) -> None:
+        self.payloads = payloads
+        self.component_plan = component_plan
+        self.user_agent_audit = validate_sec_user_agent(SEC_TEST_USER_AGENT)
+
+    def acquisition_security_state(self) -> dict:
+        return {
+            "trust_env": False,
+            "proxies": False,
+            "follow_redirects": False,
+            "max_retries": 0,
+            "max_redirects": 0,
+            "allow_cache_reads": False,
+            "allow_cache_writes": False,
+            "streaming_body": True,
+            "content_length_preflight": True,
+            "incremental_byte_budget": True,
+            "transport_max_requests": self.component_plan["max_sec_requests"],
+            "transport_max_bytes": self.component_plan["max_sec_response_bytes"],
+            "transport_max_seconds": float(
+                self.component_plan["max_sec_acquisition_seconds"]
+            ),
+        }
+
+    def fetch(self, url: str) -> tuple[bytes, ResponseAudit]:
+        payload = self.payloads[url]
+        return payload, ResponseAudit(
+            url=url,
+            status_code=200,
+            content_type="text/html; charset=iso-8859-1",
+            size_bytes=len(payload),
+            content_sha256=content_sha256(payload),
+            cache_hit=False,
+            user_agent_sha256=self.user_agent_audit.sha256,
+            network_requests=1,
+            retries=0,
+            redirects=0,
+        )
+
+
+def _write_fixed_sec_component(
+    store: SecFilingGemmaRevealStore,
+    claim: dict,
+    *,
+    payloads: tuple[bytes, ...] = (
+        b"<html><body><p>Fixed SEC filing bytes.</p></body></html>",
+    ),
+) -> tuple[Path, Path, list[dict]]:
+    tip = store.load_current_tip_anchor()
+    bundle = tip["authorization_bundles"][claim["request_sha256"]]
+    _exact_bundle, _grant, component_plan = _sec_component_plan_from_bundle(bundle)
+    documents_plan = component_plan["sec_access_plan"]["documents"]
+    assert len(payloads) == len(documents_plan)
+    transport_payloads = {
+        document["official_url"]: payload
+        for document, payload in zip(documents_plan, payloads)
+    }
+    batch = _acquire_authenticated_stage_access_document_batch(
+        authenticated_document_plan=documents_plan,
+        transport=_FixedSecTransport(transport_payloads, component_plan),
+        user_agent=SEC_TEST_USER_AGENT,
+        budget=SecCorpusBudget(
+            clock=lambda: 0.0,
+            max_requests=component_plan["max_sec_requests"],
+            max_bytes=component_plan["max_sec_response_bytes"],
+            max_seconds=float(component_plan["max_sec_acquisition_seconds"]),
+        ),
+    )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim["claim_sha256"]
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir(parents=True)
+    evidence_payloads: list[tuple[str, str, bytes]] = []
+    for document_ordinal, document in enumerate(batch.documents, start=1):
+        prefix = f"document-{document_ordinal:04d}"
+        evidence_payloads.extend(
+            (
+                (f"{prefix}-raw", f"{prefix}.raw", document.raw_primary_document),
+                (
+                    f"{prefix}-normalized",
+                    f"{prefix}.normalized.txt",
+                    document.normalized_text,
+                ),
+            )
+        )
+    evidence_payloads.extend(
+        (
+            (
+                "request-receipts-json",
+                "request-receipts.json",
+                batch.request_receipts_json,
+            ),
+            (
+                "byte-manifest-json",
+                "byte-manifest.json",
+                batch.byte_manifest_json,
+            ),
+        )
+    )
+    byte_index: list[dict] = []
+    for ordinal, (logical_id, relative_path, payload) in enumerate(
+        evidence_payloads, start=1
+    ):
+        (component_directory / relative_path).write_bytes(payload)
+        byte_index.append(
+            {
+                "ordinal": ordinal,
+                "logical_id": logical_id,
+                "relative_path": relative_path,
+                "byte_count": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    marker_body = {
+        "schema_version": SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION,
+        "request_sha256": claim["request_sha256"],
+        "claim_sha256": claim["claim_sha256"],
+        "component_id": SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
+        "byte_index": byte_index,
+        "byte_index_sha256": canonical_sha256(byte_index),
+    }
+    marker = {
+        **marker_body,
+        "marker_sha256": canonical_sha256(marker_body),
+    }
+    marker_path = component_directory / SEC_BATCH_COMPLETE_MARKER_FILENAME
+    marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    return component_directory, marker_path, byte_index
+
+
+def _rewrite_complete_marker(marker_path: Path, marker: dict) -> None:
+    marker["byte_index_sha256"] = canonical_sha256(marker["byte_index"])
+    marker["marker_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in marker.items()
+            if key != "marker_sha256"
+        }
+    )
+    marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+
+
+def test_sec_execution_claim_is_current_tip_only_and_idempotently_reports_created(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt="sec-claim-idempotent",
+        include_sec_plan=True,
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    first = store.claim_authorized_sec_stage_execution(
+        request_sha256=request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+
+    tip_after = store.load_current_tip_anchor()
+    assert first["created"] is True
+    assert first["reader_receipt"] is None
+    assert first["abort"] is None
+    assert store.state_path.read_bytes() == state_bytes
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["previous_tip_anchor_sha256"] == tip_before[
+        "tip_anchor_sha256"
+    ]
+    assert tip_after["state_sha256"] == tip_before["state_sha256"]
+    assert tip_after["stage_sec_execution_claims"] == {
+        request["request_sha256"]: first["claim"]
+    }
+    assert first["claim"]["start_current_tip_anchor_sha256"] == tip_before[
+        "tip_anchor_sha256"
+    ]
+    assert first["claim"]["sec_user_agent_sha256"] == SEC_TEST_USER_AGENT_SHA256
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store.claim_authorized_sec_stage_execution(
+        request_sha256=request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+
+    assert repeated == {**first, "created": False}
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="contact differs",
+    ):
+        store.claim_authorized_sec_stage_execution(
+            request_sha256=request["request_sha256"],
+            sec_user_agent_sha256=content_sha256(b"another private contact"),
+        )
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+@pytest.mark.parametrize("attack", ("delete", "byte_change", "marker_change"))
+def test_completed_sec_reader_receipt_requires_unchanged_durable_batch(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle, claim = _issued_sec_claim(
+        store,
+        salt=f"completed-sec-reader-{attack}",
+    )
+    component_directory, marker_path, byte_index = _write_fixed_sec_component(
+        store,
+        claim,
+    )
+    receipt = store._record_authorized_sec_stage_reader_output(
+        request_sha256=request["request_sha256"],
+    )
+    stable_state_bytes = store.state_path.read_bytes()
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    payload_path = component_directory / byte_index[0]["relative_path"]
+
+    if attack == "delete":
+        payload_path.unlink()
+    elif attack == "byte_change":
+        payload_path.write_bytes(b"changed after receipt")
+    else:
+        marker_path.write_bytes(marker_path.read_bytes() + b" ")
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_authorized_sec_stage_reader_output(
+            request_sha256=request["request_sha256"],
+        )
+
+    assert receipt == store.load_current_tip_anchor()["stage_sec_reader_receipts"][
+        request["request_sha256"]
+    ]
+    assert store.state_path.read_bytes() == stable_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+@pytest.mark.parametrize(
+    "substituted_source_path",
+    (
+        "agent_benchmark/sec_filing_gemma_stage_runner.py",
+        "agent_benchmark/sec_audit_transport.py",
+        "agent_benchmark/sec_filing_content.py",
+        "agent_benchmark/sec_filing_gemma_stage_authorization.py",
+    ),
+)
+def test_sec_execution_claim_rejects_substituted_source_bytes_without_tip_mutation(
+    tmp_path: Path,
+    substituted_source_path: str,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt="sec-claim-source-substitution",
+        include_sec_plan=True,
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    real_read = reveal_store_module._read_regular_bytes
+
+    def substituted_read(
+        path: Path,
+        location: str,
+        *,
+        max_bytes: int = reveal_store_module.MAX_TRACKED_ANCHOR_FILE_BYTES,
+    ) -> bytes:
+        payload = real_read(path, location, max_bytes=max_bytes)
+        if path.as_posix().endswith(substituted_source_path):
+            return payload + b"\n# substituted after candidate registration\n"
+        return payload
+
+    with patch.object(
+        reveal_store_module,
+        "_read_regular_bytes",
+        side_effect=substituted_read,
+    ):
+        with pytest.raises(
+            SecFilingGemmaRevealStoreError,
+            match="Could not claim the exact current SEC stage grant",
+        ):
+            store.claim_authorized_sec_stage_execution(
+                request_sha256=request["request_sha256"],
+                sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+            )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert store.load_current_tip_anchor()["stage_sec_execution_claims"] == {}
+
+
+def test_sec_reader_finalizer_is_not_a_public_store_api() -> None:
+    assert not hasattr(
+        SecFilingGemmaRevealStore,
+        "record_authorized_sec_stage_reader_output",
+    )
+    assert hasattr(
+        SecFilingGemmaRevealStore,
+        "_record_authorized_sec_stage_reader_output",
+    )
+
+
+def test_sec_reader_receipt_rehashes_fixed_bytes_and_exact_retry_is_noop(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle, claim = _issued_sec_claim(
+        store,
+        salt="sec-reader-rehash-success",
+    )
+    payloads = (
+        b"<html><body><p>First and second fixed SEC filing.</p></body></html>",
+    )
+    _directory, marker_path, expected_index = _write_fixed_sec_component(
+        store,
+        claim,
+        payloads=payloads,
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    receipt = store._record_authorized_sec_stage_reader_output(
+        request_sha256=request["request_sha256"],
+    )
+
+    tip_after = store.load_current_tip_anchor()
+    assert store.state_path.read_bytes() == state_bytes
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["stage_sec_reader_receipts"] == {
+        request["request_sha256"]: receipt
+    }
+    assert receipt["claim_sha256"] == claim["claim_sha256"]
+    assert receipt["byte_index"] == expected_index
+    assert receipt["byte_index_sha256"] == canonical_sha256(expected_index)
+    assert receipt["byte_count_total"] == sum(
+        item["byte_count"] for item in expected_index
+    )
+    assert receipt["complete_marker_sha256"] == hashlib.sha256(
+        marker_path.read_bytes()
+    ).hexdigest()
+    assert receipt["reader_output_recomputed_by_store"] is True
+    assert receipt["fresh_network_provenance_claimed"] is False
+    assert receipt["sec_user_agent_sha256"] == SEC_TEST_USER_AGENT_SHA256
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store._record_authorized_sec_stage_reader_output(
+        request_sha256=request["request_sha256"],
+    )
+
+    assert repeated == receipt
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "byte_flip",
+        "semantic_rehash",
+        "manifest_extra_field",
+        "manifest_bool_count",
+        "extra",
+        "missing",
+        "unsafe_path",
+        "rehashed_marker",
+        "symlink",
+    ),
+)
+def test_sec_reader_rejects_directory_substitution_without_tip_mutation(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle, claim = _issued_sec_claim(
+        store,
+        salt=f"sec-reader-substitution-{attack}",
+    )
+    component_directory, marker_path, byte_index = _write_fixed_sec_component(
+        store,
+        claim,
+    )
+    payload_path = component_directory / byte_index[0]["relative_path"]
+    if attack == "byte_flip":
+        payload_path.write_bytes(b"fixed SEC filing byteS")
+    elif attack == "semantic_rehash":
+        substituted = b"<html><body><p>Forged but rehashed filing.</p></body></html>"
+        payload_path.write_bytes(substituted)
+        marker = json.loads(marker_path.read_bytes())
+        marker["byte_index"][0]["byte_count"] = len(substituted)
+        marker["byte_index"][0]["sha256"] = hashlib.sha256(substituted).hexdigest()
+        _rewrite_complete_marker(marker_path, marker)
+    elif attack in {"manifest_extra_field", "manifest_bool_count"}:
+        manifest_path = component_directory / "byte-manifest.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        if attack == "manifest_extra_field":
+            manifest["forged_provenance"] = "self-issued"
+        else:
+            manifest["document_count"] = True
+        manifest_body = {
+            key: value
+            for key, value in manifest.items()
+            if key != "byte_manifest_sha256"
+        }
+        manifest["byte_manifest_sha256"] = canonical_sha256(manifest_body)
+        manifest_bytes = json.dumps(
+            manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+        manifest_path.write_bytes(manifest_bytes)
+        marker = json.loads(marker_path.read_bytes())
+        manifest_item = next(
+            item
+            for item in marker["byte_index"]
+            if item["relative_path"] == "byte-manifest.json"
+        )
+        manifest_item["byte_count"] = len(manifest_bytes)
+        manifest_item["sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+        _rewrite_complete_marker(marker_path, marker)
+    elif attack == "extra":
+        (component_directory / "unlisted.htm").write_bytes(b"unlisted")
+    elif attack == "missing":
+        payload_path.unlink()
+    elif attack == "unsafe_path":
+        marker = json.loads(marker_path.read_bytes())
+        marker["byte_index"][0]["relative_path"] = "../outside.htm"
+        _rewrite_complete_marker(marker_path, marker)
+    elif attack == "rehashed_marker":
+        marker = json.loads(marker_path.read_bytes())
+        marker["request_sha256"] = _digest("substituted marker request")
+        _rewrite_complete_marker(marker_path, marker)
+    else:
+        original_payload = payload_path.read_bytes()
+        payload_path.unlink()
+        external_target = tmp_path / "external-sec-payload.htm"
+        external_target.write_bytes(original_payload)
+        try:
+            payload_path.symlink_to(external_target)
+        except (OSError, NotImplementedError):
+            pytest.skip("File symlinks are unavailable for this test user")
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_authorized_sec_stage_reader_output(
+            request_sha256=request["request_sha256"],
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert store.load_current_tip_anchor() == tip_before
+    assert request["request_sha256"] not in tip_before[
+        "stage_sec_reader_receipts"
+    ]
+
+
+def test_sec_execution_abort_is_terminal_idempotent_and_forbids_retry(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle, claim = _issued_sec_claim(
+        store,
+        salt="sec-execution-abort",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    abort = store.abort_authorized_sec_stage_execution(
+        request_sha256=request["request_sha256"],
+        reason="external_effect_failed_or_completion_unknown",
+    )
+
+    tip_after = store.load_current_tip_anchor()
+    assert store.state_path.read_bytes() == state_bytes
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["stage_sec_execution_aborts"] == {
+        request["request_sha256"]: abort
+    }
+    assert abort["claim_sha256"] == claim["claim_sha256"]
+    assert abort["external_effect_retry_permitted"] is False
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    repeated_abort = store.abort_authorized_sec_stage_execution(
+        request_sha256=request["request_sha256"],
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    recovered_claim = store.claim_authorized_sec_stage_execution(
+        request_sha256=request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+
+    assert repeated_abort == abort
+    assert recovered_claim["created"] is False
+    assert recovered_claim["claim"] == claim
+    assert recovered_claim["abort"] == abort
+    assert recovered_claim["reader_receipt"] is None
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="another terminal abort",
+    ):
+        store.abort_authorized_sec_stage_execution(
+            request_sha256=request["request_sha256"],
+            reason="durable_output_verification_failed",
+        )
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Aborted SEC execution cannot publish",
+    ):
+        store._record_authorized_sec_stage_reader_output(
+            request_sha256=request["request_sha256"],
+        )
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+def test_active_sec_claim_blocks_registry_consumption_output_and_other_claim(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    candidate, intermediate_request, intermediate_bundle = (
+        _issued_intermediate_grant(
+            store,
+            salt="active-sec-consumption",
+            include_sec_plan=True,
+        )
+    )
+    intermediate_evidence = _evidence(
+        "intermediate",
+        candidate,
+        salt="active-sec-intermediate-output",
+    )
+    store.record_consumed_stage_output_evidence(
+        request_sha256=intermediate_request["request_sha256"],
+        stage_evidence=intermediate_evidence,
+    )
+    final_request, final_access = _grant_request(
+        intermediate_bundle["authenticated_store_snapshot"],
+        candidate,
+        stage="final",
+        evidence=intermediate_evidence,
+        include_sec_plan=True,
+    )
+    claimed = store.claim_authorized_sec_stage_execution(
+        request_sha256=intermediate_request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+    assert claimed["created"] is True
+    stable_state_bytes = store.state_path.read_bytes()
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    blocked_operations = (
+        lambda: _register(store, salt="active-sec-blocked-registry"),
+        lambda: _consume_with_grant(
+            store,
+            final_request,
+            candidate,
+            intermediate_evidence,
+            stage="final",
+            access_manifest=final_access,
+        ),
+    )
+    for operation in blocked_operations:
+        with pytest.raises(SecFilingGemmaRevealStoreError):
+            operation()
+        assert store.state_path.read_bytes() == stable_state_bytes
+        assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="lacks its current grant bundle",
+    ):
+        store.claim_authorized_sec_stage_execution(
+            request_sha256=_digest("cross-request claim"),
+            sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+        )
+    assert store.state_path.read_bytes() == stable_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    output_store = _store(tmp_path / "output-block")
+    output_candidate, output_request, _output_bundle = (
+        _issued_intermediate_grant(
+            output_store,
+            salt="active-sec-output",
+            include_sec_plan=True,
+        )
+    )
+    output_store.claim_authorized_sec_stage_execution(
+        request_sha256=output_request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+    output_state_bytes = output_store.state_path.read_bytes()
+    output_tip_bytes = output_store.current_tip_anchor_path.read_bytes()
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        output_store.record_consumed_stage_output_evidence(
+            request_sha256=output_request["request_sha256"],
+            stage_evidence=_evidence(
+                "intermediate",
+                output_candidate,
+                salt="active-sec-blocked-output",
+            ),
+        )
+    assert output_store.state_path.read_bytes() == output_state_bytes
+    assert output_store.current_tip_anchor_path.read_bytes() == output_tip_bytes
+
+
+@pytest.mark.parametrize("artifact", ("claim", "reader_receipt", "abort"))
+@pytest.mark.parametrize("crash_point", ("pending_tip", "state_replace"))
+def test_sec_tip_only_artifact_crash_recovers_once(
+    tmp_path: Path,
+    artifact: str,
+    crash_point: str,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt=f"sec-crash-{artifact}-{crash_point}",
+        include_sec_plan=True,
+    )
+    if artifact != "claim":
+        claim_result = store.claim_authorized_sec_stage_execution(
+            request_sha256=request["request_sha256"],
+            sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+        )
+        if artifact == "reader_receipt":
+            _write_fixed_sec_component(store, claim_result["claim"])
+
+    def operation():
+        if artifact == "claim":
+            return store.claim_authorized_sec_stage_execution(
+                request_sha256=request["request_sha256"],
+                sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+            )
+        if artifact == "reader_receipt":
+            return store._record_authorized_sec_stage_reader_output(
+                request_sha256=request["request_sha256"],
+            )
+        return store.abort_authorized_sec_stage_execution(
+            request_sha256=request["request_sha256"],
+            reason="external_effect_failed_or_completion_unknown",
+        )
+
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+    real_atomic_replace = reveal_store_module._atomic_replace
+    crashed = False
+
+    def crash_during_tip_only_cas(path: Path, payload: bytes) -> None:
+        nonlocal crashed
+        real_atomic_replace(path, payload)
+        parsed = json.loads(payload)
+        is_target = (
+            crash_point == "pending_tip"
+            and path == store.current_tip_anchor_path
+            and parsed.get("schema_version") == CURRENT_TIP_PENDING_SCHEMA_VERSION
+        ) or (
+            crash_point == "state_replace"
+            and path == store.state_path
+        )
+        if is_target and not crashed:
+            crashed = True
+            raise RuntimeError(
+                f"simulated {artifact} crash at {crash_point}"
+            )
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
+        crash_during_tip_only_cas,
+    ), pytest.raises(RuntimeError, match=f"simulated {artifact} crash"):
+        operation()
+
+    pending = json.loads(store.current_tip_anchor_path.read_bytes())
+    assert pending["schema_version"] == CURRENT_TIP_PENDING_SCHEMA_VERSION
+    map_name = {
+        "claim": "stage_sec_execution_claims",
+        "reader_receipt": "stage_sec_reader_receipts",
+        "abort": "stage_sec_execution_aborts",
+    }[artifact]
+    expected = pending["next_tip_anchor"][map_name][request["request_sha256"]]
+
+    recovered = operation()
+
+    if artifact == "claim":
+        assert recovered["created"] is False
+        assert recovered["claim"] == expected
+    else:
+        assert recovered == expected
+    assert store.state_path.read_bytes() == state_bytes
+    recovered_tip = store.load_current_tip_anchor()
+    assert recovered_tip["revision"] == tip_before["revision"] + 1
+    assert recovered_tip[map_name][request["request_sha256"]] == expected
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    repeated = operation()
+    if artifact == "claim":
+        assert repeated["created"] is False
+        assert repeated["claim"] == expected
+    else:
+        assert repeated == expected
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
 
 
 def test_fresh_store_uses_only_tracked_genesis_and_is_idempotent(

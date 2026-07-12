@@ -25,7 +25,7 @@ from pathlib import PurePosixPath
 import re
 from types import MappingProxyType
 from typing import Any, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 from .sec_audit_transport import SecAuditTransport, canonical_sec_url
@@ -73,6 +73,11 @@ _HISTORICAL_NAME_RE = re.compile(
 )
 _PRIMARY_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
 _ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
+_AAPL_ACCESSION_RE = re.compile(rf"{AAPL_CIK}-[0-9]{{2}}-[0-9]{{6}}\Z")
+_AUTHENTICATED_PRIMARY_PATH_RE = re.compile(
+    r"/Archives/edgar/data/320193/(?P<accession>[0-9]{18})/"
+    r"(?P<filename>[A-Za-z0-9][A-Za-z0-9._~-]{0,255})\Z"
+)
 _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _BARE_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _EASTERN = ZoneInfo("America/New_York")
@@ -138,6 +143,37 @@ _REQUEST_RECEIPT_KEYS = {
     "request_receipt_sha256",
 }
 _MAX_DETACHED_JSON_DEPTH = 64
+_AUTHENTICATED_STAGE_ACCESS_BATCH_MANIFEST_SCHEMA_VERSION = (
+    "aapl-sec-gemma-authenticated-stage-access-byte-manifest-v1"
+)
+_AUTHENTICATED_STAGE_ACCESS_RECEIPT_PURPOSE = (
+    "authenticated_stage_access_primary_document"
+)
+AUTHENTICATED_STAGE_NORMALIZED_BATCH_MAX_BYTES = 128 * 1024 * 1024
+_AUTHENTICATED_STAGE_ACCESS_MANIFEST_KEYS = {
+    "schema_version",
+    "document_count",
+    "documents",
+    "request_receipts_sha256",
+    "acquisition_request_count",
+    "acquisition_bytes",
+    "transport_security",
+    "outer_budget_role",
+    "user_agent_sha256",
+    "selection_policy",
+    "caller_stage_candidate_or_digest_authority_accepted",
+    "byte_manifest_sha256",
+}
+_AUTHENTICATED_STAGE_ACCESS_MANIFEST_ROW_KEYS = {
+    "sequence_number",
+    "accession_number",
+    "official_url",
+    "raw_document_sha256",
+    "raw_document_bytes",
+    "normalized_document_sha256",
+    "normalized_document_bytes",
+    "request_receipt_sha256",
+}
 
 
 class SecFilingGemmaCorpusError(SecPointInTimeError):
@@ -316,6 +352,30 @@ class StageContentAcquisition:
         return MappingProxyType(
             {item.accession_number: item.normalized_text for item in self.documents}
         )
+
+
+@dataclass(frozen=True)
+class _AuthenticatedStageAccessDocumentBatch:
+    """Exact bytes fetched from one already-authenticated stage-access plan.
+
+    This is intentionally an internal runner boundary.  It contains no stage,
+    candidate, grant, or caller-supplied digest authority; a future effectful
+    runner must authenticate the plan before passing its exact document list.
+    """
+
+    documents: tuple[StageDocumentBytes, ...]
+    request_receipts: tuple[Mapping[str, Any], ...]
+    byte_manifest: Mapping[str, Any]
+    request_receipts_json: bytes = field(repr=False)
+    byte_manifest_json: bytes = field(repr=False)
+
+    @property
+    def request_receipts_sha256(self) -> str:
+        return str(self.byte_manifest["request_receipts_sha256"])
+
+    @property
+    def byte_manifest_sha256(self) -> str:
+        return str(self.byte_manifest["byte_manifest_sha256"])
 
 
 def _bare_sha256(payload: bytes) -> str:
@@ -1838,7 +1898,510 @@ def _primary_document_url(record: Mapping[str, Any]) -> str:
     return canonical_sec_url(f"{base}/{quote(filename, safe='-._~')}")
 
 
-def acquire_authorized_stage_documents(
+def _canonical_authenticated_stage_access_plan(
+    authenticated_document_plan: Any,
+) -> list[dict[str, str]]:
+    """Detach the exact document-only slice of an authenticated access plan."""
+
+    if type(authenticated_document_plan) is not list:
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access document plan must be an exact built-in list"
+        )
+    if not authenticated_document_plan:
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access document plan cannot omit all documents"
+        )
+    detached: list[dict[str, str]] = []
+    for raw in list(authenticated_document_plan):
+        if type(raw) is not dict or set(raw) != {
+            "accession_number",
+            "official_url",
+        }:
+            raise SecFilingGemmaCorpusError(
+                "Authenticated stage-access document plan has an omitted or extra field"
+            )
+        accession = raw.get("accession_number")
+        official_url = raw.get("official_url")
+        if (
+            type(accession) is not str
+            or _AAPL_ACCESSION_RE.fullmatch(accession) is None
+        ):
+            raise SecFilingGemmaCorpusError(
+                "Authenticated document identity is not an exact Apple accession"
+            )
+        if type(official_url) is not str:
+            raise SecFilingGemmaCorpusError(
+                "Authenticated official SEC document URL must be an exact string"
+            )
+        try:
+            canonical = canonical_sec_url(official_url)
+            parsed = urlsplit(official_url)
+            port = parsed.port
+        except Exception:
+            raise SecFilingGemmaCorpusError(
+                "Authenticated filing URL is not a canonical official SEC URL"
+            ) from None
+        path_match = _AUTHENTICATED_PRIMARY_PATH_RE.fullmatch(parsed.path)
+        if (
+            canonical != official_url
+            or parsed.scheme != "https"
+            or parsed.netloc != "www.sec.gov"
+            or parsed.hostname != "www.sec.gov"
+            or port is not None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or path_match is None
+            or path_match.group("accession") != accession.replace("-", "")
+        ):
+            raise SecFilingGemmaCorpusError(
+                "Authenticated filing URL is not the exact canonical Apple "
+                "primary-document path for its accession"
+            )
+        detached.append(
+            {"accession_number": accession, "official_url": official_url}
+        )
+
+    accessions = [item["accession_number"] for item in detached]
+    urls = [item["official_url"] for item in detached]
+    if (
+        accessions != sorted(accessions)
+        or urls != sorted(urls)
+        or len(accessions) != len(set(accessions))
+        or len(urls) != len(set(urls))
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access documents must remain exactly ordered "
+            "and deduplicated"
+        )
+    return detached
+
+
+def _reconcile_authenticated_stage_access_receipt(
+    receipt: Any,
+    *,
+    sequence_number: int,
+    official_url: str,
+    raw_document: bytes,
+    user_agent_sha256: str,
+) -> dict[str, Any]:
+    if type(receipt) is not dict or set(receipt) != _REQUEST_RECEIPT_KEYS:
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access request receipt schema does not reconcile"
+        )
+    try:
+        body = {
+            key: receipt[key]
+            for key in receipt
+            if key != "request_receipt_sha256"
+        }
+        receipt_hash = receipt["request_receipt_sha256"]
+        content_type = receipt["content_type"]
+        exact = (
+            receipt["schema_version"] == REQUEST_RECEIPT_SCHEMA_VERSION
+            and type(receipt["sequence_number"]) is int
+            and receipt["sequence_number"] == sequence_number
+            and receipt["purpose"]
+            == _AUTHENTICATED_STAGE_ACCESS_RECEIPT_PURPOSE
+            and receipt["requested_url"] == official_url
+            and receipt["final_url"] == official_url
+            and type(receipt["status_code"]) is int
+            and receipt["status_code"] == 200
+            and type(content_type) is str
+            and 0 < len(content_type) <= 160
+            and "@" not in content_type
+            and all(32 <= ord(char) <= 126 for char in content_type)
+            and type(receipt["size_bytes"]) is int
+            and receipt["size_bytes"] == len(raw_document)
+            and receipt["content_sha256"] == content_sha256(raw_document)
+            and type(receipt["cache_hit"]) is bool
+            and receipt["cache_hit"] is False
+            and type(receipt["network_requests"]) is int
+            and receipt["network_requests"] == 1
+            and type(receipt["retries"]) is int
+            and receipt["retries"] == 0
+            and type(receipt["redirects"]) is int
+            and receipt["redirects"] == 0
+            and receipt["user_agent_sha256"] == user_agent_sha256
+            and type(receipt_hash) is str
+            and _BARE_SHA256_RE.fullmatch(receipt_hash) is not None
+            and receipt_hash == canonical_sha256(body)
+        )
+    except Exception:
+        exact = False
+    if not exact:
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access request receipt does not reconcile "
+            "to the actual returned bytes"
+        )
+    return dict(receipt)
+
+
+def _acquire_authenticated_stage_access_document_batch(
+    *,
+    authenticated_document_plan: list[dict[str, str]],
+    transport: SecCorpusTransport,
+    user_agent: str,
+    budget: SecCorpusBudget,
+) -> _AuthenticatedStageAccessDocumentBatch:
+    """Fetch the exact byte set from an already-authenticated document plan.
+
+    The future effectful runner owns authentication and passes only the exact
+    ordered ``accession_number``/``official_url`` list.  This boundary accepts
+    no stage, candidate, grant, manifest hash, or other digest as authority.  It
+    validates the plan's narrow SEC identities, performs the existing bounded
+    exact-fetch path, normalizes the bytes actually returned, and emits a
+    canonical byte manifest and canonical request receipts.
+    """
+
+    if not isinstance(budget, SecCorpusBudget):
+        raise SecFilingGemmaCorpusError("A SecCorpusBudget must be injected")
+    plan = _canonical_authenticated_stage_access_plan(authenticated_document_plan)
+    user_agent_sha256, security = _prepare_transport(
+        transport, user_agent=user_agent, budget=budget
+    )
+    start_requests = budget.requests
+    start_bytes = budget.bytes_received
+    documents: list[StageDocumentBytes] = []
+    receipts: list[dict[str, Any]] = []
+    manifest_rows: list[dict[str, Any]] = []
+    normalized_byte_total = 0
+
+    for sequence_number, planned in enumerate(plan, start=1):
+        accession = planned["accession_number"]
+        official_url = planned["official_url"]
+        raw, untrusted_receipt = _fetch_exact(
+            transport,
+            url=official_url,
+            purpose=_AUTHENTICATED_STAGE_ACCESS_RECEIPT_PURPOSE,
+            user_agent_sha256=user_agent_sha256,
+            budget=budget,
+            sequence_number=sequence_number,
+            require_json=False,
+        )
+        if not raw:
+            raise SecFilingGemmaCorpusError(
+                "Authenticated SEC primary document is empty"
+            )
+        receipt = _reconcile_authenticated_stage_access_receipt(
+            untrusted_receipt,
+            sequence_number=sequence_number,
+            official_url=official_url,
+            raw_document=raw,
+            user_agent_sha256=user_agent_sha256,
+        )
+        try:
+            normalized = normalize_filing_text(
+                raw.decode("latin-1"),
+                max_utf8_bytes=(
+                    AUTHENTICATED_STAGE_NORMALIZED_BATCH_MAX_BYTES
+                    - normalized_byte_total
+                ),
+            )
+        except (UnicodeDecodeError, SecPointInTimeError, TypeError, ValueError):
+            raise SecFilingGemmaCorpusError(
+                "Authenticated SEC primary document could not be deterministically "
+                "normalized"
+            ) from None
+        normalized_bytes = normalized.text.encode("utf-8")
+        normalized_byte_total += len(normalized_bytes)
+        if not normalized_bytes:
+            raise SecFilingGemmaCorpusError(
+                "Authenticated SEC primary document has no normalized visible text"
+            )
+        raw_hash = _bare_sha256(raw)
+        normalized_hash = _bare_sha256(normalized_bytes)
+        if normalized.sha256 != f"sha256:{normalized_hash}":
+            raise SecFilingGemmaCorpusError(
+                "Authenticated normalized SEC text hash does not reconcile"
+            )
+        receipt_hash = receipt["request_receipt_sha256"]
+        documents.append(
+            StageDocumentBytes(
+                accession_number=accession,
+                url=official_url,
+                raw_primary_document=raw,
+                normalized_text=normalized_bytes,
+                primary_document_sha256=raw_hash,
+                normalized_text_sha256=normalized_hash,
+                request_receipt_sha256=receipt_hash,
+            )
+        )
+        receipts.append(receipt)
+        manifest_rows.append(
+            {
+                "sequence_number": sequence_number,
+                "accession_number": accession,
+                "official_url": official_url,
+                "raw_document_sha256": raw_hash,
+                "raw_document_bytes": len(raw),
+                "normalized_document_sha256": normalized_hash,
+                "normalized_document_bytes": len(normalized_bytes),
+                "request_receipt_sha256": receipt_hash,
+            }
+        )
+
+    request_delta = budget.requests - start_requests
+    byte_delta = budget.bytes_received - start_bytes
+    if (
+        request_delta != len(plan)
+        or byte_delta != sum(len(item.raw_primary_document) for item in documents)
+        or len(receipts) != len(plan)
+        or len(manifest_rows) != len(plan)
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access batch requests, receipts, and actual bytes "
+            "do not reconcile"
+        )
+    receipts_sha256 = canonical_sha256(receipts)
+    manifest_body = {
+        "schema_version": (
+            _AUTHENTICATED_STAGE_ACCESS_BATCH_MANIFEST_SCHEMA_VERSION
+        ),
+        "document_count": len(documents),
+        "documents": manifest_rows,
+        "request_receipts_sha256": receipts_sha256,
+        "acquisition_request_count": request_delta,
+        "acquisition_bytes": byte_delta,
+        "transport_security": security,
+        "outer_budget_role": "post_transport_reconciliation_not_streaming_protection",
+        "user_agent_sha256": user_agent_sha256,
+        "selection_policy": "exact_ordered_authenticated_stage_access_document_plan",
+        "caller_stage_candidate_or_digest_authority_accepted": False,
+    }
+    byte_manifest = {
+        **manifest_body,
+        "byte_manifest_sha256": canonical_sha256(manifest_body),
+    }
+    request_receipts_json = _canonical_json_bytes(receipts)
+    byte_manifest_json = _canonical_json_bytes(byte_manifest)
+    if (
+        _bare_sha256(request_receipts_json) != receipts_sha256
+        or _bare_sha256(byte_manifest_json) != canonical_sha256(byte_manifest)
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Authenticated stage-access canonical byte evidence does not reconcile"
+        )
+    return _AuthenticatedStageAccessDocumentBatch(
+        documents=tuple(documents),
+        request_receipts=tuple(_deep_freeze(receipt) for receipt in receipts),
+        byte_manifest=_deep_freeze(byte_manifest),
+        request_receipts_json=request_receipts_json,
+        byte_manifest_json=byte_manifest_json,
+    )
+
+
+def _validate_persisted_authenticated_stage_access_batch(
+    *,
+    authenticated_document_plan: list[dict[str, str]],
+    raw_documents: tuple[bytes, ...],
+    normalized_documents: tuple[bytes, ...],
+    request_receipts_json: bytes,
+    byte_manifest_json: bytes,
+    expected_max_requests: int,
+    expected_max_bytes: int,
+    expected_max_seconds: float,
+    expected_user_agent_sha256: str | None = None,
+) -> _AuthenticatedStageAccessDocumentBatch:
+    """Rebuild and validate one durable batch from its actual persisted bytes."""
+
+    plan = _canonical_authenticated_stage_access_plan(authenticated_document_plan)
+    if (
+        type(raw_documents) is not tuple
+        or type(normalized_documents) is not tuple
+        or len(raw_documents) != len(plan)
+        or len(normalized_documents) != len(plan)
+        or type(request_receipts_json) is not bytes
+        or not request_receipts_json
+        or type(byte_manifest_json) is not bytes
+        or not byte_manifest_json
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch has an incomplete byte set"
+        )
+    try:
+        receipts = json.loads(request_receipts_json.decode("utf-8"))
+        manifest = json.loads(byte_manifest_json.decode("utf-8"))
+    except Exception:
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch JSON cannot be decoded"
+        ) from None
+    if (
+        type(receipts) is not list
+        or len(receipts) != len(plan)
+        or type(manifest) is not dict
+        or request_receipts_json != _canonical_json_bytes(receipts)
+        or byte_manifest_json != _canonical_json_bytes(manifest)
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch JSON is not exact and canonical"
+        )
+    manifest_rows = manifest.get("documents")
+    if (
+        set(manifest) != _AUTHENTICATED_STAGE_ACCESS_MANIFEST_KEYS
+        or type(manifest.get("document_count")) is not int
+        or type(manifest.get("acquisition_request_count")) is not int
+        or type(manifest.get("acquisition_bytes")) is not int
+        or type(manifest_rows) is not list
+        or len(manifest_rows) != len(plan)
+        or any(
+            type(row) is not dict
+            or set(row) != _AUTHENTICATED_STAGE_ACCESS_MANIFEST_ROW_KEYS
+            or type(row.get("sequence_number")) is not int
+            or type(row.get("raw_document_bytes")) is not int
+            or type(row.get("normalized_document_bytes")) is not int
+            or any(
+                type(row.get(field)) is not str
+                for field in (
+                    "accession_number",
+                    "official_url",
+                    "raw_document_sha256",
+                    "normalized_document_sha256",
+                    "request_receipt_sha256",
+                )
+            )
+            for row in manifest_rows
+        )
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch manifest schema is not exact"
+        )
+    user_agent_sha256 = manifest.get("user_agent_sha256")
+    if (
+        type(user_agent_sha256) is not str
+        or (
+            expected_user_agent_sha256 is not None
+            and user_agent_sha256 != expected_user_agent_sha256
+        )
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch crossed its contact hash"
+        )
+    transport_claim = _detached_transport_claim(manifest.get("transport_security"))
+    if (
+        transport_claim["transport_max_requests"] != expected_max_requests
+        or transport_claim["transport_max_bytes"] != expected_max_bytes
+        or transport_claim["transport_max_seconds"] != expected_max_seconds
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch crossed its transport budgets"
+        )
+    _reconcile_detached_transport_usage(
+        transport_claim,
+        request_count=len(plan),
+        byte_count=sum(len(payload) for payload in raw_documents),
+    )
+
+    documents: list[StageDocumentBytes] = []
+    reconciled_receipts: list[dict[str, Any]] = []
+    expected_rows: list[dict[str, Any]] = []
+    normalized_byte_total = 0
+    for sequence_number, (planned, raw, normalized_bytes, receipt) in enumerate(
+        zip(plan, raw_documents, normalized_documents, receipts), start=1
+    ):
+        if (
+            type(raw) is not bytes
+            or not raw
+            or type(normalized_bytes) is not bytes
+            or not normalized_bytes
+        ):
+            raise SecFilingGemmaCorpusError(
+                "Persisted authenticated SEC document bytes are empty or inexact"
+            )
+        try:
+            recomputed = normalize_filing_text(
+                raw.decode("latin-1"),
+                max_utf8_bytes=(
+                    AUTHENTICATED_STAGE_NORMALIZED_BATCH_MAX_BYTES
+                    - normalized_byte_total
+                ),
+            ).text.encode("utf-8")
+        except Exception:
+            raise SecFilingGemmaCorpusError(
+                "Persisted authenticated SEC document cannot be normalized"
+            ) from None
+        normalized_byte_total += len(recomputed)
+        if recomputed != normalized_bytes:
+            raise SecFilingGemmaCorpusError(
+                "Persisted normalized SEC text differs from its raw document"
+            )
+        reconciled = _reconcile_authenticated_stage_access_receipt(
+            receipt,
+            sequence_number=sequence_number,
+            official_url=planned["official_url"],
+            raw_document=raw,
+            user_agent_sha256=user_agent_sha256,
+        )
+        raw_hash = _bare_sha256(raw)
+        normalized_hash = _bare_sha256(normalized_bytes)
+        receipt_hash = reconciled["request_receipt_sha256"]
+        documents.append(
+            StageDocumentBytes(
+                accession_number=planned["accession_number"],
+                url=planned["official_url"],
+                raw_primary_document=raw,
+                normalized_text=normalized_bytes,
+                primary_document_sha256=raw_hash,
+                normalized_text_sha256=normalized_hash,
+                request_receipt_sha256=receipt_hash,
+            )
+        )
+        reconciled_receipts.append(reconciled)
+        expected_rows.append(
+            {
+                "sequence_number": sequence_number,
+                "accession_number": planned["accession_number"],
+                "official_url": planned["official_url"],
+                "raw_document_sha256": raw_hash,
+                "raw_document_bytes": len(raw),
+                "normalized_document_sha256": normalized_hash,
+                "normalized_document_bytes": len(normalized_bytes),
+                "request_receipt_sha256": receipt_hash,
+            }
+        )
+
+    manifest_body = {
+        key: manifest[key] for key in manifest if key != "byte_manifest_sha256"
+    }
+    if (
+        receipts != reconciled_receipts
+        or manifest.get("schema_version")
+        != _AUTHENTICATED_STAGE_ACCESS_BATCH_MANIFEST_SCHEMA_VERSION
+        or manifest.get("document_count") != len(plan)
+        or manifest.get("documents") != expected_rows
+        or manifest.get("request_receipts_sha256")
+        != canonical_sha256(reconciled_receipts)
+        or manifest.get("acquisition_request_count") != len(plan)
+        or manifest.get("acquisition_bytes")
+        != sum(len(payload) for payload in raw_documents)
+        or manifest.get("transport_security") != transport_claim
+        or manifest.get("outer_budget_role")
+        != "post_transport_reconciliation_not_streaming_protection"
+        or manifest.get("selection_policy")
+        != "exact_ordered_authenticated_stage_access_document_plan"
+        or manifest.get("caller_stage_candidate_or_digest_authority_accepted")
+        is not False
+        or manifest.get("byte_manifest_sha256") != canonical_sha256(manifest_body)
+        or _bare_sha256(request_receipts_json)
+        != canonical_sha256(reconciled_receipts)
+        or _bare_sha256(byte_manifest_json) != canonical_sha256(manifest)
+    ):
+        raise SecFilingGemmaCorpusError(
+            "Persisted authenticated SEC batch does not reconcile to its actual bytes"
+        )
+    return _AuthenticatedStageAccessDocumentBatch(
+        documents=tuple(documents),
+        request_receipts=tuple(
+            _deep_freeze(receipt) for receipt in reconciled_receipts
+        ),
+        byte_manifest=_deep_freeze(manifest),
+        request_receipts_json=request_receipts_json,
+        byte_manifest_json=byte_manifest_json,
+    )
+
+
+def _acquire_stage_documents_from_authenticated_universe_for_tests(
     *,
     transport: SecCorpusTransport,
     user_agent: str,
@@ -1848,9 +2411,10 @@ def acquire_authorized_stage_documents(
     expected_universe_sha256: str,
     session_dates: Sequence[str],
 ) -> StageContentAcquisition:
-    """Fetch all and only one already-authorized universe stage.
+    """Exercise the legacy universe-derived fetch path in isolated tests only.
 
-    Accessions and URLs are never accepted from the caller.  They are derived
+    This helper is intentionally private and is not a production authorization
+    boundary. Accessions and URLs are never accepted from the caller. They are derived
     from the externally pinned, canonically rebuilt universe, so a development
     request cannot fetch an intermediate/final filing and no arbitrary URL can
     enter the request set.  Any missing, cached, redirected, retried, duplicate,
@@ -2351,7 +2915,6 @@ __all__ = [
     "SecFilingGemmaCorpusError",
     "StageContentAcquisition",
     "StageDocumentBytes",
-    "acquire_authorized_stage_documents",
     "acquire_official_sec_catalog",
     "validate_detached_catalog_replay",
     "validate_detached_stage_content_replay",

@@ -229,10 +229,15 @@ email. The current local configuration does not contain an acceptable real
 SEC user-agent; the download phase is therefore blocked. The placeholder
 `contact@example.com` fallback is not admissible.
 
+The implementation can enforce only exact syntax, identity text, one plausible
+non-placeholder email/domain, length, and control-character rules. It cannot
+prove that the address is reachable, owned by the operator, or otherwise real;
+that remains an operator requirement before live execution.
+
 An injected or mocked transport may validate the offline pipeline but cannot
 set the production audit's `overall_pass`. Only the live entrypoint, which
 constructs the bounded official-SEC transport internally after validating the
-real contact, may produce a production pass.
+contact's syntax and non-placeholder form, may produce a production pass.
 
 The command is deliberately preflight-only unless live access is explicit:
 

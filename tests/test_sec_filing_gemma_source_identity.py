@@ -37,7 +37,6 @@ EXPECTED_UNRESOLVED_ROLES = (
     "extractor_schema",
     "ledger",
     "market_acquirer",
-    "runner",
 )
 EXPECTED_TRANSITIVE_SOURCE_PATHS = {
     "package_init": "agent_benchmark/__init__.py",
@@ -125,6 +124,9 @@ def _audit(evidence: dict[str, object], **overrides) -> dict[str, object]:
 
 
 def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> None:
+    assert SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION == (
+        "aapl-sec-gemma-source-identity-audit-v4"
+    )
     assert tuple(CANONICAL_SOURCE_ROLE_PATHS) == REQUIRED_SOURCE_HASHES
     assert UNRESOLVED_SOURCE_ROLES == EXPECTED_UNRESOLVED_ROLES
     resolved = [
@@ -136,6 +138,9 @@ def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> Non
         assert (REPOSITORY_ROOT / path).is_file()
     assert CANONICAL_SOURCE_ROLE_PATHS["extractor_prompt"] is None
     assert CANONICAL_SOURCE_ROLE_PATHS["extractor_schema"] is None
+    assert CANONICAL_SOURCE_ROLE_PATHS["runner"] == (
+        "agent_benchmark/sec_filing_gemma_stage_runner.py"
+    )
     assert {
         role: CANONICAL_SOURCE_ROLE_PATHS[role]
         for role in EXPECTED_TRANSITIVE_SOURCE_PATHS
@@ -165,6 +170,11 @@ def test_audit_hashes_exact_detached_bytes_and_is_canonical_nonauthorizing(
     assert "agent_benchmark/unleveraged_aapl.py" in receipt[
         "declared_static_local_imports_by_source"
     ]["agent_benchmark/sec_filing_gemma_no_leverage.py"]
+    runner_imports = receipt["declared_static_local_imports_by_source"][
+        "agent_benchmark/sec_filing_gemma_stage_runner.py"
+    ]
+    assert "agent_benchmark/sec_filing_gemma_corpus.py" in runner_imports
+    assert "agent_benchmark/sec_filing_gemma_reveal_store.py" in runner_imports
     assert receipt["candidate_source_hashes"] == evidence["source_hashes"]
     assert receipt["unresolved_roles"] == list(EXPECTED_UNRESOLVED_ROLES)
     assert receipt["candidate_source_tree_sha256"] == canonical_source_tree_sha256(
@@ -243,7 +253,7 @@ def test_static_local_import_omission_is_rejected_even_when_hashes_are_rebuilt(
 def test_complete_validator_names_real_unresolved_implementation_roles(evidence) -> None:
     with pytest.raises(
         SecFilingGemmaSourceIdentityIncompleteError,
-        match="extractor_prompt.*extractor_schema.*ledger.*market_acquirer.*runner",
+        match="extractor_prompt.*extractor_schema.*ledger.*market_acquirer",
     ):
         validate_complete_candidate_source_identity(
             candidate_manifest=evidence["candidate"],
