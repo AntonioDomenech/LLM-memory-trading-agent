@@ -626,17 +626,23 @@ At the current implementation checkpoint:
   uses a write-ahead pending transaction for state-plus-grant changes, and can
   return the exact persisted grant bundle on an identical crash retry without
   rerunning the verifier or consuming a request twice. Interrupted genesis
-  creation is also recoverable. The anchor is a second file in the same store
+  creation is also recoverable. Current-tip schema v2 additionally stores an
+  append-only request-keyed trusted-content pin before the verifier runs. A
+  failed verifier retains that non-authorizing pin, and an exact retry reuses it
+  without another revision. The anchor is a second file in the same store
   directory: it detects state-only rollback, but it is not an external trust
   domain and cannot by itself defeat coordinated replacement of both files;
-- the fixed verifier now produces a version-3 canonical non-authorizing audit
+- the fixed verifier now produces a version-4 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
   learner arithmetic, raw scores, gates, ranking, no-leverage proof, runtime
   structure, registry, request, and stage-access bindings. It bounds all
   untrusted envelopes before decoding or copying, replays the complete parent
-  evidence and receipt recursively, and rejects substitution of earlier-stage
-  content;
+  evidence and receipt recursively, and binds final-stage lineage to the exact
+  authenticated intermediate consumption-ledger tip, semantic audit, persisted
+  trusted-content pin, authorization bundle, grant, and current store tip. It
+  rejects altered-and-rehashed evidence, access, context, audit, pin, entry,
+  bundle, grant, tip, and child identities;
 - runtime source identity now checks the current regular files at the canonical
   paths of modules that were already loaded; the audit refuses to import an
   absent module and accepts no caller-supplied root, path, or runtime bytes. Eleven
@@ -649,15 +655,18 @@ At the current implementation checkpoint:
 - supplied learner matrices and targets must match the fold-bound feature,
   target, membership, count, and maturity identities before any deterministic
   refit. Intermediate stage identity remains explicitly blocked: recursive
-  parent evidence replay is not yet authenticated against the prior consumed
-  reveal-store ledger entry, and the development winner/output model state is
-  not yet bound to the intermediate learner input state;
+  parent evidence is now authenticated against the prior consumed reveal-store
+  ledger entry and grant, but the development winner/output model state is not
+  yet bound to the intermediate learner input state;
 - stage access remains intentionally disabled twice: the authorizing verifier
   entry point raises while any end-to-end check is unsupported, and the reveal
   store has a separate false-by-default promotion gate, so substituting only a
-  successful verifier cannot consume a request. The supplied stage-content pin
-  is cross-checked against stage access, but its store-state claim is not yet
-  authenticated by the reveal store;
+  successful verifier cannot consume a request. The reveal store derives and
+  persists the trusted stage-content pin itself, authenticates its current-tip
+  membership, and requires the audit receipt to return the exact pin and store
+  context hashes. The verifier cross-binds those claims but does not
+  independently load the store files, attest its executing Python code object,
+  or turn the same mutable directory into an external trust domain;
 - stage-specific runtime receipts are structurally reconciled, but the final
   all-stage summary remains diagnostic until owned-transport and monotonic-time
   attestations plus the five-development-filing latency preflight exist;
@@ -686,10 +695,11 @@ raw-evidence chain that can turn the fixed fail-closed audit into a complete
 verifier. It must rebuild preprocessing, extraction, feature rows, matured
 labels, and training membership from the replayed SEC catalogue and normalized
 document bytes; parse official calendar semantics; bind market-provider
-responses to the canonical snapshots; chain every artifact from genesis;
-authenticate each parent against the prior consumed reveal-store entry; issue
-the independently trusted content pin; and require the consumed authorization
-entry hash in every downstream API. A production trust domain must also retain
-the current store tip outside the mutable store directory. That machinery must
-be committed and pass the five-filing preflight before any filing meaning or
-later-stage outcome is opened.
+responses to the canonical snapshots; chain every artifact from genesis; bind
+the development winner/output state to the intermediate learner input; and
+require the consumed authorization-entry hash in every downstream reader that
+produces the next stage evidence. A production trust domain must retain the
+current store tip outside the mutable store directory, and a fresh owned process
+must attest the executing verifier rather than only the current source files.
+That machinery must be committed and pass the five-filing preflight before any
+filing meaning or later-stage outcome is opened.

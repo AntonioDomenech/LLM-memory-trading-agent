@@ -25,12 +25,18 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
     SEMANTIC_PREREQUISITE_SCHEMA_VERSION,
     STORE_SCHEMA_VERSION,
+    TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION,
+    TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION,
     SecFilingGemmaStageAuthorizationError,
+    authenticate_reveal_store_trusted_stage_content_pin,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     derive_consumed_stage_store_state_pin,
+    derive_reveal_store_trusted_stage_content_pin,
     validate_consumed_stage_authorization_grant,
     validate_consumed_stage_store_state_pin,
+    validate_reveal_store_current_tip_anchor_transition,
+    validate_trusted_stage_content_authentication_receipt,
 )
 
 
@@ -59,6 +65,18 @@ def _access(*, attempt: str, candidate: str, stage: str) -> dict:
             "transition_ordinal": 1 if stage == "intermediate" else 2,
             "single_use_consumption_required": True,
             "stage_reuse_permitted": False,
+        },
+        "prerequisite_evidence_pin": {
+            "stage": prerequisite,
+            "content_manifest_sha256": _h(
+                f"{attempt}:{prerequisite}:content-manifest"
+            ),
+            "stage_artifact_sha256": _h(
+                f"{attempt}:{prerequisite}:stage-artifact"
+            ),
+            "external_seal_receipt_sha256": _h(
+                f"{attempt}:{prerequisite}:external-seal"
+            ),
         },
         "candidate": {
             "candidate_sha256": candidate,
@@ -239,6 +257,48 @@ def _grant_context(entry_count: int = 1) -> tuple[dict, dict, dict, dict, dict]:
         authorization_bundles={entry["request_sha256"]: bundle},
     )
     return state, pin, entry, grant, current_tip_anchor
+
+
+def _rehash(value: dict, field: str) -> None:
+    value[field] = canonical_sha256(
+        {key: child for key, child in value.items() if key != field}
+    )
+
+
+def _trusted_pin_context() -> tuple[dict, dict, dict, dict, dict, dict, dict]:
+    state = _snapshot(entry_count=0)
+    prospective_entry = _entry(
+        sequence=1,
+        prior_tip=state["consumption_ledger"]["chain"]["tip_sha256"],
+    )
+    request = prospective_entry["request"]
+    access = prospective_entry["stage_access_manifest"]
+    pin = derive_reveal_store_trusted_stage_content_pin(
+        state,
+        reveal_request=request,
+        stage_access_manifest=access,
+    )
+    prior_tip = build_reveal_store_current_tip_anchor(
+        state,
+        revision=0,
+        previous_tip_anchor_sha256=None,
+        authorization_bundles={},
+        trusted_stage_content_pins={},
+    )
+    pinned_tip = build_reveal_store_current_tip_anchor(
+        state,
+        revision=1,
+        previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={request["request_sha256"]: pin},
+    )
+    receipt = authenticate_reveal_store_trusted_stage_content_pin(
+        state,
+        pinned_tip,
+        reveal_request=request,
+        stage_access_manifest=access,
+    )
+    return state, request, access, pin, prior_tip, pinned_tip, receipt
 
 
 def _validate(
@@ -477,3 +537,327 @@ def test_cross_stage_candidate_request_and_access_substitution_are_rejected() ->
         changed[key] = value
         with pytest.raises(SecFilingGemmaStageAuthorizationError, match="expected"):
             validate_consumed_stage_authorization_grant(**changed)
+
+
+def test_trusted_stage_content_pin_derivation_is_exact_and_deterministic() -> None:
+    state, request, access, pin, _prior_tip, _pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    repeated = derive_reveal_store_trusted_stage_content_pin(
+        copy.deepcopy(state),
+        reveal_request=copy.deepcopy(request),
+        stage_access_manifest=copy.deepcopy(access),
+    )
+
+    assert repeated == pin
+    assert pin["schema_version"] == TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION
+    assert pin["request_sha256"] == request["request_sha256"]
+    assert pin["prerequisite_stage_evidence_sha256"] == request[
+        "prerequisite_stage_evidence_sha256"
+    ]
+    assert pin["stage_access_manifest_sha256"] == access[
+        "stage_access_manifest_sha256"
+    ]
+    assert pin["prerequisite_stage"] == "development"
+    assert pin["requested_stage"] == "intermediate"
+    assert pin["trusted_store_state_sha256"] == state["state_sha256"]
+    assert pin["content_manifest_sha256"] == access[
+        "prerequisite_evidence_pin"
+    ]["content_manifest_sha256"]
+    assert pin["stage_artifact_sha256"] == access["prerequisite_evidence_pin"][
+        "stage_artifact_sha256"
+    ]
+    assert pin["external_seal_receipt_sha256"] == access[
+        "prerequisite_evidence_pin"
+    ]["external_seal_receipt_sha256"]
+    assert pin["pin_sha256"] == canonical_sha256(
+        {key: value for key, value in pin.items() if key != "pin_sha256"}
+    )
+    assert "trusted_current_tip_anchor_sha256" not in pin
+
+    substituted_request = copy.deepcopy(request)
+    substituted_request["candidate_sha256"] = _h("substituted candidate")
+    _rehash(substituted_request, "request_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="crossed its request or stage boundary",
+    ):
+        derive_reveal_store_trusted_stage_content_pin(
+            state,
+            reveal_request=substituted_request,
+            stage_access_manifest=access,
+        )
+
+    substituted_access = copy.deepcopy(access)
+    substituted_access["prerequisite_evidence_pin"][
+        "stage_artifact_sha256"
+    ] = _h("substituted stage artifact")
+    _rehash(substituted_access, "stage_access_manifest_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="crossed its request or stage boundary",
+    ):
+        derive_reveal_store_trusted_stage_content_pin(
+            state,
+            reveal_request=request,
+            stage_access_manifest=substituted_access,
+        )
+
+
+def test_trusted_stage_content_pin_authenticates_exact_persisted_membership() -> None:
+    state, request, access, pin, prior_tip, pinned_tip, receipt = (
+        _trusted_pin_context()
+    )
+
+    prior, current = validate_reveal_store_current_tip_anchor_transition(
+        prior_tip,
+        pinned_tip,
+    )
+    assert prior == prior_tip
+    assert current == pinned_tip
+    assert current["trusted_stage_content_pins"] == {
+        request["request_sha256"]: pin
+    }
+    assert receipt["schema_version"] == (
+        TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION
+    )
+    assert receipt["request_sha256"] == request["request_sha256"]
+    assert receipt["trusted_stage_content_pin_sha256"] == pin["pin_sha256"]
+    assert receipt["trusted_store_state_sha256"] == state["state_sha256"]
+    assert receipt["trusted_current_tip_anchor_sha256"] == pinned_tip[
+        "tip_anchor_sha256"
+    ]
+    assert receipt["trusted_current_tip_revision"] == 1
+    assert validate_trusted_stage_content_authentication_receipt(receipt) == receipt
+
+
+def test_trusted_stage_content_authentication_rejects_unpersisted_and_substituted_inputs() -> None:
+    state, request, access, pin, prior_tip, pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not exactly persisted",
+    ):
+        authenticate_reveal_store_trusted_stage_content_pin(
+            state,
+            prior_tip,
+            reveal_request=request,
+            stage_access_manifest=access,
+        )
+
+    substituted_pin = copy.deepcopy(pin)
+    substituted_pin["content_manifest_sha256"] = _h("substituted content")
+    _rehash(substituted_pin, "pin_sha256")
+    substituted_tip = build_reveal_store_current_tip_anchor(
+        state,
+        revision=1,
+        previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={request["request_sha256"]: substituted_pin},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not exactly persisted",
+    ):
+        authenticate_reveal_store_trusted_stage_content_pin(
+            state,
+            substituted_tip,
+            reveal_request=request,
+            stage_access_manifest=access,
+        )
+
+    substituted_request = copy.deepcopy(request)
+    substituted_request["prerequisite_stage_evidence_sha256"] = _h(
+        "substituted prerequisite evidence"
+    )
+    _rehash(substituted_request, "request_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not exactly persisted",
+    ):
+        authenticate_reveal_store_trusted_stage_content_pin(
+            state,
+            pinned_tip,
+            reveal_request=substituted_request,
+            stage_access_manifest=access,
+        )
+
+    substituted_access = copy.deepcopy(access)
+    substituted_access["prerequisite_evidence_pin"][
+        "external_seal_receipt_sha256"
+    ] = _h("substituted seal")
+    _rehash(substituted_access, "stage_access_manifest_sha256")
+    request_for_substituted_access = copy.deepcopy(request)
+    request_for_substituted_access["stage_access_manifest_sha256"] = (
+        substituted_access["stage_access_manifest_sha256"]
+    )
+    _rehash(request_for_substituted_access, "request_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not exactly persisted",
+    ):
+        authenticate_reveal_store_trusted_stage_content_pin(
+            state,
+            pinned_tip,
+            reveal_request=request_for_substituted_access,
+            stage_access_manifest=substituted_access,
+        )
+
+
+def test_trusted_stage_content_authentication_rejects_stale_store_state() -> None:
+    state, request, access, pin, _prior_tip, pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    newer_state = _snapshot(entry_count=1)
+    newer_tip = build_reveal_store_current_tip_anchor(
+        newer_state,
+        revision=2,
+        previous_tip_anchor_sha256=pinned_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={request["request_sha256"]: pin},
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="current-tip anchor does not authenticate",
+    ):
+        authenticate_reveal_store_trusted_stage_content_pin(
+            state,
+            newer_tip,
+            reveal_request=request,
+            stage_access_manifest=access,
+        )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not exactly persisted",
+    ):
+        authenticate_reveal_store_trusted_stage_content_pin(
+            newer_state,
+            newer_tip,
+            reveal_request=request,
+            stage_access_manifest=access,
+        )
+
+
+def test_current_tip_transition_rejects_trusted_content_pin_deletion() -> None:
+    state, _request, _access, _pin, _prior_tip, pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    deleted = build_reveal_store_current_tip_anchor(
+        state,
+        revision=2,
+        previous_tip_anchor_sha256=pinned_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="removed or changed a trusted content pin",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(pinned_tip, deleted)
+
+
+def test_current_tip_transition_rejects_trusted_content_pin_replacement() -> None:
+    state, request, _access, pin, _prior_tip, pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    replacement = copy.deepcopy(pin)
+    replacement["stage_artifact_sha256"] = _h("replacement artifact")
+    _rehash(replacement, "pin_sha256")
+    replaced = build_reveal_store_current_tip_anchor(
+        state,
+        revision=2,
+        previous_tip_anchor_sha256=pinned_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={request["request_sha256"]: replacement},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="removed or changed a trusted content pin",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(pinned_tip, replaced)
+
+
+def test_current_tip_transition_rejects_two_trusted_content_pin_appends() -> None:
+    state, request, access, pin, prior_tip, _pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    second_request = copy.deepcopy(request)
+    second_request["prerequisite_stage_evidence_sha256"] = _h(
+        "second prerequisite evidence"
+    )
+    _rehash(second_request, "request_sha256")
+    second_pin = derive_reveal_store_trusted_stage_content_pin(
+        state,
+        reveal_request=second_request,
+        stage_access_manifest=access,
+    )
+    two_pins = build_reveal_store_current_tip_anchor(
+        state,
+        revision=1,
+        previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={
+            request["request_sha256"]: pin,
+            second_request["request_sha256"]: second_pin,
+        },
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="at most one trusted content pin",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(prior_tip, two_pins)
+
+
+def test_current_tip_transition_rejects_state_changing_pin_append() -> None:
+    state, request, access, _pin, prior_tip, _pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    changed_state = copy.deepcopy(state)
+    changed_registry_hash = _h("changed registry")
+    changed_state["latest_registry"]["registry_sha256"] = changed_registry_hash
+    changed_state["latest_registry_pin"]["registry_sha256"] = changed_registry_hash
+    _rehash(changed_state, "state_sha256")
+    changed_state_pin = derive_reveal_store_trusted_stage_content_pin(
+        changed_state,
+        reveal_request=request,
+        stage_access_manifest=access,
+    )
+    changed_state_tip = build_reveal_store_current_tip_anchor(
+        changed_state,
+        revision=1,
+        previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={
+            request["request_sha256"]: changed_state_pin,
+        },
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="changed the authenticated store state",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            prior_tip,
+            changed_state_tip,
+        )
+
+
+def test_current_tip_transition_rejects_pin_append_with_consumption() -> None:
+    _state, request, _access, pin, prior_tip, _pinned_tip, _receipt = (
+        _trusted_pin_context()
+    )
+    consumed_state = _snapshot(entry_count=1)
+    combined = build_reveal_store_current_tip_anchor(
+        consumed_state,
+        revision=1,
+        previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
+        authorization_bundles={},
+        trusted_stage_content_pins={request["request_sha256"]: pin},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="dedicated tip-only transition",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(prior_tip, combined)

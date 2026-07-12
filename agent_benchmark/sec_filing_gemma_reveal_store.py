@@ -52,6 +52,7 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     validate_single_candidate_reveal_request,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
+    STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
     authoritative_prerequisite_validator,
     detach_untrusted_stage_json,
     preflight_untrusted_stage_json,
@@ -59,13 +60,16 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
     SecFilingGemmaStageAuthorizationError,
+    authenticate_reveal_store_trusted_stage_content_pin,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     derive_consumed_stage_store_state_pin,
+    derive_reveal_store_trusted_stage_content_pin,
     validate_consumed_stage_authorization_grant,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
     validate_reveal_store_current_tip_anchor_transition,
+    validate_trusted_stage_content_authentication_receipt,
 )
 
 
@@ -110,6 +114,12 @@ RESTORE_PENDING_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-restore-pending-v1"
 )
 AUTHORITATIVE_STAGE_PROMOTION_ENABLED: Final[bool] = False
+AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-authenticated-store-verifier-context-v1"
+)
+PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-parent-consumption-binding-v1"
+)
 MAX_STATE_FILE_BYTES: Final[int] = 16 * 1024 * 1024
 MAX_CURRENT_TIP_ANCHOR_FILE_BYTES: Final[int] = 64 * 1024 * 1024
 MAX_TRACKED_ANCHOR_FILE_BYTES: Final[int] = 8 * 1024 * 1024
@@ -1139,6 +1149,39 @@ def _authorization_bundle(
     return {**body, "bundle_sha256": canonical_sha256(body)}
 
 
+def _authenticated_store_verifier_context(
+    *,
+    trusted_stage_content_pin: Mapping[str, Any],
+    trusted_stage_content_authentication: Mapping[str, Any],
+    parent_consumption_binding: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    pin = _exact_caller_dict(
+        dict(trusted_stage_content_pin),
+        "authenticated verifier trusted content pin",
+    )
+    authentication = _exact_caller_dict(
+        dict(trusted_stage_content_authentication),
+        "authenticated verifier trusted content receipt",
+    )
+    parent = (
+        None
+        if parent_consumption_binding is None
+        else _exact_caller_dict(
+            dict(parent_consumption_binding),
+            "authenticated verifier parent-consumption binding",
+        )
+    )
+    body = {
+        "schema_version": AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "context_kind": "reveal_store_authenticated_preconsumption_context",
+        "trusted_stage_content_pin": pin,
+        "trusted_stage_content_authentication": authentication,
+        "parent_consumption_binding": parent,
+    }
+    return {**body, "authenticated_store_context_sha256": canonical_sha256(body)}
+
+
 def _request_body_hash(request: Mapping[str, Any]) -> str:
     _expect_keys(request, set(_REQUEST_KEYS), "stored reveal request")
     observed = _sha256(request["request_sha256"], "stored request_sha256")
@@ -1355,6 +1398,32 @@ def _validate_semantic_result(
             raise SecFilingGemmaRevealStoreError(
                 f"Semantic prerequisite result is not bound to request field {key}"
             )
+    semantic_receipt = _expect_mapping(
+        value["semantic_receipt"],
+        "semantic prerequisite audit receipt",
+    )
+    for receipt_key, context_key in (
+        (
+            "trusted_stage_content_pin_sha256",
+            "trusted_stage_content_pin_sha256",
+        ),
+        (
+            "trusted_stage_content_authentication_receipt_sha256",
+            "trusted_stage_content_authentication_receipt_sha256",
+        ),
+        (
+            "parent_consumption_binding_sha256",
+            "parent_consumption_binding_sha256",
+        ),
+        (
+            "authenticated_store_context_sha256",
+            "authenticated_store_context_sha256",
+        ),
+    ):
+        if semantic_receipt.get(receipt_key) != expected_context.get(context_key):
+            raise SecFilingGemmaRevealStoreError(
+                f"Semantic prerequisite audit lost store binding {receipt_key}"
+            )
     if value["requested_stage"] != expected_context["stage"]:
         raise SecFilingGemmaRevealStoreError(
             "Semantic prerequisite result is not bound to the requested stage"
@@ -1366,6 +1435,323 @@ def _validate_semantic_result(
             "Semantic prerequisite result hash is inconsistent"
         )
     return value
+
+
+def _expected_context_for_consumed_request(
+    request: Mapping[str, Any],
+    *,
+    trusted_stage_content_pin_sha256: str,
+    trusted_stage_content_authentication_receipt_sha256: str,
+    parent_consumption_binding_sha256: str | None,
+    authenticated_store_context_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "prerequisite_stage": request["prerequisite_stage"],
+        "prerequisite_stage_evidence_sha256": request[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "attempt_id": request["attempt_id"],
+        "candidate_sha256": request["candidate_sha256"],
+        "candidate_design_sha256": request["candidate_design_sha256"],
+        "registry_entry_sha256": request["registry_entry_sha256"],
+        "request_sha256": request["request_sha256"],
+        "stage": request["stage"],
+        "stage_access_manifest_sha256": request[
+            "stage_access_manifest_sha256"
+        ],
+        "registry_sha256": request["registry_sha256"],
+        "registry_tip_sha256": request["registry_tip_sha256"],
+        "trusted_stage_content_pin_sha256": trusted_stage_content_pin_sha256,
+        "trusted_stage_content_authentication_receipt_sha256": (
+            trusted_stage_content_authentication_receipt_sha256
+        ),
+        "parent_consumption_binding_sha256": parent_consumption_binding_sha256,
+        "authenticated_store_context_sha256": authenticated_store_context_sha256,
+    }
+
+
+def _locate_parent_intermediate_predecessor(
+    *,
+    authenticated_store_snapshot: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    child_request: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = _expect_mapping(
+        authenticated_store_snapshot,
+        "parent predecessor store snapshot",
+    )
+    current_tip = _expect_mapping(
+        independent_current_tip_anchor,
+        "parent predecessor current tip",
+    )
+    if child_request["stage"] != "final" or child_request[
+        "prerequisite_stage"
+    ] != "intermediate":
+        raise SecFilingGemmaRevealStoreError(
+            "Only a final request may require an intermediate predecessor"
+        )
+    matching = [
+        entry
+        for entry in state["consumption_ledger"]["entries"]
+        if entry["stage"] == "intermediate"
+        and entry["attempt_id"] == child_request["attempt_id"]
+        and entry["candidate_sha256"] == child_request["candidate_sha256"]
+        and entry["registry_entry_sha256"]
+        == child_request["registry_entry_sha256"]
+        and entry["request"]["candidate_design_sha256"]
+        == child_request["candidate_design_sha256"]
+        and entry["request"]["registry_sha256"]
+        == child_request["registry_sha256"]
+        and entry["request"]["registry_tip_sha256"]
+        == child_request["registry_tip_sha256"]
+    ]
+    if len(matching) != 1:
+        raise SecFilingGemmaRevealStoreError(
+            "Final request requires exactly one intermediate predecessor"
+        )
+    entry = matching[0]
+    ledger = state["consumption_ledger"]
+    if (
+        entry != ledger["entries"][-1]
+        or entry["entry_sha256"] != ledger["chain"]["tip_sha256"]
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Final request predecessor is not the exact consumption-ledger tip"
+        )
+    bundle = current_tip["authorization_bundles"].get(entry["request_sha256"])
+    if bundle is None:
+        raise SecFilingGemmaRevealStoreError(
+            "Final request predecessor lacks its persisted authorization bundle"
+        )
+    return entry, bundle
+
+
+def _build_parent_consumption_binding(
+    *,
+    authenticated_store_snapshot: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    child_request: Mapping[str, Any],
+    parent_entry: Mapping[str, Any],
+    parent_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = _expect_mapping(
+        authenticated_store_snapshot,
+        "parent binding store snapshot",
+    )
+    current_tip = _expect_mapping(
+        independent_current_tip_anchor,
+        "parent binding current tip",
+    )
+    parent = _expect_mapping(parent_entry, "parent consumption entry")
+    bundle = _expect_mapping(parent_bundle, "parent authorization bundle")
+    parent_request = _expect_mapping(parent["request"], "parent reveal request")
+    persisted_bundle = current_tip["authorization_bundles"].get(
+        parent_request["request_sha256"]
+    )
+    if persisted_bundle != bundle:
+        raise SecFilingGemmaRevealStoreError(
+            "Parent authorization bundle is not the exact current-tip bundle"
+        )
+    parent_access = _expect_mapping(
+        parent["stage_access_manifest"],
+        "parent stage-access manifest",
+    )
+    parent_validation = _expect_mapping(
+        parent["prerequisite_validation"],
+        "parent prerequisite validation",
+    )
+    parent_audit = _expect_mapping(
+        parent_validation["semantic_receipt"],
+        "parent stage audit receipt",
+    )
+    parent_pin = current_tip["trusted_stage_content_pins"].get(
+        parent_request["request_sha256"]
+    )
+    if parent_pin is None:
+        raise SecFilingGemmaRevealStoreError(
+            "Final request predecessor lacks its persisted trusted content pin"
+        )
+    if (
+        parent_audit.get("schema_version") != STAGE_AUDIT_RECEIPT_SCHEMA_VERSION
+        or parent_audit.get("prerequisite_stage") != "development"
+        or parent_audit.get("requested_stage") != "intermediate"
+        or parent_audit.get("stage_evidence_sha256")
+        != parent_request["prerequisite_stage_evidence_sha256"]
+        or parent_audit.get("candidate_sha256")
+        != parent_request["candidate_sha256"]
+        or parent_audit.get("trusted_stage_content_pin_sha256")
+        != parent_pin.get("pin_sha256")
+        or parent_audit.get("parent_consumption_binding_sha256") is not None
+        or parent_audit.get("authorizes_outcome_access") is not False
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Parent audit receipt lost its exact stage, evidence, candidate, or pin binding"
+        )
+    audit_hash = _sha256(
+        parent_audit.get("audit_receipt_sha256"),
+        "parent audit receipt hash",
+    )
+    audit_body = {
+        key: parent_audit[key]
+        for key in parent_audit
+        if key != "audit_receipt_sha256"
+    }
+    if not _same_digest(audit_hash, canonical_sha256(audit_body)):
+        raise SecFilingGemmaRevealStoreError(
+            "Parent audit receipt self-hash is inconsistent"
+        )
+    parent_authentication = validate_trusted_stage_content_authentication_receipt(
+        parent_audit.get("trusted_stage_content_authentication")
+    )
+    if (
+        parent_audit.get(
+            "trusted_stage_content_authentication_receipt_sha256"
+        )
+        != parent_authentication["authentication_receipt_sha256"]
+        or parent_validation["semantic_receipt_sha256"]
+        != canonical_sha256(parent_audit)
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Parent audit receipt lost its authentication or semantic-receipt binding"
+        )
+    parent_store_context = _authenticated_store_verifier_context(
+        trusted_stage_content_pin=parent_pin,
+        trusted_stage_content_authentication=parent_authentication,
+        parent_consumption_binding=None,
+    )
+    if (
+        parent_store_context["authenticated_store_context_sha256"]
+        != parent_audit.get("authenticated_store_context_sha256")
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Parent audit receipt does not bind its reconstructed store context"
+        )
+    parent_expected_context = _expected_context_for_consumed_request(
+        parent_request,
+        trusted_stage_content_pin_sha256=parent_pin["pin_sha256"],
+        trusted_stage_content_authentication_receipt_sha256=parent_authentication[
+            "authentication_receipt_sha256"
+        ],
+        parent_consumption_binding_sha256=None,
+        authenticated_store_context_sha256=parent_store_context[
+            "authenticated_store_context_sha256"
+        ],
+    )
+    try:
+        validate_consumed_stage_authorization_grant(
+            bundle["authorization_grant"],
+            authenticated_store_snapshot=state,
+            external_store_state_pin=bundle["store_state_pin"],
+            independent_current_tip_anchor=current_tip,
+            expected_consumption_entry_sha256=parent["entry_sha256"],
+            expected_request_sha256=parent_request["request_sha256"],
+            expected_candidate_sha256=parent_request["candidate_sha256"],
+            expected_stage="intermediate",
+            expected_prerequisite_stage_evidence_sha256=parent_request[
+                "prerequisite_stage_evidence_sha256"
+            ],
+            expected_stage_access_manifest_sha256=parent_request[
+                "stage_access_manifest_sha256"
+            ],
+            expected_output_namespace=parent_access["output"]["namespace"],
+        )
+    except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Parent authorization bundle is not valid at the current tip"
+        ) from exc
+    for request_field in (
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+    ):
+        if parent_request[request_field] != child_request[request_field]:
+            raise SecFilingGemmaRevealStoreError(
+                f"Parent predecessor crossed child identity {request_field}"
+            )
+    child_section = {
+        field: child_request[field]
+        for field in (
+            "request_sha256",
+            "stage",
+            "prerequisite_stage",
+            "prerequisite_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "attempt_id",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "registry_sha256",
+            "registry_tip_sha256",
+        )
+    }
+    parent_section = {
+        "entry_sha256": parent["entry_sha256"],
+        "sequence": parent["sequence"],
+        "request_sha256": parent_request["request_sha256"],
+        "stage": parent_request["stage"],
+        "prerequisite_stage": parent_request["prerequisite_stage"],
+        "prerequisite_stage_evidence_sha256": parent_request[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": parent_request[
+            "stage_access_manifest_sha256"
+        ],
+        "expected_context_sha256": canonical_sha256(parent_expected_context),
+        "attempt_id": parent_request["attempt_id"],
+        "candidate_sha256": parent_request["candidate_sha256"],
+        "candidate_design_sha256": parent_request["candidate_design_sha256"],
+        "registry_entry_sha256": parent_request["registry_entry_sha256"],
+        "registry_sha256": parent_request["registry_sha256"],
+        "registry_tip_sha256": parent_request["registry_tip_sha256"],
+        "prerequisite_validation_result_sha256": parent_validation[
+            "result_sha256"
+        ],
+        "semantic_receipt_sha256": parent_validation[
+            "semantic_receipt_sha256"
+        ],
+        "audit_receipt": parent_audit,
+        "audit_receipt_sha256": audit_hash,
+        "trusted_stage_content_pin": parent_pin,
+        "trusted_stage_content_pin_sha256": parent_pin["pin_sha256"],
+        "authorization_bundle_sha256": bundle["bundle_sha256"],
+        "authorization_grant_sha256": bundle["authorization_grant"][
+            "authorization_grant_sha256"
+        ],
+        "store_pin_sha256": bundle["store_state_pin"]["store_pin_sha256"],
+    }
+    authenticated_tip = {
+        "store_state_sha256": state["state_sha256"],
+        "state_snapshot_bytes_sha256": current_tip[
+            "state_snapshot_bytes_sha256"
+        ],
+        "state_snapshot_byte_count": current_tip["state_snapshot_byte_count"],
+        "consumption_ledger_sha256": state["consumption_ledger"][
+            "ledger_sha256"
+        ],
+        "consumption_ledger_tip_sha256": state["consumption_ledger"]["chain"][
+            "tip_sha256"
+        ],
+        "consumed_request_count": state["consumption_ledger"]["chain"][
+            "consumed_request_count"
+        ],
+        "current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "current_tip_revision": current_tip["revision"],
+    }
+    body = {
+        "schema_version": PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "binding_kind": "exact_prior_intermediate_consumption_and_grant",
+        "child_request": child_section,
+        "parent_consumption": parent_section,
+        "authenticated_preconsumption_tip": authenticated_tip,
+    }
+    return {
+        **body,
+        "parent_consumption_binding_sha256": canonical_sha256(body),
+    }
 
 
 def _stage_evidence_sha256(evidence: Mapping[str, Any]) -> str:
@@ -1977,12 +2363,32 @@ class SecFilingGemmaRevealStore:
         prior_tip_anchor: Mapping[str, Any],
         next_state: Mapping[str, Any],
         authorization_bundle: Mapping[str, Any] | None = None,
+        trusted_stage_content_pin: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated_state = _validate_state(
             _expect_mapping(next_state, "next reveal-store state"),
             expected_anchor=tracked_anchor,
         )
         bundles = copy.deepcopy(prior_tip_anchor["authorization_bundles"])
+        pins = copy.deepcopy(prior_tip_anchor["trusted_stage_content_pins"])
+        if authorization_bundle is not None and trusted_stage_content_pin is not None:
+            raise SecFilingGemmaRevealStoreError(
+                "Trusted content pin and authorization bundle require separate transitions"
+            )
+        if trusted_stage_content_pin is not None:
+            pin = _exact_caller_dict(
+                trusted_stage_content_pin,
+                "trusted stage-content pin",
+            )
+            request_hash = _sha256(
+                pin.get("request_sha256"),
+                "trusted stage-content pin request hash",
+            )
+            if request_hash in pins and pins[request_hash] != pin:
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted trusted stage-content pin cannot be replaced"
+                )
+            pins[request_hash] = pin
         if authorization_bundle is not None:
             bundle = _exact_caller_dict(
                 authorization_bundle, "authorization bundle"
@@ -2002,6 +2408,7 @@ class SecFilingGemmaRevealStore:
                 revision=prior_tip_anchor["revision"] + 1,
                 previous_tip_anchor_sha256=prior_tip_anchor["tip_anchor_sha256"],
                 authorization_bundles=bundles,
+                trusted_stage_content_pins=pins,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -2067,6 +2474,7 @@ class SecFilingGemmaRevealStore:
                     revision=0,
                     previous_tip_anchor_sha256=None,
                     authorization_bundles={},
+                    trusted_stage_content_pins={},
                 )
             except SecFilingGemmaStageAuthorizationError as exc:
                 raise SecFilingGemmaRevealStoreError(
@@ -2203,10 +2611,13 @@ class SecFilingGemmaRevealStore:
         The fixed candidate-bound verifier executes while the exclusive lock is
         held. It receives bounded detached copies of the prerequisite evidence,
         the actual self-hashed stage-access manifest, and the expected request
-        context.
+        context plus a reveal-store-authenticated trusted-content pin and, for
+        final requests, the exact prior intermediate consumption/grant binding.
         It must return :class:`SemanticPrerequisiteValidation`.  Failure,
         replay, verifier mutation of the state file, or any binding mismatch
-        leaves no consumption entry.
+        leaves no consumption entry. A successfully precommitted trusted pin is
+        deliberately retained across verifier failure and reused on an exact
+        retry; it cannot authorize access by itself.
 
         There is deliberately no caller-supplied validator parameter. Until
         the fixed verifier can complete every frozen check, it raises and this
@@ -2344,42 +2755,110 @@ class SecFilingGemmaRevealStore:
                 raise SecFilingGemmaRevealStoreError(
                     "Reveal request or candidate stage was already consumed"
                 )
-            candidate_key = (
-                request_value["attempt_id"],
-                request_value["candidate_sha256"],
-                request_value["registry_entry_sha256"],
-            )
-            if stage == "final" and not any(
-                entry["stage"] == "intermediate"
-                and (
-                    entry["attempt_id"],
-                    entry["candidate_sha256"],
-                    entry["registry_entry_sha256"],
-                )
-                == candidate_key
-                for entry in ledger["entries"]
-            ):
-                raise SecFilingGemmaRevealStoreError(
-                    "Final request requires prior intermediate-request consumption"
+            parent_entry: dict[str, Any] | None = None
+            parent_bundle: dict[str, Any] | None = None
+            if stage == "final":
+                # Perform this exact predecessor/grant check before the monotonic
+                # final-request pin precommit. A missing or ungranted parent must
+                # leave no final-stage authorization material behind.
+                parent_entry, parent_bundle = _locate_parent_intermediate_predecessor(
+                    authenticated_store_snapshot=current,
+                    independent_current_tip_anchor=current_tip,
+                    child_request=request_value,
                 )
 
-            context_dict = {
-                "prerequisite_stage": request_value["prerequisite_stage"],
-                "prerequisite_stage_evidence_sha256": evidence_hash,
-                "attempt_id": request_value["attempt_id"],
-                "candidate_sha256": request_value["candidate_sha256"],
-                "candidate_design_sha256": request_value[
-                    "candidate_design_sha256"
+            try:
+                trusted_content_pin = derive_reveal_store_trusted_stage_content_pin(
+                    current,
+                    reveal_request=request_value,
+                    stage_access_manifest=access_manifest,
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Reveal store could not derive the exact trusted stage-content pin"
+                ) from exc
+            persisted_pin = current_tip["trusted_stage_content_pins"].get(
+                request_hash
+            )
+            if persisted_pin is None:
+                try:
+                    current, current_tip = self._commit_state_and_tip_locked(
+                        tracked_anchor=anchor,
+                        prior_tip_anchor=current_tip,
+                        next_state=current,
+                        trusted_stage_content_pin=trusted_content_pin,
+                    )
+                except SecFilingGemmaStageAuthorizationError as exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Trusted stage-content pin precommit failed closed"
+                    ) from exc
+                (
+                    current,
+                    current_tip,
+                    original_state_bytes,
+                    original_tip_anchor_bytes,
+                ) = self._read_state_and_tip_locked(anchor)
+                persisted_pin = current_tip["trusted_stage_content_pins"].get(
+                    request_hash
+                )
+            if persisted_pin != trusted_content_pin:
+                raise SecFilingGemmaRevealStoreError(
+                    "Current tip contains another trusted pin for this request"
+                )
+            try:
+                trusted_content_authentication = (
+                    authenticate_reveal_store_trusted_stage_content_pin(
+                        current,
+                        current_tip,
+                        reveal_request=request_value,
+                        stage_access_manifest=access_manifest,
+                    )
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Persisted trusted stage-content pin failed current-tip authentication"
+                ) from exc
+            parent_consumption_binding: dict[str, Any] | None = None
+            if stage == "final":
+                # Reload the exact parent objects from the post-pin current tip.
+                # The pin-only revision is monotonic and state-preserving, but
+                # this avoids carrying any pre-transition authorization object
+                # into the verifier context.
+                parent_entry, parent_bundle = _locate_parent_intermediate_predecessor(
+                    authenticated_store_snapshot=current,
+                    independent_current_tip_anchor=current_tip,
+                    child_request=request_value,
+                )
+                parent_consumption_binding = _build_parent_consumption_binding(
+                    authenticated_store_snapshot=current,
+                    independent_current_tip_anchor=current_tip,
+                    child_request=request_value,
+                    parent_entry=parent_entry,
+                    parent_bundle=parent_bundle,
+                )
+            authenticated_store_context = _authenticated_store_verifier_context(
+                trusted_stage_content_pin=trusted_content_pin,
+                trusted_stage_content_authentication=trusted_content_authentication,
+                parent_consumption_binding=parent_consumption_binding,
+            )
+
+            context_dict = _expected_context_for_consumed_request(
+                request_value,
+                trusted_stage_content_pin_sha256=trusted_content_pin["pin_sha256"],
+                trusted_stage_content_authentication_receipt_sha256=(
+                    trusted_content_authentication["authentication_receipt_sha256"]
+                ),
+                parent_consumption_binding_sha256=(
+                    None
+                    if parent_consumption_binding is None
+                    else parent_consumption_binding[
+                        "parent_consumption_binding_sha256"
+                    ]
+                ),
+                authenticated_store_context_sha256=authenticated_store_context[
+                    "authenticated_store_context_sha256"
                 ],
-                "registry_entry_sha256": request_value["registry_entry_sha256"],
-                "request_sha256": request_hash,
-                "stage": stage,
-                "stage_access_manifest_sha256": request_value[
-                    "stage_access_manifest_sha256"
-                ],
-                "registry_sha256": request_value["registry_sha256"],
-                "registry_tip_sha256": request_value["registry_tip_sha256"],
-            }
+            )
             context = MappingProxyType(context_dict)
             promotion_gate_before = AUTHORITATIVE_STAGE_PROMOTION_ENABLED
             restore_document = _restore_pending_document(
@@ -2401,6 +2880,7 @@ class SecFilingGemmaRevealStore:
                             "evidence": evidence,
                             "stage_access_manifest": access_manifest,
                             "expected_context": context_dict,
+                            "authenticated_store_context": authenticated_store_context,
                         },
                         "fixed verifier input bundle",
                     )
@@ -2409,6 +2889,9 @@ class SecFilingGemmaRevealStore:
                             verifier_inputs["evidence"],
                             verifier_inputs["stage_access_manifest"],
                             verifier_inputs["expected_context"],
+                            authenticated_store_context=verifier_inputs[
+                                "authenticated_store_context"
+                            ],
                         )
                     finally:
                         promotion_gate_changed = (

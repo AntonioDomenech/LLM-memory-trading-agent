@@ -29,6 +29,7 @@ from agent_benchmark.sec_filing_gemma_artifact_sealer import (
 )
 from agent_benchmark.sec_filing_gemma_contract import (
     CANDIDATE_IDS,
+    CONTRACT_VERSION,
     MAX_FIT_SECONDS,
     MAX_MODEL_SECONDS,
     MAX_RUNTIME_SECONDS,
@@ -96,7 +97,7 @@ STAGE_EVIDENCE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-evidence-audit-v3"
 )
 STAGE_AUDIT_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-evidence-audit-receipt-v3"
+    "aapl-sec-gemma-stage-evidence-audit-receipt-v4"
 )
 STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-runtime-receipt-v1"
@@ -108,7 +109,16 @@ OWNED_HARDENED_TRANSPORT_MODE: Final[str] = (
     "owned_hardened_loopback_session_requires_stage_attestation"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-trusted-stage-content-pin-v1"
+    "aapl-sec-gemma-trusted-stage-content-pin-v2"
+)
+TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-trusted-stage-content-authentication-v1"
+)
+AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-authenticated-store-verifier-context-v1"
+)
+PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-parent-consumption-binding-v1"
 )
 
 # These are parser/allocation ceilings, not acquisition budgets.  The SEC
@@ -142,6 +152,90 @@ _PREREQUISITE_TRANSITIONS: Final[dict[str, str]] = {
     "development": "intermediate",
     "intermediate": "final",
 }
+_EXPECTED_REVEAL_CONTEXT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "prerequisite_stage",
+        "prerequisite_stage_evidence_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "request_sha256",
+        "stage",
+        "stage_access_manifest_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+        "trusted_stage_content_pin_sha256",
+        "trusted_stage_content_authentication_receipt_sha256",
+        "parent_consumption_binding_sha256",
+        "authenticated_store_context_sha256",
+    }
+)
+_PARENT_BINDING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "binding_kind",
+        "child_request",
+        "parent_consumption",
+        "authenticated_preconsumption_tip",
+        "parent_consumption_binding_sha256",
+    }
+)
+_PARENT_BINDING_CHILD_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "request_sha256",
+        "stage",
+        "prerequisite_stage",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+    }
+)
+_PARENT_BINDING_PARENT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "entry_sha256",
+        "sequence",
+        "request_sha256",
+        "stage",
+        "prerequisite_stage",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "expected_context_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+        "prerequisite_validation_result_sha256",
+        "semantic_receipt_sha256",
+        "audit_receipt",
+        "audit_receipt_sha256",
+        "trusted_stage_content_pin",
+        "trusted_stage_content_pin_sha256",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "store_pin_sha256",
+    }
+)
+_PARENT_BINDING_TIP_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "store_state_sha256",
+        "state_snapshot_bytes_sha256",
+        "state_snapshot_byte_count",
+        "consumption_ledger_sha256",
+        "consumption_ledger_tip_sha256",
+        "consumed_request_count",
+        "current_tip_anchor_sha256",
+        "current_tip_revision",
+    }
+)
 _BLOCKING_GAPS: Final[dict[str, str]] = {
     "artifact_seal_cas": (
         "only the latest seal transition is replayed; the envelope does not yet "
@@ -150,8 +244,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     "artifact_replay": (
         "detached SEC catalogue and document bytes replay within the current "
         "envelope, but preprocessing, extraction and feature proofs, labels, the "
-        "prelabel ledger, and full seal chain do not; replayed parent lineage is "
-        "not yet authenticated against the prior consumed reveal-store entry"
+        "prelabel ledger, and full seal chain do not; parent lineage is bound to "
+        "the prior consumed entry and grant, but that does not replace the missing "
+        "end-to-end artifact derivation proofs"
     ),
     "calendar_source_semantics": (
         "official calendar bytes are hash-bound but no pure parser proves the "
@@ -2181,20 +2276,11 @@ def validate_registry_request_and_stage_access(
     prerequisite_content = _mapping_snapshot(
         prerequisite_content_manifest, "prerequisite content manifest"
     )
-    required_context = {
-        "prerequisite_stage",
-        "prerequisite_stage_evidence_sha256",
-        "attempt_id",
-        "candidate_sha256",
-        "candidate_design_sha256",
-        "registry_entry_sha256",
-        "request_sha256",
-        "stage",
-        "stage_access_manifest_sha256",
-        "registry_sha256",
-        "registry_tip_sha256",
-    }
-    _expect_keys(context, required_context, "expected reveal context")
+    _expect_keys(
+        context,
+        set(_EXPECTED_REVEAL_CONTEXT_KEYS),
+        "expected reveal context",
+    )
     prerequisite = context["prerequisite_stage"]
     requested = context["stage"]
     if _PREREQUISITE_TRANSITIONS.get(prerequisite) != requested:
@@ -2318,18 +2404,14 @@ def validate_trusted_stage_content_pin(
     *,
     stage_access_manifest: Mapping[str, Any],
     trusted_stage_content_pin: Mapping[str, Any] | None,
+    trusted_stage_content_authentication: Mapping[str, Any] | None,
+    expected_context: Mapping[str, Any],
     expected_stage: str,
-) -> dict[str, str]:
-    """Cross-bind completed content to pins outside its evidence envelope.
-
-    ``prerequisite_evidence_pin`` is part of the already self-hashed stage-access
-    plan.  The second object is expected to come from a separately persisted
-    artifact-sealer/reveal-store state. This verifier can bind the two
-    caller-supplied objects; it deliberately does not claim that the caller
-    authenticated that store.
-    """
+) -> dict[str, Any]:
+    """Cross-bind stage access to the reveal-store-authenticated pin context."""
 
     access = _mapping_snapshot(stage_access_manifest, "stage access manifest")
+    context = _mapping_snapshot(expected_context, "trusted content expected context")
     if trusted_stage_content_pin is None:
         raise SecFilingGemmaStageVerifierError(
             "A separately persisted trusted stage-content pin is required"
@@ -2356,7 +2438,16 @@ def validate_trusted_stage_content_pin(
         trusted,
         {
             "schema_version",
-            "stage",
+            "contract_version",
+            "request_sha256",
+            "prerequisite_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "prerequisite_stage",
+            "requested_stage",
+            "attempt_id",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
             "content_manifest_sha256",
             "stage_artifact_sha256",
             "external_seal_receipt_sha256",
@@ -2365,9 +2456,12 @@ def validate_trusted_stage_content_pin(
         },
         "trusted stage-content pin",
     )
-    if trusted["schema_version"] != TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION:
+    if (
+        trusted["schema_version"] != TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION
+        or trusted["contract_version"] != CONTRACT_VERSION
+    ):
         raise SecFilingGemmaStageVerifierError(
-            "Trusted stage-content pin schema changed"
+            "Trusted stage-content pin schema or contract changed"
         )
     body = {key: trusted[key] for key in trusted if key != "pin_sha256"}
     expected_pin_hash = _sha256(trusted["pin_sha256"], "trusted content pin hash")
@@ -2375,9 +2469,34 @@ def validate_trusted_stage_content_pin(
         raise SecFilingGemmaStageVerifierError(
             "Trusted stage-content pin is not canonical"
         )
-    if access_pin["stage"] != expected_stage or trusted["stage"] != expected_stage:
+    if (
+        access_pin["stage"] != expected_stage
+        or trusted["prerequisite_stage"] != expected_stage
+        or trusted["requested_stage"] != context.get("stage")
+    ):
         raise SecFilingGemmaStageVerifierError(
             "Trusted stage-content pin crossed a stage"
+        )
+    context_bindings = {
+        "request_sha256": "request_sha256",
+        "prerequisite_stage_evidence_sha256": (
+            "prerequisite_stage_evidence_sha256"
+        ),
+        "stage_access_manifest_sha256": "stage_access_manifest_sha256",
+        "prerequisite_stage": "prerequisite_stage",
+        "attempt_id": "attempt_id",
+        "candidate_sha256": "candidate_sha256",
+        "candidate_design_sha256": "candidate_design_sha256",
+        "registry_entry_sha256": "registry_entry_sha256",
+    }
+    for pin_key, context_key in context_bindings.items():
+        if trusted[pin_key] != context.get(context_key):
+            raise SecFilingGemmaStageVerifierError(
+                f"Trusted stage-content pin differs from expected {context_key}"
+            )
+    if trusted["pin_sha256"] != context.get("trusted_stage_content_pin_sha256"):
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted stage-content pin hash differs from the reveal-store context"
         )
     for key in (
         "content_manifest_sha256",
@@ -2393,6 +2512,89 @@ def validate_trusted_stage_content_pin(
     store_state_hash = _sha256(
         trusted["trusted_store_state_sha256"], "trusted content store-state hash"
     )
+    if trusted_stage_content_authentication is None:
+        raise SecFilingGemmaStageVerifierError(
+            "Reveal-store trusted content authentication receipt is required"
+        )
+    authentication = _mapping_snapshot(
+        trusted_stage_content_authentication,
+        "trusted stage-content authentication receipt",
+    )
+    _expect_keys(
+        authentication,
+        {
+            "schema_version",
+            "contract_version",
+            "authentication_kind",
+            "request_sha256",
+            "prerequisite_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "prerequisite_stage",
+            "requested_stage",
+            "trusted_stage_content_pin_sha256",
+            "trusted_store_state_sha256",
+            "trusted_current_tip_anchor_sha256",
+            "trusted_current_tip_revision",
+            "trusted_stage_content_pins_sha256",
+            "authentication_receipt_sha256",
+        },
+        "trusted stage-content authentication receipt",
+    )
+    if (
+        authentication["schema_version"]
+        != TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION
+        or authentication["contract_version"] != trusted["contract_version"]
+        or authentication["authentication_kind"]
+        != "reveal_store_current_tip_persisted_trusted_stage_content_pin"
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted stage-content authentication semantics changed"
+        )
+    authentication_body = {
+        key: authentication[key]
+        for key in authentication
+        if key != "authentication_receipt_sha256"
+    }
+    authentication_hash = _sha256(
+        authentication["authentication_receipt_sha256"],
+        "trusted content authentication receipt hash",
+    )
+    if not hmac.compare_digest(authentication_hash, canonical_sha256(authentication_body)):
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted stage-content authentication receipt is not canonical"
+        )
+    for field in (
+        "request_sha256",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "prerequisite_stage",
+        "requested_stage",
+        "trusted_stage_content_pin_sha256",
+        "trusted_store_state_sha256",
+    ):
+        expected_value = (
+            trusted["pin_sha256"]
+            if field == "trusted_stage_content_pin_sha256"
+            else trusted[field]
+        )
+        if authentication[field] != expected_value:
+            raise SecFilingGemmaStageVerifierError(
+                f"Trusted content authentication differs from pin field {field}"
+            )
+    for field in (
+        "trusted_current_tip_anchor_sha256",
+        "trusted_stage_content_pins_sha256",
+    ):
+        _sha256(authentication[field], f"trusted content authentication {field}")
+    if (
+        type(authentication["trusted_current_tip_revision"]) is not int
+        or authentication["trusted_current_tip_revision"] < 0
+        or authentication_hash
+        != context.get("trusted_stage_content_authentication_receipt_sha256")
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Trusted content authentication lost its current-tip or context binding"
+        )
     return {
         "stage": expected_stage,
         "content_manifest_sha256": trusted["content_manifest_sha256"],
@@ -2402,6 +2604,8 @@ def validate_trusted_stage_content_pin(
         ],
         "trusted_store_state_sha256": store_state_hash,
         "pin_sha256": expected_pin_hash,
+        "authentication_receipt": authentication,
+        "authentication_receipt_sha256": authentication_hash,
     }
 
 
@@ -2414,25 +2618,298 @@ def _stage_evidence_hash(evidence: Mapping[str, Any]) -> str:
     return observed
 
 
+def validate_authenticated_store_context(
+    authenticated_store_context: Mapping[str, Any] | None,
+    *,
+    stage_access_manifest: Mapping[str, Any],
+    expected_context: Mapping[str, Any],
+    expected_stage: str,
+) -> dict[str, Any]:
+    """Validate the compact context created inside the locked reveal store."""
+
+    if authenticated_store_context is None:
+        raise SecFilingGemmaStageVerifierError(
+            "A reveal-store-authenticated verifier context is required"
+        )
+    store_context = _mapping_snapshot(
+        authenticated_store_context,
+        "authenticated store verifier context",
+    )
+    _expect_keys(
+        store_context,
+        {
+            "schema_version",
+            "contract_version",
+            "context_kind",
+            "trusted_stage_content_pin",
+            "trusted_stage_content_authentication",
+            "parent_consumption_binding",
+            "authenticated_store_context_sha256",
+        },
+        "authenticated store verifier context",
+    )
+    if (
+        store_context["schema_version"]
+        != AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION
+        or store_context["contract_version"] != CONTRACT_VERSION
+        or store_context["context_kind"]
+        != "reveal_store_authenticated_preconsumption_context"
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Authenticated store verifier context semantics changed"
+        )
+    body = {
+        key: store_context[key]
+        for key in store_context
+        if key != "authenticated_store_context_sha256"
+    }
+    store_context_hash = _sha256(
+        store_context["authenticated_store_context_sha256"],
+        "authenticated store verifier context hash",
+    )
+    if not hmac.compare_digest(store_context_hash, canonical_sha256(body)):
+        raise SecFilingGemmaStageVerifierError(
+            "Authenticated store verifier context is not canonical"
+        )
+    expected = _mapping_snapshot(expected_context, "store verifier expected context")
+    if store_context_hash != expected.get("authenticated_store_context_sha256"):
+        raise SecFilingGemmaStageVerifierError(
+            "Authenticated store context differs from the expected reveal-store context"
+        )
+    trusted_pin = validate_trusted_stage_content_pin(
+        stage_access_manifest=stage_access_manifest,
+        trusted_stage_content_pin=store_context["trusted_stage_content_pin"],
+        trusted_stage_content_authentication=store_context[
+            "trusted_stage_content_authentication"
+        ],
+        expected_context=expected,
+        expected_stage=expected_stage,
+    )
+    parent_binding = store_context["parent_consumption_binding"]
+    if expected_stage == "development":
+        if parent_binding is not None or expected.get(
+            "parent_consumption_binding_sha256"
+        ) is not None:
+            raise SecFilingGemmaStageVerifierError(
+                "Development prerequisite cannot carry a parent-consumption binding"
+            )
+    elif expected_stage == "intermediate":
+        if type(parent_binding) is not dict:
+            raise SecFilingGemmaStageVerifierError(
+                "Intermediate prerequisite requires a parent-consumption binding"
+            )
+        binding_hash = _sha256(
+            parent_binding.get("parent_consumption_binding_sha256"),
+            "parent-consumption binding hash",
+        )
+        binding_body = {
+            key: parent_binding[key]
+            for key in parent_binding
+            if key != "parent_consumption_binding_sha256"
+        }
+        if (
+            not hmac.compare_digest(binding_hash, canonical_sha256(binding_body))
+            or binding_hash != expected.get("parent_consumption_binding_sha256")
+        ):
+            raise SecFilingGemmaStageVerifierError(
+                "Parent-consumption binding is not canonical or expected"
+            )
+    else:  # pragma: no cover - guarded by stage contract before this helper
+        raise SecFilingGemmaStageVerifierError(
+            "Authenticated store context crossed a prerequisite stage"
+        )
+    return {
+        "authenticated_store_context_sha256": store_context_hash,
+        "trusted_stage_content_pin": trusted_pin,
+        "parent_consumption_binding": parent_binding,
+    }
+
+
 def validate_parent_stage_lineage(
     parent_stage_lineage: Mapping[str, Any] | None,
     *,
     prerequisite_stage: str,
     declared_parent_stage_evidence_sha256: str | None,
     current_candidate_sha256: str,
+    current_expected_context: Mapping[str, Any],
+    current_trusted_stage_content_pin: Mapping[str, Any],
+    parent_consumption_binding: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Replay the actual parent evidence and exact parent audit receipt."""
+    """Replay lineage bound to the exact consumed parent entry and grant."""
 
     if prerequisite_stage == "development":
-        if parent_stage_lineage is not None or declared_parent_stage_evidence_sha256 is not None:
+        if (
+            parent_stage_lineage is not None
+            or declared_parent_stage_evidence_sha256 is not None
+            or parent_consumption_binding is not None
+        ):
             raise SecFilingGemmaStageVerifierError(
-                "Development cannot claim a parent stage"
+                "Development cannot claim a parent stage or parent consumption"
             )
         return None
     if prerequisite_stage != "intermediate":
         raise SecFilingGemmaStageVerifierError(
             "Only the intermediate prerequisite can carry parent lineage"
         )
+    if parent_consumption_binding is None:
+        raise SecFilingGemmaStageVerifierError(
+            "Intermediate evidence requires its reveal-store parent-consumption binding"
+        )
+    binding = _mapping_snapshot(
+        parent_consumption_binding,
+        "parent-consumption binding",
+    )
+    _expect_keys(binding, set(_PARENT_BINDING_KEYS), "parent-consumption binding")
+    if (
+        binding["schema_version"] != PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION
+        or binding["contract_version"] != CONTRACT_VERSION
+        or binding["binding_kind"]
+        != "exact_prior_intermediate_consumption_and_grant"
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent-consumption binding semantics changed"
+        )
+    binding_hash = _sha256(
+        binding["parent_consumption_binding_sha256"],
+        "parent-consumption binding hash",
+    )
+    binding_body = {
+        key: binding[key]
+        for key in binding
+        if key != "parent_consumption_binding_sha256"
+    }
+    current_context = _mapping_snapshot(
+        current_expected_context,
+        "current expected reveal context",
+    )
+    _expect_keys(
+        current_context,
+        set(_EXPECTED_REVEAL_CONTEXT_KEYS),
+        "current expected reveal context",
+    )
+    if (
+        not hmac.compare_digest(binding_hash, canonical_sha256(binding_body))
+        or current_context["parent_consumption_binding_sha256"] != binding_hash
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent-consumption binding is not canonical or current-request bound"
+        )
+
+    child = _mapping_snapshot(binding["child_request"], "bound child request")
+    parent = _mapping_snapshot(
+        binding["parent_consumption"],
+        "bound parent consumption",
+    )
+    tip = _mapping_snapshot(
+        binding["authenticated_preconsumption_tip"],
+        "bound authenticated preconsumption tip",
+    )
+    _expect_keys(child, set(_PARENT_BINDING_CHILD_KEYS), "bound child request")
+    _expect_keys(parent, set(_PARENT_BINDING_PARENT_KEYS), "bound parent consumption")
+    _expect_keys(tip, set(_PARENT_BINDING_TIP_KEYS), "bound preconsumption tip")
+    expected_child = {
+        key: current_context[key] for key in _PARENT_BINDING_CHILD_KEYS
+    }
+    if child != expected_child:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent-consumption binding belongs to another final request"
+        )
+    if (
+        child["stage"] != "final"
+        or child["prerequisite_stage"] != "intermediate"
+        or child["candidate_sha256"] != current_candidate_sha256
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Bound child request crossed its stage or candidate"
+        )
+
+    for field in (
+        "store_state_sha256",
+        "state_snapshot_bytes_sha256",
+        "consumption_ledger_sha256",
+        "consumption_ledger_tip_sha256",
+        "current_tip_anchor_sha256",
+    ):
+        _sha256(tip[field], f"bound preconsumption tip {field}")
+    if (
+        type(tip["state_snapshot_byte_count"]) is not int
+        or tip["state_snapshot_byte_count"] < 1
+        or type(tip["consumed_request_count"]) is not int
+        or tip["consumed_request_count"] < 1
+        or type(tip["current_tip_revision"]) is not int
+        or tip["current_tip_revision"] < 0
+        or type(parent["sequence"]) is not int
+        or parent["sequence"] < 1
+        or parent["sequence"] != tip["consumed_request_count"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Bound parent sequence or preconsumption tip count is invalid"
+        )
+    current_pin = _mapping_snapshot(
+        current_trusted_stage_content_pin,
+        "current trusted stage-content summary",
+    )
+    current_authentication = _mapping_snapshot(
+        current_pin.get("authentication_receipt"),
+        "current trusted content authentication",
+    )
+    if (
+        tip["store_state_sha256"] != current_pin.get("trusted_store_state_sha256")
+        or tip["current_tip_anchor_sha256"]
+        != current_authentication.get("trusted_current_tip_anchor_sha256")
+        or tip["current_tip_revision"]
+        != current_authentication.get("trusted_current_tip_revision")
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent binding differs from the authenticated current store tip"
+        )
+
+    for field in (
+        "entry_sha256",
+        "request_sha256",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "expected_context_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+        "prerequisite_validation_result_sha256",
+        "semantic_receipt_sha256",
+        "audit_receipt_sha256",
+        "trusted_stage_content_pin_sha256",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "store_pin_sha256",
+    ):
+        _sha256(parent[field], f"bound parent consumption {field}")
+    # The reveal store derived the entry/bundle/grant/tip hashes from its locked
+    # authenticated files before constructing this context. This verifier
+    # cross-binds those store-origin identities to the recursive evidence; it
+    # does not claim to have independently loaded the raw bundle or store files.
+    if (
+        parent["stage"] != "intermediate"
+        or parent["prerequisite_stage"] != "development"
+        or parent["entry_sha256"] != tip["consumption_ledger_tip_sha256"]
+        or parent["candidate_sha256"] != current_candidate_sha256
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Bound parent is not the exact intermediate consumption-ledger tip"
+        )
+    for field in (
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+    ):
+        if parent[field] != child[field]:
+            raise SecFilingGemmaStageVerifierError(
+                f"Parent consumption crossed child identity {field}"
+            )
+
     declared_hash = _sha256(
         declared_parent_stage_evidence_sha256,
         "parent stage evidence hash",
@@ -2448,8 +2925,6 @@ def validate_parent_stage_lineage(
             "evidence",
             "stage_access_manifest",
             "expected_context",
-            "trusted_stage_content_pin",
-            "audit_receipt",
         },
         "parent stage lineage",
     )
@@ -2463,6 +2938,10 @@ def validate_parent_stage_lineage(
         raise SecFilingGemmaStageVerifierError(
             "Parent evidence bytes differ from the declared parent hash"
         )
+    if parent_hash != parent["prerequisite_stage_evidence_sha256"]:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent evidence differs from the prior consumed request"
+        )
     parent_candidate = parent_evidence.get("candidate_manifest")
     parent_candidate_hash = (
         parent_candidate.get("candidate_sha256")
@@ -2473,28 +2952,124 @@ def validate_parent_stage_lineage(
         raise SecFilingGemmaStageVerifierError(
             "Parent evidence belongs to another candidate"
         )
+
+    parent_access = _mapping_snapshot(
+        lineage["stage_access_manifest"],
+        "parent stage-access manifest",
+    )
+    parent_context = _mapping_snapshot(
+        lineage["expected_context"],
+        "parent expected reveal context",
+    )
+    _expect_keys(
+        parent_context,
+        set(_EXPECTED_REVEAL_CONTEXT_KEYS),
+        "parent expected reveal context",
+    )
+    parent_audit = _mapping_snapshot(
+        parent["audit_receipt"],
+        "stored parent stage audit receipt",
+    )
+    parent_pin = _mapping_snapshot(
+        parent["trusted_stage_content_pin"],
+        "stored parent trusted content pin",
+    )
+    parent_authentication = _mapping_snapshot(
+        parent_audit.get("trusted_stage_content_authentication"),
+        "stored parent trusted content authentication",
+    )
+    parent_store_context_body = {
+        "schema_version": AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "context_kind": "reveal_store_authenticated_preconsumption_context",
+        "trusted_stage_content_pin": parent_pin,
+        "trusted_stage_content_authentication": parent_authentication,
+        "parent_consumption_binding": None,
+    }
+    parent_store_context = {
+        **parent_store_context_body,
+        "authenticated_store_context_sha256": canonical_sha256(
+            parent_store_context_body
+        ),
+    }
+    expected_parent_context = {
+        "prerequisite_stage": parent["prerequisite_stage"],
+        "prerequisite_stage_evidence_sha256": parent[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "attempt_id": parent["attempt_id"],
+        "candidate_sha256": parent["candidate_sha256"],
+        "candidate_design_sha256": parent["candidate_design_sha256"],
+        "registry_entry_sha256": parent["registry_entry_sha256"],
+        "request_sha256": parent["request_sha256"],
+        "stage": parent["stage"],
+        "stage_access_manifest_sha256": parent[
+            "stage_access_manifest_sha256"
+        ],
+        "registry_sha256": parent["registry_sha256"],
+        "registry_tip_sha256": parent["registry_tip_sha256"],
+        "trusted_stage_content_pin_sha256": parent[
+            "trusted_stage_content_pin_sha256"
+        ],
+        "trusted_stage_content_authentication_receipt_sha256": (
+            parent_authentication.get("authentication_receipt_sha256")
+        ),
+        "parent_consumption_binding_sha256": None,
+        "authenticated_store_context_sha256": parent_store_context[
+            "authenticated_store_context_sha256"
+        ],
+    }
+    if (
+        parent_context != expected_parent_context
+        or canonical_sha256(parent_context) != parent["expected_context_sha256"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent expected context differs from the prior consumed request"
+        )
+    parent_content_pin = validate_trusted_stage_content_pin(
+        stage_access_manifest=parent_access,
+        trusted_stage_content_pin=parent_pin,
+        trusted_stage_content_authentication=parent_authentication,
+        expected_context=parent_context,
+        expected_stage="development",
+    )
+    if parent_content_pin["pin_sha256"] != parent[
+        "trusted_stage_content_pin_sha256"
+    ]:
+        raise SecFilingGemmaStageVerifierError(
+            "Parent trusted content pin differs from the consumed parent binding"
+        )
     computed_receipt = audit_stage_evidence(
         parent_evidence,
-        lineage["stage_access_manifest"],
-        lineage["expected_context"],
-        trusted_stage_content_pin=lineage["trusted_stage_content_pin"],
+        parent_access,
+        parent_context,
+        authenticated_store_context=parent_store_context,
     )
-    supplied_receipt = _mapping_snapshot(
-        lineage["audit_receipt"], "parent stage audit receipt"
-    )
-    if supplied_receipt != computed_receipt:
+    if parent_audit != computed_receipt:
         raise SecFilingGemmaStageVerifierError(
-            "Parent audit receipt differs from authoritative parent replay"
+            "Stored parent audit receipt differs from authoritative parent replay"
         )
     if (
         computed_receipt.get("stage_evidence_sha256") != parent_hash
         or computed_receipt.get("candidate_sha256") != current_candidate_sha256
         or computed_receipt.get("prerequisite_stage") != "development"
         or computed_receipt.get("requested_stage") != "intermediate"
+        or computed_receipt.get("trusted_stage_content_pin_sha256")
+        != parent["trusted_stage_content_pin_sha256"]
+        or computed_receipt.get("parent_consumption_binding_sha256") is not None
         or computed_receipt.get("authorizes_outcome_access") is not False
     ):
         raise SecFilingGemmaStageVerifierError(
             "Parent audit receipt crossed an evidence, candidate, or stage binding"
+        )
+    if (
+        computed_receipt["audit_receipt_sha256"]
+        != parent["audit_receipt_sha256"]
+        or canonical_sha256(computed_receipt)
+        != parent["semantic_receipt_sha256"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent audit receipt differs from the prior semantic validation"
         )
     parent_content = parent_evidence.get("content_replays_by_stage")
     if type(parent_content) is not dict or set(parent_content) != {"development"}:
@@ -2506,26 +3081,37 @@ def validate_parent_stage_lineage(
         "parent_audit_receipt_sha256": computed_receipt[
             "audit_receipt_sha256"
         ],
-        "parent_trusted_stage_content_pin_sha256": computed_receipt[
-            "trusted_stage_content_pin_sha256"
+        "parent_trusted_stage_content_pin_sha256": parent_content_pin[
+            "pin_sha256"
         ],
+        "parent_consumption_binding_sha256": binding_hash,
+        "parent_consumption_entry_sha256": parent["entry_sha256"],
+        "parent_prerequisite_validation_result_sha256": parent[
+            "prerequisite_validation_result_sha256"
+        ],
+        "parent_semantic_receipt_sha256": parent["semantic_receipt_sha256"],
+        "parent_authorization_bundle_sha256": parent[
+            "authorization_bundle_sha256"
+        ],
+        "parent_authorization_grant_sha256": parent[
+            "authorization_grant_sha256"
+        ],
+        "parent_store_pin_sha256": parent["store_pin_sha256"],
         "trusted_stage_content_pin": {
-            "stage": computed_receipt["prerequisite_stage"],
-            "content_manifest_sha256": computed_receipt[
-                "trusted_content_manifest_sha256"
+            "stage": "development",
+            "content_manifest_sha256": parent_content_pin[
+                "content_manifest_sha256"
             ],
-            "stage_artifact_sha256": computed_receipt[
-                "trusted_stage_artifact_sha256"
+            "stage_artifact_sha256": parent_content_pin[
+                "stage_artifact_sha256"
             ],
-            "external_seal_receipt_sha256": computed_receipt[
-                "trusted_external_seal_receipt_sha256"
+            "external_seal_receipt_sha256": parent_content_pin[
+                "external_seal_receipt_sha256"
             ],
-            "trusted_store_state_sha256": computed_receipt[
+            "trusted_store_state_sha256": parent_content_pin[
                 "trusted_store_state_sha256"
             ],
-            "pin_sha256": computed_receipt[
-                "trusted_stage_content_pin_sha256"
-            ],
+            "pin_sha256": parent_content_pin["pin_sha256"],
         },
         "content_replays_by_stage": parent_content,
     }
@@ -2536,7 +3122,7 @@ def audit_stage_evidence(
     stage_access_manifest: Mapping[str, Any],
     expected_context: Mapping[str, Any],
     *,
-    trusted_stage_content_pin: Mapping[str, Any] | None = None,
+    authenticated_store_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Replay all currently provable evidence and return a blocked audit receipt."""
 
@@ -2548,7 +3134,6 @@ def audit_stage_evidence(
         "evidence": evidence,
         "stage_access_manifest": stage_access_manifest,
         "expected_context": expected_context,
-        "trusted_stage_content_pin": trusted_stage_content_pin,
     }
     _preflight_plain_json(caller_bundle, "stage audit caller bundle")
     detached_bundle, _bundle_totals = _bounded_plain_json_copy(
@@ -2561,7 +3146,14 @@ def audit_stage_evidence(
     value = _mapping_snapshot(detached_bundle["evidence"], "stage evidence")
     stage_access_manifest = detached_bundle["stage_access_manifest"]
     expected_context = detached_bundle["expected_context"]
-    trusted_stage_content_pin = detached_bundle["trusted_stage_content_pin"]
+    _preflight_plain_json(
+        authenticated_store_context,
+        "authenticated store verifier context",
+    )
+    authenticated_store_context, _trusted_totals = _bounded_plain_json_copy(
+        authenticated_store_context,
+        "authenticated store verifier context",
+    )
     _expect_keys(
         value,
         {
@@ -2599,6 +3191,12 @@ def audit_stage_evidence(
     candidate = value["candidate_manifest"]
     candidate_hash = candidate.get("candidate_sha256") if type(candidate) is dict else None
     _sha256(candidate_hash, "candidate hash")
+    authenticated_context = validate_authenticated_store_context(
+        authenticated_store_context,
+        stage_access_manifest=stage_access_manifest,
+        expected_context=expected_context,
+        expected_stage=prerequisite,
+    )
     parent_lineage = validate_parent_stage_lineage(
         value["parent_stage_lineage"],
         prerequisite_stage=prerequisite,
@@ -2606,12 +3204,15 @@ def audit_stage_evidence(
             "parent_stage_evidence_sha256"
         ],
         current_candidate_sha256=candidate_hash,
+        current_expected_context=expected_context,
+        current_trusted_stage_content_pin=authenticated_context[
+            "trusted_stage_content_pin"
+        ],
+        parent_consumption_binding=authenticated_context[
+            "parent_consumption_binding"
+        ],
     )
-    current_content_pin = validate_trusted_stage_content_pin(
-        stage_access_manifest=stage_access_manifest,
-        trusted_stage_content_pin=trusted_stage_content_pin,
-        expected_stage=prerequisite,
-    )
+    current_content_pin = authenticated_context["trusted_stage_content_pin"]
     identities = validate_candidate_source_bytes(
         contract_manifest=value["contract_manifest"],
         candidate_manifest=candidate,
@@ -2853,9 +3454,14 @@ def audit_stage_evidence(
     }
     trusted_content_pin_boundary = {
         "stage_access_pin_cross_bound": True,
-        "separately_supplied_store_pin_claim_present": True,
-        "separately_supplied_store_pin_authenticated": False,
+        "store_state_and_tip_authenticated_by_reveal_store": True,
+        "pin_membership_authenticated_by_reveal_store": True,
+        "pin_and_stage_access_cross_bound_by_verifier": True,
+        "parent_consumption_cross_bound_by_verifier": parent_lineage is not None,
         "trusted_store_state_authenticated_by_verifier": False,
+        "store_files_independently_loaded_by_verifier": False,
+        "same_directory_is_external_trust_domain": False,
+        "coordinated_state_and_tip_replacement_resistant": False,
         "authorizing": False,
     }
     component_hashes = {
@@ -2870,10 +3476,21 @@ def audit_stage_evidence(
             source_runtime_trust_boundary
         ),
         "trusted_stage_content_pin": current_content_pin["pin_sha256"],
+        "trusted_stage_content_authentication": current_content_pin[
+            "authentication_receipt_sha256"
+        ],
+        "authenticated_store_context": authenticated_context[
+            "authenticated_store_context_sha256"
+        ],
         "trusted_content_pin_boundary": canonical_sha256(
             trusted_content_pin_boundary
         ),
         "parent_stage_lineage": canonical_sha256(parent_lineage),
+        "parent_consumption_binding": (
+            canonical_sha256(None)
+            if parent_lineage is None
+            else parent_lineage["parent_consumption_binding_sha256"]
+        ),
         "calendar_and_universe": canonical_sha256(calendar),
         "catalog_replay": catalog_replay["replay_validation_sha256"],
         "catalog_request_receipts": catalog_replay[
@@ -2929,6 +3546,18 @@ def audit_stage_evidence(
             "source_identity_receipt_sha256"
         ],
         "trusted_stage_content_pin_sha256": current_content_pin["pin_sha256"],
+        "trusted_stage_content_authentication": current_content_pin[
+            "authentication_receipt"
+        ],
+        "trusted_stage_content_authentication_receipt_sha256": current_content_pin[
+            "authentication_receipt_sha256"
+        ],
+        "authenticated_store_context_sha256": authenticated_context[
+            "authenticated_store_context_sha256"
+        ],
+        "parent_consumption_binding_sha256": expected_context.get(
+            "parent_consumption_binding_sha256"
+        ),
         "trusted_content_manifest_sha256": current_content_pin[
             "content_manifest_sha256"
         ],
@@ -2950,6 +3579,38 @@ def audit_stage_evidence(
             None
             if parent_lineage is None
             else parent_lineage["parent_audit_receipt_sha256"]
+        ),
+        "parent_consumption_entry_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_consumption_entry_sha256"]
+        ),
+        "parent_prerequisite_validation_result_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage[
+                "parent_prerequisite_validation_result_sha256"
+            ]
+        ),
+        "parent_semantic_receipt_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_semantic_receipt_sha256"]
+        ),
+        "parent_authorization_bundle_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_authorization_bundle_sha256"]
+        ),
+        "parent_authorization_grant_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_authorization_grant_sha256"]
+        ),
+        "parent_store_pin_sha256": (
+            None
+            if parent_lineage is None
+            else parent_lineage["parent_store_pin_sha256"]
         ),
         "catalog_replay_receipt_sha256": catalog_replay[
             "replay_validation_sha256"
@@ -2986,7 +3647,7 @@ def authoritative_prerequisite_validator(
     stage_access_manifest: Mapping[str, Any],
     expected_context: Mapping[str, Any],
     *,
-    trusted_stage_content_pin: Mapping[str, Any] | None = None,
+    authenticated_store_context: Mapping[str, Any] | None = None,
 ) -> None:
     """Fail closed instead of manufacturing an authorizing semantic result."""
 
@@ -2994,7 +3655,7 @@ def authoritative_prerequisite_validator(
         evidence,
         stage_access_manifest,
         expected_context,
-        trusted_stage_content_pin=trusted_stage_content_pin,
+        authenticated_store_context=authenticated_store_context,
     )
     blocked = [
         check
@@ -3008,13 +3669,16 @@ def authoritative_prerequisite_validator(
 
 
 __all__ = [
+    "AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION",
     "AUTHORITATIVE_VALIDATOR_ID",
     "MAX_STAGE_CONTENT_BYTES",
     "OWNED_HARDENED_TRANSPORT_MODE",
+    "PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION",
     "STAGE_AUDIT_RECEIPT_SCHEMA_VERSION",
     "STAGE_EVIDENCE_SCHEMA_VERSION",
     "STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION",
     "TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION",
+    "TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION",
     "SecFilingGemmaStageVerifierBlocked",
     "SecFilingGemmaStageVerifierError",
     "audit_stage_evidence",
@@ -3022,6 +3686,7 @@ __all__ = [
     "detach_untrusted_stage_json",
     "preflight_untrusted_stage_json",
     "validate_calendar_and_universe_snapshot",
+    "validate_authenticated_store_context",
     "validate_candidate_source_bytes",
     "validate_candidate_source_role_audit",
     "validate_candidate_runtime_source_audit",

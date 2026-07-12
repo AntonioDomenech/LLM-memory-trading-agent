@@ -49,6 +49,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_consumed_stage_authorization_grant,
     validate_consumed_stage_authorization_grant,
 )
+from agent_benchmark.sec_filing_gemma_stage_verifier import (
+    STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
+)
 from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 
 
@@ -148,10 +151,31 @@ def _request(
     evidence: dict,
     salt: str,
 ) -> tuple[dict, dict]:
+    prerequisite = "development" if stage == "intermediate" else "intermediate"
+    attempt = candidate["bindings"]["holdout_attempt_id"]
     access_body = {
-        "schema_version": "sec-gemma-test-stage-access-v1",
-        "stage": stage,
-        "candidate_sha256": candidate["candidate_sha256"],
+        "schema_version": STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "transition": {
+            "prerequisite_stage": prerequisite,
+            "requested_stage": stage,
+            "transition_ordinal": 1 if stage == "intermediate" else 2,
+            "single_use_consumption_required": True,
+            "stage_reuse_permitted": False,
+        },
+        "candidate": {
+            "candidate_sha256": candidate["candidate_sha256"],
+            "candidate_design_sha256": candidate_design_sha256(candidate),
+            "attempt_id": attempt,
+        },
+        "prerequisite_evidence_pin": {
+            "stage": prerequisite,
+            "content_manifest_sha256": _digest(f"{salt}:{prerequisite}:content"),
+            "stage_artifact_sha256": _digest(f"{salt}:{prerequisite}:artifact"),
+            "external_seal_receipt_sha256": _digest(
+                f"{salt}:{prerequisite}:seal"
+            ),
+        },
         "scope_id": f"{salt}:{stage}:access",
     }
     access_hash = canonical_sha256(access_body)
@@ -205,6 +229,18 @@ def _grant_request(
             "future_stage_access_permitted": False,
             "outcome_access_before_atomic_request_consumption_permitted": False,
         },
+        "prerequisite_evidence_pin": {
+            "stage": prerequisite,
+            "content_manifest_sha256": _digest(
+                f"grant:{attempt}:{prerequisite}:content"
+            ),
+            "stage_artifact_sha256": _digest(
+                f"grant:{attempt}:{prerequisite}:artifact"
+            ),
+            "external_seal_receipt_sha256": _digest(
+                f"grant:{attempt}:{prerequisite}:seal"
+            ),
+        },
     }
     access_manifest = {
         **access_body,
@@ -224,26 +260,72 @@ def _grant_request(
 
 
 def _semantic_validator(
-    evidence: dict, access_manifest: dict, context: dict
+    evidence: dict,
+    access_manifest: dict,
+    context: dict,
+    *,
+    authenticated_store_context: dict,
 ) -> SemanticPrerequisiteValidation:
     assert evidence["stage"] == context["prerequisite_stage"]
     assert evidence["candidate_sha256"] == context["candidate_sha256"]
     assert access_manifest["stage_access_manifest_sha256"] == context[
         "stage_access_manifest_sha256"
     ]
+    audit_body = {
+        "schema_version": STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
+        "prerequisite_stage": context["prerequisite_stage"],
+        "requested_stage": context["stage"],
+        "stage_evidence_sha256": context[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "candidate_sha256": context["candidate_sha256"],
+        "trusted_stage_content_pin_sha256": context[
+            "trusted_stage_content_pin_sha256"
+        ],
+        "trusted_stage_content_authentication": authenticated_store_context[
+            "trusted_stage_content_authentication"
+        ],
+        "trusted_stage_content_authentication_receipt_sha256": context[
+            "trusted_stage_content_authentication_receipt_sha256"
+        ],
+        "parent_consumption_binding_sha256": context[
+            "parent_consumption_binding_sha256"
+        ],
+        "authenticated_store_context_sha256": context[
+            "authenticated_store_context_sha256"
+        ],
+        "replayed_without_outcome_access": True,
+        "authorizes_outcome_access": False,
+    }
+    semantic_receipt = {
+        **audit_body,
+        "audit_receipt_sha256": canonical_sha256(audit_body),
+    }
     return SemanticPrerequisiteValidation.success(
         context,
         validator_id=VALIDATOR_ID,
         validator_source_sha256=VALIDATOR_SOURCE_SHA256,
         semantic_checks=SEMANTIC_CHECKS,
-        semantic_receipt={
-            "schema_version": "sec-gemma-test-semantic-receipt-v1",
-            "replayed_without_outcome_access": True,
-            "evidence_sha256": context[
-                "prerequisite_stage_evidence_sha256"
-            ],
-        },
+        semantic_receipt=semantic_receipt,
     )
+
+
+def _store_bound_receipt(context: Mapping[str, object], **extra: object) -> dict:
+    return {
+        "trusted_stage_content_pin_sha256": context[
+            "trusted_stage_content_pin_sha256"
+        ],
+        "trusted_stage_content_authentication_receipt_sha256": context[
+            "trusted_stage_content_authentication_receipt_sha256"
+        ],
+        "parent_consumption_binding_sha256": context[
+            "parent_consumption_binding_sha256"
+        ],
+        "authenticated_store_context_sha256": context[
+            "authenticated_store_context_sha256"
+        ],
+        **extra,
+    }
 
 
 def _consume(
@@ -274,6 +356,34 @@ def _consume(
         )
 
 
+def _consume_with_grant(
+    store: SecFilingGemmaRevealStore,
+    request: dict,
+    candidate: dict,
+    evidence: dict,
+    *,
+    stage: str,
+    access_manifest: dict,
+    validator=_semantic_validator,
+) -> dict:
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "authoritative_prerequisite_validator",
+        validator,
+    ), patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store."
+        "AUTHORITATIVE_STAGE_PROMOTION_ENABLED",
+        True,
+    ):
+        return store.consume_request_and_issue_authorization_grant(
+            request,
+            candidate_manifest=candidate,
+            stage=stage,
+            stage_access_manifest=access_manifest,
+            prerequisite_stage_evidence=evidence,
+        )
+
+
 def test_fresh_store_uses_only_tracked_genesis_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -293,6 +403,7 @@ def test_fresh_store_uses_only_tracked_genesis_and_is_idempotent(
     assert chain["actual_final_touch_count"] == 0
     assert chain["historical_final_reveal_count_lower_bound"] == 10
     assert chain["repository_final_touch_count_lower_bound"] == 10
+    assert store.load_current_tip_anchor()["trusted_stage_content_pins"] == {}
 
 
 def test_interrupted_genesis_pending_anchor_recovers_on_initialize(
@@ -443,6 +554,7 @@ def test_intermediate_request_is_single_use_and_does_not_touch_final(
         evidence=evidence,
         salt="intermediate",
     )
+    tip_before = store.load_current_tip_anchor()
 
     consumed = _consume(
         store,
@@ -458,6 +570,11 @@ def test_intermediate_request_is_single_use_and_does_not_touch_final(
     assert consumed["consumption_ledger"]["entries"][0][
         "final_touch_delta"
     ] == 0
+    tip_after = store.load_current_tip_anchor()
+    assert tip_after["revision"] == tip_before["revision"] + 2
+    assert set(tip_after["trusted_stage_content_pins"]) == {
+        request["request_sha256"]
+    }
 
     before_replay = store.load()
     with pytest.raises(SecFilingGemmaRevealStoreError, match="already consumed"):
@@ -505,6 +622,78 @@ def test_public_consume_uses_only_the_fixed_verifier_and_fails_closed(
     assert store.load() == before
 
 
+def test_blocked_verifier_observes_precommitted_pin_and_retry_reuses_it(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="blocked-pin-retry")
+    evidence = _evidence("development", candidate, salt="blocked-pin-retry")
+    request, access_manifest = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=evidence,
+        salt="blocked-pin-retry",
+    )
+    state_bytes = store.state_path.read_bytes()
+    state_before = store.load()
+    tip_before = store.load_current_tip_anchor()
+    observed_pins: list[dict] = []
+
+    def blocked_validator(
+        _evidence,
+        _access,
+        _context,
+        *,
+        authenticated_store_context,
+    ):
+        on_disk_tip = json.loads(store.current_tip_anchor_path.read_bytes())
+        persisted_pin = on_disk_tip["trusted_stage_content_pins"][
+            request["request_sha256"]
+        ]
+        assert persisted_pin == authenticated_store_context[
+            "trusted_stage_content_pin"
+        ]
+        observed_pins.append(copy.deepcopy(persisted_pin))
+        raise RuntimeError("synthetic blocked verifier")
+
+    for attempt in range(2):
+        with pytest.raises(
+            SecFilingGemmaRevealStoreError,
+            match="Fixed semantic prerequisite verifier failed",
+        ):
+            _consume(
+                store,
+                request,
+                candidate,
+                evidence,
+                stage="intermediate",
+                access_hash=access_manifest,
+                validator=blocked_validator,
+            )
+        tip_after_attempt = store.load_current_tip_anchor()
+        if attempt == 0:
+            first_tip_bytes = store.current_tip_anchor_path.read_bytes()
+            first_tip = tip_after_attempt
+        else:
+            assert store.current_tip_anchor_path.read_bytes() == first_tip_bytes
+            assert tip_after_attempt == first_tip
+
+    assert len(observed_pins) == 2
+    assert observed_pins[0] == observed_pins[1]
+    assert first_tip["revision"] == tip_before["revision"] + 1
+    assert set(first_tip["trusted_stage_content_pins"]) == {
+        request["request_sha256"]
+    }
+    assert first_tip["authorization_bundles"] == tip_before[
+        "authorization_bundles"
+    ]
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.load() == state_before
+    assert store.load()["consumption_ledger"]["entries"] == []
+
+
 def test_substituted_successful_verifier_cannot_bypass_store_promotion_gate(
     tmp_path: Path,
 ) -> None:
@@ -522,7 +711,7 @@ def test_substituted_successful_verifier_cannot_bypass_store_promotion_gate(
         salt="independent-promotion-gate",
     )
     state_bytes = store.state_path.read_bytes()
-    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
 
     with patch(
         "agent_benchmark.sec_filing_gemma_reveal_store."
@@ -541,7 +730,14 @@ def test_substituted_successful_verifier_cannot_bypass_store_promotion_gate(
         )
 
     assert store.state_path.read_bytes() == state_bytes
-    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    tip_after = store.load_current_tip_anchor()
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert set(tip_after["trusted_stage_content_pins"]) == {
+        request["request_sha256"]
+    }
+    assert tip_after["trusted_stage_content_pins"][request["request_sha256"]][
+        "request_sha256"
+    ] == request["request_sha256"]
     assert store.load()["consumption_ledger"]["entries"] == []
 
 
@@ -560,11 +756,22 @@ def test_substituted_verifier_cannot_enable_the_store_promotion_gate(
         salt="verifier-gate-flip",
     )
     state_bytes = store.state_path.read_bytes()
-    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
 
-    def flip_gate_then_succeed(evidence_value, access_value, context_value):
+    def flip_gate_then_succeed(
+        evidence_value,
+        access_value,
+        context_value,
+        *,
+        authenticated_store_context,
+    ):
         reveal_store_module.AUTHORITATIVE_STAGE_PROMOTION_ENABLED = True
-        return _semantic_validator(evidence_value, access_value, context_value)
+        return _semantic_validator(
+            evidence_value,
+            access_value,
+            context_value,
+            authenticated_store_context=authenticated_store_context,
+        )
 
     with patch(
         "agent_benchmark.sec_filing_gemma_reveal_store."
@@ -584,7 +791,11 @@ def test_substituted_verifier_cannot_enable_the_store_promotion_gate(
 
     assert reveal_store_module.AUTHORITATIVE_STAGE_PROMOTION_ENABLED is False
     assert store.state_path.read_bytes() == state_bytes
-    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    tip_after = store.load_current_tip_anchor()
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert set(tip_after["trusted_stage_content_pins"]) == {
+        request["request_sha256"]
+    }
     assert store.load()["consumption_ledger"]["entries"] == []
 
 
@@ -783,7 +994,14 @@ def test_state_write_crash_recovers_exact_bundle_and_retry_is_idempotent(
     def crash_after_state_replace(path: Path, payload: bytes) -> None:
         nonlocal crashed
         real_atomic_replace(path, payload)
-        if path == store.state_path and not crashed:
+        if (
+            path == store.state_path
+            and json.loads(payload)["consumption_ledger"]["chain"][
+                "consumed_request_count"
+            ]
+            == 1
+            and not crashed
+        ):
             crashed = True
             raise RuntimeError("simulated process stop after state replace")
 
@@ -1154,7 +1372,16 @@ def test_verifier_exception_after_state_mutation_restores_exact_original_bytes(
     before = store.load()
     original_bytes = store.state_path.read_bytes()
 
-    def mutate_then_raise(_evidence, _access, _context):
+    def mutate_then_raise(
+        _evidence,
+        _access,
+        _context,
+        *,
+        authenticated_store_context,
+    ):
+        assert authenticated_store_context["trusted_stage_content_pin"][
+            "request_sha256"
+        ] == request["request_sha256"]
         assert store.restore_pending_path.exists()
         store.state_path.write_bytes(b'{"verifier_mutation":true}\n')
         assert store.state_path.read_bytes() != original_bytes
@@ -1197,8 +1424,20 @@ def test_interrupted_failed_verifier_restore_recovers_both_files_on_next_load(
     original_state = store.load()
     original_state_bytes = store.state_path.read_bytes()
     original_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    post_pin_tip_bytes: bytes | None = None
 
-    def mutate_both_then_raise(_evidence, _access, _context):
+    def mutate_both_then_raise(
+        _evidence,
+        _access,
+        _context,
+        *,
+        authenticated_store_context,
+    ):
+        nonlocal post_pin_tip_bytes
+        assert authenticated_store_context["trusted_stage_content_pin"][
+            "request_sha256"
+        ] == request["request_sha256"]
+        post_pin_tip_bytes = store.current_tip_anchor_path.read_bytes()
         store.state_path.write_bytes(b'{"mutated_state":true}\n')
         store.current_tip_anchor_path.write_bytes(b'{"mutated_tip":true}\n')
         raise RuntimeError("verifier failed after mutating both files")
@@ -1235,13 +1474,15 @@ def test_interrupted_failed_verifier_restore_recovers_both_files_on_next_load(
         )
 
     assert stopped is True
+    assert post_pin_tip_bytes is not None
+    assert post_pin_tip_bytes != original_tip_bytes
     assert store.restore_pending_path.exists()
     assert store.state_path.read_bytes() == original_state_bytes
     assert store.current_tip_anchor_path.read_bytes() != original_tip_bytes
 
     assert store.load() == original_state
     assert store.state_path.read_bytes() == original_state_bytes
-    assert store.current_tip_anchor_path.read_bytes() == original_tip_bytes
+    assert store.current_tip_anchor_path.read_bytes() == post_pin_tip_bytes
     assert not store.restore_pending_path.exists()
 
 
@@ -1262,7 +1503,16 @@ def test_invalid_verifier_result_after_state_mutation_restores_exact_original_by
     before = store.load()
     original_bytes = store.state_path.read_bytes()
 
-    def mutate_then_return_invalid(_evidence, _access, _context):
+    def mutate_then_return_invalid(
+        _evidence,
+        _access,
+        _context,
+        *,
+        authenticated_store_context,
+    ):
+        assert authenticated_store_context["trusted_stage_content_pin"][
+            "request_sha256"
+        ] == request["request_sha256"]
         store.state_path.write_bytes(b'{"verifier_mutation":true}\n')
         assert store.state_path.read_bytes() != original_bytes
         return True
@@ -1288,8 +1538,8 @@ def test_invalid_verifier_result_after_state_mutation_restores_exact_original_by
 @pytest.mark.parametrize(
     "validator",
     [
-        lambda _evidence, _access, _context: True,
-        lambda _evidence, _access, _context: {
+        lambda _evidence, _access, _context, *, authenticated_store_context: True,
+        lambda _evidence, _access, _context, *, authenticated_store_context: {
             "semantic_validation_completed": True
         },
     ],
@@ -1342,7 +1592,13 @@ def test_semantic_result_with_wrong_candidate_binding_is_rejected(
         salt="wrong-binding",
     )
 
-    def wrong_validator(_evidence, _access, context):
+    def wrong_validator(
+        _evidence,
+        _access,
+        context,
+        *,
+        authenticated_store_context,
+    ):
         changed = dict(context)
         changed["candidate_sha256"] = _digest("another candidate")
         return SemanticPrerequisiteValidation.success(
@@ -1350,7 +1606,9 @@ def test_semantic_result_with_wrong_candidate_binding_is_rejected(
             validator_id=VALIDATOR_ID,
             validator_source_sha256=VALIDATOR_SOURCE_SHA256,
             semantic_checks=SEMANTIC_CHECKS,
-            semantic_receipt={"semantic_replay": "wrong candidate"},
+            semantic_receipt=_store_bound_receipt(
+                context, semantic_replay="wrong candidate"
+            ),
         )
 
     before = store.load()
@@ -1384,7 +1642,13 @@ def test_semantic_result_cannot_be_reused_for_another_access_manifest(
         salt="cross-access-result",
     )
 
-    def stale_access_validator(_evidence, _access, context):
+    def stale_access_validator(
+        _evidence,
+        _access,
+        context,
+        *,
+        authenticated_store_context,
+    ):
         changed = dict(context)
         changed["stage_access_manifest_sha256"] = _digest("another access manifest")
         return SemanticPrerequisiteValidation.success(
@@ -1392,7 +1656,9 @@ def test_semantic_result_cannot_be_reused_for_another_access_manifest(
             validator_id=VALIDATOR_ID,
             validator_source_sha256=VALIDATOR_SOURCE_SHA256,
             semantic_checks=SEMANTIC_CHECKS,
-            semantic_receipt={"semantic_replay": "stale access manifest"},
+            semantic_receipt=_store_bound_receipt(
+                context, semantic_replay="stale access manifest"
+            ),
         )
 
     before = store.load()
@@ -1467,13 +1733,19 @@ def test_semantic_result_requires_the_exact_frozen_replay_checklist(
         salt="weak-checklist",
     )
 
-    def weak_validator(_evidence, _access, context):
+    def weak_validator(
+        _evidence,
+        _access,
+        context,
+        *,
+        authenticated_store_context,
+    ):
         return SemanticPrerequisiteValidation.success(
             context,
             validator_id=VALIDATOR_ID,
             validator_source_sha256=VALIDATOR_SOURCE_SHA256,
             semantic_checks=("ok",),
-            semantic_receipt={"claimed": True},
+            semantic_receipt=_store_bound_receipt(context, claimed=True),
         )
 
     before = store.load()
@@ -1508,13 +1780,19 @@ def test_validator_source_identity_is_derived_from_the_candidate(
         salt="wrong-validator-source",
     )
 
-    def wrong_source_validator(_evidence, _access, context):
+    def wrong_source_validator(
+        _evidence,
+        _access,
+        context,
+        *,
+        authenticated_store_context,
+    ):
         return SemanticPrerequisiteValidation.success(
             context,
             validator_id=VALIDATOR_ID,
             validator_source_sha256=_digest("not candidate-bound"),
             semantic_checks=SEMANTIC_CHECKS,
-            semantic_receipt={"claimed": True},
+            semantic_receipt=_store_bound_receipt(context, claimed=True),
         )
 
     before = store.load()
@@ -1555,9 +1833,20 @@ def test_fixed_verifier_cannot_redirect_the_authoritative_store_path(
     redirected_state = redirected_directory / STATE_FILENAME
     redirected_state.write_bytes(original_bytes)
 
-    def redirecting_validator(callback_evidence, callback_access, context):
+    def redirecting_validator(
+        callback_evidence,
+        callback_access,
+        context,
+        *,
+        authenticated_store_context,
+    ):
         store._store_directory = redirected_directory
-        return _semantic_validator(callback_evidence, callback_access, context)
+        return _semantic_validator(
+            callback_evidence,
+            callback_access,
+            context,
+            authenticated_store_context=authenticated_store_context,
+        )
 
     with pytest.raises(
         SecFilingGemmaRevealStoreError,
@@ -1645,21 +1934,21 @@ def test_final_consumption_increments_actual_touch_exactly_once(
     development_evidence = _evidence(
         "development", candidate, salt="final-count-development"
     )
-    intermediate_request, intermediate_access = _request(
+    intermediate_request, intermediate_access = _grant_request(
         registered,
         candidate,
         stage="intermediate",
         evidence=development_evidence,
-        salt="final-count-intermediate",
     )
-    after_intermediate = _consume(
+    intermediate_bundle = _consume_with_grant(
         store,
         intermediate_request,
         candidate,
         development_evidence,
         stage="intermediate",
-        access_hash=intermediate_access,
+        access_manifest=intermediate_access,
     )
+    after_intermediate = intermediate_bundle["authenticated_store_snapshot"]
     assert after_intermediate["consumption_ledger"]["chain"][
         "actual_final_touch_count"
     ] == 0
@@ -1707,6 +1996,350 @@ def test_final_consumption_increments_actual_touch_exactly_once(
     ] == 1
 
 
+def test_final_verifier_receives_exact_internal_parent_consumption_binding(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="final-parent-context")
+    development_evidence = _evidence(
+        "development", candidate, salt="final-parent-context-development"
+    )
+    intermediate_request, intermediate_access = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=development_evidence,
+    )
+    intermediate_bundle = _consume_with_grant(
+        store,
+        intermediate_request,
+        candidate,
+        development_evidence,
+        stage="intermediate",
+        access_manifest=intermediate_access,
+    )
+    intermediate_state = intermediate_bundle["authenticated_store_snapshot"]
+    intermediate_evidence = _evidence(
+        "intermediate", candidate, salt="final-parent-context-final"
+    )
+    final_request, final_access = _request(
+        intermediate_state,
+        candidate,
+        stage="final",
+        evidence=intermediate_evidence,
+        salt="final-parent-context-final",
+    )
+
+    for public_method in (
+        SecFilingGemmaRevealStore.consume_request,
+        SecFilingGemmaRevealStore.consume_request_and_issue_authorization_grant,
+    ):
+        public_signature = inspect.signature(public_method)
+        assert "authenticated_store_context" not in public_signature.parameters
+        assert all(
+            parameter.kind is not inspect.Parameter.VAR_KEYWORD
+            for parameter in public_signature.parameters.values()
+        )
+    state_before_override = store.state_path.read_bytes()
+    tip_before_override = store.current_tip_anchor_path.read_bytes()
+    with pytest.raises(TypeError, match="authenticated_store_context"):
+        store.consume_request(
+            final_request,
+            candidate_manifest=candidate,
+            stage="final",
+            stage_access_manifest=final_access,
+            prerequisite_stage_evidence=intermediate_evidence,
+            authenticated_store_context={"forged": True},
+        )
+    assert store.state_path.read_bytes() == state_before_override
+    assert store.current_tip_anchor_path.read_bytes() == tip_before_override
+
+    tip_before_final = store.load_current_tip_anchor()
+    observed: dict[str, dict] = {}
+
+    def capture_final_context(
+        evidence,
+        access_manifest,
+        expected_context,
+        *,
+        authenticated_store_context,
+    ):
+        assert expected_context["stage"] == "final"
+        observed["expected_context"] = copy.deepcopy(expected_context)
+        observed["authenticated_store_context"] = copy.deepcopy(
+            authenticated_store_context
+        )
+        observed["post_final_pin_state"] = json.loads(
+            store.state_path.read_bytes()
+        )
+        observed["post_final_pin_tip"] = json.loads(
+            store.current_tip_anchor_path.read_bytes()
+        )
+        return _semantic_validator(
+            evidence,
+            access_manifest,
+            expected_context,
+            authenticated_store_context=authenticated_store_context,
+        )
+
+    consumed = _consume(
+        store,
+        final_request,
+        candidate,
+        intermediate_evidence,
+        stage="final",
+        access_hash=final_access,
+        validator=capture_final_context,
+    )
+    assert consumed["consumption_ledger"]["chain"]["consumed_request_count"] == 2
+
+    expected_context = observed["expected_context"]
+    store_context = observed["authenticated_store_context"]
+    post_pin_state = observed["post_final_pin_state"]
+    post_pin_tip = observed["post_final_pin_tip"]
+    assert post_pin_state == intermediate_state
+    assert post_pin_tip["revision"] == tip_before_final["revision"] + 1
+    assert post_pin_tip["authorization_bundles"][
+        intermediate_request["request_sha256"]
+    ] == intermediate_bundle
+    assert store_context["trusted_stage_content_pin"] == post_pin_tip[
+        "trusted_stage_content_pins"
+    ][final_request["request_sha256"]]
+    store_context_body = {
+        key: store_context[key]
+        for key in store_context
+        if key != "authenticated_store_context_sha256"
+    }
+    assert canonical_sha256(store_context_body) == store_context[
+        "authenticated_store_context_sha256"
+    ]
+    assert expected_context["authenticated_store_context_sha256"] == (
+        store_context["authenticated_store_context_sha256"]
+    )
+
+    binding = store_context["parent_consumption_binding"]
+    parent_entry = post_pin_state["consumption_ledger"]["entries"][-1]
+    parent_request = parent_entry["request"]
+    parent_validation = parent_entry["prerequisite_validation"]
+    parent_audit = parent_validation["semantic_receipt"]
+    parent_pin = post_pin_tip["trusted_stage_content_pins"][
+        parent_request["request_sha256"]
+    ]
+    persisted_bundle = post_pin_tip["authorization_bundles"][
+        parent_request["request_sha256"]
+    ]
+    parent_grant = persisted_bundle["authorization_grant"]
+    parent_store_pin = persisted_bundle["store_state_pin"]
+    assert parent_entry["entry_sha256"] == post_pin_state[
+        "consumption_ledger"
+    ]["chain"]["tip_sha256"]
+    assert parent_validation["semantic_receipt_sha256"] == canonical_sha256(
+        parent_audit
+    )
+    assert parent_audit["audit_receipt_sha256"] == canonical_sha256(
+        {
+            key: parent_audit[key]
+            for key in parent_audit
+            if key != "audit_receipt_sha256"
+        }
+    )
+    assert parent_audit["trusted_stage_content_pin_sha256"] == parent_pin[
+        "pin_sha256"
+    ]
+    assert parent_audit[
+        "trusted_stage_content_authentication_receipt_sha256"
+    ] == parent_audit["trusted_stage_content_authentication"][
+        "authentication_receipt_sha256"
+    ]
+
+    parent_expected_context = {
+        "prerequisite_stage": parent_request["prerequisite_stage"],
+        "prerequisite_stage_evidence_sha256": parent_request[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "attempt_id": parent_request["attempt_id"],
+        "candidate_sha256": parent_request["candidate_sha256"],
+        "candidate_design_sha256": parent_request[
+            "candidate_design_sha256"
+        ],
+        "registry_entry_sha256": parent_request["registry_entry_sha256"],
+        "request_sha256": parent_request["request_sha256"],
+        "stage": parent_request["stage"],
+        "stage_access_manifest_sha256": parent_request[
+            "stage_access_manifest_sha256"
+        ],
+        "registry_sha256": parent_request["registry_sha256"],
+        "registry_tip_sha256": parent_request["registry_tip_sha256"],
+        "trusted_stage_content_pin_sha256": parent_pin["pin_sha256"],
+        "trusted_stage_content_authentication_receipt_sha256": parent_audit[
+            "trusted_stage_content_authentication_receipt_sha256"
+        ],
+        "parent_consumption_binding_sha256": None,
+        "authenticated_store_context_sha256": parent_audit[
+            "authenticated_store_context_sha256"
+        ],
+    }
+    child_fields = (
+        "request_sha256",
+        "stage",
+        "prerequisite_stage",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+    )
+    expected_child = {field: final_request[field] for field in child_fields}
+    expected_parent = {
+        "entry_sha256": parent_entry["entry_sha256"],
+        "sequence": parent_entry["sequence"],
+        "request_sha256": parent_request["request_sha256"],
+        "stage": parent_request["stage"],
+        "prerequisite_stage": parent_request["prerequisite_stage"],
+        "prerequisite_stage_evidence_sha256": parent_request[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": parent_request[
+            "stage_access_manifest_sha256"
+        ],
+        "expected_context_sha256": canonical_sha256(parent_expected_context),
+        "attempt_id": parent_request["attempt_id"],
+        "candidate_sha256": parent_request["candidate_sha256"],
+        "candidate_design_sha256": parent_request[
+            "candidate_design_sha256"
+        ],
+        "registry_entry_sha256": parent_request["registry_entry_sha256"],
+        "registry_sha256": parent_request["registry_sha256"],
+        "registry_tip_sha256": parent_request["registry_tip_sha256"],
+        "prerequisite_validation_result_sha256": parent_validation[
+            "result_sha256"
+        ],
+        "semantic_receipt_sha256": parent_validation[
+            "semantic_receipt_sha256"
+        ],
+        "audit_receipt": parent_audit,
+        "audit_receipt_sha256": parent_audit["audit_receipt_sha256"],
+        "trusted_stage_content_pin": parent_pin,
+        "trusted_stage_content_pin_sha256": parent_pin["pin_sha256"],
+        "authorization_bundle_sha256": persisted_bundle["bundle_sha256"],
+        "authorization_grant_sha256": parent_grant[
+            "authorization_grant_sha256"
+        ],
+        "store_pin_sha256": parent_store_pin["store_pin_sha256"],
+    }
+    expected_authenticated_tip = {
+        "store_state_sha256": post_pin_state["state_sha256"],
+        "state_snapshot_bytes_sha256": post_pin_tip[
+            "state_snapshot_bytes_sha256"
+        ],
+        "state_snapshot_byte_count": post_pin_tip[
+            "state_snapshot_byte_count"
+        ],
+        "consumption_ledger_sha256": post_pin_state["consumption_ledger"][
+            "ledger_sha256"
+        ],
+        "consumption_ledger_tip_sha256": post_pin_state[
+            "consumption_ledger"
+        ]["chain"]["tip_sha256"],
+        "consumed_request_count": post_pin_state["consumption_ledger"][
+            "chain"
+        ]["consumed_request_count"],
+        "current_tip_anchor_sha256": post_pin_tip["tip_anchor_sha256"],
+        "current_tip_revision": post_pin_tip["revision"],
+    }
+    expected_binding_body = {
+        "schema_version": (
+            reveal_store_module.PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "binding_kind": "exact_prior_intermediate_consumption_and_grant",
+        "child_request": expected_child,
+        "parent_consumption": expected_parent,
+        "authenticated_preconsumption_tip": expected_authenticated_tip,
+    }
+    expected_binding = {
+        **expected_binding_body,
+        "parent_consumption_binding_sha256": canonical_sha256(
+            expected_binding_body
+        ),
+    }
+    assert binding == expected_binding
+    assert expected_context["parent_consumption_binding_sha256"] == binding[
+        "parent_consumption_binding_sha256"
+    ]
+
+
+def test_final_requires_exact_predecessor_authorization_bundle_before_pin(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(store, salt="final-parent-bundle")
+    development_evidence = _evidence(
+        "development", candidate, salt="final-parent-bundle-development"
+    )
+    intermediate_request, intermediate_access = _request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=development_evidence,
+        salt="final-parent-bundle-intermediate",
+    )
+    after_intermediate = _consume(
+        store,
+        intermediate_request,
+        candidate,
+        development_evidence,
+        stage="intermediate",
+        access_hash=intermediate_access,
+    )
+    assert intermediate_request["request_sha256"] not in store.load_current_tip_anchor()[
+        "authorization_bundles"
+    ]
+
+    intermediate_evidence = _evidence(
+        "intermediate", candidate, salt="final-parent-bundle-final"
+    )
+    final_request, final_access = _request(
+        after_intermediate,
+        candidate,
+        stage="final",
+        evidence=intermediate_evidence,
+        salt="final-parent-bundle-final",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    def verifier_must_not_run(*_args, **_kwargs):
+        raise AssertionError(
+            "final predecessor authorization must fail before verifier execution"
+        )
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="persisted authorization bundle",
+    ):
+        _consume(
+            store,
+            final_request,
+            candidate,
+            intermediate_evidence,
+            stage="final",
+            access_hash=final_access,
+            validator=verifier_must_not_run,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert final_request["request_sha256"] not in store.load_current_tip_anchor()[
+        "trusted_stage_content_pins"
+    ]
+
+
 def test_final_request_cannot_be_consumed_before_intermediate_request(
     tmp_path: Path,
 ) -> None:
@@ -1721,9 +2354,11 @@ def test_final_request_cannot_be_consumed_before_intermediate_request(
         evidence=evidence,
         salt="too-early-final",
     )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
 
     with pytest.raises(
-        SecFilingGemmaRevealStoreError, match="prior intermediate"
+        SecFilingGemmaRevealStoreError, match="intermediate predecessor"
     ):
         _consume(
             store,
@@ -1736,6 +2371,11 @@ def test_final_request_cannot_be_consumed_before_intermediate_request(
     assert store.load()["consumption_ledger"]["chain"][
         "actual_final_touch_count"
     ] == 0
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert request["request_sha256"] not in store.load_current_tip_anchor()[
+        "trusted_stage_content_pins"
+    ]
 
 
 def test_interrupted_atomic_temp_file_is_never_authoritative(tmp_path: Path) -> None:

@@ -58,7 +58,13 @@ CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-consumed-stage-authorization-bundle-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v1"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v2"
+)
+TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-trusted-stage-content-pin-v2"
+)
+TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-trusted-stage-content-authentication-v1"
 )
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -229,8 +235,47 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "consumption_ledger_sha256",
         "consumption_ledger_tip_sha256",
         "consumed_request_count",
+        "trusted_stage_content_pins",
         "authorization_bundles",
         "tip_anchor_sha256",
+    }
+)
+_TRUSTED_STAGE_CONTENT_PIN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "request_sha256",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "prerequisite_stage",
+        "requested_stage",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "content_manifest_sha256",
+        "stage_artifact_sha256",
+        "external_seal_receipt_sha256",
+        "trusted_store_state_sha256",
+        "pin_sha256",
+    }
+)
+_TRUSTED_STAGE_CONTENT_AUTHENTICATION_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "authentication_kind",
+        "request_sha256",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "prerequisite_stage",
+        "requested_stage",
+        "trusted_stage_content_pin_sha256",
+        "trusted_store_state_sha256",
+        "trusted_current_tip_anchor_sha256",
+        "trusted_current_tip_revision",
+        "trusted_stage_content_pins_sha256",
+        "authentication_receipt_sha256",
     }
 )
 
@@ -517,6 +562,305 @@ def validate_consumed_stage_store_state_pin(
     return observed
 
 
+def _validated_trusted_stage_content_pin(
+    raw: Any,
+    *,
+    expected_request_sha256: str | None = None,
+) -> dict[str, Any]:
+    pin = _mapping(raw, "trusted stage-content pin")
+    _expect_keys(
+        pin,
+        _TRUSTED_STAGE_CONTENT_PIN_KEYS,
+        "trusted stage-content pin",
+    )
+    if (
+        pin["schema_version"] != TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION
+        or pin["contract_version"] != CONTRACT_VERSION
+        or _STAGE_PREREQUISITES.get(pin["requested_stage"])
+        != pin["prerequisite_stage"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Trusted stage-content pin schema, contract, or stage transition changed"
+        )
+    _safe_id(pin["attempt_id"], "trusted content attempt id")
+    for field in (
+        "request_sha256",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "content_manifest_sha256",
+        "stage_artifact_sha256",
+        "external_seal_receipt_sha256",
+        "trusted_store_state_sha256",
+    ):
+        _sha256(pin[field], f"trusted content {field}")
+    pin_hash = _self_hash(pin, "pin_sha256", "trusted stage-content pin")
+    if (
+        expected_request_sha256 is not None
+        and pin["request_sha256"]
+        != _sha256(expected_request_sha256, "expected trusted-content request hash")
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Trusted stage-content pin is stored under another request"
+        )
+    pin["pin_sha256"] = pin_hash
+    return pin
+
+
+def _validated_trusted_stage_content_pins(
+    raw: Any,
+) -> dict[str, dict[str, Any]]:
+    pins = _mapping(raw, "current-tip trusted stage-content pins")
+    validated: dict[str, dict[str, Any]] = {}
+    for request_sha256, raw_pin in pins.items():
+        request_hash = _sha256(
+            request_sha256,
+            "current-tip trusted stage-content pin key",
+        )
+        validated[request_hash] = _validated_trusted_stage_content_pin(
+            raw_pin,
+            expected_request_sha256=request_hash,
+        )
+    return validated
+
+
+def _validated_trusted_content_request_and_access(
+    reveal_request: Mapping[str, Any],
+    stage_access_manifest: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    request = _mapping(reveal_request, "trusted-content reveal request")
+    _expect_keys(request, _REQUEST_KEYS, "trusted-content reveal request")
+    request_hash = _self_hash(
+        request,
+        "request_sha256",
+        "trusted-content reveal request",
+    )
+    requested_stage = request["stage"]
+    prerequisite_stage = request["prerequisite_stage"]
+    if (
+        request["schema_version"] != REVEAL_REQUEST_SCHEMA_VERSION
+        or request["contract_version"] != CONTRACT_VERSION
+        or _STAGE_PREREQUISITES.get(requested_stage) != prerequisite_stage
+        or request["authorizes_outcome_access"] is not False
+        or request["effectful_atomic_single_use_consumption_required"] is not True
+        or request["cross_attempt_comparison_permitted"] is not False
+        or request["cross_attempt_winner_selection_permitted"] is not False
+        or request["globally_pristine_claim"] is not False
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Trusted-content request changed its frozen non-authorizing semantics"
+        )
+    _safe_id(request["attempt_id"], "trusted-content request attempt id")
+    for field in (
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+    ):
+        _sha256(request[field], f"trusted-content request {field}")
+
+    access = _mapping(
+        stage_access_manifest,
+        "trusted-content stage-access manifest",
+    )
+    access_hash = _self_hash(
+        access,
+        "stage_access_manifest_sha256",
+        "trusted-content stage-access manifest",
+    )
+    transition = _mapping(
+        access.get("transition"),
+        "trusted-content stage-access transition",
+    )
+    candidate = _mapping(
+        access.get("candidate"),
+        "trusted-content stage-access candidate",
+    )
+    evidence_pin = _mapping(
+        access.get("prerequisite_evidence_pin"),
+        "trusted-content prerequisite evidence pin",
+    )
+    _expect_keys(
+        evidence_pin,
+        frozenset(
+            {
+                "stage",
+                "content_manifest_sha256",
+                "stage_artifact_sha256",
+                "external_seal_receipt_sha256",
+            }
+        ),
+        "trusted-content prerequisite evidence pin",
+    )
+    if (
+        access.get("schema_version") != STAGE_ACCESS_MANIFEST_SCHEMA_VERSION
+        or access.get("contract_version") != CONTRACT_VERSION
+        or access_hash != request["stage_access_manifest_sha256"]
+        or transition.get("prerequisite_stage") != prerequisite_stage
+        or transition.get("requested_stage") != requested_stage
+        or transition.get("single_use_consumption_required") is not True
+        or transition.get("stage_reuse_permitted") is not False
+        or candidate.get("attempt_id") != request["attempt_id"]
+        or candidate.get("candidate_sha256") != request["candidate_sha256"]
+        or candidate.get("candidate_design_sha256")
+        != request["candidate_design_sha256"]
+        or evidence_pin.get("stage") != prerequisite_stage
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Trusted-content stage access crossed its request or stage boundary"
+        )
+    for field in (
+        "content_manifest_sha256",
+        "stage_artifact_sha256",
+        "external_seal_receipt_sha256",
+    ):
+        _sha256(evidence_pin[field], f"trusted-content prerequisite {field}")
+    request["request_sha256"] = request_hash
+    access["stage_access_manifest_sha256"] = access_hash
+    return request, access, evidence_pin
+
+
+def derive_reveal_store_trusted_stage_content_pin(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    reveal_request: Mapping[str, Any],
+    stage_access_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Derive the exact pre-consumption content pin for one validated request."""
+
+    state, _ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    request, access, evidence_pin = _validated_trusted_content_request_and_access(
+        reveal_request,
+        stage_access_manifest,
+    )
+    body = {
+        "schema_version": TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "request_sha256": request["request_sha256"],
+        "prerequisite_stage_evidence_sha256": request[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": access[
+            "stage_access_manifest_sha256"
+        ],
+        "prerequisite_stage": request["prerequisite_stage"],
+        "requested_stage": request["stage"],
+        "attempt_id": request["attempt_id"],
+        "candidate_sha256": request["candidate_sha256"],
+        "candidate_design_sha256": request["candidate_design_sha256"],
+        "registry_entry_sha256": request["registry_entry_sha256"],
+        "content_manifest_sha256": evidence_pin["content_manifest_sha256"],
+        "stage_artifact_sha256": evidence_pin["stage_artifact_sha256"],
+        "external_seal_receipt_sha256": evidence_pin[
+            "external_seal_receipt_sha256"
+        ],
+        "trusted_store_state_sha256": state["state_sha256"],
+    }
+    return {**body, "pin_sha256": canonical_sha256(body)}
+
+
+def authenticate_reveal_store_trusted_stage_content_pin(
+    authenticated_store_snapshot: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    *,
+    reveal_request: Mapping[str, Any],
+    stage_access_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authenticate exact pin membership through the independently loaded tip."""
+
+    state, _ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    current_tip = validate_reveal_store_current_tip_anchor(
+        state,
+        independent_current_tip_anchor,
+    )
+    expected_pin = derive_reveal_store_trusted_stage_content_pin(
+        state,
+        reveal_request=reveal_request,
+        stage_access_manifest=stage_access_manifest,
+    )
+    request_hash = expected_pin["request_sha256"]
+    persisted = current_tip["trusted_stage_content_pins"].get(request_hash)
+    if persisted != expected_pin:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Trusted stage-content pin is not exactly persisted at the current tip"
+        )
+    body = {
+        "schema_version": TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "authentication_kind": (
+            "reveal_store_current_tip_persisted_trusted_stage_content_pin"
+        ),
+        "request_sha256": request_hash,
+        "prerequisite_stage_evidence_sha256": expected_pin[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": expected_pin[
+            "stage_access_manifest_sha256"
+        ],
+        "prerequisite_stage": expected_pin["prerequisite_stage"],
+        "requested_stage": expected_pin["requested_stage"],
+        "trusted_stage_content_pin_sha256": expected_pin["pin_sha256"],
+        "trusted_store_state_sha256": state["state_sha256"],
+        "trusted_current_tip_anchor_sha256": current_tip[
+            "tip_anchor_sha256"
+        ],
+        "trusted_current_tip_revision": current_tip["revision"],
+        "trusted_stage_content_pins_sha256": canonical_sha256(
+            current_tip["trusted_stage_content_pins"]
+        ),
+    }
+    return {
+        **body,
+        "authentication_receipt_sha256": canonical_sha256(body),
+    }
+
+
+def validate_trusted_stage_content_authentication_receipt(
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = _mapping(receipt, "trusted stage-content authentication receipt")
+    _expect_keys(
+        value,
+        _TRUSTED_STAGE_CONTENT_AUTHENTICATION_KEYS,
+        "trusted stage-content authentication receipt",
+    )
+    if (
+        value["schema_version"]
+        != TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["authentication_kind"]
+        != "reveal_store_current_tip_persisted_trusted_stage_content_pin"
+        or _STAGE_PREREQUISITES.get(value["requested_stage"])
+        != value["prerequisite_stage"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Trusted stage-content authentication semantics changed"
+        )
+    for field in (
+        "request_sha256",
+        "prerequisite_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "trusted_stage_content_pin_sha256",
+        "trusted_store_state_sha256",
+        "trusted_current_tip_anchor_sha256",
+        "trusted_stage_content_pins_sha256",
+    ):
+        _sha256(value[field], f"trusted content authentication {field}")
+    _strict_int(
+        value["trusted_current_tip_revision"],
+        "trusted content current-tip revision",
+    )
+    _self_hash(
+        value,
+        "authentication_receipt_sha256",
+        "trusted stage-content authentication receipt",
+    )
+    return value
+
+
 def _validated_authorization_bundles(raw: Any) -> dict[str, dict[str, Any]]:
     bundles = _mapping(raw, "current-tip authorization bundles")
     validated: dict[str, dict[str, Any]] = {}
@@ -635,6 +979,9 @@ def validate_reveal_store_current_tip_anchor_structure(
         anchor["consumed_request_count"],
         "current-tip consumed request count",
     )
+    anchor["trusted_stage_content_pins"] = _validated_trusted_stage_content_pins(
+        anchor["trusted_stage_content_pins"]
+    )
     anchor["authorization_bundles"] = _validated_authorization_bundles(
         anchor["authorization_bundles"]
     )
@@ -648,6 +995,7 @@ def build_reveal_store_current_tip_anchor(
     revision: int,
     previous_tip_anchor_sha256: str | None,
     authorization_bundles: Mapping[str, Any],
+    trusted_stage_content_pins: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the separately persisted CAS anchor for one exact store state."""
 
@@ -664,6 +1012,9 @@ def build_reveal_store_current_tip_anchor(
             "previous current-tip anchor hash",
         )
     bundles = _validated_authorization_bundles(authorization_bundles)
+    pins = _validated_trusted_stage_content_pins(
+        {} if trusted_stage_content_pins is None else trusted_stage_content_pins
+    )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -678,6 +1029,7 @@ def build_reveal_store_current_tip_anchor(
         "consumption_ledger_sha256": ledger["ledger_sha256"],
         "consumption_ledger_tip_sha256": ledger["chain"]["tip_sha256"],
         "consumed_request_count": ledger["chain"]["consumed_request_count"],
+        "trusted_stage_content_pins": pins,
         "authorization_bundles": bundles,
     }
     return {**body, "tip_anchor_sha256": canonical_sha256(body)}
@@ -717,6 +1069,47 @@ def validate_reveal_store_current_tip_anchor_transition(
         raise SecFilingGemmaStageAuthorizationError(
             "Current-tip transition may append at most one authorization bundle"
         )
+    prior_pins = prior["trusted_stage_content_pins"]
+    next_pins = next_anchor["trusted_stage_content_pins"]
+    if any(next_pins.get(key) != value for key, value in prior_pins.items()):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip anchor transition removed or changed a trusted content pin"
+        )
+    pin_delta = len(next_pins) - len(prior_pins)
+    if pin_delta not in {0, 1}:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one trusted content pin"
+        )
+    if pin_delta:
+        if consumption_delta != 0 or bundle_delta != 0:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Trusted content pin append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Trusted content pin append changed the authenticated store state"
+            )
+        new_request_hash = next(iter(set(next_pins) - set(prior_pins)))
+        if next_pins[new_request_hash]["trusted_store_state_sha256"] != prior[
+            "state_sha256"
+        ]:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Trusted content pin does not bind the pre-consumption state"
+            )
+    elif consumption_delta == 1 and set(next_pins) != set(prior_pins):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Consumption transition changed trusted content pin membership"
+        )
     return prior, next_anchor
 
 
@@ -735,6 +1128,7 @@ def validate_reveal_store_current_tip_anchor(
         revision=observed["revision"],
         previous_tip_anchor_sha256=observed["previous_tip_anchor_sha256"],
         authorization_bundles=observed["authorization_bundles"],
+        trusted_stage_content_pins=observed["trusted_stage_content_pins"],
     )
     if observed != expected:
         raise SecFilingGemmaStageAuthorizationError(
@@ -1064,13 +1458,18 @@ __all__ = [
     "CONSUMED_STAGE_AUTHORIZATION_GRANT_SCHEMA_VERSION",
     "CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
+    "TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION",
+    "TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION",
     "SecFilingGemmaStageAuthorizationError",
+    "authenticate_reveal_store_trusted_stage_content_pin",
     "build_consumed_stage_authorization_grant",
     "build_reveal_store_current_tip_anchor",
     "derive_consumed_stage_store_state_pin",
+    "derive_reveal_store_trusted_stage_content_pin",
     "validate_consumed_stage_authorization_grant",
     "validate_consumed_stage_store_state_pin",
     "validate_reveal_store_current_tip_anchor",
     "validate_reveal_store_current_tip_anchor_structure",
     "validate_reveal_store_current_tip_anchor_transition",
+    "validate_trusted_stage_content_authentication_receipt",
 ]

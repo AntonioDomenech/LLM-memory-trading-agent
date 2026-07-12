@@ -30,6 +30,9 @@ from agent_benchmark.sec_filing_gemma_learner import (
 from agent_benchmark.sec_filing_gemma_prediction_evidence import (
     AVAILABLE_PREDICTION_STATUS,
 )
+from agent_benchmark.sec_filing_gemma_reveal_registry import (
+    candidate_design_sha256,
+)
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     OWNED_HARDENED_TRANSPORT_MODE,
     STAGE_EVIDENCE_SCHEMA_VERSION,
@@ -77,16 +80,29 @@ def _detached_boundary() -> dict[str, bool]:
     }
 
 
+def _rehash(value: dict, field: str) -> None:
+    value[field] = canonical_sha256(
+        {key: item for key, item in value.items() if key != field}
+    )
+
+
 def _trusted_content_pin(
     stage: str,
     *,
     content_hash: str | None = None,
     artifact_hash: str | None = None,
+    evidence_hash: str | None = None,
+    request_hash: str | None = None,
+    attempt_id: str | None = None,
+    candidate_hash: str | None = None,
+    candidate_design_hash: str | None = None,
+    registry_entry_hash: str | None = None,
+    store_state_hash: str | None = None,
 ) -> tuple[dict, dict]:
     content = content_hash or _h(f"{stage} content")
     artifact = artifact_hash or _h(f"{stage} artifact")
     seal = _h(f"{stage} external seal receipt")
-    access = {
+    access_body = {
         "prerequisite_evidence_pin": {
             "stage": stage,
             "content_manifest_sha256": content,
@@ -94,15 +110,149 @@ def _trusted_content_pin(
             "external_seal_receipt_sha256": seal,
         }
     }
+    access = {
+        **access_body,
+        "stage_access_manifest_sha256": canonical_sha256(access_body),
+    }
     body = {
         "schema_version": TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION,
-        "stage": stage,
+        "contract_version": CONTRACT_VERSION,
+        "request_sha256": request_hash or _h(f"{stage} request"),
+        "prerequisite_stage_evidence_sha256": evidence_hash
+        or _h(f"{stage} evidence"),
+        "stage_access_manifest_sha256": access[
+            "stage_access_manifest_sha256"
+        ],
+        "prerequisite_stage": stage,
+        "requested_stage": {
+            "development": "intermediate",
+            "intermediate": "final",
+        }[stage],
+        "attempt_id": attempt_id or f"{CONTRACT_VERSION}-attempt-001",
+        "candidate_sha256": candidate_hash or _h("candidate"),
+        "candidate_design_sha256": candidate_design_hash
+        or _h("candidate design"),
+        "registry_entry_sha256": registry_entry_hash or _h("registry entry"),
         "content_manifest_sha256": content,
         "stage_artifact_sha256": artifact,
         "external_seal_receipt_sha256": seal,
-        "trusted_store_state_sha256": _h(f"{stage} trusted store state"),
+        "trusted_store_state_sha256": store_state_hash
+        or _h(f"{stage} trusted store state"),
     }
     return access, {**body, "pin_sha256": canonical_sha256(body)}
+
+
+def _trusted_content_authentication(
+    pin: dict,
+    *,
+    tip_anchor_hash: str | None = None,
+    tip_revision: int = 1,
+) -> dict:
+    body = {
+        "schema_version": (
+            verifier_module.TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "authentication_kind": (
+            "reveal_store_current_tip_persisted_trusted_stage_content_pin"
+        ),
+        "request_sha256": pin["request_sha256"],
+        "prerequisite_stage_evidence_sha256": pin[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": pin["stage_access_manifest_sha256"],
+        "prerequisite_stage": pin["prerequisite_stage"],
+        "requested_stage": pin["requested_stage"],
+        "trusted_stage_content_pin_sha256": pin["pin_sha256"],
+        "trusted_store_state_sha256": pin["trusted_store_state_sha256"],
+        "trusted_current_tip_anchor_sha256": tip_anchor_hash
+        or _h(f"{pin['prerequisite_stage']} current tip"),
+        "trusted_current_tip_revision": tip_revision,
+        "trusted_stage_content_pins_sha256": _h(
+            f"{pin['prerequisite_stage']} persisted pins"
+        ),
+    }
+    return {
+        **body,
+        "authentication_receipt_sha256": canonical_sha256(body),
+    }
+
+
+def _authenticated_store_fixture(
+    stage: str,
+    *,
+    content_hash: str | None = None,
+    evidence_hash: str | None = None,
+    request_hash: str | None = None,
+    attempt_id: str | None = None,
+    candidate_hash: str | None = None,
+    candidate_design_hash: str | None = None,
+    registry_entry_hash: str | None = None,
+    registry_hash: str | None = None,
+    registry_tip_hash: str | None = None,
+    store_state_hash: str | None = None,
+    tip_anchor_hash: str | None = None,
+    tip_revision: int = 1,
+    parent_binding: dict | None = None,
+) -> tuple[dict, dict, dict, dict, dict]:
+    access, pin = _trusted_content_pin(
+        stage,
+        content_hash=content_hash,
+        evidence_hash=evidence_hash,
+        request_hash=request_hash,
+        attempt_id=attempt_id,
+        candidate_hash=candidate_hash,
+        candidate_design_hash=candidate_design_hash,
+        registry_entry_hash=registry_entry_hash,
+        store_state_hash=store_state_hash,
+    )
+    authentication = _trusted_content_authentication(
+        pin,
+        tip_anchor_hash=tip_anchor_hash,
+        tip_revision=tip_revision,
+    )
+    store_body = {
+        "schema_version": (
+            verifier_module.AUTHENTICATED_STORE_VERIFIER_CONTEXT_SCHEMA_VERSION
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "context_kind": "reveal_store_authenticated_preconsumption_context",
+        "trusted_stage_content_pin": pin,
+        "trusted_stage_content_authentication": authentication,
+        "parent_consumption_binding": parent_binding,
+    }
+    store_context = {
+        **store_body,
+        "authenticated_store_context_sha256": canonical_sha256(store_body),
+    }
+    expected_context = {
+        "prerequisite_stage": pin["prerequisite_stage"],
+        "prerequisite_stage_evidence_sha256": pin[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "attempt_id": pin["attempt_id"],
+        "candidate_sha256": pin["candidate_sha256"],
+        "candidate_design_sha256": pin["candidate_design_sha256"],
+        "registry_entry_sha256": pin["registry_entry_sha256"],
+        "request_sha256": pin["request_sha256"],
+        "stage": pin["requested_stage"],
+        "stage_access_manifest_sha256": pin["stage_access_manifest_sha256"],
+        "registry_sha256": registry_hash or _h("registry"),
+        "registry_tip_sha256": registry_tip_hash or _h("registry tip"),
+        "trusted_stage_content_pin_sha256": pin["pin_sha256"],
+        "trusted_stage_content_authentication_receipt_sha256": authentication[
+            "authentication_receipt_sha256"
+        ],
+        "parent_consumption_binding_sha256": (
+            None
+            if parent_binding is None
+            else parent_binding["parent_consumption_binding_sha256"]
+        ),
+        "authenticated_store_context_sha256": store_context[
+            "authenticated_store_context_sha256"
+        ],
+    }
+    return access, pin, authentication, expected_context, store_context
 
 
 def _candidate_fixture() -> tuple[dict, dict[str, str]]:
@@ -560,10 +710,14 @@ def test_content_wrapper_rejects_cross_stage_and_substituted_manifest(monkeypatc
 
 
 def test_trusted_content_pin_must_match_preexisting_stage_access() -> None:
-    access, trusted = _trusted_content_pin("development")
+    access, trusted, authentication, context, _store_context = (
+        _authenticated_store_fixture("development")
+    )
     summary = validate_trusted_stage_content_pin(
         stage_access_manifest=access,
         trusted_stage_content_pin=trusted,
+        trusted_stage_content_authentication=authentication,
+        expected_context=context,
         expected_stage="development",
     )
     assert summary["pin_sha256"] == trusted["pin_sha256"]
@@ -574,10 +728,15 @@ def test_trusted_content_pin_must_match_preexisting_stage_access() -> None:
         key: value for key, value in substituted.items() if key != "pin_sha256"
     }
     substituted["pin_sha256"] = canonical_sha256(substituted_body)
-    with pytest.raises(SecFilingGemmaStageVerifierError, match="stage_artifact_sha256"):
+    with pytest.raises(
+        SecFilingGemmaStageVerifierError,
+        match="reveal-store context|stage_artifact_sha256",
+    ):
         validate_trusted_stage_content_pin(
             stage_access_manifest=access,
             trusted_stage_content_pin=substituted,
+            trusted_stage_content_authentication=authentication,
+            expected_context=context,
             expected_stage="development",
         )
 
@@ -1163,8 +1322,19 @@ def _minimal_audit_envelope(candidate: dict, sources: dict[str, str]) -> dict:
 def test_audit_lists_every_required_check_and_never_claims_authorization(monkeypatch) -> None:
     candidate, sources = _candidate_fixture()
     evidence = _minimal_audit_envelope(candidate, sources)
-    stage_access, trusted_pin = _trusted_content_pin(
-        "development", content_hash=_h("content")
+    (
+        stage_access,
+        trusted_pin,
+        _authentication,
+        expected_context,
+        authenticated_store_context,
+    ) = _authenticated_store_fixture(
+        "development",
+        content_hash=_h("content"),
+        evidence_hash=evidence["stage_evidence_sha256"],
+        attempt_id=candidate["bindings"]["holdout_attempt_id"],
+        candidate_hash=candidate["candidate_sha256"],
+        candidate_design_hash=candidate_design_sha256(candidate),
     )
     candidate_hash = candidate["candidate_sha256"]
     monkeypatch.setattr(
@@ -1265,8 +1435,8 @@ def test_audit_lists_every_required_check_and_never_claims_authorization(monkeyp
     receipt = audit_stage_evidence(
         evidence,
         stage_access,
-        {},
-        trusted_stage_content_pin=trusted_pin,
+        expected_context,
+        authenticated_store_context=authenticated_store_context,
     )
     assert receipt["semantic_checks"] == list(REQUIRED_STAGE_VERIFIER_CHECKS)
     assert set(receipt["check_status"]) == set(REQUIRED_STAGE_VERIFIER_CHECKS)
@@ -1294,9 +1464,14 @@ def test_audit_lists_every_required_check_and_never_claims_authorization(monkeyp
     ]
     assert receipt["trusted_content_pin_boundary"] == {
         "stage_access_pin_cross_bound": True,
-        "separately_supplied_store_pin_claim_present": True,
-        "separately_supplied_store_pin_authenticated": False,
+        "store_state_and_tip_authenticated_by_reveal_store": True,
+        "pin_membership_authenticated_by_reveal_store": True,
+        "pin_and_stage_access_cross_bound_by_verifier": True,
+        "parent_consumption_cross_bound_by_verifier": False,
         "trusted_store_state_authenticated_by_verifier": False,
+        "store_files_independently_loaded_by_verifier": False,
+        "same_directory_is_external_trust_domain": False,
+        "coordinated_state_and_tip_replacement_resistant": False,
         "authorizing": False,
     }
     assert receipt["trusted_stage_content_pin_sha256"] == trusted_pin["pin_sha256"]
@@ -1329,8 +1504,8 @@ def test_audit_lists_every_required_check_and_never_claims_authorization(monkeyp
         audit_stage_evidence(
             evidence,
             stage_access,
-            {},
-            trusted_stage_content_pin=trusted_pin,
+            expected_context,
+            authenticated_store_context=authenticated_store_context,
         )
 
     evidence["content_replays_by_stage"] = {}
@@ -1342,99 +1517,234 @@ def test_audit_lists_every_required_check_and_never_claims_authorization(monkeyp
         audit_stage_evidence(
             evidence,
             stage_access,
-            {},
-            trusted_stage_content_pin=trusted_pin,
+            expected_context,
+            authenticated_store_context=authenticated_store_context,
         )
 
 
-def test_intermediate_stage_rejects_an_opaque_parent_hash() -> None:
-    candidate, sources = _candidate_fixture()
-    evidence = _minimal_audit_envelope(candidate, sources)
-    evidence["prerequisite_stage"] = "intermediate"
-    evidence["parent_stage_evidence_sha256"] = _h("opaque parent")
-    evidence_body = {
-        key: evidence[key] for key in evidence if key != "stage_evidence_sha256"
-    }
-    evidence["stage_evidence_sha256"] = canonical_sha256(evidence_body)
-    with pytest.raises(SecFilingGemmaStageVerifierError, match="complete parent lineage"):
-        audit_stage_evidence(evidence, {}, {})
-
-
-def test_parent_lineage_replays_actual_evidence_and_exact_receipt(monkeypatch) -> None:
-    candidate, sources = _candidate_fixture()
-    parent = _minimal_audit_envelope(candidate, sources)
-    parent_hash = parent["stage_evidence_sha256"]
-    audit_body = {
-        "stage_evidence_sha256": parent_hash,
-        "candidate_sha256": candidate["candidate_sha256"],
-        "prerequisite_stage": "development",
-        "requested_stage": "intermediate",
-        "authorizes_outcome_access": False,
-        "trusted_stage_content_pin_sha256": _h("parent trusted pin"),
-        "trusted_content_manifest_sha256": _h("content"),
-        "trusted_stage_artifact_sha256": _h("development artifact"),
-        "trusted_external_seal_receipt_sha256": _h("development seal"),
-        "trusted_store_state_sha256": _h("development store"),
-    }
-    computed = {
-        **audit_body,
-        "audit_receipt_sha256": canonical_sha256(audit_body),
-    }
-    monkeypatch.setattr(
-        verifier_module,
-        "audit_stage_evidence",
-        lambda *args, **kwargs: copy.deepcopy(computed),
-    )
-    lineage = {
-        "evidence": parent,
-        "stage_access_manifest": {"parent": "access"},
-        "expected_context": {"parent": "context"},
-        "trusted_stage_content_pin": {"parent": "pin"},
-        "audit_receipt": copy.deepcopy(computed),
-    }
-    summary = validate_parent_stage_lineage(
-        lineage,
-        prerequisite_stage="intermediate",
-        declared_parent_stage_evidence_sha256=parent_hash,
-        current_candidate_sha256=candidate["candidate_sha256"],
-    )
-    assert summary["parent_stage_evidence_sha256"] == parent_hash
-
-    substituted = copy.deepcopy(lineage)
-    substituted["audit_receipt"]["trusted_content_manifest_sha256"] = _h(
-        "substituted parent receipt"
-    )
-    with pytest.raises(SecFilingGemmaStageVerifierError, match="authoritative parent replay"):
-        validate_parent_stage_lineage(
-            substituted,
-            prerequisite_stage="intermediate",
-            declared_parent_stage_evidence_sha256=parent_hash,
-            current_candidate_sha256=candidate["candidate_sha256"],
-        )
-
-
-def test_real_recursive_parent_lineage_replays_nested_v3_audit(monkeypatch) -> None:
+def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
     candidate, sources = _candidate_fixture()
     candidate_hash = candidate["candidate_sha256"]
-    parent = _minimal_audit_envelope(candidate, sources)
-    parent["model_batches_by_stage"] = {
-        "development": {"stage": "development"}
-    }
-    parent["market_replays_by_stage"] = {
-        "development": {
-            "stage": "development",
-            "market_stage_manifest": {},
+    candidate_design_hash = candidate_design_sha256(candidate)
+    attempt_id = candidate["bindings"]["holdout_attempt_id"]
+    registry_entry_hash = _h("registry entry")
+    registry_hash = _h("registry")
+    registry_tip_hash = _h("registry tip")
+
+    parent_evidence = _minimal_audit_envelope(candidate, sources)
+    parent_evidence_hash = parent_evidence["stage_evidence_sha256"]
+    (
+        parent_access,
+        parent_pin,
+        parent_authentication,
+        parent_context,
+        parent_store_context,
+    ) = _authenticated_store_fixture(
+        "development",
+        content_hash=_h("content"),
+        evidence_hash=parent_evidence_hash,
+        request_hash=_h("parent request"),
+        attempt_id=attempt_id,
+        candidate_hash=candidate_hash,
+        candidate_design_hash=candidate_design_hash,
+        registry_entry_hash=registry_entry_hash,
+        registry_hash=registry_hash,
+        registry_tip_hash=registry_tip_hash,
+        store_state_hash=_h("parent store state"),
+        tip_anchor_hash=_h("parent current tip"),
+        tip_revision=6,
+    )
+    if parent_audit_builder is None:
+        parent_audit_body = {
+            "stage_evidence_sha256": parent_evidence_hash,
+            "candidate_sha256": candidate_hash,
+            "prerequisite_stage": "development",
+            "requested_stage": "intermediate",
+            "trusted_stage_content_pin_sha256": parent_pin["pin_sha256"],
+            "trusted_stage_content_authentication": parent_authentication,
+            "trusted_stage_content_authentication_receipt_sha256": (
+                parent_authentication["authentication_receipt_sha256"]
+            ),
+            "authenticated_store_context_sha256": parent_store_context[
+                "authenticated_store_context_sha256"
+            ],
+            "parent_consumption_binding_sha256": None,
+            "trusted_content_manifest_sha256": parent_pin[
+                "content_manifest_sha256"
+            ],
+            "trusted_stage_artifact_sha256": parent_pin[
+                "stage_artifact_sha256"
+            ],
+            "trusted_external_seal_receipt_sha256": parent_pin[
+                "external_seal_receipt_sha256"
+            ],
+            "trusted_store_state_sha256": parent_pin[
+                "trusted_store_state_sha256"
+            ],
+            "authorizes_outcome_access": False,
         }
+        parent_audit = {
+            **parent_audit_body,
+            "audit_receipt_sha256": canonical_sha256(parent_audit_body),
+        }
+    else:
+        parent_audit = parent_audit_builder(
+            parent_evidence,
+            parent_access,
+            parent_context,
+            parent_store_context,
+        )
+    parent_entry_hash = _h("parent consumption entry")
+    parent_consumption = {
+        "entry_sha256": parent_entry_hash,
+        "sequence": 1,
+        "request_sha256": parent_pin["request_sha256"],
+        "stage": "intermediate",
+        "prerequisite_stage": "development",
+        "prerequisite_stage_evidence_sha256": parent_evidence_hash,
+        "stage_access_manifest_sha256": parent_pin[
+            "stage_access_manifest_sha256"
+        ],
+        "expected_context_sha256": canonical_sha256(parent_context),
+        "attempt_id": attempt_id,
+        "candidate_sha256": candidate_hash,
+        "candidate_design_sha256": candidate_design_hash,
+        "registry_entry_sha256": registry_entry_hash,
+        "registry_sha256": registry_hash,
+        "registry_tip_sha256": registry_tip_hash,
+        "prerequisite_validation_result_sha256": _h("parent validation result"),
+        "semantic_receipt_sha256": canonical_sha256(parent_audit),
+        "audit_receipt": parent_audit,
+        "audit_receipt_sha256": parent_audit["audit_receipt_sha256"],
+        "trusted_stage_content_pin": parent_pin,
+        "trusted_stage_content_pin_sha256": parent_pin["pin_sha256"],
+        "authorization_bundle_sha256": _h("parent authorization bundle"),
+        "authorization_grant_sha256": _h("parent authorization grant"),
+        "store_pin_sha256": _h("parent store pin"),
     }
-    parent["prediction_replay"] = {"stage": "development"}
-    parent_body = {
-        key: parent[key] for key in parent if key != "stage_evidence_sha256"
+
+    current_store_state_hash = _h("current final preconsumption store state")
+    current_tip_anchor_hash = _h("current final preconsumption tip")
+    child_evidence_hash = _h("current intermediate evidence")
+    child_access, child_pin = _trusted_content_pin(
+        "intermediate",
+        content_hash=_h("intermediate content"),
+        evidence_hash=child_evidence_hash,
+        request_hash=_h("child final request"),
+        attempt_id=attempt_id,
+        candidate_hash=candidate_hash,
+        candidate_design_hash=candidate_design_hash,
+        registry_entry_hash=registry_entry_hash,
+        store_state_hash=current_store_state_hash,
+    )
+    child_authentication = _trusted_content_authentication(
+        child_pin,
+        tip_anchor_hash=current_tip_anchor_hash,
+        tip_revision=7,
+    )
+    child_request = {
+        "request_sha256": child_pin["request_sha256"],
+        "stage": "final",
+        "prerequisite_stage": "intermediate",
+        "prerequisite_stage_evidence_sha256": child_evidence_hash,
+        "stage_access_manifest_sha256": child_pin[
+            "stage_access_manifest_sha256"
+        ],
+        "attempt_id": attempt_id,
+        "candidate_sha256": candidate_hash,
+        "candidate_design_sha256": candidate_design_hash,
+        "registry_entry_sha256": registry_entry_hash,
+        "registry_sha256": registry_hash,
+        "registry_tip_sha256": registry_tip_hash,
     }
-    parent["stage_evidence_sha256"] = canonical_sha256(parent_body)
-    parent_access, parent_pin = _trusted_content_pin(
-        "development", content_hash=_h("content")
+    current_tip = {
+        "store_state_sha256": current_store_state_hash,
+        "state_snapshot_bytes_sha256": _h("current state snapshot bytes"),
+        "state_snapshot_byte_count": 1024,
+        "consumption_ledger_sha256": _h("current consumption ledger"),
+        "consumption_ledger_tip_sha256": parent_entry_hash,
+        "consumed_request_count": 1,
+        "current_tip_anchor_sha256": current_tip_anchor_hash,
+        "current_tip_revision": 7,
+    }
+    binding_body = {
+        "schema_version": verifier_module.PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "binding_kind": "exact_prior_intermediate_consumption_and_grant",
+        "child_request": child_request,
+        "parent_consumption": parent_consumption,
+        "authenticated_preconsumption_tip": current_tip,
+    }
+    binding = {
+        **binding_body,
+        "parent_consumption_binding_sha256": canonical_sha256(binding_body),
+    }
+    (
+        rebuilt_child_access,
+        rebuilt_child_pin,
+        rebuilt_child_authentication,
+        child_context,
+        child_store_context,
+    ) = _authenticated_store_fixture(
+        "intermediate",
+        content_hash=_h("intermediate content"),
+        evidence_hash=child_evidence_hash,
+        request_hash=_h("child final request"),
+        attempt_id=attempt_id,
+        candidate_hash=candidate_hash,
+        candidate_design_hash=candidate_design_hash,
+        registry_entry_hash=registry_entry_hash,
+        registry_hash=registry_hash,
+        registry_tip_hash=registry_tip_hash,
+        store_state_hash=current_store_state_hash,
+        tip_anchor_hash=current_tip_anchor_hash,
+        tip_revision=7,
+        parent_binding=binding,
+    )
+    assert rebuilt_child_access == child_access
+    assert rebuilt_child_pin == child_pin
+    assert rebuilt_child_authentication == child_authentication
+    child_pin_summary = validate_trusted_stage_content_pin(
+        stage_access_manifest=child_access,
+        trusted_stage_content_pin=child_pin,
+        trusted_stage_content_authentication=child_authentication,
+        expected_context=child_context,
+        expected_stage="intermediate",
+    )
+    return {
+        "candidate_sha256": candidate_hash,
+        "parent_evidence_sha256": parent_evidence_hash,
+        "lineage": {
+            "evidence": parent_evidence,
+            "stage_access_manifest": parent_access,
+            "expected_context": parent_context,
+        },
+        "parent_audit": parent_audit,
+        "binding": binding,
+        "current_expected_context": child_context,
+        "current_trusted_stage_content_pin": child_pin_summary,
+        "authenticated_store_context": child_store_context,
+    }
+
+
+def _validate_exact_parent_binding(fixture: dict) -> dict:
+    return validate_parent_stage_lineage(
+        fixture["lineage"],
+        prerequisite_stage="intermediate",
+        declared_parent_stage_evidence_sha256=fixture[
+            "parent_evidence_sha256"
+        ],
+        current_candidate_sha256=fixture["candidate_sha256"],
+        current_expected_context=fixture["current_expected_context"],
+        current_trusted_stage_content_pin=fixture[
+            "current_trusted_stage_content_pin"
+        ],
+        parent_consumption_binding=fixture["binding"],
     )
 
+
+def _stub_development_audit_replays(monkeypatch, candidate: dict) -> None:
+    candidate_hash = candidate["candidate_sha256"]
     monkeypatch.setattr(
         verifier_module,
         "validate_candidate_source_bytes",
@@ -1490,254 +1800,6 @@ def test_real_recursive_parent_lineage_replays_nested_v3_audit(monkeypatch) -> N
             "content_manifest_sha256": value["content_manifest"][
                 "content_manifest_sha256"
             ],
-            "replay_validation_sha256": _h(
-                f"{expected_stage} content replay"
-            ),
-            "request_receipts_sha256": _h(
-                f"{expected_stage} content receipts"
-            ),
-        },
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_model_attempt_batch",
-        lambda batch, **kwargs: {
-            "stage": batch["stage"],
-            "model_attempt_receipt_sha256s": [_h(f"{batch['stage']} attempt")],
-            "runtime_guard_sha256": _h(f"{batch['stage']} guard"),
-            "model_elapsed_nanoseconds": 1,
-        },
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_market_snapshot_stage_replay",
-        lambda replay: {"artifact_stage": replay["stage"]},
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_prediction_artifact_replay",
-        lambda value, **kwargs: {"stage": value["stage"], "prefix": {}},
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_learner_refit_replays",
-        lambda *args, **kwargs: {"learner_replay_sha256": _h("learner")},
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_raw_scores_gates_and_ranking",
-        lambda *args, **kwargs: {"selected_candidate_id": "p50_e0"},
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_stage_runtime_receipt",
-        lambda *args, **kwargs: _h("runtime"),
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_registry_request_and_stage_access",
-        lambda **kwargs: {"request_sha256": _h("request")},
-    )
-
-    parent_receipt = audit_stage_evidence(
-        parent,
-        parent_access,
-        {},
-        trusted_stage_content_pin=parent_pin,
-    )
-    child = _minimal_audit_envelope(candidate, sources)
-    child["prerequisite_stage"] = "intermediate"
-    child["parent_stage_evidence_sha256"] = parent[
-        "stage_evidence_sha256"
-    ]
-    child["parent_stage_lineage"] = {
-        "evidence": parent,
-        "stage_access_manifest": parent_access,
-        "expected_context": {},
-        "trusted_stage_content_pin": parent_pin,
-        "audit_receipt": parent_receipt,
-    }
-    intermediate_manifest = {
-        "content_manifest_sha256": _h("intermediate content")
-    }
-    child["content_replays_by_stage"] = {
-        "development": copy.deepcopy(parent["content_replays_by_stage"]["development"]),
-        "intermediate": {
-            "stage": "intermediate",
-            "content_manifest": intermediate_manifest,
-        },
-    }
-    child["prerequisite_content_manifest"] = intermediate_manifest
-    child["model_batches_by_stage"] = {
-        "development": {"stage": "development"},
-        "intermediate": {"stage": "intermediate"},
-    }
-    child["market_replays_by_stage"] = {
-        "development": {
-            "stage": "development",
-            "market_stage_manifest": {},
-        },
-        "intermediate": {
-            "stage": "intermediate",
-            "market_stage_manifest": {},
-        },
-    }
-    child["prediction_replay"] = {"stage": "intermediate"}
-    child_body = {
-        key: child[key] for key in child if key != "stage_evidence_sha256"
-    }
-    child["stage_evidence_sha256"] = canonical_sha256(child_body)
-    child_access, child_pin = _trusted_content_pin(
-        "intermediate", content_hash=_h("intermediate content")
-    )
-
-    receipt = audit_stage_evidence(
-        child,
-        child_access,
-        {},
-        trusted_stage_content_pin=child_pin,
-    )
-    assert receipt["parent_stage_evidence_sha256"] == parent[
-        "stage_evidence_sha256"
-    ]
-    assert receipt["parent_audit_receipt_sha256"] == parent_receipt[
-        "audit_receipt_sha256"
-    ]
-    assert receipt["check_status"]["stage_identity"]["status"] == "blocked"
-
-    substituted = copy.deepcopy(child)
-    substituted["content_replays_by_stage"]["development"]["content_manifest"][
-        "content_manifest_sha256"
-    ] = _h("substituted development content")
-    substituted_body = {
-        key: substituted[key]
-        for key in substituted
-        if key != "stage_evidence_sha256"
-    }
-    substituted["stage_evidence_sha256"] = canonical_sha256(substituted_body)
-    with pytest.raises(
-        SecFilingGemmaStageVerifierError, match="Earlier-stage content"
-    ):
-        audit_stage_evidence(
-            substituted,
-            child_access,
-            {},
-            trusted_stage_content_pin=child_pin,
-        )
-
-
-def test_intermediate_stage_identity_stays_blocked_after_exact_parent_replay(
-    monkeypatch,
-) -> None:
-    candidate, sources = _candidate_fixture()
-    evidence = _minimal_audit_envelope(candidate, sources)
-    evidence["prerequisite_stage"] = "intermediate"
-    evidence["parent_stage_evidence_sha256"] = _h("development evidence")
-    evidence["parent_stage_lineage"] = {"replayed": True}
-    evidence["model_batches_by_stage"] = {
-        "development": {"stage": "development"},
-        "intermediate": {"stage": "intermediate"},
-    }
-    evidence["market_replays_by_stage"] = {
-        "development": {"stage": "development", "market_stage_manifest": {}},
-        "intermediate": {"stage": "intermediate", "market_stage_manifest": {}},
-    }
-    intermediate_content = {"content_manifest_sha256": _h("intermediate content")}
-    evidence["content_replays_by_stage"] = {
-        "development": {
-            "stage": "development",
-            "content_manifest": {"content_manifest_sha256": _h("content")},
-        },
-        "intermediate": {
-            "stage": "intermediate",
-            "content_manifest": intermediate_content,
-        },
-    }
-    evidence["prerequisite_content_manifest"] = intermediate_content
-    evidence_body = {
-        key: evidence[key] for key in evidence if key != "stage_evidence_sha256"
-    }
-    evidence["stage_evidence_sha256"] = canonical_sha256(evidence_body)
-    candidate_hash = candidate["candidate_sha256"]
-    stage_access, trusted_pin = _trusted_content_pin(
-        "intermediate", content_hash=_h("intermediate content")
-    )
-    parent_access, parent_pin = _trusted_content_pin(
-        "development", content_hash=_h("content")
-    )
-    parent_content_pin = validate_trusted_stage_content_pin(
-        stage_access_manifest=parent_access,
-        trusted_stage_content_pin=parent_pin,
-        expected_stage="development",
-    )
-
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_parent_stage_lineage",
-        lambda *args, **kwargs: {
-            "parent_stage_evidence_sha256": _h("development evidence"),
-            "parent_audit_receipt_sha256": _h("parent audit"),
-            "parent_trusted_stage_content_pin_sha256": parent_pin["pin_sha256"],
-            "trusted_stage_content_pin": parent_content_pin,
-            "content_replays_by_stage": {
-                "development": copy.deepcopy(
-                    evidence["content_replays_by_stage"]["development"]
-                )
-            },
-        },
-    )
-
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_candidate_source_bytes",
-        lambda **kwargs: {
-            "candidate_sha256": candidate_hash,
-            "stage_verifier_source_sha256": candidate["bindings"]["source_hashes"][
-                "stage_verifier"
-            ],
-        },
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_candidate_source_role_audit",
-        lambda **kwargs: {
-            "source_identity_receipt_sha256": _h("source identity")
-        },
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_candidate_runtime_source_audit",
-        lambda **kwargs: {
-            "source_identity_receipt_sha256": _h("runtime source identity"),
-            "complete": False,
-        },
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_calendar_and_universe_snapshot",
-        lambda **kwargs: {"corpus_universe_sha256": _h("universe")},
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_detached_catalog_evidence",
-        lambda *args, **kwargs: {
-            **_detached_boundary(),
-            "schema_version": verifier_module.DETACHED_CATALOG_REPLAY_RECEIPT_SCHEMA_VERSION,
-            "corpus_universe_sha256": _h("universe"),
-            "replay_validation_sha256": _h("catalog replay"),
-            "request_receipts_sha256": _h("catalog receipts"),
-        },
-    )
-    monkeypatch.setattr(
-        verifier_module,
-        "validate_detached_stage_content_evidence",
-        lambda value, expected_stage, **kwargs: {
-            **_detached_boundary(),
-            "schema_version": verifier_module.DETACHED_STAGE_CONTENT_REPLAY_RECEIPT_SCHEMA_VERSION,
-            "artifact_stage": expected_stage,
-            "content_manifest_sha256": value["content_manifest"][
-                "content_manifest_sha256"
-            ],
             "replay_validation_sha256": _h(f"{expected_stage} content replay"),
             "request_receipts_sha256": _h(f"{expected_stage} content receipts"),
         },
@@ -1745,22 +1807,22 @@ def test_intermediate_stage_identity_stays_blocked_after_exact_parent_replay(
     monkeypatch.setattr(
         verifier_module,
         "validate_model_attempt_batch",
-        lambda batch, **kwargs: {
-            "stage": batch["stage"],
-            "model_attempt_receipt_sha256s": [_h(f"{batch['stage']} attempt")],
-            "runtime_guard_sha256": _h(f"{batch['stage']} guard"),
+        lambda *args, **kwargs: {
+            "stage": "development",
+            "model_attempt_receipt_sha256s": [_h("attempt")],
+            "runtime_guard_sha256": _h("guard"),
             "model_elapsed_nanoseconds": 1,
         },
     )
     monkeypatch.setattr(
         verifier_module,
         "validate_market_snapshot_stage_replay",
-        lambda replay: {"artifact_stage": replay["stage"]},
+        lambda *args, **kwargs: {"artifact_stage": "development"},
     )
     monkeypatch.setattr(
         verifier_module,
         "validate_prediction_artifact_replay",
-        lambda *args, **kwargs: {"stage": "intermediate", "prefix": {}},
+        lambda *args, **kwargs: {"stage": "development", "prefix": {}},
     )
     monkeypatch.setattr(
         verifier_module,
@@ -1783,37 +1845,198 @@ def test_intermediate_stage_identity_stays_blocked_after_exact_parent_replay(
         lambda **kwargs: {"request_sha256": _h("request")},
     )
 
-    receipt = audit_stage_evidence(
-        evidence,
-        stage_access,
-        {},
-        trusted_stage_content_pin=trusted_pin,
-    )
-    stage_identity = receipt["check_status"]["stage_identity"]
-    assert stage_identity["status"] == "blocked"
-    assert "development winner" in stage_identity["reason"]
-    assert "parent evidence and audit receipt are replayed" in stage_identity["reason"]
-    assert "learner output state" in stage_identity["reason"]
-    assert receipt["all_checks_completed"] is False
-    assert receipt["authorizes_outcome_access"] is False
 
-    substituted = copy.deepcopy(evidence)
-    substituted["content_replays_by_stage"]["development"]["content_manifest"][
-        "content_manifest_sha256"
-    ] = _h("substituted earlier-stage content")
-    substituted_body = {
-        key: substituted[key]
-        for key in substituted
-        if key != "stage_evidence_sha256"
-    }
-    substituted["stage_evidence_sha256"] = canonical_sha256(substituted_body)
-    with pytest.raises(SecFilingGemmaStageVerifierError, match="Earlier-stage content"):
-        audit_stage_evidence(
-            substituted,
-            stage_access,
-            {},
-            trusted_stage_content_pin=trusted_pin,
+def test_parent_lineage_recursively_replays_real_v4_audit_context(monkeypatch) -> None:
+    def build_parent_audit(evidence, access, context, store_context):
+        _stub_development_audit_replays(
+            monkeypatch,
+            evidence["candidate_manifest"],
         )
+        return audit_stage_evidence(
+            evidence,
+            access,
+            context,
+            authenticated_store_context=store_context,
+        )
+
+    fixture = _exact_parent_binding_fixture(build_parent_audit)
+    summary = _validate_exact_parent_binding(fixture)
+    assert fixture["parent_audit"]["schema_version"] == (
+        verifier_module.STAGE_AUDIT_RECEIPT_SCHEMA_VERSION
+    )
+    assert summary["parent_audit_receipt_sha256"] == fixture["parent_audit"][
+        "audit_receipt_sha256"
+    ]
+
+
+def test_intermediate_stage_rejects_an_opaque_parent_hash(monkeypatch) -> None:
+    fixture = _exact_parent_binding_fixture()
+    fixture["lineage"] = None
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(fixture["parent_audit"]),
+    )
+    with pytest.raises(SecFilingGemmaStageVerifierError, match="complete parent lineage"):
+        _validate_exact_parent_binding(fixture)
+
+
+def test_parent_lineage_replays_exact_consumed_parent_and_receipt(monkeypatch) -> None:
+    fixture = _exact_parent_binding_fixture()
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(fixture["parent_audit"]),
+    )
+    summary = _validate_exact_parent_binding(fixture)
+    parent = fixture["binding"]["parent_consumption"]
+    assert summary["parent_stage_evidence_sha256"] == fixture[
+        "parent_evidence_sha256"
+    ]
+    assert summary["parent_consumption_binding_sha256"] == fixture["binding"][
+        "parent_consumption_binding_sha256"
+    ]
+    assert summary["parent_consumption_entry_sha256"] == parent["entry_sha256"]
+    assert summary["parent_authorization_bundle_sha256"] == parent[
+        "authorization_bundle_sha256"
+    ]
+    assert summary["parent_authorization_grant_sha256"] == parent[
+        "authorization_grant_sha256"
+    ]
+
+
+@pytest.mark.parametrize(
+    "target, expected_error",
+    [
+        ("evidence", "declared parent hash"),
+        ("access", "stage_artifact_sha256"),
+        ("context", "expected context differs"),
+        ("audit", "authoritative parent replay"),
+        ("pin", "expected context differs"),
+    ],
+)
+def test_parent_documents_reject_rehashed_substitutions(
+    monkeypatch,
+    target: str,
+    expected_error: str,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    original_audit = copy.deepcopy(fixture["parent_audit"])
+    lineage = fixture["lineage"]
+    binding = fixture["binding"]
+    parent = binding["parent_consumption"]
+    update_binding_context = False
+    if target == "evidence":
+        lineage["evidence"]["prediction_replay"] = {"substituted": True}
+        _rehash(lineage["evidence"], "stage_evidence_sha256")
+    elif target == "access":
+        lineage["stage_access_manifest"]["prerequisite_evidence_pin"][
+            "stage_artifact_sha256"
+        ] = _h("substituted parent stage artifact")
+        _rehash(
+            lineage["stage_access_manifest"],
+            "stage_access_manifest_sha256",
+        )
+    elif target == "context":
+        lineage["expected_context"]["request_sha256"] = _h(
+            "substituted parent context request"
+        )
+        parent["expected_context_sha256"] = canonical_sha256(
+            lineage["expected_context"]
+        )
+        update_binding_context = True
+    elif target == "audit":
+        parent["audit_receipt"]["trusted_content_manifest_sha256"] = _h(
+            "substituted parent receipt content"
+        )
+        _rehash(parent["audit_receipt"], "audit_receipt_sha256")
+        parent["audit_receipt_sha256"] = parent["audit_receipt"][
+            "audit_receipt_sha256"
+        ]
+        parent["semantic_receipt_sha256"] = canonical_sha256(
+            parent["audit_receipt"]
+        )
+        update_binding_context = True
+    else:
+        parent["trusted_stage_content_pin"]["content_manifest_sha256"] = _h(
+            "substituted parent trusted content"
+        )
+        _rehash(parent["trusted_stage_content_pin"], "pin_sha256")
+        parent["trusted_stage_content_pin_sha256"] = parent[
+            "trusted_stage_content_pin"
+        ]["pin_sha256"]
+        update_binding_context = True
+    if update_binding_context:
+        _rehash(binding, "parent_consumption_binding_sha256")
+        fixture["current_expected_context"][
+            "parent_consumption_binding_sha256"
+        ] = binding["parent_consumption_binding_sha256"]
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(original_audit),
+    )
+    with pytest.raises(SecFilingGemmaStageVerifierError, match=expected_error):
+        _validate_exact_parent_binding(fixture)
+
+
+@pytest.mark.parametrize(
+    "target, expected_error",
+    [
+        ("entry", "consumption-ledger tip"),
+        ("current_tip", "authenticated current store tip"),
+        ("child_identity", "another final request"),
+    ],
+)
+def test_parent_binding_rejects_deep_rehashed_identity_and_tip_substitutions(
+    monkeypatch,
+    target: str,
+    expected_error: str,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    binding = fixture["binding"]
+    parent = binding["parent_consumption"]
+    if target == "entry":
+        parent["entry_sha256"] = _h("substituted parent entry")
+    elif target == "current_tip":
+        binding["authenticated_preconsumption_tip"][
+            "current_tip_anchor_sha256"
+        ] = _h("substituted current tip")
+    else:
+        binding["child_request"]["attempt_id"] = (
+            f"{CONTRACT_VERSION}-attempt-substituted"
+        )
+    _rehash(binding, "parent_consumption_binding_sha256")
+    fixture["current_expected_context"][
+        "parent_consumption_binding_sha256"
+    ] = binding["parent_consumption_binding_sha256"]
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(fixture["parent_audit"]),
+    )
+    with pytest.raises(SecFilingGemmaStageVerifierError, match=expected_error):
+        _validate_exact_parent_binding(fixture)
+
+
+@pytest.mark.parametrize("target", ["bundle", "grant"])
+def test_rehashed_parent_authorization_cannot_replace_store_pinned_binding(
+    monkeypatch,
+    target: str,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    parent = fixture["binding"]["parent_consumption"]
+    parent[f"authorization_{target}_sha256"] = _h(
+        f"substituted authorization {target}"
+    )
+    _rehash(fixture["binding"], "parent_consumption_binding_sha256")
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(fixture["parent_audit"]),
+    )
+    with pytest.raises(SecFilingGemmaStageVerifierError, match="current-request bound"):
+        _validate_exact_parent_binding(fixture)
 
 
 def test_authorizing_entrypoint_always_fails_closed(monkeypatch) -> None:
