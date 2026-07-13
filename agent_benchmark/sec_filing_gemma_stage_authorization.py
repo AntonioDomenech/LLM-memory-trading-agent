@@ -23,8 +23,14 @@ import re
 from typing import Any, Final
 
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
+    MAX_INPUT_BYTES,
+    MAX_MODEL_SECONDS,
+    MAX_SENTENCE_CHARACTERS,
+    MAX_SENTENCES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
+    STAGE_MODEL_CALL_CAPS,
     build_stage_content_manifest,
     canonical_sha256,
     validate_candidate_manifest,
@@ -94,8 +100,26 @@ DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
 DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-root-carry-in-reader-receipt-v1"
 )
+STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-model-execution-claim-v2"
+)
+STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-model-reader-receipt-v2"
+)
+STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-model-execution-abort-v1"
+)
+DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-model-execution-claim-v2"
+)
+DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-model-reader-receipt-v2"
+)
+DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-model-execution-abort-v1"
+)
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v7"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v8"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -109,6 +133,7 @@ _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _OUTPUT_NAMESPACE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 _AAPL_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+_ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 STAGE_RUNNER_REPOSITORY_PATH: Final[str] = (
     "agent_benchmark/sec_filing_gemma_stage_runner.py"
 )
@@ -116,6 +141,7 @@ SEC_CORPUS_REPOSITORY_PATH: Final[str] = (
     "agent_benchmark/sec_filing_gemma_corpus.py"
 )
 SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID: Final[str] = "sec_stage_document_batch"
+STAGE_MODEL_BATCH_COMPONENT_ID: Final[str] = "owned_stage_gemma_model_batch"
 STAGE_EVIDENCE_OUTPUT_COMPONENT_ID: Final[str] = "owned_stage_evidence_document"
 STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH: Final[str] = "stage_evidence.json"
 # A Latin-1 source byte can expand to at most two UTF-8 bytes.  Keeping the
@@ -127,6 +153,17 @@ SEC_EXECUTION_RESOLVED_SOURCE_PATHS: Final[tuple[tuple[str, str], ...]] = tuple(
     (role, path)
     for role, path in CANONICAL_SOURCE_ROLE_PATHS.items()
     if path is not None
+)
+MODEL_EXECUTION_SOURCE_ROLES: Final[tuple[str, ...]] = (
+    "contract",
+    "extractor",
+    "extractor_prompt",
+    "extractor_schema",
+    "preprocessor",
+    "reveal_store",
+    "runner",
+    "source_identity",
+    "stage_authorization",
 )
 _STAGE_PREREQUISITES: Final[dict[str, str]] = {
     "intermediate": "development",
@@ -614,6 +651,228 @@ _DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_KEYS: Final[frozenset[str]] = (
         }
     )
 )
+_STAGE_MODEL_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "claim_kind",
+        "request_sha256",
+        "consumption_entry_sha256",
+        "consumption_entry_sequence",
+        "attempt_id",
+        "candidate_sha256",
+        "registry_entry_sha256",
+        "input_prerequisite_stage",
+        "authorized_stage",
+        "input_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "output_namespace",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "grant_store_state_sha256",
+        "grant_consumption_ledger_sha256",
+        "grant_consumption_ledger_tip_sha256",
+        "start_current_tip_anchor_sha256",
+        "stage_sec_execution_claim_sha256",
+        "stage_sec_reader_receipt_sha256",
+        "development_root_scope_sha256",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "corpus_universe_sha256",
+        "carry_in_kind",
+        "carry_in_reader_receipt_sha256",
+        "sec_document_count",
+        "sec_acquisition_accession_order",
+        "sec_acquisition_accession_order_sha256",
+        "event_count",
+        "event_plan",
+        "event_plan_sha256",
+        "identity_lexicon_sha256",
+        "candidate_source_hashes_sha256",
+        "execution_source_hashes",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "model_name",
+        "model_digest",
+        "runtime_fingerprint_sha256",
+        "model_transport_sha256",
+        "model_runtime_limits",
+        "model_runtime_limits_sha256",
+        "model_component_id",
+        "owned_local_model_execution_required",
+        "caller_supplied_path_permitted",
+        "filing_text_included",
+        "market_access_permitted",
+        "outcome_access_permitted",
+        "future_stage_access_permitted",
+        "paid_api_access_permitted",
+        "external_network_access_permitted",
+        "effect_may_be_repeated_after_indeterminate_crash",
+        "claim_sha256",
+    }
+)
+_STAGE_MODEL_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "request_sha256",
+        "claim_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "stage_sec_execution_claim_sha256",
+        "stage_sec_reader_receipt_sha256",
+        "development_root_scope_sha256",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "corpus_universe_sha256",
+        "carry_in_kind",
+        "carry_in_reader_receipt_sha256",
+        "sec_document_count",
+        "sec_acquisition_accession_order_sha256",
+        "event_count",
+        "event_plan_sha256",
+        "identity_lexicon_sha256",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "model_name",
+        "model_digest",
+        "runtime_fingerprint_sha256",
+        "model_transport_sha256",
+        "model_runtime_limits_sha256",
+        "model_component_id",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
+        "complete_marker_sha256",
+        "fresh_model_provenance_claimed",
+        "reader_output_recomputed_by_store",
+        "receipt_sha256",
+    }
+)
+_STAGE_MODEL_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "abort_kind",
+        "request_sha256",
+        "claim_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "model_component_id",
+        "reason",
+        "external_effect_retry_permitted",
+        "abort_sha256",
+    }
+)
+_DEVELOPMENT_MODEL_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "claim_kind",
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+        "corpus_universe_sha256",
+        "corpus_universe_semantic_sha256",
+        "authorized_stage",
+        "output_namespace",
+        "start_current_tip_anchor_sha256",
+        "start_consumed_request_count",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "sec_document_count",
+        "sec_acquisition_accession_order",
+        "sec_acquisition_accession_order_sha256",
+        "event_count",
+        "event_plan",
+        "event_plan_sha256",
+        "identity_lexicon_sha256",
+        "candidate_source_hashes_sha256",
+        "execution_source_hashes",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "model_name",
+        "model_digest",
+        "runtime_fingerprint_sha256",
+        "model_transport_sha256",
+        "model_runtime_limits",
+        "model_runtime_limits_sha256",
+        "model_component_id",
+        "carry_in_required",
+        "owned_local_model_execution_required",
+        "caller_supplied_path_permitted",
+        "filing_text_included",
+        "market_access_permitted",
+        "outcome_access_permitted",
+        "future_stage_access_permitted",
+        "paid_api_access_permitted",
+        "external_network_access_permitted",
+        "reveal_request_consumption_permitted",
+        "consumption_ledger_mutation_permitted",
+        "effect_may_be_repeated_after_indeterminate_crash",
+        "claim_sha256",
+    }
+)
+_DEVELOPMENT_MODEL_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "development_content_root_plan_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "sec_document_count",
+        "sec_acquisition_accession_order_sha256",
+        "event_count",
+        "event_plan_sha256",
+        "identity_lexicon_sha256",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "model_name",
+        "model_digest",
+        "runtime_fingerprint_sha256",
+        "model_transport_sha256",
+        "model_runtime_limits_sha256",
+        "model_component_id",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
+        "complete_marker_sha256",
+        "fresh_model_provenance_claimed",
+        "reader_output_recomputed_by_store",
+        "receipt_sha256",
+    }
+)
+_DEVELOPMENT_MODEL_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "abort_kind",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "development_content_root_plan_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "model_component_id",
+        "reason",
+        "external_effect_retry_permitted",
+        "abort_sha256",
+    }
+)
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -639,6 +898,12 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "development_sec_reader_receipts",
         "development_sec_execution_aborts",
         "development_root_carry_in_reader_receipts",
+        "stage_model_execution_claims",
+        "stage_model_reader_receipts",
+        "stage_model_execution_aborts",
+        "development_model_execution_claims",
+        "development_model_reader_receipts",
+        "development_model_execution_aborts",
         "tip_anchor_sha256",
     }
 )
@@ -2886,6 +3151,1180 @@ def _validated_development_root_carry_in_reader_receipts(
     return validated
 
 
+def _validated_model_accession_order(raw: Any, *, location: str) -> list[str]:
+    if type(raw) is not list or not raw:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must be a non-empty exact list"
+        )
+    accessions = [
+        _safe_id(value, f"{location} item {index}")
+        for index, value in enumerate(raw)
+    ]
+    if (
+        any(_AAPL_ACCESSION_RE.fullmatch(value) is None for value in accessions)
+        or accessions != sorted(accessions)
+        or len(accessions) != len(set(accessions))
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} is not the exact canonical Apple accession order"
+        )
+    return accessions
+
+
+def _model_event_plan(
+    *,
+    universe_manifest: Mapping[str, Any],
+    stage: str,
+    sec_acquisition_accession_order: list[str],
+) -> list[dict[str, Any]]:
+    if stage not in {"development", "intermediate", "final"}:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model event-plan stage is invalid"
+        )
+    universe = _mapping(universe_manifest, "owned model corpus universe")
+    records = universe.get("records")
+    if type(records) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model corpus universe has no exact records"
+        )
+    acquisition_order = _validated_model_accession_order(
+        sec_acquisition_accession_order,
+        location="owned model SEC acquisition accession order",
+    )
+    sec_ordinals = {
+        accession: ordinal
+        for ordinal, accession in enumerate(acquisition_order, start=1)
+    }
+    stage_records: list[dict[str, str]] = []
+    for index, raw_record in enumerate(records):
+        record = _mapping(raw_record, f"owned model universe record {index}")
+        if record.get("artifact_stage") != stage:
+            continue
+        accession = _safe_id(
+            record.get("accession_number"),
+            f"owned model universe accession {index}",
+        )
+        form = record.get("form")
+        availability = record.get("availability_session")
+        if (
+            _AAPL_ACCESSION_RE.fullmatch(accession) is None
+            or form not in {"10-K", "10-Q"}
+            or type(availability) is not str
+            or _ISO_DATE_RE.fullmatch(availability) is None
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Owned model universe event identity is invalid"
+            )
+        stage_records.append(
+            {
+                "accession_number": accession,
+                "form": form,
+                "availability_session": availability,
+            }
+        )
+    stage_records.sort(
+        key=lambda record: (
+            record["availability_session"],
+            record["accession_number"],
+        )
+    )
+    if (
+        len(stage_records) != len(acquisition_order)
+        or {record["accession_number"] for record in stage_records}
+        != set(acquisition_order)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model event plan differs from the exact stage SEC document set"
+        )
+    return [
+        {
+            "event_ordinal": event_ordinal,
+            "accession_number": record["accession_number"],
+            "form": record["form"],
+            "availability_session": record["availability_session"],
+            "sec_document_ordinal": sec_ordinals[record["accession_number"]],
+        }
+        for event_ordinal, record in enumerate(stage_records, start=1)
+    ]
+
+
+def _validated_model_event_plan(
+    raw: Any,
+    *,
+    universe_manifest: Mapping[str, Any],
+    stage: str,
+    sec_acquisition_accession_order: list[str],
+) -> list[dict[str, Any]]:
+    if type(raw) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model event plan must be an exact list"
+        )
+    observed = _plain(raw, "owned model event plan")
+    expected = _model_event_plan(
+        universe_manifest=universe_manifest,
+        stage=stage,
+        sec_acquisition_accession_order=sec_acquisition_accession_order,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model event plan is not the canonical chronological stage plan"
+        )
+    return expected
+
+
+def _validated_model_execution_source_hashes(
+    raw: Any,
+    *,
+    location: str,
+) -> dict[str, str]:
+    sources = _mapping(raw, location)
+    if set(sources) != set(MODEL_EXECUTION_SOURCE_ROLES):
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} does not bind the exact owned model source closure"
+        )
+    return {
+        role: _sha256(sources[role], f"{location} {role}")
+        for role in MODEL_EXECUTION_SOURCE_ROLES
+    }
+
+
+def _expected_model_runtime_limits(
+    *,
+    stage: str,
+    accession_count: int,
+) -> dict[str, Any]:
+    if stage not in STAGE_MODEL_CALL_CAPS:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model execution stage is invalid"
+        )
+    count = _strict_int(
+        accession_count,
+        "owned model execution accession count",
+        minimum=1,
+    )
+    call_cap = STAGE_MODEL_CALL_CAPS[stage]
+    if count > call_cap:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned model execution exceeds its frozen stage call cap"
+        )
+    return {
+        "model_call_count": count,
+        "model_call_cap": call_cap,
+        "maximum_model_seconds": MAX_MODEL_SECONDS,
+        "maximum_input_utf8_bytes": MAX_INPUT_BYTES,
+        "maximum_sentences": MAX_SENTENCES,
+        "maximum_sentence_characters": MAX_SENTENCE_CHARACTERS,
+        "connect_timeout_seconds": 2,
+        "read_timeout_seconds": 30,
+        "redirects": 0,
+        "retries": 0,
+        "pull_attempts": 0,
+        "repair_attempts": 0,
+        "streaming": False,
+        "thinking": False,
+    }
+
+
+def _validated_model_runtime_limits(
+    raw: Any,
+    *,
+    stage: str,
+    accession_count: int,
+    location: str,
+) -> dict[str, Any]:
+    limits = _mapping(raw, location)
+    expected = _expected_model_runtime_limits(
+        stage=stage,
+        accession_count=accession_count,
+    )
+    if limits != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} changed the frozen local-model limits"
+        )
+    return limits
+
+
+def _stage_model_candidate_context(
+    authorization_bundle: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[str]]:
+    bundle, grant, component_plan = _sec_component_plan_from_bundle(
+        authorization_bundle
+    )
+    registry = _mapping(
+        bundle["authenticated_store_snapshot"].get("latest_registry"),
+        "stage model candidate registry",
+    )
+    raw_entries = registry.get("entries")
+    if type(raw_entries) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model candidate registry has no exact entries"
+        )
+    matches: list[dict[str, Any]] = []
+    for index, raw_entry in enumerate(raw_entries):
+        entry = _mapping(raw_entry, f"stage model registry entry {index}")
+        candidate = entry.get("candidate_manifest")
+        if (
+            entry.get("entry_sha256") == grant["registry_entry_sha256"]
+            and type(candidate) is dict
+            and candidate.get("candidate_sha256") == grant["candidate_sha256"]
+        ):
+            matches.append(_mapping(candidate, "stage model candidate manifest"))
+    if len(matches) != 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model grant lacks exactly one registry-pinned candidate"
+        )
+    candidate = matches[0]
+    try:
+        validate_candidate_manifest(
+            candidate,
+            expected_candidate_sha256=grant["candidate_sha256"],
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model candidate manifest is not canonical"
+        ) from exc
+    accessions = [
+        document["accession_number"]
+        for document in component_plan["sec_access_plan"]["documents"]
+    ]
+    return bundle, grant, candidate, accessions
+
+
+def _stage_model_development_root_context(
+    *,
+    current_tip: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    grant: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    matches: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    candidate_bindings = _mapping(
+        candidate.get("bindings"),
+        "stage model candidate bindings for development root",
+    )
+    candidate_sources = _mapping(
+        candidate_bindings.get("source_hashes"),
+        "stage model candidate source hashes for development root",
+    )
+    snapshot = _mapping(
+        bundle.get("authenticated_store_snapshot"),
+        "stage model bundled snapshot for development root",
+    )
+    registry = _mapping(
+        snapshot.get("latest_registry"),
+        "stage model registry for development root",
+    )
+    registry_pin = _mapping(
+        snapshot.get("latest_registry_pin"),
+        "stage model registry pin for development root",
+    )
+    claims = _mapping(
+        current_tip.get("development_sec_execution_claims"),
+        "stage model development SEC claims",
+    )
+    readers = _mapping(
+        current_tip.get("development_sec_reader_receipts"),
+        "stage model development SEC readers",
+    )
+    aborts = _mapping(
+        current_tip.get("development_sec_execution_aborts"),
+        "stage model development SEC aborts",
+    )
+    for scope_hash, root_claim in claims.items():
+        root_reader = readers.get(scope_hash)
+        if (
+            type(root_claim) is not dict
+            or type(root_reader) is not dict
+            or scope_hash in aborts
+            or root_claim.get("candidate_sha256") != grant["candidate_sha256"]
+            or root_claim.get("registry_entry_sha256")
+            != grant["registry_entry_sha256"]
+            or root_claim.get("registry_sha256") != registry.get("registry_sha256")
+            or root_claim.get("registry_tip_sha256") != registry_pin.get("tip_sha256")
+            or root_claim.get("corpus_universe_sha256")
+            != candidate_bindings.get("corpus_universe_sha256")
+            or root_claim.get("corpus_universe_semantic_sha256")
+            != candidate_bindings.get("corpus_universe_semantic_sha256")
+        ):
+            continue
+        plan = _validated_development_content_root_plan(
+            root_claim.get("development_content_root_plan")
+        )
+        root_sources = _mapping(
+            root_claim.get("execution_source_hashes"),
+            "stage model development-root execution source hashes",
+        )
+        if (
+            plan["development_root_scope_sha256"] != scope_hash
+            or root_reader.get("claim_sha256") != root_claim.get("claim_sha256")
+            or any(
+                candidate_sources.get(role) != value
+                for role, value in root_sources.items()
+            )
+        ):
+            continue
+        universe = _mapping(
+            plan.get("corpus_universe_manifest"),
+            "stage model development-root universe",
+        )
+        if (
+            universe.get("universe_sha256")
+            != candidate_bindings.get("corpus_universe_sha256")
+            or universe.get("universe_semantic_sha256")
+            != candidate_bindings.get("corpus_universe_semantic_sha256")
+        ):
+            continue
+        matches.append((root_claim, root_reader, universe))
+    if len(matches) != 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution requires exactly one terminal matching development SEC root"
+        )
+    return matches[0]
+
+
+def _validated_stage_model_execution_claims(
+    raw: Any,
+    *,
+    authorization_bundles: Mapping[str, Any],
+    sec_execution_claims: Mapping[str, Any],
+    sec_reader_receipts: Mapping[str, Any],
+    sec_execution_aborts: Mapping[str, Any],
+    stage_carry_in_reader_receipts: Mapping[str, Any],
+    development_root_carry_in_reader_receipts: Mapping[str, Any],
+    development_sec_execution_claims: Mapping[str, Any],
+    development_sec_reader_receipts: Mapping[str, Any],
+    development_sec_execution_aborts: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    claims = _mapping(raw, "current-tip stage model execution claims")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_request_sha256, raw_claim in claims.items():
+        request_hash = _sha256(
+            raw_request_sha256,
+            "stage model execution claim map key",
+        )
+        claim = _mapping(
+            raw_claim,
+            f"stage model execution claim {request_hash}",
+        )
+        _expect_keys(
+            claim,
+            _STAGE_MODEL_EXECUTION_CLAIM_KEYS,
+            f"stage model execution claim {request_hash}",
+        )
+        if (
+            claim["schema_version"] != STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION
+            or claim["contract_version"] != CONTRACT_VERSION
+            or claim["claim_kind"] != "owned_stage_gemma_model_batch"
+            or claim["request_sha256"] != request_hash
+            or claim["model_component_id"] != STAGE_MODEL_BATCH_COMPONENT_ID
+            or claim["owned_local_model_execution_required"] is not True
+            or claim["caller_supplied_path_permitted"] is not False
+            or claim["filing_text_included"] is not False
+            or claim["market_access_permitted"] is not False
+            or claim["outcome_access_permitted"] is not False
+            or claim["future_stage_access_permitted"] is not False
+            or claim["paid_api_access_permitted"] is not False
+            or claim["external_network_access_permitted"] is not False
+            or claim["effect_may_be_repeated_after_indeterminate_crash"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim semantics changed"
+            )
+        _self_hash(claim, "claim_sha256", "stage model execution claim")
+        stage = claim["authorized_stage"]
+        if stage not in _STAGE_PREREQUISITES:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim stage is invalid"
+            )
+        for field in (
+            "request_sha256",
+            "consumption_entry_sha256",
+            "candidate_sha256",
+            "registry_entry_sha256",
+            "input_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "authorization_bundle_sha256",
+            "authorization_grant_sha256",
+            "grant_store_state_sha256",
+            "grant_consumption_ledger_sha256",
+            "grant_consumption_ledger_tip_sha256",
+            "start_current_tip_anchor_sha256",
+            "stage_sec_execution_claim_sha256",
+            "stage_sec_reader_receipt_sha256",
+            "development_root_scope_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "corpus_universe_sha256",
+            "carry_in_reader_receipt_sha256",
+            "sec_acquisition_accession_order_sha256",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "candidate_source_hashes_sha256",
+            "execution_source_hashes_sha256",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+        ):
+            _sha256(claim[field], f"stage model execution claim {field}")
+        for field in ("attempt_id", "input_prerequisite_stage", "model_name"):
+            _safe_id(claim[field], f"stage model execution claim {field}")
+        if claim["input_prerequisite_stage"] != _STAGE_PREREQUISITES[stage]:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim crossed its prerequisite stage"
+            )
+        namespace = claim["output_namespace"]
+        if type(namespace) is not str or _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim namespace is invalid"
+            )
+        _strict_int(
+            claim["consumption_entry_sequence"],
+            "stage model execution entry sequence",
+            minimum=1,
+        )
+        acquisition_accessions = _validated_model_accession_order(
+            claim["sec_acquisition_accession_order"],
+            location="stage model execution SEC acquisition order",
+        )
+        if (
+            claim["sec_document_count"] != len(acquisition_accessions)
+            or claim["sec_acquisition_accession_order_sha256"]
+            != canonical_sha256(acquisition_accessions)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution SEC acquisition binding is inconsistent"
+            )
+        sources = _validated_model_execution_source_hashes(
+            claim["execution_source_hashes"],
+            location="stage model execution source hashes",
+        )
+        if (
+            claim["execution_source_hashes"] != sources
+            or claim["execution_source_hashes_sha256"] != canonical_sha256(sources)
+            or claim["execution_source_role_count"] != len(sources)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution source closure is inconsistent"
+            )
+        limits = _validated_model_runtime_limits(
+            claim["model_runtime_limits"],
+            stage=stage,
+            accession_count=len(acquisition_accessions),
+            location="stage model runtime limits",
+        )
+        if claim["model_runtime_limits_sha256"] != canonical_sha256(limits):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model runtime-limit hash is inconsistent"
+            )
+        bundle = authorization_bundles.get(request_hash)
+        sec_claim = sec_execution_claims.get(request_hash)
+        sec_reader = sec_reader_receipts.get(request_hash)
+        if (
+            type(bundle) is not dict
+            or type(sec_claim) is not dict
+            or type(sec_reader) is not dict
+            or request_hash in sec_execution_aborts
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim lacks terminal SEC ancestry"
+            )
+        final_carry = stage_carry_in_reader_receipts.get(request_hash)
+        root_carry = development_root_carry_in_reader_receipts.get(request_hash)
+        if stage == "intermediate":
+            carry = root_carry
+            carry_kind = "development_root_carry_in"
+            other_carry = final_carry
+        else:
+            carry = final_carry
+            carry_kind = "stage_carry_in"
+            other_carry = root_carry
+        if type(carry) is not dict or other_carry is not None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim requires exactly one stage-correct carry receipt"
+            )
+        canonical_bundle, grant, candidate, planned_accessions = (
+            _stage_model_candidate_context(bundle)
+        )
+        root_claim, root_reader, universe = _stage_model_development_root_context(
+            current_tip={
+                "development_sec_execution_claims": (
+                    development_sec_execution_claims
+                ),
+                "development_sec_reader_receipts": (
+                    development_sec_reader_receipts
+                ),
+                "development_sec_execution_aborts": (
+                    development_sec_execution_aborts
+                ),
+            },
+            bundle=canonical_bundle,
+            grant=grant,
+            candidate=candidate,
+        )
+        event_plan = _validated_model_event_plan(
+            claim["event_plan"],
+            universe_manifest=universe,
+            stage=stage,
+            sec_acquisition_accession_order=planned_accessions,
+        )
+        if (
+            claim["event_count"] != len(event_plan)
+            or claim["event_plan_sha256"] != canonical_sha256(event_plan)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution event-plan binding is inconsistent"
+            )
+        candidate_sources = _mapping(
+            _mapping(candidate["bindings"], "stage model candidate bindings")[
+                "source_hashes"
+            ],
+            "stage model candidate source hashes",
+        )
+        if (
+            claim["identity_lexicon_sha256"]
+            != CANONICAL_IDENTITY_LEXICON_SHA256
+            or candidate["bindings"]["identity_lexicon_sha256"]
+            != CANONICAL_IDENTITY_LEXICON_SHA256
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution changed the canonical identity lexicon"
+            )
+        model = _mapping(candidate["model"], "stage model candidate model")
+        expected = {
+            "request_sha256": grant["request_sha256"],
+            "consumption_entry_sha256": grant["consumption_entry_sha256"],
+            "consumption_entry_sequence": grant["consumption_entry_sequence"],
+            "attempt_id": grant["attempt_id"],
+            "candidate_sha256": grant["candidate_sha256"],
+            "registry_entry_sha256": grant["registry_entry_sha256"],
+            "input_prerequisite_stage": grant["prerequisite_stage"],
+            "authorized_stage": grant["stage"],
+            "input_stage_evidence_sha256": grant[
+                "prerequisite_stage_evidence_sha256"
+            ],
+            "stage_access_manifest_sha256": grant["stage_access_manifest_sha256"],
+            "output_namespace": grant["output_namespace"],
+            "authorization_bundle_sha256": canonical_bundle["bundle_sha256"],
+            "authorization_grant_sha256": grant["authorization_grant_sha256"],
+            "grant_store_state_sha256": grant["store_state_sha256"],
+            "grant_consumption_ledger_sha256": grant["consumption_ledger_sha256"],
+            "grant_consumption_ledger_tip_sha256": grant[
+                "consumption_ledger_tip_sha256"
+            ],
+            "stage_sec_execution_claim_sha256": sec_claim["claim_sha256"],
+            "stage_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+            "development_root_scope_sha256": root_claim[
+                "development_root_scope_sha256"
+            ],
+            "development_sec_execution_claim_sha256": root_claim[
+                "claim_sha256"
+            ],
+            "development_sec_reader_receipt_sha256": root_reader[
+                "receipt_sha256"
+            ],
+            "corpus_universe_sha256": universe["universe_sha256"],
+            "carry_in_kind": carry_kind,
+            "carry_in_reader_receipt_sha256": carry["receipt_sha256"],
+            "sec_document_count": len(planned_accessions),
+            "sec_acquisition_accession_order": planned_accessions,
+            "sec_acquisition_accession_order_sha256": canonical_sha256(
+                planned_accessions
+            ),
+            "event_count": len(event_plan),
+            "event_plan": event_plan,
+            "event_plan_sha256": canonical_sha256(event_plan),
+            "identity_lexicon_sha256": CANONICAL_IDENTITY_LEXICON_SHA256,
+            "candidate_source_hashes_sha256": canonical_sha256(candidate_sources),
+            "model_name": model["name"],
+            "model_digest": model["digest"],
+            "runtime_fingerprint_sha256": model[
+                "runtime_fingerprint_sha256"
+            ],
+            "model_transport_sha256": canonical_sha256(model["transport"]),
+        }
+        if (
+            any(claim[field] != value for field, value in expected.items())
+            or any(candidate_sources.get(role) != value for role, value in sources.items())
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim crossed its candidate, SEC, carry, or grant ancestry"
+            )
+        validated[request_hash] = claim
+    return validated
+
+
+def _validated_stage_model_reader_receipts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip stage model reader receipts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_request_sha256, raw_receipt in receipts.items():
+        request_hash = _sha256(raw_request_sha256, "stage model reader map key")
+        receipt = _mapping(raw_receipt, f"stage model reader receipt {request_hash}")
+        _expect_keys(
+            receipt,
+            _STAGE_MODEL_READER_RECEIPT_KEYS,
+            f"stage model reader receipt {request_hash}",
+        )
+        if (
+            receipt["schema_version"] != STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"] != "store_rehashed_owned_stage_gemma_model_batch"
+            or receipt["request_sha256"] != request_hash
+            or receipt["model_component_id"] != STAGE_MODEL_BATCH_COMPONENT_ID
+            or receipt["fresh_model_provenance_claimed"] is not False
+            or receipt["reader_output_recomputed_by_store"] is not True
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model reader receipt semantics changed"
+            )
+        _self_hash(receipt, "receipt_sha256", "stage model reader receipt")
+        index = _validated_sec_byte_index(receipt["byte_index"])
+        if (
+            receipt["byte_index"] != index
+            or receipt["byte_index_sha256"] != canonical_sha256(index)
+            or receipt["byte_count_total"]
+            != sum(item["byte_count"] for item in index)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model reader byte index is inconsistent"
+            )
+        for field in (
+            "request_sha256",
+            "claim_sha256",
+            "candidate_sha256",
+            "stage_sec_execution_claim_sha256",
+            "stage_sec_reader_receipt_sha256",
+            "development_root_scope_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "corpus_universe_sha256",
+            "carry_in_reader_receipt_sha256",
+            "sec_acquisition_accession_order_sha256",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "execution_source_hashes_sha256",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+            "byte_index_sha256",
+            "complete_marker_sha256",
+        ):
+            _sha256(receipt[field], f"stage model reader receipt {field}")
+        claim = claims.get(request_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model reader receipt lacks its execution claim"
+            )
+        expected_fields = (
+            "authorized_stage",
+            "candidate_sha256",
+            "output_namespace",
+            "stage_sec_execution_claim_sha256",
+            "stage_sec_reader_receipt_sha256",
+            "development_root_scope_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "corpus_universe_sha256",
+            "carry_in_kind",
+            "carry_in_reader_receipt_sha256",
+            "sec_document_count",
+            "sec_acquisition_accession_order_sha256",
+            "event_count",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "execution_source_hashes_sha256",
+            "execution_source_role_count",
+            "model_name",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+            "model_component_id",
+        )
+        if (
+            receipt["claim_sha256"] != claim["claim_sha256"]
+            or any(receipt[field] != claim[field] for field in expected_fields)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model reader receipt crossed its execution claim"
+            )
+        validated[request_hash] = receipt
+    return validated
+
+
+def _validated_stage_model_execution_aborts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    aborts = _mapping(raw, "current-tip stage model execution aborts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_request_sha256, raw_abort in aborts.items():
+        request_hash = _sha256(raw_request_sha256, "stage model abort map key")
+        abort = _mapping(raw_abort, f"stage model execution abort {request_hash}")
+        _expect_keys(
+            abort,
+            _STAGE_MODEL_EXECUTION_ABORT_KEYS,
+            f"stage model execution abort {request_hash}",
+        )
+        if (
+            abort["schema_version"] != STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION
+            or abort["contract_version"] != CONTRACT_VERSION
+            or abort["abort_kind"] != "indeterminate_owned_stage_gemma_model_batch"
+            or abort["reason"]
+            not in {
+                "claim_recovered_without_terminal_receipt",
+                "external_effect_failed_or_completion_unknown",
+                "durable_output_verification_failed",
+            }
+            or abort["external_effect_retry_permitted"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution abort semantics changed"
+            )
+        _self_hash(abort, "abort_sha256", "stage model execution abort")
+        claim = claims.get(request_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution abort lacks its claim"
+            )
+        expected = {
+            "request_sha256": request_hash,
+            "claim_sha256": claim["claim_sha256"],
+            "authorized_stage": claim["authorized_stage"],
+            "candidate_sha256": claim["candidate_sha256"],
+            "output_namespace": claim["output_namespace"],
+            "model_component_id": claim["model_component_id"],
+        }
+        if any(abort[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution abort crossed its claim"
+            )
+        validated[request_hash] = abort
+    return validated
+
+
+def _validated_development_model_execution_claims(
+    raw: Any,
+    *,
+    development_sec_execution_claims: Mapping[str, Any],
+    development_sec_reader_receipts: Mapping[str, Any],
+    development_sec_execution_aborts: Mapping[str, Any],
+    authenticated_store_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    claims = _mapping(raw, "current-tip development model execution claims")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_claim in claims.items():
+        scope_hash = _sha256(
+            raw_scope_sha256,
+            "development model execution claim map key",
+        )
+        claim = _mapping(
+            raw_claim,
+            f"development model execution claim {scope_hash}",
+        )
+        _expect_keys(
+            claim,
+            _DEVELOPMENT_MODEL_EXECUTION_CLAIM_KEYS,
+            f"development model execution claim {scope_hash}",
+        )
+        if (
+            claim["schema_version"]
+            != DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION
+            or claim["contract_version"] != CONTRACT_VERSION
+            or claim["claim_kind"] != "owned_development_gemma_model_batch"
+            or claim["development_root_scope_sha256"] != scope_hash
+            or claim["authorized_stage"] != "development"
+            or claim["model_component_id"] != STAGE_MODEL_BATCH_COMPONENT_ID
+            or claim["carry_in_required"] is not False
+            or claim["owned_local_model_execution_required"] is not True
+            or claim["caller_supplied_path_permitted"] is not False
+            or claim["filing_text_included"] is not False
+            or claim["market_access_permitted"] is not False
+            or claim["outcome_access_permitted"] is not False
+            or claim["future_stage_access_permitted"] is not False
+            or claim["paid_api_access_permitted"] is not False
+            or claim["external_network_access_permitted"] is not False
+            or claim["reveal_request_consumption_permitted"] is not False
+            or claim["consumption_ledger_mutation_permitted"] is not False
+            or claim["effect_may_be_repeated_after_indeterminate_crash"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution claim semantics changed"
+            )
+        _self_hash(claim, "claim_sha256", "development model execution claim")
+        _strict_int(
+            claim["start_consumed_request_count"],
+            "development model execution start consumed-request count",
+        )
+        for field in (
+            "development_root_scope_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "corpus_universe_sha256",
+            "corpus_universe_semantic_sha256",
+            "start_current_tip_anchor_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "sec_acquisition_accession_order_sha256",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "candidate_source_hashes_sha256",
+            "execution_source_hashes_sha256",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+        ):
+            _sha256(claim[field], f"development model execution claim {field}")
+        for field in ("attempt_id", "model_name"):
+            _safe_id(claim[field], f"development model execution claim {field}")
+        namespace = claim["output_namespace"]
+        if type(namespace) is not str or _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution namespace is invalid"
+            )
+        acquisition_accessions = _validated_model_accession_order(
+            claim["sec_acquisition_accession_order"],
+            location="development model execution SEC acquisition order",
+        )
+        if (
+            claim["sec_document_count"] != len(acquisition_accessions)
+            or claim["sec_acquisition_accession_order_sha256"]
+            != canonical_sha256(acquisition_accessions)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution SEC acquisition binding is inconsistent"
+            )
+        if claim["identity_lexicon_sha256"] != CANONICAL_IDENTITY_LEXICON_SHA256:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution changed the canonical identity lexicon"
+            )
+        sources = _validated_model_execution_source_hashes(
+            claim["execution_source_hashes"],
+            location="development model execution source hashes",
+        )
+        if (
+            claim["execution_source_hashes"] != sources
+            or claim["execution_source_hashes_sha256"] != canonical_sha256(sources)
+            or claim["execution_source_role_count"] != len(sources)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution source closure is inconsistent"
+            )
+        limits = _validated_model_runtime_limits(
+            claim["model_runtime_limits"],
+            stage="development",
+            accession_count=len(acquisition_accessions),
+            location="development model runtime limits",
+        )
+        if claim["model_runtime_limits_sha256"] != canonical_sha256(limits):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model runtime-limit hash is inconsistent"
+            )
+        sec_claim = development_sec_execution_claims.get(scope_hash)
+        sec_reader = development_sec_reader_receipts.get(scope_hash)
+        if (
+            type(sec_claim) is not dict
+            or type(sec_reader) is not dict
+            or scope_hash in development_sec_execution_aborts
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution claim lacks terminal development SEC ancestry"
+            )
+        plan = _validated_development_content_root_plan(
+            sec_claim["development_content_root_plan"]
+        )
+        root_scope = plan["root_scope"]
+        planned_accessions = [
+            document["accession_number"]
+            for document in plan["sec_access_plan"]["documents"]
+        ]
+        planned_accessions = _validated_model_accession_order(
+            planned_accessions,
+            location="development model planned SEC acquisition order",
+        )
+        universe = _mapping(
+            plan["corpus_universe_manifest"],
+            "development model corpus universe",
+        )
+        event_plan = _validated_model_event_plan(
+            claim["event_plan"],
+            universe_manifest=universe,
+            stage="development",
+            sec_acquisition_accession_order=planned_accessions,
+        )
+        if (
+            claim["event_count"] != len(event_plan)
+            or claim["event_plan_sha256"] != canonical_sha256(event_plan)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution event-plan binding is inconsistent"
+            )
+        expected = {
+            "development_root_scope_sha256": scope_hash,
+            "development_content_root_plan_sha256": plan[
+                "development_content_root_plan_sha256"
+            ],
+            "attempt_id": sec_claim["attempt_id"],
+            "candidate_sha256": sec_claim["candidate_sha256"],
+            "candidate_design_sha256": sec_claim["candidate_design_sha256"],
+            "registry_entry_sha256": sec_claim["registry_entry_sha256"],
+            "registry_sha256": sec_claim["registry_sha256"],
+            "registry_tip_sha256": sec_claim["registry_tip_sha256"],
+            "corpus_universe_sha256": sec_claim["corpus_universe_sha256"],
+            "corpus_universe_semantic_sha256": sec_claim[
+                "corpus_universe_semantic_sha256"
+            ],
+            "output_namespace": sec_claim["output_namespace"],
+            "development_sec_execution_claim_sha256": sec_claim[
+                "claim_sha256"
+            ],
+            "development_sec_reader_receipt_sha256": sec_reader[
+                "receipt_sha256"
+            ],
+            "start_consumed_request_count": sec_claim[
+                "start_consumed_request_count"
+            ],
+            "sec_document_count": len(planned_accessions),
+            "sec_acquisition_accession_order": planned_accessions,
+            "sec_acquisition_accession_order_sha256": canonical_sha256(
+                planned_accessions
+            ),
+            "event_count": len(event_plan),
+            "event_plan": event_plan,
+            "event_plan_sha256": canonical_sha256(event_plan),
+            "identity_lexicon_sha256": CANONICAL_IDENTITY_LEXICON_SHA256,
+        }
+        if any(claim[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution claim crossed its SEC root ancestry"
+            )
+        sec_sources = _mapping(
+            sec_claim["execution_source_hashes"],
+            "development SEC source hashes for model execution",
+        )
+        if any(
+            sec_sources.get(role) != value
+            for role, value in sources.items()
+            if role in sec_sources
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution bytes differ from its SEC root source closure"
+            )
+        for field in ("model_digest", "runtime_fingerprint_sha256"):
+            _sha256(claim[field], f"development model candidate {field}")
+        if authenticated_store_snapshot is not None:
+            _state, _registry_entry, candidate = _development_registered_candidate(
+                authenticated_store_snapshot,
+                plan=plan,
+                require_latest=False,
+            )
+            candidate_sources = _mapping(
+                candidate["bindings"]["source_hashes"],
+                "development model candidate source hashes",
+            )
+            model = _mapping(candidate["model"], "development model candidate model")
+            candidate_expected = {
+                "identity_lexicon_sha256": CANONICAL_IDENTITY_LEXICON_SHA256,
+                "candidate_source_hashes_sha256": canonical_sha256(
+                    candidate_sources
+                ),
+                "model_name": model["name"],
+                "model_digest": model["digest"],
+                "runtime_fingerprint_sha256": model[
+                    "runtime_fingerprint_sha256"
+                ],
+                "model_transport_sha256": canonical_sha256(model["transport"]),
+            }
+            if (
+                any(
+                    claim[field] != value
+                    for field, value in candidate_expected.items()
+                )
+                or any(
+                    candidate_sources.get(role) != value
+                    for role, value in sources.items()
+                )
+                or candidate["bindings"]["identity_lexicon_sha256"]
+                != CANONICAL_IDENTITY_LEXICON_SHA256
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Development model execution claim crossed its registered candidate"
+                )
+        validated[scope_hash] = claim
+    return validated
+
+
+def _validated_development_model_reader_receipts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip development model reader receipts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_receipt in receipts.items():
+        scope_hash = _sha256(raw_scope_sha256, "development model reader map key")
+        receipt = _mapping(
+            raw_receipt,
+            f"development model reader receipt {scope_hash}",
+        )
+        _expect_keys(
+            receipt,
+            _DEVELOPMENT_MODEL_READER_RECEIPT_KEYS,
+            f"development model reader receipt {scope_hash}",
+        )
+        if (
+            receipt["schema_version"]
+            != DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "store_rehashed_owned_development_gemma_model_batch"
+            or receipt["development_root_scope_sha256"] != scope_hash
+            or receipt["authorized_stage"] != "development"
+            or receipt["model_component_id"] != STAGE_MODEL_BATCH_COMPONENT_ID
+            or receipt["fresh_model_provenance_claimed"] is not False
+            or receipt["reader_output_recomputed_by_store"] is not True
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model reader receipt semantics changed"
+            )
+        _self_hash(receipt, "receipt_sha256", "development model reader receipt")
+        index = _validated_sec_byte_index(receipt["byte_index"])
+        if (
+            receipt["byte_index"] != index
+            or receipt["byte_index_sha256"] != canonical_sha256(index)
+            or receipt["byte_count_total"]
+            != sum(item["byte_count"] for item in index)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model reader byte index is inconsistent"
+            )
+        for field in (
+            "development_root_scope_sha256",
+            "claim_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "sec_acquisition_accession_order_sha256",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "execution_source_hashes_sha256",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+            "byte_index_sha256",
+            "complete_marker_sha256",
+        ):
+            _sha256(receipt[field], f"development model reader receipt {field}")
+        claim = claims.get(scope_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model reader receipt lacks its execution claim"
+            )
+        expected_fields = (
+            "development_content_root_plan_sha256",
+            "authorized_stage",
+            "candidate_sha256",
+            "output_namespace",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "sec_document_count",
+            "sec_acquisition_accession_order_sha256",
+            "event_count",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "execution_source_hashes_sha256",
+            "execution_source_role_count",
+            "model_name",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+            "model_component_id",
+        )
+        if (
+            receipt["claim_sha256"] != claim["claim_sha256"]
+            or any(receipt[field] != claim[field] for field in expected_fields)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model reader receipt crossed its execution claim"
+            )
+        validated[scope_hash] = receipt
+    return validated
+
+
+def _validated_development_model_execution_aborts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    aborts = _mapping(raw, "current-tip development model execution aborts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_abort in aborts.items():
+        scope_hash = _sha256(raw_scope_sha256, "development model abort map key")
+        abort = _mapping(
+            raw_abort,
+            f"development model execution abort {scope_hash}",
+        )
+        _expect_keys(
+            abort,
+            _DEVELOPMENT_MODEL_EXECUTION_ABORT_KEYS,
+            f"development model execution abort {scope_hash}",
+        )
+        if (
+            abort["schema_version"]
+            != DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION
+            or abort["contract_version"] != CONTRACT_VERSION
+            or abort["abort_kind"]
+            != "indeterminate_owned_development_gemma_model_batch"
+            or abort["reason"]
+            not in {
+                "claim_recovered_without_terminal_receipt",
+                "external_effect_failed_or_completion_unknown",
+                "durable_output_verification_failed",
+            }
+            or abort["external_effect_retry_permitted"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution abort semantics changed"
+            )
+        _self_hash(abort, "abort_sha256", "development model execution abort")
+        claim = claims.get(scope_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution abort lacks its claim"
+            )
+        expected = {
+            "development_root_scope_sha256": scope_hash,
+            "claim_sha256": claim["claim_sha256"],
+            "development_content_root_plan_sha256": claim[
+                "development_content_root_plan_sha256"
+            ],
+            "authorized_stage": "development",
+            "candidate_sha256": claim["candidate_sha256"],
+            "output_namespace": claim["output_namespace"],
+            "model_component_id": claim["model_component_id"],
+        }
+        if any(abort[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution abort crossed its claim"
+            )
+        validated[scope_hash] = abort
+    return validated
+
+
 def validate_reveal_store_current_tip_anchor_structure(
     current_tip_anchor: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -3005,6 +4444,68 @@ def validate_reveal_store_current_tip_anchor_structure(
             ],
         )
     )
+    anchor["stage_model_execution_claims"] = (
+        _validated_stage_model_execution_claims(
+            anchor["stage_model_execution_claims"],
+            authorization_bundles=anchor["authorization_bundles"],
+            sec_execution_claims=anchor["stage_sec_execution_claims"],
+            sec_reader_receipts=anchor["stage_sec_reader_receipts"],
+            sec_execution_aborts=anchor["stage_sec_execution_aborts"],
+            stage_carry_in_reader_receipts=anchor[
+                "stage_carry_in_reader_receipts"
+            ],
+            development_root_carry_in_reader_receipts=anchor[
+                "development_root_carry_in_reader_receipts"
+            ],
+            development_sec_execution_claims=anchor[
+                "development_sec_execution_claims"
+            ],
+            development_sec_reader_receipts=anchor[
+                "development_sec_reader_receipts"
+            ],
+            development_sec_execution_aborts=anchor[
+                "development_sec_execution_aborts"
+            ],
+        )
+    )
+    anchor["stage_model_reader_receipts"] = (
+        _validated_stage_model_reader_receipts(
+            anchor["stage_model_reader_receipts"],
+            claims=anchor["stage_model_execution_claims"],
+        )
+    )
+    anchor["stage_model_execution_aborts"] = (
+        _validated_stage_model_execution_aborts(
+            anchor["stage_model_execution_aborts"],
+            claims=anchor["stage_model_execution_claims"],
+        )
+    )
+    anchor["development_model_execution_claims"] = (
+        _validated_development_model_execution_claims(
+            anchor["development_model_execution_claims"],
+            development_sec_execution_claims=anchor[
+                "development_sec_execution_claims"
+            ],
+            development_sec_reader_receipts=anchor[
+                "development_sec_reader_receipts"
+            ],
+            development_sec_execution_aborts=anchor[
+                "development_sec_execution_aborts"
+            ],
+        )
+    )
+    anchor["development_model_reader_receipts"] = (
+        _validated_development_model_reader_receipts(
+            anchor["development_model_reader_receipts"],
+            claims=anchor["development_model_execution_claims"],
+        )
+    )
+    anchor["development_model_execution_aborts"] = (
+        _validated_development_model_execution_aborts(
+            anchor["development_model_execution_aborts"],
+            claims=anchor["development_model_execution_claims"],
+        )
+    )
     if set(anchor["stage_carry_in_reader_receipts"]) & set(
         anchor["development_root_carry_in_reader_receipts"]
     ):
@@ -3023,6 +4524,18 @@ def validate_reveal_store_current_tip_anchor_structure(
         raise SecFilingGemmaStageAuthorizationError(
             "Development SEC execution cannot be both completed and aborted"
         )
+    if set(anchor["stage_model_reader_receipts"]) & set(
+        anchor["stage_model_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution cannot be both completed and aborted"
+        )
+    if set(anchor["development_model_reader_receipts"]) & set(
+        anchor["development_model_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution cannot be both completed and aborted"
+        )
     active_stage_claims = set(anchor["stage_sec_execution_claims"]) - set(
         anchor["stage_sec_reader_receipts"]
     ) - set(anchor["stage_sec_execution_aborts"])
@@ -3034,6 +4547,30 @@ def validate_reveal_store_current_tip_anchor_structure(
     if len(active_stage_claims) + len(active_development_claims) > 1:
         raise SecFilingGemmaStageAuthorizationError(
             "At most one SEC execution claim may be globally active"
+        )
+    active_stage_model_claims = set(
+        anchor["stage_model_execution_claims"]
+    ) - set(anchor["stage_model_reader_receipts"]) - set(
+        anchor["stage_model_execution_aborts"]
+    )
+    active_development_model_claims = set(
+        anchor["development_model_execution_claims"]
+    ) - set(anchor["development_model_reader_receipts"]) - set(
+        anchor["development_model_execution_aborts"]
+    )
+    if (
+        len(active_stage_model_claims)
+        + len(active_development_model_claims)
+        > 1
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one model execution claim may be globally active"
+        )
+    if (
+        active_stage_model_claims or active_development_model_claims
+    ) and (active_stage_claims or active_development_claims):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC and model effects cannot be globally active together"
         )
     _self_hash(anchor, "tip_anchor_sha256", "independent current-tip anchor")
     return anchor
@@ -3055,6 +4592,12 @@ def build_reveal_store_current_tip_anchor(
     development_sec_reader_receipts: Mapping[str, Any] | None = None,
     development_sec_execution_aborts: Mapping[str, Any] | None = None,
     development_root_carry_in_reader_receipts: Mapping[str, Any] | None = None,
+    stage_model_execution_claims: Mapping[str, Any] | None = None,
+    stage_model_reader_receipts: Mapping[str, Any] | None = None,
+    stage_model_execution_aborts: Mapping[str, Any] | None = None,
+    development_model_execution_claims: Mapping[str, Any] | None = None,
+    development_model_reader_receipts: Mapping[str, Any] | None = None,
+    development_model_execution_aborts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the separately persisted CAS anchor for one exact store state."""
 
@@ -3170,6 +4713,80 @@ def build_reveal_store_current_tip_anchor(
         raise SecFilingGemmaStageAuthorizationError(
             "Final and development-root carry-in receipts cannot share a request"
         )
+    model_claims = _validated_stage_model_execution_claims(
+        {} if stage_model_execution_claims is None else stage_model_execution_claims,
+        authorization_bundles=bundles,
+        sec_execution_claims=sec_claims,
+        sec_reader_receipts=sec_receipts,
+        sec_execution_aborts=sec_aborts,
+        stage_carry_in_reader_receipts=carry_in_receipts,
+        development_root_carry_in_reader_receipts=(
+            development_root_carry_in_receipts
+        ),
+        development_sec_execution_claims=development_claims,
+        development_sec_reader_receipts=development_receipts,
+        development_sec_execution_aborts=development_aborts,
+    )
+    model_receipts = _validated_stage_model_reader_receipts(
+        {} if stage_model_reader_receipts is None else stage_model_reader_receipts,
+        claims=model_claims,
+    )
+    model_aborts = _validated_stage_model_execution_aborts(
+        {} if stage_model_execution_aborts is None else stage_model_execution_aborts,
+        claims=model_claims,
+    )
+    if set(model_receipts) & set(model_aborts):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution cannot be both completed and aborted"
+        )
+    development_model_claims = _validated_development_model_execution_claims(
+        (
+            {}
+            if development_model_execution_claims is None
+            else development_model_execution_claims
+        ),
+        development_sec_execution_claims=development_claims,
+        development_sec_reader_receipts=development_receipts,
+        development_sec_execution_aborts=development_aborts,
+        authenticated_store_snapshot=state,
+    )
+    development_model_receipts = _validated_development_model_reader_receipts(
+        (
+            {}
+            if development_model_reader_receipts is None
+            else development_model_reader_receipts
+        ),
+        claims=development_model_claims,
+    )
+    development_model_aborts = _validated_development_model_execution_aborts(
+        (
+            {}
+            if development_model_execution_aborts is None
+            else development_model_execution_aborts
+        ),
+        claims=development_model_claims,
+    )
+    if set(development_model_receipts) & set(development_model_aborts):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution cannot be both completed and aborted"
+        )
+    active_model_count = len(
+        set(model_claims) - set(model_receipts) - set(model_aborts)
+    ) + len(
+        set(development_model_claims)
+        - set(development_model_receipts)
+        - set(development_model_aborts)
+    )
+    if active_model_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one model execution claim may be globally active"
+        )
+    if active_model_count and (
+        active_stage_claim_count + active_development_claim_count
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "SEC and model effects cannot be globally active together"
+        )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -3197,6 +4814,12 @@ def build_reveal_store_current_tip_anchor(
         "development_root_carry_in_reader_receipts": (
             development_root_carry_in_receipts
         ),
+        "stage_model_execution_claims": model_claims,
+        "stage_model_reader_receipts": model_receipts,
+        "stage_model_execution_aborts": model_aborts,
+        "development_model_execution_claims": development_model_claims,
+        "development_model_reader_receipts": development_model_receipts,
+        "development_model_execution_aborts": development_model_aborts,
     }
     return {**body, "tip_anchor_sha256": canonical_sha256(body)}
 
@@ -3204,6 +4827,8 @@ def build_reveal_store_current_tip_anchor(
 def validate_reveal_store_current_tip_anchor_transition(
     prior_tip_anchor: Mapping[str, Any],
     next_tip_anchor: Mapping[str, Any],
+    *,
+    authenticated_store_snapshot: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate one monotonic, bundle-preserving CAS-anchor transition."""
 
@@ -3514,6 +5139,265 @@ def validate_reveal_store_current_tip_anchor_transition(
         raise SecFilingGemmaStageAuthorizationError(
             "Non-carry-in transition changed development-root carry-in membership"
         )
+
+    prior_model_claims = prior["stage_model_execution_claims"]
+    next_model_claims = next_anchor["stage_model_execution_claims"]
+    prior_model_receipts = prior["stage_model_reader_receipts"]
+    next_model_receipts = next_anchor["stage_model_reader_receipts"]
+    prior_model_aborts = prior["stage_model_execution_aborts"]
+    next_model_aborts = next_anchor["stage_model_execution_aborts"]
+    prior_development_model_claims = prior[
+        "development_model_execution_claims"
+    ]
+    next_development_model_claims = next_anchor[
+        "development_model_execution_claims"
+    ]
+    prior_development_model_receipts = prior[
+        "development_model_reader_receipts"
+    ]
+    next_development_model_receipts = next_anchor[
+        "development_model_reader_receipts"
+    ]
+    prior_development_model_aborts = prior[
+        "development_model_execution_aborts"
+    ]
+    next_development_model_aborts = next_anchor[
+        "development_model_execution_aborts"
+    ]
+    for prior_map, next_map, label in (
+        (prior_model_claims, next_model_claims, "stage model execution claim"),
+        (prior_model_receipts, next_model_receipts, "stage model reader receipt"),
+        (prior_model_aborts, next_model_aborts, "stage model execution abort"),
+        (
+            prior_development_model_claims,
+            next_development_model_claims,
+            "development model execution claim",
+        ),
+        (
+            prior_development_model_receipts,
+            next_development_model_receipts,
+            "development model reader receipt",
+        ),
+        (
+            prior_development_model_aborts,
+            next_development_model_aborts,
+            "development model execution abort",
+        ),
+    ):
+        if any(next_map.get(key) != value for key, value in prior_map.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                f"Current-tip transition removed or changed a persisted {label}"
+            )
+    model_claim_delta = len(next_model_claims) - len(prior_model_claims)
+    model_reader_delta = len(next_model_receipts) - len(prior_model_receipts)
+    model_abort_delta = len(next_model_aborts) - len(prior_model_aborts)
+    development_model_claim_delta = len(
+        next_development_model_claims
+    ) - len(prior_development_model_claims)
+    development_model_reader_delta = len(
+        next_development_model_receipts
+    ) - len(prior_development_model_receipts)
+    development_model_abort_delta = len(
+        next_development_model_aborts
+    ) - len(prior_development_model_aborts)
+    model_deltas = (
+        model_claim_delta,
+        model_reader_delta,
+        model_abort_delta,
+        development_model_claim_delta,
+        development_model_reader_delta,
+        development_model_abort_delta,
+    )
+    if any(delta not in {0, 1} for delta in model_deltas):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one model execution artifact"
+        )
+    model_delta_count = sum(model_deltas)
+    if model_delta_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Model claims, reader receipts, and aborts require separate global transitions"
+        )
+    prior_active_models = set(prior_model_claims) - set(
+        prior_model_receipts
+    ) - set(prior_model_aborts)
+    prior_active_development_models = set(
+        prior_development_model_claims
+    ) - set(prior_development_model_receipts) - set(
+        prior_development_model_aborts
+    )
+    non_model_execution_maps = (
+        "stage_sec_execution_claims",
+        "stage_sec_reader_receipts",
+        "stage_sec_execution_aborts",
+        "development_sec_execution_claims",
+        "development_sec_reader_receipts",
+        "development_sec_execution_aborts",
+    )
+    non_model_execution_maps_unchanged = all(
+        next_anchor[name] == prior[name] for name in non_model_execution_maps
+    )
+    if prior_active_models or prior_active_development_models:
+        if prior_active_models:
+            active_key = next(iter(prior_active_models))
+            terminal_key = None
+            if model_reader_delta:
+                terminal_key = next(
+                    iter(set(next_model_receipts) - set(prior_model_receipts))
+                )
+            elif model_abort_delta:
+                terminal_key = next(
+                    iter(set(next_model_aborts) - set(prior_model_aborts))
+                )
+            correct_lifecycle_terminal = (
+                terminal_key == active_key
+                and not development_model_reader_delta
+                and not development_model_abort_delta
+            )
+        else:
+            active_key = next(iter(prior_active_development_models))
+            terminal_key = None
+            if development_model_reader_delta:
+                terminal_key = next(
+                    iter(
+                        set(next_development_model_receipts)
+                        - set(prior_development_model_receipts)
+                    )
+                )
+            elif development_model_abort_delta:
+                terminal_key = next(
+                    iter(
+                        set(next_development_model_aborts)
+                        - set(prior_development_model_aborts)
+                    )
+                )
+            correct_lifecycle_terminal = (
+                terminal_key == active_key
+                and not model_reader_delta
+                and not model_abort_delta
+            )
+        if (
+            model_claim_delta
+            or development_model_claim_delta
+            or model_delta_count != 1
+            or not correct_lifecycle_terminal
+            or consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+            or carry_in_delta
+            or development_root_carry_in_delta
+            or not non_model_execution_maps_unchanged
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Active model execution claim blocks every transition except its exact terminal receipt"
+            )
+    if model_delta_count:
+        if (
+            consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+            or carry_in_delta
+            or development_root_carry_in_delta
+            or not non_model_execution_maps_unchanged
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Model execution artifact append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Model execution artifact append changed authenticated store state"
+            )
+    if model_claim_delta:
+        request_hash = next(
+            iter(set(next_model_claims) - set(prior_model_claims))
+        )
+        claim = next_model_claims[request_hash]
+        if (
+            request_hash not in prior["authorization_bundles"]
+            or request_hash not in prior["stage_sec_execution_claims"]
+            or request_hash not in prior["stage_sec_reader_receipts"]
+            or request_hash in prior["stage_sec_execution_aborts"]
+            or request_hash in prior["consumed_stage_output_receipts"]
+            or claim["start_current_tip_anchor_sha256"]
+            != prior["tip_anchor_sha256"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim does not bind terminal pre-output ancestry at the exact current tip"
+            )
+        expected_claim = build_stage_model_execution_claim(
+            prior["authorization_bundles"][request_hash],
+            independent_current_tip_anchor=prior,
+            execution_source_hashes=claim["execution_source_hashes"],
+        )
+        if claim != expected_claim:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage model execution claim differs from its exact owned plan"
+            )
+    if development_model_claim_delta:
+        scope_hash = next(
+            iter(
+                set(next_development_model_claims)
+                - set(prior_development_model_claims)
+            )
+        )
+        claim = next_development_model_claims[scope_hash]
+        if (
+            scope_hash not in prior["development_sec_execution_claims"]
+            or scope_hash not in prior["development_sec_reader_receipts"]
+            or scope_hash in prior["development_sec_execution_aborts"]
+            or claim["start_current_tip_anchor_sha256"]
+            != prior["tip_anchor_sha256"]
+            or claim["start_consumed_request_count"]
+            != prior["consumed_request_count"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution claim does not bind terminal SEC root ancestry at the exact current tip"
+            )
+        if authenticated_store_snapshot is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model claim transition requires the authenticated prior store snapshot"
+            )
+        validate_reveal_store_current_tip_anchor(
+            authenticated_store_snapshot,
+            prior,
+        )
+        expected_claim = build_development_model_execution_claim(
+            authenticated_store_snapshot,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=prior,
+            execution_source_hashes=claim["execution_source_hashes"],
+        )
+        if claim != expected_claim:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development model execution claim differs from its exact candidate-bound owned plan"
+            )
+    if not model_delta_count:
+        model_map_names = (
+            "stage_model_execution_claims",
+            "stage_model_reader_receipts",
+            "stage_model_execution_aborts",
+            "development_model_execution_claims",
+            "development_model_reader_receipts",
+            "development_model_execution_aborts",
+        )
+        if any(
+            set(next_anchor[name]) != set(prior[name])
+            for name in model_map_names
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Non-model transition changed model execution membership"
+            )
 
     prior_development_claims = prior["development_sec_execution_claims"]
     next_development_claims = next_anchor["development_sec_execution_claims"]
@@ -3834,6 +5718,24 @@ def validate_reveal_store_current_tip_anchor(
         ],
         development_root_carry_in_reader_receipts=observed[
             "development_root_carry_in_reader_receipts"
+        ],
+        stage_model_execution_claims=observed[
+            "stage_model_execution_claims"
+        ],
+        stage_model_reader_receipts=observed[
+            "stage_model_reader_receipts"
+        ],
+        stage_model_execution_aborts=observed[
+            "stage_model_execution_aborts"
+        ],
+        development_model_execution_claims=observed[
+            "development_model_execution_claims"
+        ],
+        development_model_reader_receipts=observed[
+            "development_model_reader_receipts"
+        ],
+        development_model_execution_aborts=observed[
+            "development_model_execution_aborts"
         ],
     )
     if observed != expected:
@@ -4766,6 +6668,784 @@ def build_stage_sec_execution_abort(
         "external_effect_retry_permitted": False,
     }
     return {**body, "abort_sha256": canonical_sha256(body)}
+
+
+def build_stage_model_execution_claim(
+    authorization_bundle: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+    execution_source_hashes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Claim one exact intermediate/final owned Gemma batch at the current tip."""
+
+    bundle, grant, candidate, accessions = _stage_model_candidate_context(
+        authorization_bundle
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        bundle["authenticated_store_snapshot"],
+        independent_current_tip_anchor,
+    )
+    request_hash = grant["request_sha256"]
+    if current_tip["authorization_bundles"].get(request_hash) != bundle:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model authorization bundle is not exact at the current tip"
+        )
+    stage = grant["stage"]
+    if stage not in _STAGE_PREREQUISITES:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution supports only intermediate and final requests"
+        )
+    sec_claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+    sec_reader = current_tip["stage_sec_reader_receipts"].get(request_hash)
+    if (
+        type(sec_claim) is not dict
+        or type(sec_reader) is not dict
+        or request_hash in current_tip["stage_sec_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution requires one terminal owned SEC reader"
+        )
+    final_carry = current_tip["stage_carry_in_reader_receipts"].get(request_hash)
+    root_carry = current_tip[
+        "development_root_carry_in_reader_receipts"
+    ].get(request_hash)
+    if stage == "intermediate":
+        carry = root_carry
+        other_carry = final_carry
+        carry_kind = "development_root_carry_in"
+    else:
+        carry = final_carry
+        other_carry = root_carry
+        carry_kind = "stage_carry_in"
+    if type(carry) is not dict or other_carry is not None:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution requires exactly one stage-correct carry receipt"
+        )
+    root_claim, root_reader, universe = _stage_model_development_root_context(
+        current_tip=current_tip,
+        bundle=bundle,
+        grant=grant,
+        candidate=candidate,
+    )
+    event_plan = _model_event_plan(
+        universe_manifest=universe,
+        stage=stage,
+        sec_acquisition_accession_order=accessions,
+    )
+    if request_hash in current_tip["consumed_stage_output_receipts"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution must precede the same request's stage output"
+        )
+    if request_hash in current_tip["stage_model_execution_claims"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution is already claimed"
+        )
+    active_sec = set(current_tip["stage_sec_execution_claims"]) - set(
+        current_tip["stage_sec_reader_receipts"]
+    ) - set(current_tip["stage_sec_execution_aborts"])
+    active_development_sec = set(
+        current_tip["development_sec_execution_claims"]
+    ) - set(current_tip["development_sec_reader_receipts"]) - set(
+        current_tip["development_sec_execution_aborts"]
+    )
+    active_model = set(current_tip["stage_model_execution_claims"]) - set(
+        current_tip["stage_model_reader_receipts"]
+    ) - set(current_tip["stage_model_execution_aborts"])
+    active_development_model = set(
+        current_tip["development_model_execution_claims"]
+    ) - set(current_tip["development_model_reader_receipts"]) - set(
+        current_tip["development_model_execution_aborts"]
+    )
+    if active_sec or active_development_sec or active_model or active_development_model:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Another owned external effect is already active"
+        )
+    sources = _validated_model_execution_source_hashes(
+        execution_source_hashes,
+        location="owned stage model execution source hashes",
+    )
+    candidate_sources = _mapping(
+        candidate["bindings"]["source_hashes"],
+        "owned stage model candidate source hashes",
+    )
+    if (
+        candidate["bindings"]["identity_lexicon_sha256"]
+        != CANONICAL_IDENTITY_LEXICON_SHA256
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned stage model candidate changed the canonical identity lexicon"
+        )
+    if any(candidate_sources.get(role) != value for role, value in sources.items()):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned stage model execution bytes differ from the registered candidate"
+        )
+    model = _mapping(candidate["model"], "owned stage model candidate model")
+    limits = _expected_model_runtime_limits(
+        stage=stage,
+        accession_count=len(accessions),
+    )
+    body = {
+        "schema_version": STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "claim_kind": "owned_stage_gemma_model_batch",
+        "request_sha256": request_hash,
+        "consumption_entry_sha256": grant["consumption_entry_sha256"],
+        "consumption_entry_sequence": grant["consumption_entry_sequence"],
+        "attempt_id": grant["attempt_id"],
+        "candidate_sha256": grant["candidate_sha256"],
+        "registry_entry_sha256": grant["registry_entry_sha256"],
+        "input_prerequisite_stage": grant["prerequisite_stage"],
+        "authorized_stage": stage,
+        "input_stage_evidence_sha256": grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": grant["stage_access_manifest_sha256"],
+        "output_namespace": grant["output_namespace"],
+        "authorization_bundle_sha256": bundle["bundle_sha256"],
+        "authorization_grant_sha256": grant["authorization_grant_sha256"],
+        "grant_store_state_sha256": grant["store_state_sha256"],
+        "grant_consumption_ledger_sha256": grant["consumption_ledger_sha256"],
+        "grant_consumption_ledger_tip_sha256": grant[
+            "consumption_ledger_tip_sha256"
+        ],
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "stage_sec_execution_claim_sha256": sec_claim["claim_sha256"],
+        "stage_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        "development_root_scope_sha256": root_claim[
+            "development_root_scope_sha256"
+        ],
+        "development_sec_execution_claim_sha256": root_claim["claim_sha256"],
+        "development_sec_reader_receipt_sha256": root_reader["receipt_sha256"],
+        "corpus_universe_sha256": universe["universe_sha256"],
+        "carry_in_kind": carry_kind,
+        "carry_in_reader_receipt_sha256": carry["receipt_sha256"],
+        "sec_document_count": len(accessions),
+        "sec_acquisition_accession_order": accessions,
+        "sec_acquisition_accession_order_sha256": canonical_sha256(accessions),
+        "event_count": len(event_plan),
+        "event_plan": event_plan,
+        "event_plan_sha256": canonical_sha256(event_plan),
+        "identity_lexicon_sha256": CANONICAL_IDENTITY_LEXICON_SHA256,
+        "candidate_source_hashes_sha256": canonical_sha256(candidate_sources),
+        "execution_source_hashes": sources,
+        "execution_source_hashes_sha256": canonical_sha256(sources),
+        "execution_source_role_count": len(sources),
+        "model_name": model["name"],
+        "model_digest": model["digest"],
+        "runtime_fingerprint_sha256": model["runtime_fingerprint_sha256"],
+        "model_transport_sha256": canonical_sha256(model["transport"]),
+        "model_runtime_limits": limits,
+        "model_runtime_limits_sha256": canonical_sha256(limits),
+        "model_component_id": STAGE_MODEL_BATCH_COMPONENT_ID,
+        "owned_local_model_execution_required": True,
+        "caller_supplied_path_permitted": False,
+        "filing_text_included": False,
+        "market_access_permitted": False,
+        "outcome_access_permitted": False,
+        "future_stage_access_permitted": False,
+        "paid_api_access_permitted": False,
+        "external_network_access_permitted": False,
+        "effect_may_be_repeated_after_indeterminate_crash": False,
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def build_stage_model_reader_receipt(
+    claim: Mapping[str, Any],
+    *,
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+) -> dict[str, Any]:
+    """Bind store-rehashed durable stage model artifacts to one claim."""
+
+    claim_value = _mapping(claim, "stage model reader receipt claim")
+    _expect_keys(
+        claim_value,
+        _STAGE_MODEL_EXECUTION_CLAIM_KEYS,
+        "stage model reader receipt claim",
+    )
+    _self_hash(claim_value, "claim_sha256", "stage model reader receipt claim")
+    index = _validated_sec_byte_index(byte_index)
+    body = {
+        "schema_version": STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "store_rehashed_owned_stage_gemma_model_batch",
+        "request_sha256": claim_value["request_sha256"],
+        "claim_sha256": claim_value["claim_sha256"],
+        "authorized_stage": claim_value["authorized_stage"],
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "stage_sec_execution_claim_sha256": claim_value[
+            "stage_sec_execution_claim_sha256"
+        ],
+        "stage_sec_reader_receipt_sha256": claim_value[
+            "stage_sec_reader_receipt_sha256"
+        ],
+        "development_root_scope_sha256": claim_value[
+            "development_root_scope_sha256"
+        ],
+        "development_sec_execution_claim_sha256": claim_value[
+            "development_sec_execution_claim_sha256"
+        ],
+        "development_sec_reader_receipt_sha256": claim_value[
+            "development_sec_reader_receipt_sha256"
+        ],
+        "corpus_universe_sha256": claim_value["corpus_universe_sha256"],
+        "carry_in_kind": claim_value["carry_in_kind"],
+        "carry_in_reader_receipt_sha256": claim_value[
+            "carry_in_reader_receipt_sha256"
+        ],
+        "sec_document_count": claim_value["sec_document_count"],
+        "sec_acquisition_accession_order_sha256": claim_value[
+            "sec_acquisition_accession_order_sha256"
+        ],
+        "event_count": claim_value["event_count"],
+        "event_plan_sha256": claim_value["event_plan_sha256"],
+        "identity_lexicon_sha256": claim_value["identity_lexicon_sha256"],
+        "execution_source_hashes_sha256": claim_value[
+            "execution_source_hashes_sha256"
+        ],
+        "execution_source_role_count": claim_value[
+            "execution_source_role_count"
+        ],
+        "model_name": claim_value["model_name"],
+        "model_digest": claim_value["model_digest"],
+        "runtime_fingerprint_sha256": claim_value[
+            "runtime_fingerprint_sha256"
+        ],
+        "model_transport_sha256": claim_value["model_transport_sha256"],
+        "model_runtime_limits_sha256": claim_value[
+            "model_runtime_limits_sha256"
+        ],
+        "model_component_id": claim_value["model_component_id"],
+        "byte_index": index,
+        "byte_index_sha256": canonical_sha256(index),
+        "byte_count_total": sum(item["byte_count"] for item in index),
+        "complete_marker_sha256": _sha256(
+            complete_marker_sha256,
+            "stage model complete marker hash",
+        ),
+        "fresh_model_provenance_claimed": False,
+        "reader_output_recomputed_by_store": True,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_stage_model_execution_abort(
+    claim: Mapping[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Terminally refuse retry after a possibly executed stage model effect."""
+
+    claim_value = _mapping(claim, "stage model execution abort claim")
+    _expect_keys(
+        claim_value,
+        _STAGE_MODEL_EXECUTION_CLAIM_KEYS,
+        "stage model execution abort claim",
+    )
+    _self_hash(claim_value, "claim_sha256", "stage model execution abort claim")
+    if reason not in {
+        "claim_recovered_without_terminal_receipt",
+        "external_effect_failed_or_completion_unknown",
+        "durable_output_verification_failed",
+    }:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution abort reason is not canonical"
+        )
+    body = {
+        "schema_version": STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "abort_kind": "indeterminate_owned_stage_gemma_model_batch",
+        "request_sha256": claim_value["request_sha256"],
+        "claim_sha256": claim_value["claim_sha256"],
+        "authorized_stage": claim_value["authorized_stage"],
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "model_component_id": claim_value["model_component_id"],
+        "reason": reason,
+        "external_effect_retry_permitted": False,
+    }
+    return {**body, "abort_sha256": canonical_sha256(body)}
+
+
+def build_development_model_execution_claim(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    independent_current_tip_anchor: Mapping[str, Any],
+    execution_source_hashes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Claim the request-free development Gemma batch after its SEC root reader."""
+
+    state, _ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    current_tip = validate_reveal_store_current_tip_anchor(
+        state,
+        independent_current_tip_anchor,
+    )
+    scope_hash = _sha256(
+        development_root_scope_sha256,
+        "development model root scope hash",
+    )
+    sec_claim = current_tip["development_sec_execution_claims"].get(scope_hash)
+    sec_reader = current_tip["development_sec_reader_receipts"].get(scope_hash)
+    if (
+        type(sec_claim) is not dict
+        or type(sec_reader) is not dict
+        or scope_hash in current_tip["development_sec_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution requires one terminal development SEC reader"
+        )
+    if scope_hash in current_tip["development_model_execution_claims"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution is already claimed"
+        )
+    if current_tip["consumed_request_count"] != sec_claim[
+        "start_consumed_request_count"
+    ]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution must precede reveal-request consumption"
+        )
+    active_sec = set(current_tip["stage_sec_execution_claims"]) - set(
+        current_tip["stage_sec_reader_receipts"]
+    ) - set(current_tip["stage_sec_execution_aborts"])
+    active_development_sec = set(
+        current_tip["development_sec_execution_claims"]
+    ) - set(current_tip["development_sec_reader_receipts"]) - set(
+        current_tip["development_sec_execution_aborts"]
+    )
+    active_model = set(current_tip["stage_model_execution_claims"]) - set(
+        current_tip["stage_model_reader_receipts"]
+    ) - set(current_tip["stage_model_execution_aborts"])
+    active_development_model = set(
+        current_tip["development_model_execution_claims"]
+    ) - set(current_tip["development_model_reader_receipts"]) - set(
+        current_tip["development_model_execution_aborts"]
+    )
+    if active_sec or active_development_sec or active_model or active_development_model:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Another owned external effect is already active"
+        )
+    plan = _validated_development_content_root_plan(
+        sec_claim["development_content_root_plan"]
+    )
+    _state, _registry_entry, candidate = _development_registered_candidate(
+        state,
+        plan=plan,
+        require_latest=False,
+    )
+    candidate_sources = _mapping(
+        candidate["bindings"]["source_hashes"],
+        "development model candidate source hashes",
+    )
+    if (
+        candidate["bindings"]["identity_lexicon_sha256"]
+        != CANONICAL_IDENTITY_LEXICON_SHA256
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development model candidate changed the canonical identity lexicon"
+        )
+    sources = _validated_model_execution_source_hashes(
+        execution_source_hashes,
+        location="owned development model execution source hashes",
+    )
+    if any(candidate_sources.get(role) != value for role, value in sources.items()):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development model execution bytes differ from the registered candidate"
+        )
+    sec_sources = _mapping(
+        sec_claim["execution_source_hashes"],
+        "development SEC source hashes for model execution",
+    )
+    if any(
+        sec_sources.get(role) != value
+        for role, value in sources.items()
+        if role in sec_sources
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development model bytes differ from the terminal SEC root"
+        )
+    root_scope = plan["root_scope"]
+    accessions = [
+        document["accession_number"]
+        for document in plan["sec_access_plan"]["documents"]
+    ]
+    accessions = _validated_model_accession_order(
+        accessions,
+        location="development model planned accession order",
+    )
+    universe = _mapping(
+        plan["corpus_universe_manifest"],
+        "development model corpus universe",
+    )
+    event_plan = _model_event_plan(
+        universe_manifest=universe,
+        stage="development",
+        sec_acquisition_accession_order=accessions,
+    )
+    model = _mapping(candidate["model"], "development model candidate model")
+    limits = _expected_model_runtime_limits(
+        stage="development",
+        accession_count=len(accessions),
+    )
+    body = {
+        "schema_version": DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "claim_kind": "owned_development_gemma_model_batch",
+        "development_root_scope_sha256": scope_hash,
+        "development_content_root_plan_sha256": plan[
+            "development_content_root_plan_sha256"
+        ],
+        "attempt_id": sec_claim["attempt_id"],
+        "candidate_sha256": sec_claim["candidate_sha256"],
+        "candidate_design_sha256": sec_claim["candidate_design_sha256"],
+        "registry_entry_sha256": sec_claim["registry_entry_sha256"],
+        "registry_sha256": sec_claim["registry_sha256"],
+        "registry_tip_sha256": sec_claim["registry_tip_sha256"],
+        "corpus_universe_sha256": root_scope["corpus_universe_sha256"],
+        "corpus_universe_semantic_sha256": root_scope[
+            "corpus_universe_semantic_sha256"
+        ],
+        "authorized_stage": "development",
+        "output_namespace": sec_claim["output_namespace"],
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "start_consumed_request_count": current_tip["consumed_request_count"],
+        "development_sec_execution_claim_sha256": sec_claim["claim_sha256"],
+        "development_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        "sec_document_count": len(accessions),
+        "sec_acquisition_accession_order": accessions,
+        "sec_acquisition_accession_order_sha256": canonical_sha256(accessions),
+        "event_count": len(event_plan),
+        "event_plan": event_plan,
+        "event_plan_sha256": canonical_sha256(event_plan),
+        "identity_lexicon_sha256": CANONICAL_IDENTITY_LEXICON_SHA256,
+        "candidate_source_hashes_sha256": canonical_sha256(candidate_sources),
+        "execution_source_hashes": sources,
+        "execution_source_hashes_sha256": canonical_sha256(sources),
+        "execution_source_role_count": len(sources),
+        "model_name": model["name"],
+        "model_digest": model["digest"],
+        "runtime_fingerprint_sha256": model["runtime_fingerprint_sha256"],
+        "model_transport_sha256": canonical_sha256(model["transport"]),
+        "model_runtime_limits": limits,
+        "model_runtime_limits_sha256": canonical_sha256(limits),
+        "model_component_id": STAGE_MODEL_BATCH_COMPONENT_ID,
+        "carry_in_required": False,
+        "owned_local_model_execution_required": True,
+        "caller_supplied_path_permitted": False,
+        "filing_text_included": False,
+        "market_access_permitted": False,
+        "outcome_access_permitted": False,
+        "future_stage_access_permitted": False,
+        "paid_api_access_permitted": False,
+        "external_network_access_permitted": False,
+        "reveal_request_consumption_permitted": False,
+        "consumption_ledger_mutation_permitted": False,
+        "effect_may_be_repeated_after_indeterminate_crash": False,
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def build_development_model_reader_receipt(
+    claim: Mapping[str, Any],
+    *,
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+) -> dict[str, Any]:
+    """Bind store-rehashed development model artifacts to one root claim."""
+
+    claim_value = _mapping(claim, "development model reader receipt claim")
+    _expect_keys(
+        claim_value,
+        _DEVELOPMENT_MODEL_EXECUTION_CLAIM_KEYS,
+        "development model reader receipt claim",
+    )
+    _self_hash(
+        claim_value,
+        "claim_sha256",
+        "development model reader receipt claim",
+    )
+    index = _validated_sec_byte_index(byte_index)
+    body = {
+        "schema_version": DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "store_rehashed_owned_development_gemma_model_batch",
+        "development_root_scope_sha256": claim_value[
+            "development_root_scope_sha256"
+        ],
+        "claim_sha256": claim_value["claim_sha256"],
+        "development_content_root_plan_sha256": claim_value[
+            "development_content_root_plan_sha256"
+        ],
+        "authorized_stage": "development",
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "development_sec_execution_claim_sha256": claim_value[
+            "development_sec_execution_claim_sha256"
+        ],
+        "development_sec_reader_receipt_sha256": claim_value[
+            "development_sec_reader_receipt_sha256"
+        ],
+        "sec_document_count": claim_value["sec_document_count"],
+        "sec_acquisition_accession_order_sha256": claim_value[
+            "sec_acquisition_accession_order_sha256"
+        ],
+        "event_count": claim_value["event_count"],
+        "event_plan_sha256": claim_value["event_plan_sha256"],
+        "identity_lexicon_sha256": claim_value["identity_lexicon_sha256"],
+        "execution_source_hashes_sha256": claim_value[
+            "execution_source_hashes_sha256"
+        ],
+        "execution_source_role_count": claim_value[
+            "execution_source_role_count"
+        ],
+        "model_name": claim_value["model_name"],
+        "model_digest": claim_value["model_digest"],
+        "runtime_fingerprint_sha256": claim_value[
+            "runtime_fingerprint_sha256"
+        ],
+        "model_transport_sha256": claim_value["model_transport_sha256"],
+        "model_runtime_limits_sha256": claim_value[
+            "model_runtime_limits_sha256"
+        ],
+        "model_component_id": claim_value["model_component_id"],
+        "byte_index": index,
+        "byte_index_sha256": canonical_sha256(index),
+        "byte_count_total": sum(item["byte_count"] for item in index),
+        "complete_marker_sha256": _sha256(
+            complete_marker_sha256,
+            "development model complete marker hash",
+        ),
+        "fresh_model_provenance_claimed": False,
+        "reader_output_recomputed_by_store": True,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_development_model_execution_abort(
+    claim: Mapping[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Terminally refuse retry after a possibly executed development model effect."""
+
+    claim_value = _mapping(claim, "development model execution abort claim")
+    _expect_keys(
+        claim_value,
+        _DEVELOPMENT_MODEL_EXECUTION_CLAIM_KEYS,
+        "development model execution abort claim",
+    )
+    _self_hash(
+        claim_value,
+        "claim_sha256",
+        "development model execution abort claim",
+    )
+    if reason not in {
+        "claim_recovered_without_terminal_receipt",
+        "external_effect_failed_or_completion_unknown",
+        "durable_output_verification_failed",
+    }:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution abort reason is not canonical"
+        )
+    body = {
+        "schema_version": DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "abort_kind": "indeterminate_owned_development_gemma_model_batch",
+        "development_root_scope_sha256": claim_value[
+            "development_root_scope_sha256"
+        ],
+        "claim_sha256": claim_value["claim_sha256"],
+        "development_content_root_plan_sha256": claim_value[
+            "development_content_root_plan_sha256"
+        ],
+        "authorized_stage": "development",
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "model_component_id": claim_value["model_component_id"],
+        "reason": reason,
+        "external_effect_retry_permitted": False,
+    }
+    return {**body, "abort_sha256": canonical_sha256(body)}
+
+
+def validate_stage_model_execution_claim(
+    claim: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> str:
+    """Require exact current-tip membership for one stage model claim."""
+
+    observed = _mapping(claim, "stage model execution claim")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    request_hash = _sha256(
+        observed.get("request_sha256"),
+        "stage model execution claim request hash",
+    )
+    if current_tip["stage_model_execution_claims"].get(request_hash) != observed:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution claim is not exact at the current tip"
+        )
+    return _self_hash(observed, "claim_sha256", "stage model execution claim")
+
+
+def validate_stage_model_reader_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+) -> str:
+    """Require exact current membership and rehashed stage model bytes."""
+
+    observed = _mapping(receipt, "stage model reader receipt")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    request_hash = _sha256(
+        observed.get("request_sha256"),
+        "stage model reader receipt request hash",
+    )
+    claim = current_tip["stage_model_execution_claims"].get(request_hash)
+    if (
+        type(claim) is not dict
+        or current_tip["stage_model_reader_receipts"].get(request_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model reader receipt is not exact at the current tip"
+        )
+    expected = build_stage_model_reader_receipt(
+        claim,
+        byte_index=byte_index,
+        complete_marker_sha256=complete_marker_sha256,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model reader receipt differs from rehashed durable bytes"
+        )
+    return observed["receipt_sha256"]
+
+
+def validate_stage_model_execution_abort(
+    abort: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> str:
+    """Require exact current-tip membership for one stage model abort."""
+
+    observed = _mapping(abort, "stage model execution abort")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    request_hash = _sha256(
+        observed.get("request_sha256"),
+        "stage model abort request hash",
+    )
+    if current_tip["stage_model_execution_aborts"].get(request_hash) != observed:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage model execution abort is not exact at the current tip"
+        )
+    return _self_hash(observed, "abort_sha256", "stage model execution abort")
+
+
+def validate_development_model_execution_claim(
+    claim: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> str:
+    """Require exact current-tip membership for one development model claim."""
+
+    observed = _mapping(claim, "development model execution claim")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development model claim root scope hash",
+    )
+    if (
+        current_tip["development_model_execution_claims"].get(scope_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution claim is not exact at the current tip"
+        )
+    return _self_hash(
+        observed,
+        "claim_sha256",
+        "development model execution claim",
+    )
+
+
+def validate_development_model_reader_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+) -> str:
+    """Require exact current membership and rehashed development model bytes."""
+
+    observed = _mapping(receipt, "development model reader receipt")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development model reader root scope hash",
+    )
+    claim = current_tip["development_model_execution_claims"].get(scope_hash)
+    if (
+        type(claim) is not dict
+        or current_tip["development_model_reader_receipts"].get(scope_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model reader receipt is not exact at the current tip"
+        )
+    expected = build_development_model_reader_receipt(
+        claim,
+        byte_index=byte_index,
+        complete_marker_sha256=complete_marker_sha256,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model reader receipt differs from rehashed durable bytes"
+        )
+    return observed["receipt_sha256"]
+
+
+def validate_development_model_execution_abort(
+    abort: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> str:
+    """Require exact current-tip membership for one development model abort."""
+
+    observed = _mapping(abort, "development model execution abort")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development model abort root scope hash",
+    )
+    if (
+        current_tip["development_model_execution_aborts"].get(scope_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development model execution abort is not exact at the current tip"
+        )
+    return _self_hash(
+        observed,
+        "abort_sha256",
+        "development model execution abort",
+    )
 
 
 def _reconstruct_development_content_manifest_from_root(
@@ -5977,7 +8657,11 @@ __all__ = [
     "DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION",
+    "DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION",
+    "DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION",
+    "DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION",
     "DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION",
+    "MODEL_EXECUTION_SOURCE_ROLES",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
     "OWNED_SEC_RAW_BATCH_MAX_BYTES",
     "SEC_EXECUTION_RESOLVED_SOURCE_PATHS",
@@ -5985,6 +8669,10 @@ __all__ = [
     "SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID",
     "STAGE_EVIDENCE_OUTPUT_COMPONENT_ID",
     "STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH",
+    "STAGE_MODEL_BATCH_COMPONENT_ID",
+    "STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION",
+    "STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION",
+    "STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION",
     "STAGE_RUNNER_REPOSITORY_PATH",
     "STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION",
     "STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
@@ -5999,8 +8687,14 @@ __all__ = [
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
     "build_development_sec_reader_receipt",
+    "build_development_model_execution_abort",
+    "build_development_model_execution_claim",
+    "build_development_model_reader_receipt",
     "build_development_root_carry_in_reader_receipt",
     "build_stage_carry_in_reader_receipt",
+    "build_stage_model_execution_abort",
+    "build_stage_model_execution_claim",
+    "build_stage_model_reader_receipt",
     "build_stage_sec_execution_abort",
     "build_stage_sec_execution_claim",
     "build_stage_sec_reader_receipt",
@@ -6011,9 +8705,15 @@ __all__ = [
     "validate_consumed_stage_output_receipt",
     "validate_consumed_stage_store_state_pin",
     "validate_development_root_carry_in_reader_receipt",
+    "validate_development_model_execution_abort",
+    "validate_development_model_execution_claim",
+    "validate_development_model_reader_receipt",
     "validate_reveal_store_current_tip_anchor",
     "validate_reveal_store_current_tip_anchor_structure",
     "validate_reveal_store_current_tip_anchor_transition",
     "validate_stage_carry_in_reader_receipt",
+    "validate_stage_model_execution_abort",
+    "validate_stage_model_execution_claim",
+    "validate_stage_model_reader_receipt",
     "validate_trusted_stage_content_authentication_receipt",
 ]

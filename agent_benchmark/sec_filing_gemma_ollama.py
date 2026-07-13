@@ -3,8 +3,10 @@
 The client has one fixed destination and one request shape.  It accepts only
 the safe payload returned by ``validate_extractor_request`` and it never
 performs discovery, pulls, retries, redirects, streaming, or output repair.
-Runtime identity is supplied by a separately sealed local-runtime artifact;
-this module deliberately does not query a second endpoint to discover it.
+Runtime identity can be supplied by a separately sealed local-runtime artifact
+or minted by the bounded, loopback-only probe in this module.  The probe reads
+only Ollama's version and fixed-model metadata endpoints; it never invokes a
+model or discovers, pulls, or mutates installed models.
 """
 
 from __future__ import annotations
@@ -33,12 +35,20 @@ from agent_benchmark.sec_filing_gemma_contract import (
 
 
 OLLAMA_ENDPOINT: Final[str] = "http://127.0.0.1:11434/api/chat"
+OLLAMA_VERSION_ENDPOINT: Final[str] = "http://127.0.0.1:11434/api/version"
+OLLAMA_SHOW_ENDPOINT: Final[str] = "http://127.0.0.1:11434/api/show"
 OLLAMA_MODEL: Final[str] = "gemma4:12b"
 CONNECT_TIMEOUT_SECONDS: Final[float] = 2.0
 READ_TIMEOUT_SECONDS: Final[float] = 30.0
 MAX_RESPONSE_BYTES: Final[int] = 256 * 1024
 RUNTIME_IDENTITY_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-ollama-runtime-identity-v1"
+)
+RUNTIME_PROBE_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-ollama-runtime-probe-receipt-v1"
+)
+RUNTIME_FINGERPRINT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-ollama-runtime-fingerprint-v1"
 )
 RECEIPT_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-ollama-call-receipt-v1"
 ATTEMPT_RECEIPT_SCHEMA_VERSION: Final[str] = (
@@ -62,6 +72,12 @@ _SENTENCE_ID_RE = re.compile(r"[CP][0-9]{4}\Z")
 _RFC3339_UTC_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
     r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z\Z"
+)
+_OLLAMA_VERSION_RE = re.compile(
+    r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z][0-9A-Za-z.-]{0,126})?\Z"
+)
+_MODEL_BLOB_FROM_RE = re.compile(
+    r"(?:^|[/\\])sha256[:-]([0-9a-f]{64})\Z"
 )
 _RUNTIME_IDENTITY_KEYS = {
     "schema_version",
@@ -90,11 +106,51 @@ _OLLAMA_RESPONSE_KEYS = {
     "eval_duration",
 }
 _OLLAMA_MESSAGE_KEYS = {"role", "content"}
+_RUNTIME_PROBE_MANIFEST_KEYS = {
+    "schema_version",
+    "version_endpoint",
+    "show_endpoint",
+    "model_name",
+    "show_request_bytes_base64",
+    "show_request_sha256",
+    "version_response_bytes_base64",
+    "version_response_sha256",
+    "show_response_bytes_base64",
+    "show_response_sha256",
+    "version_http_status",
+    "version_response_url",
+    "version_response_content_type",
+    "version_response_content_length",
+    "version_response_history_count",
+    "show_http_status",
+    "show_response_url",
+    "show_response_content_type",
+    "show_response_content_length",
+    "show_response_history_count",
+    "model_digest",
+    "runtime_fingerprint_sha256",
+    "runtime_evidence_bytes_base64",
+    "runtime_evidence_sha256",
+    "transport_mode",
+    "trusted_production_transport",
+    "network_requests",
+    "redirects",
+    "retries",
+    "pull_attempts",
+    "model_calls",
+    "receipt_sha256",
+}
 _REQUEST_HEADERS = {
     "Accept": "application/json",
     "Accept-Encoding": "identity",
     "Content-Type": "application/json",
 }
+_PROBE_GET_HEADERS = {
+    "Accept": "application/json",
+    "Accept-Encoding": "identity",
+}
+_OWNED_PROBE_TRANSPORT_MODE = "owned_hardened_loopback_runtime_probe_unattested"
+_INJECTED_PROBE_TRANSPORT_MODE = "untrusted_injected_test_runtime_probe_transport"
 
 
 class SecFilingGemmaOllamaError(RuntimeError):
@@ -126,6 +182,122 @@ class PinnedOllamaRuntimeIdentity:
     runtime_fingerprint_sha256: str
     evidence_bytes: bytes
     evidence_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class OllamaRuntimeProbeReceipt:
+    """Replayable evidence from the two non-generative runtime observations."""
+
+    schema_version: str
+    version_endpoint: str
+    show_endpoint: str
+    model_name: str
+    show_request_bytes: bytes
+    show_request_sha256: str
+    version_response_bytes: bytes
+    version_response_sha256: str
+    show_response_bytes: bytes
+    show_response_sha256: str
+    version_http_status: int
+    version_response_url: str
+    version_response_content_type: str
+    version_response_content_length: int | None
+    version_response_history_count: int
+    show_http_status: int
+    show_response_url: str
+    show_response_content_type: str
+    show_response_content_length: int | None
+    show_response_history_count: int
+    model_digest: str
+    runtime_fingerprint_sha256: str
+    runtime_evidence_bytes: bytes
+    runtime_evidence_sha256: str
+    transport_mode: str
+    trusted_production_transport: bool
+    network_requests: int
+    redirects: int
+    retries: int
+    pull_attempts: int
+    model_calls: int
+
+    def runtime_evidence(self) -> dict[str, Any]:
+        """Return a fresh decoded compact identity envelope."""
+
+        value = _strict_json_bytes(
+            self.runtime_evidence_bytes,
+            location="sealed runtime probe evidence",
+            maximum=MAX_RESPONSE_BYTES,
+        )
+        if not isinstance(value, dict):
+            raise SecFilingGemmaOllamaError(
+                "Sealed runtime probe evidence is not an object"
+            )
+        return value
+
+    def pinned_runtime_identity(self) -> PinnedOllamaRuntimeIdentity:
+        """Revalidate and expose the compact identity derived by the probe."""
+
+        return validate_pinned_runtime_identity(
+            self.runtime_evidence(),
+            expected_evidence_sha256=self.runtime_evidence_sha256,
+            expected_model_digest=self.model_digest,
+            expected_runtime_fingerprint_sha256=(
+                self.runtime_fingerprint_sha256
+            ),
+        )
+
+    def _manifest_body(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "version_endpoint": self.version_endpoint,
+            "show_endpoint": self.show_endpoint,
+            "model_name": self.model_name,
+            "show_request_bytes_base64": base64.b64encode(
+                self.show_request_bytes
+            ).decode("ascii"),
+            "show_request_sha256": self.show_request_sha256,
+            "version_response_bytes_base64": base64.b64encode(
+                self.version_response_bytes
+            ).decode("ascii"),
+            "version_response_sha256": self.version_response_sha256,
+            "show_response_bytes_base64": base64.b64encode(
+                self.show_response_bytes
+            ).decode("ascii"),
+            "show_response_sha256": self.show_response_sha256,
+            "version_http_status": self.version_http_status,
+            "version_response_url": self.version_response_url,
+            "version_response_content_type": self.version_response_content_type,
+            "version_response_content_length": (
+                self.version_response_content_length
+            ),
+            "version_response_history_count": self.version_response_history_count,
+            "show_http_status": self.show_http_status,
+            "show_response_url": self.show_response_url,
+            "show_response_content_type": self.show_response_content_type,
+            "show_response_content_length": self.show_response_content_length,
+            "show_response_history_count": self.show_response_history_count,
+            "model_digest": self.model_digest,
+            "runtime_fingerprint_sha256": self.runtime_fingerprint_sha256,
+            "runtime_evidence_bytes_base64": base64.b64encode(
+                self.runtime_evidence_bytes
+            ).decode("ascii"),
+            "runtime_evidence_sha256": self.runtime_evidence_sha256,
+            "transport_mode": self.transport_mode,
+            "trusted_production_transport": self.trusted_production_transport,
+            "network_requests": self.network_requests,
+            "redirects": self.redirects,
+            "retries": self.retries,
+            "pull_attempts": self.pull_attempts,
+            "model_calls": self.model_calls,
+        }
+
+    @property
+    def receipt_sha256(self) -> str:
+        return canonical_sha256(self._manifest_body())
+
+    def to_manifest(self) -> dict[str, Any]:
+        body = self._manifest_body()
+        return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -727,7 +899,10 @@ def _header(headers: Mapping[str, Any], name: str) -> str | None:
 
 
 def _validate_http_envelope(
-    response: ResponseLike, response_bytes: bytes
+    response: ResponseLike,
+    response_bytes: bytes,
+    *,
+    expected_endpoint: str = OLLAMA_ENDPOINT,
 ) -> dict[str, Any]:
     status = getattr(response, "status_code", None)
     if isinstance(status, bool) or not isinstance(status, int):
@@ -737,7 +912,7 @@ def _validate_http_envelope(
     if status != 200:
         raise SecFilingGemmaOllamaError("Ollama returned a non-success status")
     response_url = getattr(response, "url", None)
-    if type(response_url) is not str or response_url != OLLAMA_ENDPOINT:
+    if type(response_url) is not str or response_url != expected_endpoint:
         raise SecFilingGemmaOllamaError("Ollama response URL changed")
     history = getattr(response, "history", None)
     if not isinstance(history, Sequence) or isinstance(history, (str, bytes)):
@@ -1406,6 +1581,515 @@ def validate_ollama_model_attempt_receipt(
     return receipt
 
 
+def _runtime_probe_show_request_bytes() -> bytes:
+    return _canonical_json_bytes(
+        {"model": OLLAMA_MODEL, "verbose": False},
+        "Ollama show request",
+    )
+
+
+def _extract_runtime_probe_model_digest(show: Mapping[str, Any]) -> str:
+    required = {
+        "modelfile",
+        "parameters",
+        "template",
+        "details",
+        "model_info",
+        "capabilities",
+        "modified_at",
+    }
+    missing = required - set(show)
+    if missing:
+        raise SecFilingGemmaOllamaError(
+            f"Ollama show response is missing required runtime fields: {sorted(missing)}"
+        )
+    for field in ("modelfile", "parameters", "template", "modified_at"):
+        if not isinstance(show[field], str):
+            raise SecFilingGemmaOllamaError(
+                f"Ollama show response {field} must be text"
+            )
+    if not show["modelfile"]:
+        raise SecFilingGemmaOllamaError("Ollama show response modelfile is empty")
+    if not isinstance(show["details"], Mapping) or not isinstance(
+        show["model_info"], Mapping
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama show response details and model_info must be objects"
+        )
+    capabilities = show["capabilities"]
+    if (
+        not isinstance(capabilities, list)
+        or not all(isinstance(value, str) and value for value in capabilities)
+        or len(capabilities) != len(set(capabilities))
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama show response capabilities are invalid"
+        )
+
+    lines = [line.strip() for line in show["modelfile"].splitlines()]
+    expected_name_marker = f"# FROM {OLLAMA_MODEL}"
+    if lines.count(expected_name_marker) != 1:
+        raise SecFilingGemmaOllamaError(
+            "Ollama show response does not identify the exact fixed model"
+        )
+    from_lines = [
+        line[5:].strip()
+        for line in lines
+        if line.startswith("FROM ") and not line.startswith("#")
+    ]
+    if len(from_lines) != 1:
+        raise SecFilingGemmaOllamaError(
+            "Ollama show response must contain one active model FROM directive"
+        )
+    target = from_lines[0]
+    if len(target) >= 2 and target[0] == target[-1] == '"':
+        target = target[1:-1]
+    match = _MODEL_BLOB_FROM_RE.search(target)
+    if match is None:
+        raise SecFilingGemmaOllamaError(
+            "Ollama show response does not expose an exact model blob digest"
+        )
+    return match.group(1)
+
+
+def _derive_runtime_probe_identity(
+    *,
+    version_response_bytes: bytes,
+    show_response_bytes: bytes,
+    expected_model_digest: str,
+) -> PinnedOllamaRuntimeIdentity:
+    expected_digest = _sha256(expected_model_digest, "expected_model_digest")
+    version = _strict_json_bytes(
+        version_response_bytes,
+        location="Ollama version response",
+        maximum=MAX_RESPONSE_BYTES,
+    )
+    if not isinstance(version, Mapping):
+        raise SecFilingGemmaOllamaError("Ollama version response must be an object")
+    _expect_exact_keys(version, {"version"}, "Ollama version response")
+    if (
+        not isinstance(version["version"], str)
+        or _OLLAMA_VERSION_RE.fullmatch(version["version"]) is None
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama version response is not a bounded semantic version"
+        )
+    show = _strict_json_bytes(
+        show_response_bytes,
+        location="Ollama show response",
+        maximum=MAX_RESPONSE_BYTES,
+    )
+    if not isinstance(show, Mapping):
+        raise SecFilingGemmaOllamaError("Ollama show response must be an object")
+    observed_digest = _extract_runtime_probe_model_digest(show)
+    if not hmac.compare_digest(observed_digest, expected_digest):
+        raise SecFilingGemmaOllamaError(
+            "Ollama installed model digest differs from the candidate"
+        )
+    fingerprint_material = {
+        "schema_version": RUNTIME_FINGERPRINT_SCHEMA_VERSION,
+        "chat_endpoint": OLLAMA_ENDPOINT,
+        "version_endpoint": OLLAMA_VERSION_ENDPOINT,
+        "show_endpoint": OLLAMA_SHOW_ENDPOINT,
+        "model_name": OLLAMA_MODEL,
+        "model_digest": observed_digest,
+        "version_response": dict(version),
+        "show_response": dict(show),
+    }
+    fingerprint = canonical_sha256(fingerprint_material)
+    evidence = {
+        "schema_version": RUNTIME_IDENTITY_SCHEMA_VERSION,
+        "endpoint": OLLAMA_ENDPOINT,
+        "model_name": OLLAMA_MODEL,
+        "model_digest": observed_digest,
+        "runtime_fingerprint_sha256": fingerprint,
+    }
+    return validate_pinned_runtime_identity(
+        evidence,
+        expected_evidence_sha256=canonical_sha256(evidence),
+        expected_model_digest=expected_digest,
+        expected_runtime_fingerprint_sha256=fingerprint,
+    )
+
+
+def _perform_runtime_probe_request(
+    transport: TransportLike,
+    *,
+    method: str,
+    endpoint: str,
+    headers: Mapping[str, str],
+    request_bytes: bytes | None,
+) -> tuple[bytes, dict[str, Any]]:
+    response: ResponseLike | None = None
+    try:
+        kwargs: dict[str, Any] = {
+            "headers": dict(headers),
+            "timeout": (CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
+            "allow_redirects": False,
+            "stream": True,
+        }
+        if request_bytes is not None:
+            kwargs["data"] = request_bytes
+        try:
+            response = transport.request(method, endpoint, **kwargs)
+        except Exception:
+            raise SecFilingGemmaOllamaError(
+                "Ollama loopback runtime probe failed"
+            ) from None
+        response_bytes = _read_bounded_response(response)
+        http_evidence = _validate_http_envelope(
+            response,
+            response_bytes,
+            expected_endpoint=endpoint,
+        )
+        return response_bytes, http_evidence
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def probe_owned_ollama_runtime(
+    *,
+    expected_model_digest: str,
+    expected_runtime_fingerprint_sha256: str,
+    transport: TransportLike | None = None,
+) -> OllamaRuntimeProbeReceipt:
+    """Observe the fixed local runtime without model I/O or mutable authority.
+
+    Omitting ``transport`` creates the hardened, environment-independent
+    production session.  Injection exists only for deterministic offline tests
+    and is explicitly sealed as untrusted in the receipt.
+    """
+
+    expected_digest = _sha256(expected_model_digest, "expected_model_digest")
+    expected_fingerprint = _sha256(
+        expected_runtime_fingerprint_sha256,
+        "expected_runtime_fingerprint_sha256",
+    )
+    show_request_bytes = _runtime_probe_show_request_bytes()
+    owned_transport = transport is None
+    active_transport: TransportLike = (
+        build_hardened_loopback_session() if transport is None else transport
+    )
+    try:
+        if not hasattr(active_transport, "request"):
+            raise SecFilingGemmaOllamaError(
+                "Ollama runtime-probe transport must provide request()"
+            )
+        version_bytes, version_http = _perform_runtime_probe_request(
+            active_transport,
+            method="GET",
+            endpoint=OLLAMA_VERSION_ENDPOINT,
+            headers=_PROBE_GET_HEADERS,
+            request_bytes=None,
+        )
+        show_bytes, show_http = _perform_runtime_probe_request(
+            active_transport,
+            method="POST",
+            endpoint=OLLAMA_SHOW_ENDPOINT,
+            headers=_REQUEST_HEADERS,
+            request_bytes=show_request_bytes,
+        )
+        identity = _derive_runtime_probe_identity(
+            version_response_bytes=version_bytes,
+            show_response_bytes=show_bytes,
+            expected_model_digest=expected_digest,
+        )
+        if not hmac.compare_digest(
+            identity.runtime_fingerprint_sha256, expected_fingerprint
+        ):
+            raise SecFilingGemmaOllamaError(
+                "Ollama runtime fingerprint differs from the candidate"
+            )
+    finally:
+        if owned_transport:
+            try:
+                close = getattr(active_transport, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+
+    return OllamaRuntimeProbeReceipt(
+        schema_version=RUNTIME_PROBE_RECEIPT_SCHEMA_VERSION,
+        version_endpoint=OLLAMA_VERSION_ENDPOINT,
+        show_endpoint=OLLAMA_SHOW_ENDPOINT,
+        model_name=OLLAMA_MODEL,
+        show_request_bytes=show_request_bytes,
+        show_request_sha256=hashlib.sha256(show_request_bytes).hexdigest(),
+        version_response_bytes=version_bytes,
+        version_response_sha256=hashlib.sha256(version_bytes).hexdigest(),
+        show_response_bytes=show_bytes,
+        show_response_sha256=hashlib.sha256(show_bytes).hexdigest(),
+        version_http_status=version_http["http_status"],
+        version_response_url=version_http["response_url"],
+        version_response_content_type=version_http["response_content_type"],
+        version_response_content_length=version_http["response_content_length"],
+        version_response_history_count=version_http["response_history_count"],
+        show_http_status=show_http["http_status"],
+        show_response_url=show_http["response_url"],
+        show_response_content_type=show_http["response_content_type"],
+        show_response_content_length=show_http["response_content_length"],
+        show_response_history_count=show_http["response_history_count"],
+        model_digest=identity.model_digest,
+        runtime_fingerprint_sha256=identity.runtime_fingerprint_sha256,
+        runtime_evidence_bytes=identity.evidence_bytes,
+        runtime_evidence_sha256=identity.evidence_sha256,
+        transport_mode=(
+            _OWNED_PROBE_TRANSPORT_MODE
+            if owned_transport
+            else _INJECTED_PROBE_TRANSPORT_MODE
+        ),
+        trusted_production_transport=False,
+        network_requests=2,
+        redirects=0,
+        retries=0,
+        pull_attempts=0,
+        model_calls=0,
+    )
+
+
+def _validate_persisted_probe_http_evidence(
+    manifest: Mapping[str, Any],
+    *,
+    prefix: str,
+    endpoint: str,
+    response_bytes: bytes,
+) -> None:
+    status = manifest[f"{prefix}_http_status"]
+    if isinstance(status, bool) or status != 200:
+        raise SecFilingGemmaOllamaError(
+            f"Ollama runtime-probe {prefix} HTTP status changed"
+        )
+    if manifest[f"{prefix}_response_url"] != endpoint:
+        raise SecFilingGemmaOllamaError(
+            f"Ollama runtime-probe {prefix} response URL changed"
+        )
+    if manifest[f"{prefix}_response_content_type"] != "application/json":
+        raise SecFilingGemmaOllamaError(
+            f"Ollama runtime-probe {prefix} response content type changed"
+        )
+    content_length = manifest[f"{prefix}_response_content_length"]
+    if content_length is not None and (
+        isinstance(content_length, bool)
+        or not isinstance(content_length, int)
+        or content_length != len(response_bytes)
+    ):
+        raise SecFilingGemmaOllamaError(
+            f"Ollama runtime-probe {prefix} Content-Length changed"
+        )
+    history_count = manifest[f"{prefix}_response_history_count"]
+    if isinstance(history_count, bool) or history_count != 0:
+        raise SecFilingGemmaOllamaError(
+            f"Ollama runtime-probe {prefix} redirect history changed"
+        )
+
+
+def validate_ollama_runtime_probe_receipt(
+    manifest: Mapping[str, Any],
+    *,
+    expected_model_digest: str,
+    expected_runtime_fingerprint_sha256: str,
+    expected_transport_mode: str | None = None,
+    expected_probe_receipt_sha256: str | None = None,
+) -> OllamaRuntimeProbeReceipt:
+    """Replay a persisted probe from bounded bytes against candidate pins."""
+
+    if not isinstance(manifest, Mapping):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe receipt must be a mapping"
+        )
+    _expect_exact_keys(
+        manifest,
+        _RUNTIME_PROBE_MANIFEST_KEYS,
+        "Ollama runtime-probe receipt",
+    )
+    if manifest["schema_version"] != RUNTIME_PROBE_RECEIPT_SCHEMA_VERSION:
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe receipt schema changed"
+        )
+    if (
+        manifest["version_endpoint"] != OLLAMA_VERSION_ENDPOINT
+        or manifest["show_endpoint"] != OLLAMA_SHOW_ENDPOINT
+        or manifest["model_name"] != OLLAMA_MODEL
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe fixed destination or model changed"
+        )
+    expected_digest = _sha256(expected_model_digest, "expected_model_digest")
+    expected_fingerprint = _sha256(
+        expected_runtime_fingerprint_sha256,
+        "expected_runtime_fingerprint_sha256",
+    )
+    show_request_bytes = _decode_manifest_bytes(
+        manifest["show_request_bytes_base64"],
+        location="show_request_bytes_base64",
+    )
+    if show_request_bytes != _runtime_probe_show_request_bytes():
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe show request changed"
+        )
+    version_bytes = _decode_manifest_bytes(
+        manifest["version_response_bytes_base64"],
+        location="version_response_bytes_base64",
+    )
+    show_bytes = _decode_manifest_bytes(
+        manifest["show_response_bytes_base64"],
+        location="show_response_bytes_base64",
+    )
+    for field, payload in (
+        ("show_request_sha256", show_request_bytes),
+        ("version_response_sha256", version_bytes),
+        ("show_response_sha256", show_bytes),
+    ):
+        observed = hashlib.sha256(payload).hexdigest()
+        if not hmac.compare_digest(_sha256(manifest[field], field), observed):
+            raise SecFilingGemmaOllamaError(
+                f"Ollama runtime-probe {field} does not match its bytes"
+            )
+    _validate_persisted_probe_http_evidence(
+        manifest,
+        prefix="version",
+        endpoint=OLLAMA_VERSION_ENDPOINT,
+        response_bytes=version_bytes,
+    )
+    _validate_persisted_probe_http_evidence(
+        manifest,
+        prefix="show",
+        endpoint=OLLAMA_SHOW_ENDPOINT,
+        response_bytes=show_bytes,
+    )
+    identity = _derive_runtime_probe_identity(
+        version_response_bytes=version_bytes,
+        show_response_bytes=show_bytes,
+        expected_model_digest=expected_digest,
+    )
+    if (
+        not hmac.compare_digest(identity.model_digest, expected_digest)
+        or manifest["model_digest"] != identity.model_digest
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe model digest is not candidate-bound"
+        )
+    if (
+        not hmac.compare_digest(
+            identity.runtime_fingerprint_sha256, expected_fingerprint
+        )
+        or manifest["runtime_fingerprint_sha256"]
+        != identity.runtime_fingerprint_sha256
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe fingerprint is not candidate-bound"
+        )
+    evidence_bytes = _decode_manifest_bytes(
+        manifest["runtime_evidence_bytes_base64"],
+        location="runtime_evidence_bytes_base64",
+    )
+    if evidence_bytes != identity.evidence_bytes:
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe compact evidence changed"
+        )
+    if (
+        _sha256(manifest["runtime_evidence_sha256"], "runtime_evidence_sha256")
+        != identity.evidence_sha256
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe evidence hash changed"
+        )
+    permitted_modes = {
+        _OWNED_PROBE_TRANSPORT_MODE,
+        _INJECTED_PROBE_TRANSPORT_MODE,
+    }
+    transport_mode = manifest["transport_mode"]
+    if transport_mode not in permitted_modes or (
+        expected_transport_mode is not None
+        and transport_mode != expected_transport_mode
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe transport mode changed or is not pinned"
+        )
+    if manifest["trusted_production_transport"] is not False:
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe cannot self-attest transport trust"
+        )
+    for field, expected in (
+        ("network_requests", 2),
+        ("redirects", 0),
+        ("retries", 0),
+        ("pull_attempts", 0),
+        ("model_calls", 0),
+    ):
+        value = manifest[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value != expected:
+            raise SecFilingGemmaOllamaError(
+                f"Ollama runtime-probe {field} changed"
+            )
+    body = {key: manifest[key] for key in manifest if key != "receipt_sha256"}
+    observed_receipt_hash = canonical_sha256(body)
+    if not hmac.compare_digest(
+        _sha256(manifest["receipt_sha256"], "receipt_sha256"),
+        observed_receipt_hash,
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe receipt hash changed"
+        )
+    if expected_probe_receipt_sha256 is not None and not hmac.compare_digest(
+        observed_receipt_hash,
+        _sha256(
+            expected_probe_receipt_sha256,
+            "expected_probe_receipt_sha256",
+        ),
+    ):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe receipt is not externally pinned"
+        )
+    receipt = OllamaRuntimeProbeReceipt(
+        schema_version=manifest["schema_version"],
+        version_endpoint=manifest["version_endpoint"],
+        show_endpoint=manifest["show_endpoint"],
+        model_name=manifest["model_name"],
+        show_request_bytes=show_request_bytes,
+        show_request_sha256=manifest["show_request_sha256"],
+        version_response_bytes=version_bytes,
+        version_response_sha256=manifest["version_response_sha256"],
+        show_response_bytes=show_bytes,
+        show_response_sha256=manifest["show_response_sha256"],
+        version_http_status=manifest["version_http_status"],
+        version_response_url=manifest["version_response_url"],
+        version_response_content_type=manifest["version_response_content_type"],
+        version_response_content_length=manifest[
+            "version_response_content_length"
+        ],
+        version_response_history_count=manifest[
+            "version_response_history_count"
+        ],
+        show_http_status=manifest["show_http_status"],
+        show_response_url=manifest["show_response_url"],
+        show_response_content_type=manifest["show_response_content_type"],
+        show_response_content_length=manifest["show_response_content_length"],
+        show_response_history_count=manifest["show_response_history_count"],
+        model_digest=manifest["model_digest"],
+        runtime_fingerprint_sha256=manifest["runtime_fingerprint_sha256"],
+        runtime_evidence_bytes=evidence_bytes,
+        runtime_evidence_sha256=manifest["runtime_evidence_sha256"],
+        transport_mode=transport_mode,
+        trusted_production_transport=False,
+        network_requests=2,
+        redirects=0,
+        retries=0,
+        pull_attempts=0,
+        model_calls=0,
+    )
+    if receipt.to_manifest() != dict(manifest):
+        raise SecFilingGemmaOllamaError(
+            "Ollama runtime-probe receipt is not canonical"
+        )
+    return receipt
+
+
 def build_hardened_loopback_session() -> requests.Session:
     """Construct the production transport without proxy or retry inheritance."""
 
@@ -1659,21 +2343,28 @@ __all__ = [
     "MAX_RESPONSE_BYTES",
     "OLLAMA_ENDPOINT",
     "OLLAMA_MODEL",
+    "OLLAMA_SHOW_ENDPOINT",
+    "OLLAMA_VERSION_ENDPOINT",
     "OllamaExtractionReceipt",
     "OllamaModelAttemptReceipt",
+    "OllamaRuntimeProbeReceipt",
     "PinnedOllamaRuntimeIdentity",
     "READ_TIMEOUT_SECONDS",
     "RECEIPT_SCHEMA_VERSION",
     "RUNTIME_GUARD_SCHEMA_VERSION",
+    "RUNTIME_FINGERPRINT_SCHEMA_VERSION",
     "RUNTIME_IDENTITY_SCHEMA_VERSION",
+    "RUNTIME_PROBE_RECEIPT_SCHEMA_VERSION",
     "SecFilingGemmaOllamaError",
     "VALID_ATTEMPT_STATUS",
     "build_runtime_identity_guard",
     "build_hardened_loopback_session",
     "call_ollama_extractor",
     "call_ollama_extractor_attempt",
+    "probe_owned_ollama_runtime",
     "validate_ollama_extraction_receipt",
     "validate_ollama_model_attempt_receipt",
+    "validate_ollama_runtime_probe_receipt",
     "validate_pinned_runtime_identity",
     "validate_runtime_identity_guard",
 ]

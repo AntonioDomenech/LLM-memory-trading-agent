@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
     canonical_sha256,
@@ -33,8 +34,6 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_UNRESOLVED_ROLES = (
-    "extractor_prompt",
-    "extractor_schema",
     "ledger",
     "market_acquirer",
 )
@@ -68,7 +67,7 @@ def _candidate(source_hashes: dict[str, str]) -> dict[str, object]:
         calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
         corpus_universe_sha256=_hash("universe"),
         corpus_universe_semantic_sha256=_hash("universe-semantic"),
-        identity_lexicon_sha256=_hash("identity-lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_hash("predecessor-registry"),
         holdout_attempt_id="aapl-sec-filing-gemma-v1-attempt-001",
         experiment_source_commit="b" * 40,
@@ -136,8 +135,12 @@ def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> Non
     for path in resolved:
         assert path.startswith("agent_benchmark/")
         assert (REPOSITORY_ROOT / path).is_file()
-    assert CANONICAL_SOURCE_ROLE_PATHS["extractor_prompt"] is None
-    assert CANONICAL_SOURCE_ROLE_PATHS["extractor_schema"] is None
+    assert CANONICAL_SOURCE_ROLE_PATHS["extractor_prompt"] == (
+        "agent_benchmark/sec_filing_gemma_extractor_prompt.py"
+    )
+    assert CANONICAL_SOURCE_ROLE_PATHS["extractor_schema"] == (
+        "agent_benchmark/sec_filing_gemma_extractor_schema.py"
+    )
     assert CANONICAL_SOURCE_ROLE_PATHS["runner"] == (
         "agent_benchmark/sec_filing_gemma_stage_runner.py"
     )
@@ -253,7 +256,7 @@ def test_static_local_import_omission_is_rejected_even_when_hashes_are_rebuilt(
 def test_complete_validator_names_real_unresolved_implementation_roles(evidence) -> None:
     with pytest.raises(
         SecFilingGemmaSourceIdentityIncompleteError,
-        match="extractor_prompt.*extractor_schema.*ledger.*market_acquirer",
+        match="ledger.*market_acquirer",
     ):
         validate_complete_candidate_source_identity(
             candidate_manifest=evidence["candidate"],
@@ -406,7 +409,7 @@ def test_source_tree_pin_cannot_be_an_arbitrary_digest(evidence) -> None:
         calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
         corpus_universe_sha256=_hash("universe"),
         corpus_universe_semantic_sha256=_hash("universe-semantic"),
-        identity_lexicon_sha256=_hash("identity-lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_hash("predecessor-registry"),
         holdout_attempt_id="aapl-sec-filing-gemma-v1-attempt-001",
         experiment_source_commit="b" * 40,

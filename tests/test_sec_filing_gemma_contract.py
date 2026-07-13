@@ -9,16 +9,20 @@ import json
 import pytest
 
 import agent_benchmark.sec_filing_gemma_contract as contract_module
+import agent_benchmark.sec_filing_gemma_extractor_prompt as extractor_prompt_module
+import agent_benchmark.sec_filing_gemma_extractor_schema as extractor_schema_module
 from agent_benchmark.sec_filing_gemma_contract import (
     CALENDAR_SOURCE_URLS,
+    CANONICAL_IDENTITY_LEXICON,
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     DIMENSION_NAMES,
     EXTRACTOR_REQUEST_VERSION,
     EXTRACTOR_SCHEMA_VERSION,
     FLAG_NAMES,
     LABEL_MATURITY_OFFSET,
     LIVE_LESSON_SCHEMA_VERSION,
-    MANDATORY_IDENTITY_TERMS,
     PREPROCESSOR_VERSION,
+    REDACTED_INPUT_SCHEMA_VERSION,
     REQUIRED_SOURCE_HASHES,
     SecFilingGemmaContractError,
     authorize_stage_access,
@@ -43,6 +47,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     validate_extractor_output,
     validate_extractor_request,
     validate_live_lessons,
+    validate_redacted_input_manifest,
     validate_final_runtime_summary,
     validate_stage_extraction_coverage,
     validate_stage_content_manifest,
@@ -71,17 +76,8 @@ def _offset_session(value: str, offset: int) -> str:
     return SESSIONS[SESSIONS.index(value) + offset]
 
 
-def _identity_terms() -> list[str]:
-    return sorted(
-        set(MANDATORY_IDENTITY_TERMS)
-        | {
-            "luca maestri",
-        }
-    )
-
-
-IDENTITY_TERMS = _identity_terms()
-IDENTITY_LEXICON_SHA256 = canonical_sha256(IDENTITY_TERMS)
+IDENTITY_TERMS = list(CANONICAL_IDENTITY_LEXICON)
+IDENTITY_LEXICON_SHA256 = CANONICAL_IDENTITY_LEXICON_SHA256
 
 
 def _sources() -> dict[str, str]:
@@ -162,6 +158,7 @@ def _candidate(
     *,
     calendar_source_evidence_sha256: str | None = None,
     catalog_sha256: str | None = None,
+    identity_lexicon_sha256: str = IDENTITY_LEXICON_SHA256,
 ) -> dict:
     return build_candidate_manifest(
         model_digest=_hash("d"),
@@ -181,7 +178,7 @@ def _candidate(
         calendar_sessions_sha256=CALENDAR_SESSIONS_SHA256,
         corpus_universe_sha256=universe["universe_sha256"],
         corpus_universe_semantic_sha256=universe["universe_semantic_sha256"],
-        identity_lexicon_sha256=IDENTITY_LEXICON_SHA256,
+        identity_lexicon_sha256=identity_lexicon_sha256,
         predecessor_reveal_registry_sha256=_hash("7"),
         holdout_attempt_id="aapl-sec-filing-gemma-v1-attempt-001",
         experiment_source_commit="b" * 40,
@@ -222,6 +219,10 @@ def _extractor_context(universe: dict) -> tuple[dict, dict, dict, dict]:
         accession_number=current["accession_number"],
         corpus_universe_sha256=universe["universe_sha256"],
         model_payload_sha256=model_payload_sha256,
+        preprocessed_event_sha256=_hash("1"),
+        owned_preprocessing_receipt_sha256=_hash("2"),
+        sec_reader_receipt_sha256=_hash("3"),
+        carry_in_reader_receipt_sha256=None,
         universe_manifest=universe,
         stage_content_manifest=content_manifest,
     )
@@ -284,6 +285,10 @@ def _validate_request(
         expected_redacted_input_manifest_sha256=redacted_manifest[
             "redacted_input_manifest_sha256"
         ],
+        expected_preprocessed_event_sha256=_hash("1"),
+        expected_owned_preprocessing_receipt_sha256=_hash("2"),
+        expected_sec_reader_receipt_sha256=_hash("3"),
+        expected_carry_in_reader_receipt_sha256=None,
     )
 
 
@@ -312,6 +317,18 @@ def _replace_first_model_sentence(
         accession_number=changed["current_accession_number"],
         corpus_universe_sha256=universe["universe_sha256"],
         model_payload_sha256=payload_hash,
+        preprocessed_event_sha256=redacted_manifest[
+            "preprocessed_event_sha256"
+        ],
+        owned_preprocessing_receipt_sha256=redacted_manifest[
+            "owned_preprocessing_receipt_sha256"
+        ],
+        sec_reader_receipt_sha256=redacted_manifest[
+            "sec_reader_receipt_sha256"
+        ],
+        carry_in_reader_receipt_sha256=redacted_manifest[
+            "carry_in_reader_receipt_sha256"
+        ],
         universe_manifest=universe,
         stage_content_manifest=content_manifests[redacted_manifest["artifact_stage"]],
     )
@@ -607,6 +624,52 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     assert first["gates"]["final"]["minimum_periods_beating_ablation"] == 2
 
 
+def test_contract_reexports_owned_extractor_prompt_schema_and_exact_payload() -> None:
+    assert (
+        contract_module.EXTRACTOR_SYSTEM_PROMPT
+        is extractor_prompt_module.EXTRACTOR_SYSTEM_PROMPT
+    )
+    assert (
+        contract_module.build_extractor_json_schema
+        is extractor_schema_module.build_extractor_json_schema
+    )
+    assert contract_module.EXTRACTOR_SCHEMA_VERSION == (
+        extractor_schema_module.EXTRACTOR_SCHEMA_VERSION
+    )
+    assert contract_module.DIMENSION_NAMES is extractor_schema_module.DIMENSION_NAMES
+    assert contract_module.FLAG_NAMES is extractor_schema_module.FLAG_NAMES
+    assert (
+        contract_module.ADVERSE_FLAG_NAMES
+        is extractor_schema_module.ADVERSE_FLAG_NAMES
+    )
+    assert contract_module.CURRENT_IMPACTS is extractor_schema_module.CURRENT_IMPACTS
+    assert (
+        contract_module.COMPARATIVE_CHANGES
+        is extractor_schema_module.COMPARATIVE_CHANGES
+    )
+    assert (
+        contract_module.DOCUMENT_QUALITIES
+        is extractor_schema_module.DOCUMENT_QUALITIES
+    )
+
+    sentences = [
+        {"id": "C0001", "text": "Demand improved while costs declined."},
+        {"id": "P0001", "text": "Demand had weakened in the prior period."},
+    ]
+    payload = build_extractor_model_payload(sentences)
+    assert payload["messages"][0] == {
+        "role": "system",
+        "content": extractor_prompt_module.EXTRACTOR_SYSTEM_PROMPT,
+    }
+    assert payload["format"] == extractor_schema_module.build_extractor_json_schema()
+
+    # Every call returns detached schema containers; a caller cannot mutate the
+    # next request or the owned enum constants through a prior return value.
+    payload["format"]["properties"]["dimensions"]["required"].append("forged")
+    replay = build_extractor_model_payload(sentences)
+    assert "forged" not in replay["format"]["properties"]["dimensions"]["required"]
+
+
 def test_any_contract_mutation_is_rejected() -> None:
     manifest = build_contract_manifest()
     manifest["gates"]["final"]["minimum_total_episode_count"] = 1
@@ -654,6 +717,9 @@ def test_candidate_binds_model_runtime_universe_lexicon_and_source_closure() -> 
         validate_candidate_manifest(changed)
     with pytest.raises(SecFilingGemmaContractError, match="externally pinned"):
         validate_candidate_manifest(candidate, expected_candidate_sha256=_hash("9"))
+
+    with pytest.raises(SecFilingGemmaContractError, match="frozen production lexicon"):
+        _candidate(universe, identity_lexicon_sha256=_hash("9"))
 
 
 def test_candidate_rejects_missing_transitive_source_hash() -> None:
@@ -806,6 +872,129 @@ def test_valid_extractor_request_is_bound_to_exact_current_and_prior_filings() -
     }
 
 
+def test_redacted_input_v3_binds_owned_preprocessing_and_reader_ancestry() -> None:
+    universe = _universe()
+    _request, manifest, _candidate_manifest, contents = _extractor_context(universe)
+    assert manifest["schema_version"] == REDACTED_INPUT_SCHEMA_VERSION
+    assert manifest["preprocessed_event_sha256"] == _hash("1")
+    assert manifest["owned_preprocessing_receipt_sha256"] == _hash("2")
+    assert manifest["sec_reader_receipt_sha256"] == _hash("3")
+    assert manifest["carry_in_reader_receipt_sha256"] is None
+    assert validate_redacted_input_manifest(
+        manifest,
+        universe_manifest=universe,
+        stage_content_manifest=contents["development"],
+        expected_manifest_sha256=manifest["redacted_input_manifest_sha256"],
+        expected_preprocessed_event_sha256=_hash("1"),
+        expected_owned_preprocessing_receipt_sha256=_hash("2"),
+        expected_sec_reader_receipt_sha256=_hash("3"),
+        expected_carry_in_reader_receipt_sha256=None,
+    ) == manifest["redacted_input_manifest_sha256"]
+
+    current = next(
+        record
+        for record in universe["records"]
+        if record["artifact_stage"] == "development"
+    )
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="cannot claim a carry-in",
+    ):
+        build_redacted_input_manifest(
+            artifact_stage="development",
+            accession_number=current["accession_number"],
+            corpus_universe_sha256=universe["universe_sha256"],
+            model_payload_sha256=_hash("4"),
+            preprocessed_event_sha256=_hash("5"),
+            owned_preprocessing_receipt_sha256=_hash("6"),
+            sec_reader_receipt_sha256=_hash("7"),
+            carry_in_reader_receipt_sha256=_hash("8"),
+            universe_manifest=universe,
+            stage_content_manifest=contents["development"],
+        )
+
+    intermediate_content = _stage_content(universe, "intermediate")
+    intermediate = next(
+        record
+        for record in universe["records"]
+        if record["artifact_stage"] == "intermediate"
+    )
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="carry_in_reader_receipt_sha256",
+    ):
+        build_redacted_input_manifest(
+            artifact_stage="intermediate",
+            accession_number=intermediate["accession_number"],
+            corpus_universe_sha256=universe["universe_sha256"],
+            model_payload_sha256=_hash("4"),
+            preprocessed_event_sha256=_hash("5"),
+            owned_preprocessing_receipt_sha256=_hash("6"),
+            sec_reader_receipt_sha256=_hash("7"),
+            carry_in_reader_receipt_sha256=None,
+            universe_manifest=universe,
+            stage_content_manifest=intermediate_content,
+        )
+    intermediate_manifest = build_redacted_input_manifest(
+        artifact_stage="intermediate",
+        accession_number=intermediate["accession_number"],
+        corpus_universe_sha256=universe["universe_sha256"],
+        model_payload_sha256=_hash("4"),
+        preprocessed_event_sha256=_hash("5"),
+        owned_preprocessing_receipt_sha256=_hash("6"),
+        sec_reader_receipt_sha256=_hash("7"),
+        carry_in_reader_receipt_sha256=_hash("8"),
+        universe_manifest=universe,
+        stage_content_manifest=intermediate_content,
+    )
+    assert intermediate_manifest["carry_in_reader_receipt_sha256"] == _hash("8")
+    assert validate_redacted_input_manifest(
+        intermediate_manifest,
+        universe_manifest=universe,
+        stage_content_manifest=intermediate_content,
+        expected_manifest_sha256=intermediate_manifest[
+            "redacted_input_manifest_sha256"
+        ],
+        expected_preprocessed_event_sha256=_hash("5"),
+        expected_owned_preprocessing_receipt_sha256=_hash("6"),
+        expected_sec_reader_receipt_sha256=_hash("7"),
+        expected_carry_in_reader_receipt_sha256=_hash("8"),
+    ) == intermediate_manifest["redacted_input_manifest_sha256"]
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("preprocessed_event_sha256", _hash("4")),
+        ("owned_preprocessing_receipt_sha256", _hash("5")),
+        ("sec_reader_receipt_sha256", _hash("6")),
+    ],
+)
+def test_redacted_input_rejects_rehashed_but_unpinned_owned_ancestry(
+    field: str,
+    replacement: str,
+) -> None:
+    universe = _universe()
+    request, manifest, candidate, contents = _extractor_context(universe)
+    changed = copy.deepcopy(manifest)
+    changed[field] = replacement
+    body = {
+        key: value
+        for key, value in changed.items()
+        if key != "redacted_input_manifest_sha256"
+    }
+    changed["redacted_input_manifest_sha256"] = canonical_sha256(body)
+    request["redacted_input_manifest_sha256"] = changed[
+        "redacted_input_manifest_sha256"
+    ]
+
+    with pytest.raises(
+        SecFilingGemmaContractError,
+        match="independently pinned owned ancestry",
+    ):
+        _validate_request(request, universe, changed, candidate, contents)
+
+
 @pytest.mark.parametrize("binding", ["calendar", "catalog"])
 def test_extractor_rejects_candidate_universe_provenance_mismatch(
     binding: str,
@@ -866,6 +1055,18 @@ def test_extractor_rejects_stage_relabel_and_wrong_or_self_prior() -> None:
         accession_number=other_accession,
         corpus_universe_sha256=universe["universe_sha256"],
         model_payload_sha256=request["model_payload_sha256"],
+        preprocessed_event_sha256=redacted_manifest[
+            "preprocessed_event_sha256"
+        ],
+        owned_preprocessing_receipt_sha256=redacted_manifest[
+            "owned_preprocessing_receipt_sha256"
+        ],
+        sec_reader_receipt_sha256=redacted_manifest[
+            "sec_reader_receipt_sha256"
+        ],
+        carry_in_reader_receipt_sha256=redacted_manifest[
+            "carry_in_reader_receipt_sha256"
+        ],
         universe_manifest=universe,
         stage_content_manifest=contents["development"],
     )

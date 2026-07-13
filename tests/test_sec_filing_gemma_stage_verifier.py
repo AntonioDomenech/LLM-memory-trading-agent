@@ -14,6 +14,7 @@ import pytest
 import agent_benchmark.sec_filing_gemma_stage_verifier as verifier_module
 from agent_benchmark.sec_filing_gemma_contract import (
     CALENDAR_SOURCE_URLS,
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
@@ -279,7 +280,7 @@ def _candidate_fixture() -> tuple[dict, dict[str, str]]:
         calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
         corpus_universe_sha256=_h("universe"),
         corpus_universe_semantic_sha256=_h("universe semantic"),
-        identity_lexicon_sha256=_h("identity lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_h("predecessor registry"),
         holdout_attempt_id=f"{CONTRACT_VERSION}-attempt-001",
         experiment_source_commit=_h("experiment commit"),
@@ -336,7 +337,7 @@ def test_source_byte_omission_mutation_and_cross_candidate_pin_fail_closed() -> 
         )
 
 
-def test_source_role_audit_uses_frozen_mapping_and_keeps_four_roles_unresolved() -> None:
+def test_source_role_audit_uses_frozen_mapping_and_keeps_two_roles_unresolved() -> None:
     candidate, sources = _candidate_fixture()
     receipt = validate_candidate_source_role_audit(
         candidate_manifest=candidate,
@@ -345,10 +346,8 @@ def test_source_role_audit_uses_frozen_mapping_and_keeps_four_roles_unresolved()
     )
     assert receipt["complete"] is False
     assert receipt["authorizes"] is False
-    assert receipt["unresolved_role_count"] == 4
+    assert receipt["unresolved_role_count"] == 2
     assert receipt["unresolved_roles"] == [
-        "extractor_prompt",
-        "extractor_schema",
         "ledger",
         "market_acquirer",
     ]
@@ -815,7 +814,7 @@ def _complete_calendar_universe_fixture() -> tuple[dict, dict, dict, dict[str, s
         calendar_sessions_sha256=universe["calendar_sessions_sha256"],
         corpus_universe_sha256=universe["universe_sha256"],
         corpus_universe_semantic_sha256=universe["universe_semantic_sha256"],
-        identity_lexicon_sha256=_h("identity lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_h("predecessor registry"),
         holdout_attempt_id=f"{CONTRACT_VERSION}-attempt-001",
         experiment_source_commit=_h("experiment commit"),

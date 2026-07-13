@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 import copy
 import hashlib
 import json
@@ -21,19 +22,46 @@ from agent_benchmark.sec_filing_gemma_contract import (
     validate_extractor_request,
 )
 from agent_benchmark.sec_filing_gemma_preprocessor import (
+    CANONICAL_EXECUTIVE_IDENTITY_TERMS,
+    CANONICAL_IDENTITY_LEXICON,
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     MAX_CURRENT_SENTENCES,
+    MAX_OWNED_NORMALIZED_SOURCE_BYTES,
     MAX_PRIOR_SENTENCES,
+    OWNED_PREPROCESSING_RECEIPT_SCHEMA_VERSION,
     PREPROCESSED_EVENT_SCHEMA_VERSION,
     SecFilingGemmaPreprocessorError,
+    build_owned_preprocessing_receipt,
     preprocess_filing_event,
+    validate_owned_preprocessing_receipt,
     validate_preprocessed_event,
 )
 
 
-IDENTITY_LEXICON = MANDATORY_IDENTITY_TERMS + (
-    "luca maestri",
-    "steve jobs",
-)
+IDENTITY_LEXICON = CANONICAL_IDENTITY_LEXICON
+
+
+class _SecondReadFlippingEvent(Mapping[str, object]):
+    """Expose one canonical read, then forge one top-level field."""
+
+    def __init__(self, value: dict, *, field: str, forged: object) -> None:
+        self._value = value
+        self._field = field
+        self._forged = forged
+        self.read_counts: dict[str, int] = {}
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._value)
+
+    def __len__(self) -> int:
+        return len(self._value)
+
+    def __getitem__(self, key: str) -> object:
+        count = self.read_counts.get(key, 0) + 1
+        self.read_counts[key] = count
+        if key == self._field and count > 1:
+            return self._forged
+        return self._value[key]
 
 
 def _texts(artifact: dict, prefix: str | None = None) -> list[str]:
@@ -49,6 +77,568 @@ def _alpha_suffix(number: int) -> str:
     # introducing absolute numbers that the preprocessor must redact.
     first, second = divmod(number, len(string.ascii_lowercase))
     return string.ascii_lowercase[first] + string.ascii_lowercase[second]
+
+
+def _normalized_source(relative_path: str, text: str) -> dict:
+    payload = text.encode("utf-8")
+    return {
+        "relative_path": relative_path,
+        "byte_count": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def _owned_preprocessing_case() -> tuple[dict, dict]:
+    current = "Demand improved while liquidity remained stable."
+    prior = "Demand had weakened while supply risk increased."
+    artifact = preprocess_filing_event(
+        current_normalized_text=current,
+        prior_same_form_normalized_text=prior,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    kwargs = {
+        "scope_kind": "development_root",
+        "scope_sha256": "1" * 64,
+        "candidate_sha256": "2" * 64,
+        "model_execution_claim_sha256": "3" * 64,
+        "sec_reader_receipt_sha256": "4" * 64,
+        "carry_in_reader_receipt_sha256": None,
+        "stage": "development",
+        # Event order is chronological universe order, while file ordinals are
+        # acquisition-plan order.  They are intentionally independent.
+        "event_ordinal": 7,
+        "accession_number": "0000320193-00-000002",
+        "form": "10-Q",
+        "current_normalized_source": _normalized_source(
+            "document-0002.normalized.txt",
+            current,
+        ),
+        "prior_same_form_normalized_source": _normalized_source(
+            "document-0009.normalized.txt",
+            prior,
+        ),
+        "prior_provenance_kind": "same_scope_document",
+        "preprocessor_source_sha256": "5" * 64,
+        "preprocessed_event": artifact,
+        "current_normalized_text": current,
+        "prior_same_form_normalized_text": prior,
+    }
+    return artifact, kwargs
+
+
+def test_canonical_production_identity_lexicon_is_frozen_and_replayable() -> None:
+    assert isinstance(CANONICAL_IDENTITY_LEXICON, tuple)
+    assert CANONICAL_IDENTITY_LEXICON == tuple(sorted(CANONICAL_IDENTITY_LEXICON))
+    assert len(CANONICAL_IDENTITY_LEXICON) == len(set(CANONICAL_IDENTITY_LEXICON))
+    assert set(MANDATORY_IDENTITY_TERMS).issubset(CANONICAL_IDENTITY_LEXICON)
+    assert {"luca maestri", "steve jobs"}.issubset(CANONICAL_IDENTITY_LEXICON)
+    assert CANONICAL_IDENTITY_LEXICON_SHA256 == canonical_sha256(
+        list(CANONICAL_IDENTITY_LEXICON)
+    )
+
+    required_executive_terms = {
+        "jobs",
+        "steve jobs",
+        "cook",
+        "tim cook",
+        "oppenheimer",
+        "peter oppenheimer",
+        "maestri",
+        "luca maestri",
+        "parekh",
+        "kevan parekh",
+        "williams",
+        "jeff williams",
+        "ive",
+        "jony ive",
+        "schiller",
+        "phil schiller",
+        "cue",
+        "eddy cue",
+        "federighi",
+        "craig federighi",
+        "srouji",
+        "johny srouji",
+        "o'brien",
+        "deirdre o'brien",
+        "khan",
+        "sabih khan",
+        "ternus",
+        "john ternus",
+        "joswiak",
+        "greg joswiak",
+        "forstall",
+        "scott forstall",
+        "mansfield",
+        "bob mansfield",
+        "ahrendts",
+        "angela ahrendts",
+        "riccio",
+        "dan riccio",
+        "levinson",
+        "arthur levinson",
+    }
+    assert required_executive_terms.issubset(CANONICAL_EXECUTIVE_IDENTITY_TERMS)
+    assert set(CANONICAL_EXECUTIVE_IDENTITY_TERMS).issubset(
+        CANONICAL_IDENTITY_LEXICON
+    )
+
+
+def test_executive_variants_and_unknown_honorific_people_are_redacted() -> None:
+    current = (
+        "Cook said customer demand improved. "
+        "Maestri described liquidity risk. "
+        "Jeff Williams said supply risk increased. "
+        "Kevan Parekh said operating costs declined. "
+        "Dr. Rowan Quill described regulatory uncertainty. "
+        "Ms. Zephyr said inventory risk remained stable."
+    )
+
+    first = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    replay = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    output = " ".join(_texts(first))
+    lowered = output.casefold()
+
+    assert replay == first
+    assert output.count("[IDENTITY]") >= 6
+    for leaked in (
+        "cook",
+        "maestri",
+        "jeff williams",
+        "kevan parekh",
+        "rowan",
+        "quill",
+        "zephyr",
+    ):
+        assert leaked not in lowered
+    assert "customer demand improved" in lowered
+    assert "operating costs declined" in lowered
+    assert first["redaction_report"]["identity_matches_remaining"] == 0
+
+
+def test_honorifics_consume_the_complete_shared_bounded_person_name() -> None:
+    current = (
+        "Mr. Anna van der Meer resigned while demand improved. "
+        "Mr. Susan Q. Wagner resigned while liquidity remained stable. "
+        "Dr. John Ronald Reuel resigned while supply risk increased."
+    )
+
+    first = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    replay = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    output = " ".join(_texts(first))
+    lowered = output.casefold()
+
+    assert replay == first
+    assert output.count("[IDENTITY] resigned") == 3
+    assert "[IDENTITY] resigned while demand improved" in output
+    assert "[IDENTITY] resigned while liquidity remained stable" in output
+    assert "[IDENTITY] resigned while supply risk increased" in output
+    for leaked in (
+        "anna",
+        "meer",
+        "susan",
+        "wagner",
+        "john",
+        "ronald",
+        "reuel",
+    ):
+        assert leaked not in lowered
+    assert first["redaction_report"]["identity_matches_remaining"] == 0
+
+
+def test_unlisted_people_are_redacted_by_title_and_speech_context() -> None:
+    current = (
+        "Susan Wagner said demand improved. "
+        "Monica Lozano said liquidity remained stable. "
+        "Chief Executive Officer Susan Wagner said demand improved. "
+        "Independent Director Avery North noted supply risk increased. "
+        "CFO Jordan Lee explained operating costs declined. "
+        "Chief Executive Officer Susan Wagner oversees operations and liquidity. "
+        "Susan Wagner, Chief Executive Officer, noted customer demand improved. "
+        "Susan Wagner was appointed Chief Executive Officer. "
+        "CEO Susan de Wagner said inventory risk remained stable."
+    )
+
+    first = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    replay = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    output = " ".join(_texts(first))
+    lowered = output.casefold()
+
+    assert replay == first
+    assert output.count("[IDENTITY]") >= 9
+    for leaked in (
+        "susan",
+        "wagner",
+        "monica",
+        "lozano",
+        "avery",
+        "north",
+        "jordan",
+        "lee",
+    ):
+        assert leaked not in lowered
+    assert "[IDENTITY] said demand improved" in output
+    assert "Chief Executive Officer [IDENTITY] said demand improved" in output
+    assert "Independent Director [IDENTITY] noted supply risk increased" in output
+    assert "CFO [IDENTITY] explained operating costs declined" in output
+    assert (
+        "Chief Executive Officer [IDENTITY] oversees operations and liquidity"
+        in output
+    )
+    assert (
+        "[IDENTITY], Chief Executive Officer, noted customer demand improved"
+        in output
+    )
+    assert "[IDENTITY] was appointed Chief Executive Officer" in output
+    assert "CEO [IDENTITY] said inventory risk remained stable" in output
+    assert first["redaction_report"]["identity_matches_remaining"] == 0
+
+
+def test_bounded_parenthetical_particle_and_transition_people_are_redacted() -> None:
+    current = (
+        "Susan Wagner (Chief Executive Officer) said demand improved. "
+        "Anna van der Meer indicated liquidity remained stable. "
+        "Anna van der Meer will serve as Chief Executive Officer. "
+        "Monica Lozano joined as Director. "
+        "Avery North named Chief Financial Officer. "
+        "Jordan Lee elected Chair."
+    )
+
+    first = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    replay = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    output = " ".join(_texts(first))
+    lowered = output.casefold()
+
+    assert replay == first
+    assert output.count("[IDENTITY]") >= 6
+    for leaked in (
+        "susan",
+        "wagner",
+        "anna",
+        "meer",
+        "monica",
+        "lozano",
+        "avery",
+        "north",
+        "jordan",
+        "lee",
+    ):
+        assert leaked not in lowered
+    assert "[IDENTITY] (Chief Executive Officer) said demand improved" in output
+    assert "[IDENTITY] indicated liquidity remained stable" in output
+    assert "[IDENTITY] will serve as Chief Executive Officer" in output
+    assert "[IDENTITY] joined as Director" in output
+    assert "[IDENTITY] named Chief Financial Officer" in output
+    assert "[IDENTITY] elected Chair" in output
+    assert first["redaction_report"]["identity_matches_remaining"] == 0
+
+
+def test_owned_preprocessing_receipt_is_deterministic_and_exactly_replayable() -> None:
+    artifact, kwargs = _owned_preprocessing_case()
+
+    first = build_owned_preprocessing_receipt(**kwargs)
+    replay = build_owned_preprocessing_receipt(**copy.deepcopy(kwargs))
+
+    assert replay == first
+    assert first["schema_version"] == OWNED_PREPROCESSING_RECEIPT_SCHEMA_VERSION
+    assert first["receipt_kind"] == "owned_filing_event_preprocessing"
+    assert first["scope_kind"] == "development_root"
+    assert first["scope_sha256"] == "1" * 64
+    assert first["candidate_sha256"] == "2" * 64
+    assert first["model_execution_claim_sha256"] == "3" * 64
+    assert first["sec_reader_receipt_sha256"] == "4" * 64
+    assert first["carry_in_reader_receipt_sha256"] is None
+    assert first["event_ordinal"] == 7
+    assert first["current_normalized_source"]["relative_path"] == (
+        "document-0002.normalized.txt"
+    )
+    assert first["prior_same_form_normalized_source"]["relative_path"] == (
+        "document-0009.normalized.txt"
+    )
+    assert first["canonical_identity_lexicon_sha256"] == (
+        CANONICAL_IDENTITY_LEXICON_SHA256
+    )
+    assert first["preprocessed_event_sha256"] == artifact[
+        "preprocessed_event_sha256"
+    ]
+    assert first["model_payload_sha256"] == artifact["model_payload_sha256"]
+    assert "model_payload" not in first
+    assert "redacted_input_manifest_sha256" not in first
+    body = {key: value for key, value in first.items() if key != "receipt_sha256"}
+    assert first["receipt_sha256"] == canonical_sha256(body)
+    assert validate_owned_preprocessing_receipt(
+        first,
+        **kwargs,
+    ) == first["receipt_sha256"]
+
+
+def test_owned_preprocessing_receipt_detaches_flipping_event_mapping_once() -> None:
+    artifact, kwargs = _owned_preprocessing_case()
+    forged_hash = "f" * 64
+    flipping = _SecondReadFlippingEvent(
+        artifact,
+        field="model_payload_sha256",
+        forged=forged_hash,
+    )
+    kwargs["preprocessed_event"] = flipping
+
+    receipt = build_owned_preprocessing_receipt(**kwargs)
+
+    assert flipping.read_counts["model_payload_sha256"] == 1
+    assert receipt["model_payload_sha256"] == artifact["model_payload_sha256"]
+    assert receipt["model_payload_sha256"] != forged_hash
+
+
+@pytest.mark.parametrize(
+    "field, replacement",
+    [
+        ("model_execution_claim_sha256", "a" * 64),
+        ("sec_reader_receipt_sha256", "b" * 64),
+        ("candidate_sha256", "c" * 64),
+        ("event_ordinal", 3),
+        ("accession_number", "0000320193-00-000003"),
+        ("preprocessor_source_sha256", "d" * 64),
+    ],
+)
+def test_owned_preprocessing_receipt_rejects_rehashed_mutation(
+    field: str,
+    replacement: object,
+) -> None:
+    _, kwargs = _owned_preprocessing_case()
+    receipt = build_owned_preprocessing_receipt(**kwargs)
+    changed = copy.deepcopy(receipt)
+    changed[field] = replacement
+    changed_body = {
+        key: value for key, value in changed.items() if key != "receipt_sha256"
+    }
+    changed["receipt_sha256"] = canonical_sha256(changed_body)
+
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="canonical replay"):
+        validate_owned_preprocessing_receipt(changed, **kwargs)
+
+
+def test_owned_preprocessing_receipt_rejects_wrong_prior_and_provenance() -> None:
+    _, kwargs = _owned_preprocessing_case()
+    wrong_prior = copy.deepcopy(kwargs)
+    wrong_prior["prior_same_form_normalized_source"] = _normalized_source(
+        "document-0009.normalized.txt",
+        "A different earlier filing.",
+    )
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="exact normalized text"):
+        build_owned_preprocessing_receipt(**wrong_prior)
+
+    changed_prior_text = copy.deepcopy(kwargs)
+    changed_prior_text["prior_same_form_normalized_text"] = (
+        "A different earlier filing."
+    )
+    changed_prior_text["prior_same_form_normalized_source"] = _normalized_source(
+        "document-0009.normalized.txt",
+        changed_prior_text["prior_same_form_normalized_text"],
+    )
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="canonical replay"):
+        build_owned_preprocessing_receipt(**changed_prior_text)
+
+    same_source = copy.deepcopy(kwargs)
+    same_source["prior_same_form_normalized_source"]["relative_path"] = (
+        "document-0002.normalized.txt"
+    )
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="distinct document"):
+        build_owned_preprocessing_receipt(**same_source)
+
+    wrong_kind = copy.deepcopy(kwargs)
+    wrong_kind["prior_provenance_kind"] = "development_root_carry_in"
+    wrong_kind["prior_same_form_normalized_source"]["relative_path"] = (
+        "carry-in-0001.normalized.txt"
+    )
+    with pytest.raises(
+        SecFilingGemmaPreprocessorError,
+        match="valid only for intermediate",
+    ):
+        build_owned_preprocessing_receipt(**wrong_kind)
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    [
+        ({"sha256": "a" * 64}, "exact normalized text"),
+        ({"byte_count": 1}, "exact normalized text"),
+        ({"byte_count": True}, "integer from"),
+        ({"byte_count": MAX_OWNED_NORMALIZED_SOURCE_BYTES + 1}, "integer from"),
+        ({"sha256": "A" * 64}, "bare lowercase"),
+        ({"unexpected": "field"}, "contain exactly"),
+    ],
+)
+def test_owned_preprocessing_receipt_rejects_wrong_source_descriptor(
+    mutation: dict,
+    message: str,
+) -> None:
+    _, kwargs = _owned_preprocessing_case()
+    changed = copy.deepcopy(kwargs)
+    changed["current_normalized_source"].update(mutation)
+
+    with pytest.raises(SecFilingGemmaPreprocessorError, match=message):
+        build_owned_preprocessing_receipt(**changed)
+
+
+@pytest.mark.parametrize(
+    "relative_path, message",
+    [
+        ("../document-0002.normalized.txt", "canonical normalized filename"),
+        ("document-2.normalized.txt", "canonical normalized filename"),
+        ("document-0000.normalized.txt", "ordinal must be positive"),
+        ("carry-in-0002.normalized.txt", "canonical document"),
+        ("document-0002.normalized.txt/extra", "canonical normalized filename"),
+        (r"folder\document-0002.normalized.txt", "canonical normalized filename"),
+    ],
+)
+def test_owned_preprocessing_receipt_rejects_noncanonical_source_path(
+    relative_path: str,
+    message: str,
+) -> None:
+    _, kwargs = _owned_preprocessing_case()
+    changed = copy.deepcopy(kwargs)
+    changed["current_normalized_source"]["relative_path"] = relative_path
+
+    with pytest.raises(SecFilingGemmaPreprocessorError, match=message):
+        build_owned_preprocessing_receipt(**changed)
+
+
+@pytest.mark.parametrize(
+    "stage, prior_kind",
+    [
+        ("intermediate", "development_root_carry_in"),
+        ("final", "stage_carry_in"),
+    ],
+)
+def test_stage_receipts_bind_required_carry_reader_and_stage_specific_prior(
+    stage: str,
+    prior_kind: str,
+) -> None:
+    current = "Demand improved while liquidity remained stable."
+    prior = "Supply risk had increased."
+    artifact = preprocess_filing_event(
+        current_normalized_text=current,
+        prior_same_form_normalized_text=prior,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    kwargs = {
+        "scope_kind": "stage_request",
+        "scope_sha256": "1" * 64,
+        "candidate_sha256": "2" * 64,
+        "model_execution_claim_sha256": "3" * 64,
+        "sec_reader_receipt_sha256": "4" * 64,
+        "carry_in_reader_receipt_sha256": "5" * 64,
+        "stage": stage,
+        "event_ordinal": 11,
+        "accession_number": "0000320193-24-000001",
+        "form": "10-K",
+        "current_normalized_source": _normalized_source(
+            "document-0001.normalized.txt",
+            current,
+        ),
+        "prior_same_form_normalized_source": _normalized_source(
+            "carry-in-0001.normalized.txt",
+            prior,
+        ),
+        "prior_provenance_kind": prior_kind,
+        "preprocessor_source_sha256": "6" * 64,
+        "preprocessed_event": artifact,
+        "current_normalized_text": current,
+        "prior_same_form_normalized_text": prior,
+    }
+
+    receipt = build_owned_preprocessing_receipt(**kwargs)
+    assert receipt["carry_in_reader_receipt_sha256"] == "5" * 64
+    assert receipt["prior_provenance_kind"] == prior_kind
+
+    missing_carry = copy.deepcopy(kwargs)
+    missing_carry["carry_in_reader_receipt_sha256"] = None
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="bare lowercase"):
+        build_owned_preprocessing_receipt(**missing_carry)
+
+
+def test_development_first_form_allows_no_prior_but_never_a_carry_reader() -> None:
+    current = "Demand improved while liquidity remained stable."
+    artifact = preprocess_filing_event(
+        current_normalized_text=current,
+        identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+    )
+    kwargs = {
+        "scope_kind": "development_root",
+        "scope_sha256": "1" * 64,
+        "candidate_sha256": "2" * 64,
+        "model_execution_claim_sha256": "3" * 64,
+        "sec_reader_receipt_sha256": "4" * 64,
+        "carry_in_reader_receipt_sha256": None,
+        "stage": "development",
+        "event_ordinal": 4,
+        "accession_number": "0000320193-00-000001",
+        "form": "10-K",
+        "current_normalized_source": _normalized_source(
+            "document-0001.normalized.txt",
+            current,
+        ),
+        "prior_same_form_normalized_source": None,
+        "prior_provenance_kind": None,
+        "preprocessor_source_sha256": "5" * 64,
+        "preprocessed_event": artifact,
+        "current_normalized_text": current,
+        "prior_same_form_normalized_text": None,
+    }
+    receipt = build_owned_preprocessing_receipt(**kwargs)
+    assert receipt["prior_same_form_normalized_source"] is None
+    assert receipt["prior_provenance_kind"] is None
+
+    with_carry = {**kwargs, "carry_in_reader_receipt_sha256": "6" * 64}
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="cannot bind a carry"):
+        build_owned_preprocessing_receipt(**with_carry)
+
+
+@pytest.mark.parametrize(
+    "scope_kind, stage",
+    [
+        ("development_root", "intermediate"),
+        ("development_root", "final"),
+        ("stage_request", "development"),
+    ],
+)
+def test_owned_preprocessing_scope_and_stage_must_match(
+    scope_kind: str,
+    stage: str,
+) -> None:
+    _, kwargs = _owned_preprocessing_case()
+    changed = copy.deepcopy(kwargs)
+    changed["scope_kind"] = scope_kind
+    changed["stage"] = stage
+    if stage != "development":
+        changed["carry_in_reader_receipt_sha256"] = "6" * 64
+
+    with pytest.raises(SecFilingGemmaPreprocessorError, match="inconsistent"):
+        build_owned_preprocessing_receipt(**changed)
 
 
 def test_builds_exact_canonical_payload_report_and_hashes() -> None:
@@ -272,6 +862,10 @@ def test_artifact_fields_are_accepted_by_existing_extractor_request_validator() 
         accession_number=current["accession_number"],
         corpus_universe_sha256=universe["universe_sha256"],
         model_payload_sha256=artifact["model_payload_sha256"],
+        preprocessed_event_sha256=artifact["preprocessed_event_sha256"],
+        owned_preprocessing_receipt_sha256="2" * 64,
+        sec_reader_receipt_sha256="3" * 64,
+        carry_in_reader_receipt_sha256=None,
         universe_manifest=universe,
         stage_content_manifest=content,
     )
@@ -314,6 +908,12 @@ def test_artifact_fields_are_accepted_by_existing_extractor_request_validator() 
         expected_redacted_input_manifest_sha256=redacted_manifest[
             "redacted_input_manifest_sha256"
         ],
+        expected_preprocessed_event_sha256=artifact[
+            "preprocessed_event_sha256"
+        ],
+        expected_owned_preprocessing_receipt_sha256="2" * 64,
+        expected_sec_reader_receipt_sha256="3" * 64,
+        expected_carry_in_reader_receipt_sha256=None,
     )
     assert validated["model_payload_sha256"] == artifact["model_payload_sha256"]
     assert validated["sentence_ids"] == tuple(

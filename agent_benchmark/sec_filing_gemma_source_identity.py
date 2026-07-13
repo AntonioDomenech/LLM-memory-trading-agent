@@ -11,7 +11,7 @@ not prove that the current source bytes created every already-loaded code
 object, so runtime completeness remains false pending an owned startup/import
 attestation.
 
-Several conceptual roles do not yet have one frozen source owner.  They remain
+Two conceptual roles do not yet have one frozen source owner.  They remain
 explicitly unresolved instead of being aliased to a convenient existing file.
 Consequently the current receipt is always non-authorizing and incomplete; the
 strict completeness validator raises until those source owners are implemented
@@ -50,13 +50,12 @@ MAX_RUNTIME_SOURCE_BYTES_TOTAL: Final[int] = 64 * 1024 * 1024
 
 # A ``None`` value is an intentional fail-closed declaration that the
 # conceptual role has no single frozen repository source owner yet.  In
-# particular, prompt/schema bytes are embedded in the contract today; assigning
-# all three roles to that file would create aliases rather than distinct source
-# identities.  The trading ledger is split across prediction/scoring/proof
-# components, and production market acquisition is not yet implemented as one
-# frozen owner.  The bounded owned SEC stage runner now has a distinct source
-# owner, while its market/model/artifact coverage remains intentionally
-# incomplete and non-authorizing.
+# The prompt and extractor schema now have distinct frozen source owners.  The
+# trading ledger is still split across prediction/scoring/proof components, and
+# production market acquisition is not yet implemented as one frozen owner.
+# The bounded owned SEC stage runner has a distinct source owner, while its
+# market/model/artifact coverage remains intentionally incomplete and
+# non-authorizing.
 _CANONICAL_SOURCE_ROLE_PATH_ITEMS: Final[tuple[tuple[str, str | None], ...]] = (
     (
         "artifact_sealer",
@@ -70,8 +69,14 @@ _CANONICAL_SOURCE_ROLE_PATH_ITEMS: Final[tuple[tuple[str, str | None], ...]] = (
     ("direct_edge_features", "agent_benchmark/direct_edge_features.py"),
     ("downside_features", "agent_benchmark/downside_features.py"),
     ("extractor", "agent_benchmark/sec_filing_gemma_ollama.py"),
-    ("extractor_prompt", None),
-    ("extractor_schema", None),
+    (
+        "extractor_prompt",
+        "agent_benchmark/sec_filing_gemma_extractor_prompt.py",
+    ),
+    (
+        "extractor_schema",
+        "agent_benchmark/sec_filing_gemma_extractor_schema.py",
+    ),
     ("learner", "agent_benchmark/sec_filing_gemma_learner.py"),
     ("ledger", None),
     ("market_acquirer", None),

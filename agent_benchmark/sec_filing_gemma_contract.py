@@ -18,6 +18,19 @@ import math
 import re
 from typing import Any, Final
 
+from agent_benchmark.sec_filing_gemma_extractor_prompt import (
+    EXTRACTOR_SYSTEM_PROMPT,
+)
+from agent_benchmark.sec_filing_gemma_extractor_schema import (
+    ADVERSE_FLAG_NAMES,
+    COMPARATIVE_CHANGES,
+    CURRENT_IMPACTS,
+    DIMENSION_NAMES,
+    DOCUMENT_QUALITIES,
+    EXTRACTOR_SCHEMA_VERSION,
+    FLAG_NAMES,
+    build_extractor_json_schema,
+)
 from agent_benchmark.sec_session_calendar import (
     CALENDAR_ID as AUTHORITATIVE_CALENDAR_ID,
     EXPECTED_SESSIONS as AUTHORITATIVE_SESSION_DATES,
@@ -32,9 +45,11 @@ from agent_benchmark.sec_session_calendar import (
 CONTRACT_VERSION: Final[str] = "aapl-sec-filing-gemma-v1"
 CANDIDATE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-candidate-v2"
 STAGE_RECEIPT_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-stage-receipt-v1"
-EXTRACTOR_SCHEMA_VERSION: Final[str] = "sec-filing-extractor-v1"
 EXTRACTOR_REQUEST_VERSION: Final[str] = "issuer-relative-grounded-request-v1"
 PREPROCESSOR_VERSION: Final[str] = "issuer-relative-period-grounded-sentences-v1"
+REDACTED_INPUT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-redacted-input-event-v3"
+)
 LIVE_LESSON_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-live-lesson-v1"
 UNIVERSE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-corpus-universe-v1"
 CONTENT_MANIFEST_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-stage-content-v1"
@@ -96,43 +111,6 @@ STAGE_MODEL_CALL_CAPS: Final[dict[str, int]] = {
     "final": 12,
 }
 
-DIMENSION_NAMES: Final[tuple[str, ...]] = (
-    "demand",
-    "pricing_power",
-    "gross_margin",
-    "operating_cost_pressure",
-    "capital_allocation",
-    "liquidity",
-    "forward_guidance",
-    "supply_chain",
-    "legal_regulatory",
-    "management_uncertainty",
-)
-FLAG_NAMES: Final[tuple[str, ...]] = (
-    "new_material_risk",
-    "guidance_withdrawn",
-    "liquidity_stress",
-    "restructuring_or_impairment",
-    "internal_control_weakness",
-    "management_transition",
-)
-ADVERSE_FLAG_NAMES: Final[tuple[str, ...]] = FLAG_NAMES[:-1]
-CURRENT_IMPACTS: Final[frozenset[str]] = frozenset(
-    {"favorable", "neutral", "unfavorable", "mixed", "not_stated"}
-)
-COMPARATIVE_CHANGES: Final[frozenset[str]] = frozenset(
-    {
-        "improving",
-        "stable",
-        "deteriorating",
-        "mixed",
-        "not_comparable",
-        "not_stated",
-    }
-)
-DOCUMENT_QUALITIES: Final[frozenset[str]] = frozenset(
-    {"usable", "thin", "unusable"}
-)
 CANDIDATE_IDS: Final[tuple[str, ...]] = (
     "p50_e0",
     "p55_e0",
@@ -243,12 +221,96 @@ MANDATORY_IDENTITY_TERMS: Final[tuple[str, ...]] = (
     "xcode",
     "0000320193",
 )
-EXTRACTOR_SYSTEM_PROMPT: Final[str] = (
-    "Extract only evidence-grounded relative business conditions from the anonymized "
-    "current periodic filing and its optional anonymized prior same-form filing. Use "
-    "only supplied C and P sentence identifiers. Return exactly the required JSON "
-    "schema. Do not infer or name the issuer, date, security, price, return, forecast, "
-    "benchmark, or trading action."
+# Historical/current leadership terms are deliberately broader than issuer and
+# product identities. SEC narrative commonly uses a surname alone, so keeping
+# only full names would leak the speaker identity. Common surnames therefore
+# trade some semantic recall for fail-closed identity isolation.
+CANONICAL_EXECUTIVE_IDENTITY_TERMS: Final[tuple[str, ...]] = tuple(
+    sorted(
+        {
+            "adams",
+            "ahrendts",
+            "amelio",
+            "anderson",
+            "angela ahrendts",
+            "arthur levinson",
+            "avie tevanian",
+            "bertrand serlet",
+            "bob mansfield",
+            "cook",
+            "craig federighi",
+            "cue",
+            "dan riccio",
+            "daniel riccio",
+            "deirdre o'brien",
+            "eddy cue",
+            "edward cue",
+            "fadell",
+            "federighi",
+            "forstall",
+            "fred anderson",
+            "gil amelio",
+            "greg joswiak",
+            "gregory joswiak",
+            "heinen",
+            "ive",
+            "jackson",
+            "jeff williams",
+            "jeffrey williams",
+            "jobs",
+            "johny srouji",
+            "john sculley",
+            "john ternus",
+            "johnson",
+            "jon rubinstein",
+            "jonathan ive",
+            "jony ive",
+            "joswiak",
+            "katherine adams",
+            "kevan parekh",
+            "khan",
+            "levinson",
+            "lisa jackson",
+            "luca maestri",
+            "maestri",
+            "mansfield",
+            "markkula",
+            "michael scott",
+            "michael spindler",
+            "mike markkula",
+            "nancy heinen",
+            "o'brien",
+            "oppenheimer",
+            "parekh",
+            "peter oppenheimer",
+            "phil schiller",
+            "philip schiller",
+            "riccio",
+            "ron johnson",
+            "rubinstein",
+            "sabih khan",
+            "schiller",
+            "scott forstall",
+            "sculley",
+            "serlet",
+            "spindler",
+            "srouji",
+            "steve jobs",
+            "ternus",
+            "tevanian",
+            "tim cook",
+            "tony fadell",
+            "williams",
+        }
+    )
+)
+CANONICAL_IDENTITY_LEXICON: Final[tuple[str, ...]] = tuple(
+    sorted(
+        {
+            *MANDATORY_IDENTITY_TERMS,
+            *CANONICAL_EXECUTIVE_IDENTITY_TERMS,
+        }
+    )
 )
 _SPELLED_ABSOLUTE_TERMS = frozenset(
     {
@@ -444,6 +506,11 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+CANONICAL_IDENTITY_LEXICON_SHA256: Final[str] = canonical_sha256(
+    list(CANONICAL_IDENTITY_LEXICON)
+)
+
+
 def _canonical_json_text(value: Any) -> str:
     try:
         return json.dumps(
@@ -455,62 +522,6 @@ def _canonical_json_text(value: Any) -> str:
         )
     except (TypeError, ValueError) as exc:
         raise SecFilingGemmaContractError("Model payload must be finite JSON") from exc
-
-
-def build_extractor_json_schema() -> dict[str, Any]:
-    dimension_schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["current_impact", "change_vs_prior", "evidence_sentence_ids"],
-        "properties": {
-            "current_impact": {"type": "string", "enum": sorted(CURRENT_IMPACTS)},
-            "change_vs_prior": {"type": "string", "enum": sorted(COMPARATIVE_CHANGES)},
-            "evidence_sentence_ids": {
-                "type": "array",
-                "items": {"type": "string", "pattern": "^[CP][0-9]{4}$"},
-                "uniqueItems": True,
-            },
-        },
-    }
-    flag_schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["present", "evidence_sentence_ids"],
-        "properties": {
-            "present": {"type": "boolean"},
-            "evidence_sentence_ids": {
-                "type": "array",
-                "items": {"type": "string", "pattern": "^[CP][0-9]{4}$"},
-                "uniqueItems": True,
-            },
-        },
-    }
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["schema_version", "document_quality", "dimensions", "flags"],
-        "properties": {
-            "schema_version": {"const": EXTRACTOR_SCHEMA_VERSION},
-            "document_quality": {
-                "type": "string",
-                "enum": sorted(DOCUMENT_QUALITIES),
-            },
-            "dimensions": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": list(DIMENSION_NAMES),
-                "properties": {
-                    name: copy.deepcopy(dimension_schema) for name in DIMENSION_NAMES
-                },
-            },
-            "flags": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": list(FLAG_NAMES),
-                "properties": {name: copy.deepcopy(flag_schema) for name in FLAG_NAMES},
-            },
-        },
-    }
 
 
 def build_extractor_model_payload(sentences: Sequence[Mapping[str, str]]) -> dict[str, Any]:
@@ -542,6 +553,10 @@ def build_redacted_input_manifest(
     accession_number: str,
     corpus_universe_sha256: str,
     model_payload_sha256: str,
+    preprocessed_event_sha256: str,
+    owned_preprocessing_receipt_sha256: str,
+    sec_reader_receipt_sha256: str,
+    carry_in_reader_receipt_sha256: str | None,
     universe_manifest: Mapping[str, Any],
     stage_content_manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -573,13 +588,40 @@ def build_redacted_input_manifest(
             "Redacted-input event accession is outside its authorized stage"
         )
     payload_hash = _sha256(model_payload_sha256, "model_payload_sha256")
+    preprocessed_hash = _sha256(
+        preprocessed_event_sha256,
+        "preprocessed_event_sha256",
+    )
+    preprocessing_receipt_hash = _sha256(
+        owned_preprocessing_receipt_sha256,
+        "owned_preprocessing_receipt_sha256",
+    )
+    sec_reader_hash = _sha256(
+        sec_reader_receipt_sha256,
+        "sec_reader_receipt_sha256",
+    )
+    if artifact_stage == "development":
+        if carry_in_reader_receipt_sha256 is not None:
+            raise SecFilingGemmaContractError(
+                "Development redacted inputs cannot claim a carry-in reader receipt"
+            )
+        carry_in_reader_hash: str | None = None
+    else:
+        carry_in_reader_hash = _sha256(
+            carry_in_reader_receipt_sha256,
+            "carry_in_reader_receipt_sha256",
+        )
     body = {
-        "schema_version": "aapl-sec-gemma-redacted-input-event-v2",
+        "schema_version": REDACTED_INPUT_SCHEMA_VERSION,
         "artifact_stage": artifact_stage,
         "accession_number": accession_number,
         "corpus_universe_sha256": universe_hash,
         "content_manifest_sha256": content_hash,
         "model_payload_sha256": payload_hash,
+        "preprocessed_event_sha256": preprocessed_hash,
+        "owned_preprocessing_receipt_sha256": preprocessing_receipt_hash,
+        "sec_reader_receipt_sha256": sec_reader_hash,
+        "carry_in_reader_receipt_sha256": carry_in_reader_hash,
         "isolation_scope": "one_current_filing_and_its_immediate_prior_only",
     }
     return {**body, "redacted_input_manifest_sha256": canonical_sha256(body)}
@@ -591,6 +633,10 @@ def validate_redacted_input_manifest(
     universe_manifest: Mapping[str, Any],
     stage_content_manifest: Mapping[str, Any],
     expected_manifest_sha256: str,
+    expected_preprocessed_event_sha256: str,
+    expected_owned_preprocessing_receipt_sha256: str,
+    expected_sec_reader_receipt_sha256: str,
+    expected_carry_in_reader_receipt_sha256: str | None,
 ) -> str:
     value = _expect_mapping(manifest, "redacted-input manifest")
     _expect_keys(
@@ -602,6 +648,10 @@ def validate_redacted_input_manifest(
             "corpus_universe_sha256",
             "content_manifest_sha256",
             "model_payload_sha256",
+            "preprocessed_event_sha256",
+            "owned_preprocessing_receipt_sha256",
+            "sec_reader_receipt_sha256",
+            "carry_in_reader_receipt_sha256",
             "isolation_scope",
             "redacted_input_manifest_sha256",
         },
@@ -612,11 +662,57 @@ def validate_redacted_input_manifest(
         accession_number=value["accession_number"],
         corpus_universe_sha256=value["corpus_universe_sha256"],
         model_payload_sha256=value["model_payload_sha256"],
+        preprocessed_event_sha256=value["preprocessed_event_sha256"],
+        owned_preprocessing_receipt_sha256=value[
+            "owned_preprocessing_receipt_sha256"
+        ],
+        sec_reader_receipt_sha256=value["sec_reader_receipt_sha256"],
+        carry_in_reader_receipt_sha256=value[
+            "carry_in_reader_receipt_sha256"
+        ],
         universe_manifest=universe_manifest,
         stage_content_manifest=stage_content_manifest,
     )
     if value != rebuilt:
         raise SecFilingGemmaContractError("Redacted-input manifest is not canonical")
+    expected_ancestry: dict[str, str | None] = {
+        "preprocessed_event_sha256": _sha256(
+            expected_preprocessed_event_sha256,
+            "expected_preprocessed_event_sha256",
+        ),
+        "owned_preprocessing_receipt_sha256": _sha256(
+            expected_owned_preprocessing_receipt_sha256,
+            "expected_owned_preprocessing_receipt_sha256",
+        ),
+        "sec_reader_receipt_sha256": _sha256(
+            expected_sec_reader_receipt_sha256,
+            "expected_sec_reader_receipt_sha256",
+        ),
+    }
+    if value["artifact_stage"] == "development":
+        if expected_carry_in_reader_receipt_sha256 is not None:
+            raise SecFilingGemmaContractError(
+                "Development redacted inputs cannot expect a carry-in reader receipt"
+            )
+        expected_ancestry["carry_in_reader_receipt_sha256"] = None
+    else:
+        expected_ancestry["carry_in_reader_receipt_sha256"] = _sha256(
+            expected_carry_in_reader_receipt_sha256,
+            "expected_carry_in_reader_receipt_sha256",
+        )
+    for field, expected in expected_ancestry.items():
+        observed = value[field]
+        if expected is None:
+            matches = observed is None
+        else:
+            matches = type(observed) is str and hmac.compare_digest(
+                observed,
+                expected,
+            )
+        if not matches:
+            raise SecFilingGemmaContractError(
+                "Redacted-input manifest differs from independently pinned owned ancestry"
+            )
     observed = _sha256(
         value["redacted_input_manifest_sha256"],
         "redacted_input_manifest_sha256",
@@ -706,6 +802,8 @@ def build_contract_manifest() -> dict[str, Any]:
             "schema_version": EXTRACTOR_SCHEMA_VERSION,
             "request_version": EXTRACTOR_REQUEST_VERSION,
             "preprocessor_version": PREPROCESSOR_VERSION,
+            "identity_lexicon": list(CANONICAL_IDENTITY_LEXICON),
+            "identity_lexicon_sha256": CANONICAL_IDENTITY_LEXICON_SHA256,
             "one_call_per_filing": True,
             "prior_same_form_in_same_prompt": True,
             "maximum_utf8_bytes": MAX_INPUT_BYTES,
@@ -1268,6 +1366,13 @@ def _candidate_body(
         "corpus_universe_semantic_sha256",
     )
     lexicon_hash = _sha256(identity_lexicon_sha256, "identity_lexicon_sha256")
+    if not hmac.compare_digest(
+        lexicon_hash,
+        CANONICAL_IDENTITY_LEXICON_SHA256,
+    ):
+        raise SecFilingGemmaContractError(
+            "Candidate identity lexicon differs from the frozen production lexicon"
+        )
     predecessor_registry_hash = _sha256(
         predecessor_reveal_registry_sha256,
         "predecessor_reveal_registry_sha256",
@@ -2310,6 +2415,10 @@ def validate_extractor_request(
     forbidden_identity_terms: Sequence[str],
     redacted_input_manifest: Mapping[str, Any],
     expected_redacted_input_manifest_sha256: str,
+    expected_preprocessed_event_sha256: str,
+    expected_owned_preprocessing_receipt_sha256: str,
+    expected_sec_reader_receipt_sha256: str,
+    expected_carry_in_reader_receipt_sha256: str | None,
 ) -> dict[str, Any]:
     """Validate a metadata envelope and return only the safe Ollama payload."""
 
@@ -2431,6 +2540,16 @@ def validate_extractor_request(
         universe_manifest=universe_manifest,
         stage_content_manifest=manifests[current["artifact_stage"]],
         expected_manifest_sha256=expected_redacted_input_manifest_sha256,
+        expected_preprocessed_event_sha256=(
+            expected_preprocessed_event_sha256
+        ),
+        expected_owned_preprocessing_receipt_sha256=(
+            expected_owned_preprocessing_receipt_sha256
+        ),
+        expected_sec_reader_receipt_sha256=expected_sec_reader_receipt_sha256,
+        expected_carry_in_reader_receipt_sha256=(
+            expected_carry_in_reader_receipt_sha256
+        ),
     )
     if value["redacted_input_manifest_sha256"] != redacted_manifest_hash:
         raise SecFilingGemmaContractError(
@@ -3463,6 +3582,9 @@ __all__ = [
     "BRIER_TARGET_COST_BPS",
     "CALENDAR_SOURCE_EVIDENCE_SCHEMA_VERSION",
     "CALENDAR_SOURCE_URLS",
+    "CANONICAL_EXECUTIVE_IDENTITY_TERMS",
+    "CANONICAL_IDENTITY_LEXICON",
+    "CANONICAL_IDENTITY_LEXICON_SHA256",
     "CANDIDATE_IDS",
     "CONTENT_MANIFEST_SCHEMA_VERSION",
     "CONTRACT_VERSION",
@@ -3479,6 +3601,7 @@ __all__ = [
     "MARKET_LOOKBACK_SESSIONS",
     "MAX_RUNTIME_SECONDS",
     "PREPROCESSOR_VERSION",
+    "REDACTED_INPUT_SCHEMA_VERSION",
     "REQUIRED_SOURCE_HASHES",
     "REQUIRED_STAGE_VERIFIER_CHECKS",
     "STAGE_MODEL_CALL_CAPS",

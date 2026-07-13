@@ -152,8 +152,6 @@ CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
 STAGE_EVIDENCE_OUTPUT_COMPONENT_ID: Final[str] = "owned_stage_evidence_document"
 STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH: Final[str] = "stage_evidence.json"
 _EXPECTED_UNRESOLVED_SOURCE_ROLES: Final[tuple[str, ...]] = (
-    "extractor_prompt",
-    "extractor_schema",
     "ledger",
     "market_acquirer",
 )
@@ -367,8 +365,8 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "transport and monotonic runtime are not independently attested"
     ),
     "source_identity": (
-        "resolved source roles replay against frozen paths, but extractor_prompt, "
-        "extractor_schema, ledger, and market_acquirer remain unresolved; "
+        "resolved source roles replay against frozen paths, but ledger and "
+        "market_acquirer remain unresolved; "
         "current files at loaded module paths do not yet attest the source bytes "
         "that created the executing code objects"
     ),

@@ -21,6 +21,7 @@ import agent_benchmark.sec_filing_gemma_stage_runner as stage_runner_module
 
 from agent_benchmark.sec_audit_transport import ResponseAudit
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
@@ -117,7 +118,7 @@ def _candidate(registry: dict, sequence: int, *, salt: str) -> dict:
         calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
         corpus_universe_sha256=_digest(f"{salt}:universe"),
         corpus_universe_semantic_sha256=_digest(f"{salt}:semantic-universe"),
-        identity_lexicon_sha256=_digest(f"{salt}:lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=registry["registry_sha256"],
         holdout_attempt_id=(
             f"aapl-sec-filing-gemma-v1-attempt-{sequence:03d}"
@@ -957,7 +958,7 @@ def _registered_development_root(
         corpus_universe_semantic_sha256=universe[
             "universe_semantic_sha256"
         ],
-        identity_lexicon_sha256=_digest(f"{salt}:lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=prior_registry["registry_sha256"],
         holdout_attempt_id=f"aapl-sec-filing-gemma-v1-attempt-{sequence:03d}",
         experiment_source_commit=_commit(f"{salt}:experiment-commit"),

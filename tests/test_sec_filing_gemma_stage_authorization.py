@@ -12,6 +12,7 @@ import pytest
 import agent_benchmark.sec_filing_gemma_stage_verifier as verifier_module
 
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
@@ -44,12 +45,20 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION,
+    DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION,
+    DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION,
+    DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION,
     DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
+    MODEL_EXECUTION_SOURCE_ROLES,
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     SEMANTIC_PREREQUISITE_SCHEMA_VERSION,
     STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
+    STAGE_MODEL_BATCH_COMPONENT_ID,
+    STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION,
+    STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION,
+    STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION,
     STORE_SCHEMA_VERSION,
     TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION,
     TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION,
@@ -61,8 +70,14 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
+    build_development_model_execution_abort,
+    build_development_model_execution_claim,
+    build_development_model_reader_receipt,
     build_development_root_carry_in_reader_receipt,
     build_stage_carry_in_reader_receipt,
+    build_stage_model_execution_abort,
+    build_stage_model_execution_claim,
+    build_stage_model_reader_receipt,
     build_stage_sec_execution_abort,
     build_stage_sec_execution_claim,
     build_stage_sec_reader_receipt,
@@ -72,8 +87,14 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_consumed_stage_output_receipt,
     validate_consumed_stage_store_state_pin,
     validate_development_root_carry_in_reader_receipt,
+    validate_development_model_execution_abort,
+    validate_development_model_execution_claim,
+    validate_development_model_reader_receipt,
     validate_reveal_store_current_tip_anchor_transition,
     validate_stage_carry_in_reader_receipt,
+    validate_stage_model_execution_abort,
+    validate_stage_model_execution_claim,
+    validate_stage_model_reader_receipt,
     validate_trusted_stage_content_authentication_receipt,
     _sec_component_plan_from_bundle,
 )
@@ -105,6 +126,25 @@ def _execution_source_hashes(sequence: int = 1) -> dict[str, str]:
     }
 
 
+def _model_execution_source_hashes(sequence: int = 1) -> dict[str, str]:
+    source_hashes = _sec_source_hashes(sequence)
+    return {role: source_hashes[role] for role in MODEL_EXECUTION_SOURCE_ROLES}
+
+
+def _development_model_source_hashes(state: dict) -> dict[str, str]:
+    source_hashes = state["latest_registry"]["entries"][-1][
+        "candidate_manifest"
+    ]["bindings"]["source_hashes"]
+    return {role: source_hashes[role] for role in MODEL_EXECUTION_SOURCE_ROLES}
+
+
+def _bundle_model_source_hashes(bundle: dict) -> dict[str, str]:
+    source_hashes = bundle["authenticated_store_snapshot"]["latest_registry"][
+        "entries"
+    ][-1]["candidate_manifest"]["bindings"]["source_hashes"]
+    return {role: source_hashes[role] for role in MODEL_EXECUTION_SOURCE_ROLES}
+
+
 def _development_source_record(
     year: int,
     serial: int,
@@ -129,9 +169,12 @@ def _development_universe() -> dict:
     records: list[dict] = []
     serial = 1
     for year in range(2000, 2026):
+        # Deliberately assign accession serials out of event-time order.  SEC
+        # acquisition is accession-sorted, while model events must be ordered
+        # by conservative availability session.
         for form, month in (
-            ("10-K", 2),
             ("10-Q", 5),
+            ("10-K", 2),
             ("10-Q", 8),
             ("10-Q", 11),
         ):
@@ -139,7 +182,7 @@ def _development_universe() -> dict:
                 _development_source_record(year, serial, form, month)
             )
             serial += 1
-    for form, month in (("10-Q", 2), ("10-Q", 5)):
+    for form, month in (("10-Q", 5), ("10-Q", 2)):
         records.append(_development_source_record(2026, serial, form, month))
         serial += 1
     return build_corpus_universe_manifest(
@@ -173,7 +216,7 @@ def _development_root_context() -> tuple[dict, dict, dict, dict]:
         corpus_universe_semantic_sha256=universe[
             "universe_semantic_sha256"
         ],
-        identity_lexicon_sha256=_h("development identity lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_h(
             "development predecessor registry"
         ),
@@ -244,7 +287,7 @@ def _sec_candidate(sequence: int) -> dict:
         calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
         corpus_universe_sha256=_h(f"universe:{sequence}"),
         corpus_universe_semantic_sha256=_h(f"universe-semantic:{sequence}"),
-        identity_lexicon_sha256=_h(f"lexicon:{sequence}"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_h("registry"),
         holdout_attempt_id=f"{CONTRACT_VERSION}-attempt-{sequence:03d}",
         experiment_source_commit=_commit(f"experiment:{sequence}"),
@@ -642,6 +685,12 @@ def _next_tip(
             "development_sec_reader_receipts",
             "development_sec_execution_aborts",
             "development_root_carry_in_reader_receipts",
+            "stage_model_execution_claims",
+            "stage_model_reader_receipts",
+            "stage_model_execution_aborts",
+            "development_model_execution_claims",
+            "development_model_reader_receipts",
+            "development_model_execution_aborts",
         )
     }
     maps.update(map_overrides)
@@ -864,7 +913,30 @@ def _bundle_for_state(state: dict) -> tuple[dict, dict, dict]:
 
 
 def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
-    candidate = _sec_candidate(1)
+    _root_child_state, _root_child_tip, _root_carry, root_binding = (
+        _development_root_carry_in_fixture()
+    )
+    root_state = root_binding["root_state"]
+    root_claim = root_binding["root_claim"]
+    root_reader = root_binding["root_reader"]
+    root_scope_hash = root_binding["root_scope_sha256"]
+    root_execution_sources = root_binding["root_execution_sources"]
+    candidate = root_state["latest_registry"]["entries"][0][
+        "candidate_manifest"
+    ]
+    root_registry_entry = root_state["latest_registry"]["entries"][0]
+    identity_request = {
+        "registry_sha256": root_state["latest_registry"]["registry_sha256"],
+        "registry_tip_sha256": root_state["latest_registry_pin"]["tip_sha256"],
+        "registered_entry_count": root_state["latest_registry_pin"][
+            "registered_entry_count"
+        ],
+        "historical_final_reveal_count_lower_bound": 10,
+        "attempt_id": root_claim["attempt_id"],
+        "candidate_sha256": root_claim["candidate_sha256"],
+        "candidate_design_sha256": root_claim["candidate_design_sha256"],
+        "registry_entry_sha256": root_registry_entry["entry_sha256"],
+    }
     parent_documents = [
         {
             "accession_number": "0000320193-23-000111",
@@ -911,8 +983,17 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         "max_sec_response_bytes": 1_000_000,
         "max_sec_acquisition_seconds": 30.0,
     }
-    parent_entry = _rewrite_entry(parent_raw, access=parent_access)
+    parent_entry = _rewrite_entry(
+        parent_raw,
+        access=parent_access,
+        identity_request=identity_request,
+    )
     parent_state = _state_from_entries([parent_entry], candidate)
+    parent_state["latest_registry"] = copy.deepcopy(root_state["latest_registry"])
+    parent_state["latest_registry_pin"] = copy.deepcopy(
+        root_state["latest_registry_pin"]
+    )
+    _rehash(parent_state, "state_sha256")
     parent_entry, parent_grant, parent_bundle = _bundle_for_state(parent_state)
     parent_request_hash = parent_entry["request_sha256"]
     parent_tip = build_reveal_store_current_tip_anchor(
@@ -920,11 +1001,13 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         revision=1,
         previous_tip_anchor_sha256=_h("parent prior tip"),
         authorization_bundles={parent_request_hash: parent_bundle},
+        development_sec_execution_claims={root_scope_hash: root_claim},
+        development_sec_reader_receipts={root_scope_hash: root_reader},
     )
     parent_claim = build_stage_sec_execution_claim(
         parent_bundle,
         independent_current_tip_anchor=parent_tip,
-        execution_source_hashes=_execution_source_hashes(),
+        execution_source_hashes=root_execution_sources,
         sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
     )
     parent_claim_tip = _next_tip(
@@ -988,13 +1071,27 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         candidate_sha256_override=candidate["candidate_sha256"],
     )
     child_access = copy.deepcopy(child_raw["stage_access_manifest"])
-    child_document = {
-        "accession_number": "0000320193-24-000333",
-        "official_url": (
-            "https://www.sec.gov/Archives/edgar/data/320193/"
-            "000032019324000333/aapl-20240928.htm"
+    final_records = [
+        record
+        for record in root_binding["root_plan"]["corpus_universe_manifest"][
+            "records"
+        ]
+        if record["artifact_stage"] == "final"
+    ]
+    child_documents = sorted(
+        (
+            {
+                "accession_number": record["accession_number"],
+                "official_url": (
+                    "https://www.sec.gov/Archives/edgar/data/320193/"
+                    f"{record['accession_number'].replace('-', '')}/"
+                    f"{record['primary_document']}"
+                ),
+            }
+            for record in final_records
         ),
-    }
+        key=lambda document: document["accession_number"],
+    )
     child_access["sec_access_plan"] = {
         "selection_policy": "all_and_only_requested_stage_universe_primary_documents",
         "method": "GET",
@@ -1002,15 +1099,17 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         "redirects_permitted": False,
         "retries_permitted": False,
         "cache_substitution_permitted": False,
-        "document_count": 1,
+        "document_count": len(child_documents),
         "accessions_sha256": canonical_sha256(
-            [child_document["accession_number"]]
+            [document["accession_number"] for document in child_documents]
         ),
-        "official_urls_sha256": canonical_sha256([child_document["official_url"]]),
-        "documents": [child_document],
+        "official_urls_sha256": canonical_sha256(
+            [document["official_url"] for document in child_documents]
+        ),
+        "documents": child_documents,
     }
     child_access["budgets"] = {
-        "max_sec_requests": 1,
+        "max_sec_requests": len(child_documents),
         "max_sec_response_bytes": 1_000_000,
         "max_sec_acquisition_seconds": 30.0,
     }
@@ -1046,6 +1145,11 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         prerequisite_evidence_sha256=parent_evidence_hash,
     )
     child_state = _state_from_entries([parent_entry, child_entry], candidate)
+    child_state["latest_registry"] = copy.deepcopy(root_state["latest_registry"])
+    child_state["latest_registry_pin"] = copy.deepcopy(
+        root_state["latest_registry_pin"]
+    )
+    _rehash(child_state, "state_sha256")
     child_entry, child_grant, child_bundle = _bundle_for_state(child_state)
     child_request_hash = child_entry["request_sha256"]
     child_tip = build_reveal_store_current_tip_anchor(
@@ -1059,11 +1163,13 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         consumed_stage_output_receipts={parent_request_hash: parent_output},
         stage_sec_execution_claims={parent_request_hash: parent_claim},
         stage_sec_reader_receipts={parent_request_hash: parent_reader},
+        development_sec_execution_claims={root_scope_hash: root_claim},
+        development_sec_reader_receipts={root_scope_hash: root_reader},
     )
     child_claim = build_stage_sec_execution_claim(
         child_bundle,
         independent_current_tip_anchor=child_tip,
-        execution_source_hashes=_execution_source_hashes(),
+        execution_source_hashes=root_execution_sources,
         sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
     )
     child_claim_tip = _next_tip(
@@ -1124,6 +1230,9 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
             "reveal_store"
         ],
         "request_sha256": child_request_hash,
+        "root_scope_sha256": root_scope_hash,
+        "root_claim": root_claim,
+        "root_reader": root_reader,
     }
 
 
@@ -1495,6 +1604,106 @@ def _development_root_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         "child_claim": child_claim,
         "child_reader": child_reader,
         "child_claim_tip": child_claim_tip,
+        "root_state": root_state,
+        "root_reader_tip": root_reader_tip,
+        "root_plan": plan,
+        "root_execution_sources": execution_sources,
+    }
+
+
+def _model_byte_index(salt: str) -> list[dict]:
+    return [
+        {
+            "ordinal": 1,
+            "logical_id": "model-batch-manifest",
+            "relative_path": "model-batch-manifest.json",
+            "byte_count": 137,
+            "sha256": _h(f"{salt}:model batch manifest"),
+        }
+    ]
+
+
+def _stage_model_fixture(
+    stage: str = "intermediate",
+) -> tuple[dict, dict, dict, dict, dict]:
+    if stage == "intermediate":
+        state, sec_reader_tip, carry, binding = _development_root_carry_in_fixture()
+        carry_tip = _next_tip(
+            state,
+            sec_reader_tip,
+            development_root_carry_in_reader_receipts={
+                binding["request_sha256"]: carry
+            },
+        )
+    elif stage == "final":
+        state, sec_reader_tip, carry, binding = _final_carry_in_fixture()
+        carry_tip = _next_tip(
+            state,
+            sec_reader_tip,
+            stage_carry_in_reader_receipts={binding["request_sha256"]: carry},
+        )
+    else:
+        raise AssertionError(stage)
+    validate_reveal_store_current_tip_anchor_transition(sec_reader_tip, carry_tip)
+    request_hash = binding["request_sha256"]
+    bundle = carry_tip["authorization_bundles"][request_hash]
+    claim = build_stage_model_execution_claim(
+        bundle,
+        independent_current_tip_anchor=carry_tip,
+        execution_source_hashes=_bundle_model_source_hashes(bundle),
+    )
+    claim_tip = _next_tip(
+        state,
+        carry_tip,
+        stage_model_execution_claims={request_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(carry_tip, claim_tip)
+    byte_index = _model_byte_index(stage)
+    reader = build_stage_model_reader_receipt(
+        claim,
+        byte_index=byte_index,
+        complete_marker_sha256=_h(f"{stage}:model complete marker"),
+    )
+    return state, carry_tip, claim_tip, claim, {
+        "request_sha256": request_hash,
+        "reader": reader,
+        "byte_index": byte_index,
+        "complete_marker_sha256": _h(f"{stage}:model complete marker"),
+    }
+
+
+def _development_model_fixture() -> tuple[dict, dict, dict, dict, dict]:
+    _state, _tip, _carry, binding = _development_root_carry_in_fixture()
+    root_state = binding["root_state"]
+    root_reader_tip = binding["root_reader_tip"]
+    scope_hash = binding["root_scope_sha256"]
+    claim = build_development_model_execution_claim(
+        root_state,
+        development_root_scope_sha256=scope_hash,
+        independent_current_tip_anchor=root_reader_tip,
+        execution_source_hashes=_development_model_source_hashes(root_state),
+    )
+    claim_tip = _next_tip(
+        root_state,
+        root_reader_tip,
+        development_model_execution_claims={scope_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        root_reader_tip,
+        claim_tip,
+        authenticated_store_snapshot=root_state,
+    )
+    byte_index = _model_byte_index("development")
+    reader = build_development_model_reader_receipt(
+        claim,
+        byte_index=byte_index,
+        complete_marker_sha256=_h("development:model complete marker"),
+    )
+    return root_state, root_reader_tip, claim_tip, claim, {
+        "scope_sha256": scope_hash,
+        "reader": reader,
+        "byte_index": byte_index,
+        "complete_marker_sha256": _h("development:model complete marker"),
     }
 
 
@@ -3257,3 +3466,517 @@ def test_development_sec_maps_are_append_only_after_terminal_receipt() -> None:
             completed_tip,
             deleted_tip,
         )
+
+
+def test_intermediate_model_claim_binds_terminal_sec_carry_candidate_and_limits() -> None:
+    state, carry_tip, claim_tip, claim, binding = _stage_model_fixture()
+    request_hash = binding["request_sha256"]
+    bundle = carry_tip["authorization_bundles"][request_hash]
+    replay = build_stage_model_execution_claim(
+        bundle,
+        independent_current_tip_anchor=carry_tip,
+        execution_source_hashes=_bundle_model_source_hashes(bundle),
+    )
+    assert replay == claim
+    assert claim["schema_version"] == STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION
+    assert claim["authorized_stage"] == "intermediate"
+    assert claim["carry_in_kind"] == "development_root_carry_in"
+    assert claim["model_component_id"] == STAGE_MODEL_BATCH_COMPONENT_ID
+    assert claim["model_runtime_limits"]["model_call_count"] == len(
+        claim["sec_acquisition_accession_order"]
+    )
+    assert claim["model_runtime_limits"]["model_call_cap"] == 20
+    assert claim["identity_lexicon_sha256"] == CANONICAL_IDENTITY_LEXICON_SHA256
+    assert claim["event_count"] == len(claim["event_plan"])
+    assert [
+        (event["availability_session"], event["accession_number"])
+        for event in claim["event_plan"]
+    ] == sorted(
+        (event["availability_session"], event["accession_number"])
+        for event in claim["event_plan"]
+    )
+    assert [
+        event["accession_number"] for event in claim["event_plan"]
+    ] != claim["sec_acquisition_accession_order"]
+    acquisition_ordinal = {
+        accession: ordinal
+        for ordinal, accession in enumerate(
+            claim["sec_acquisition_accession_order"], start=1
+        )
+    }
+    assert [event["event_ordinal"] for event in claim["event_plan"]] == list(
+        range(1, claim["event_count"] + 1)
+    )
+    assert all(
+        event["sec_document_ordinal"]
+        == acquisition_ordinal[event["accession_number"]]
+        for event in claim["event_plan"]
+    )
+    assert claim["development_root_scope_sha256"] in carry_tip[
+        "development_sec_execution_claims"
+    ]
+    for field in (
+        "caller_supplied_path_permitted",
+        "filing_text_included",
+        "market_access_permitted",
+        "outcome_access_permitted",
+        "future_stage_access_permitted",
+        "paid_api_access_permitted",
+        "external_network_access_permitted",
+        "effect_may_be_repeated_after_indeterminate_crash",
+    ):
+        assert claim[field] is False
+    assert validate_stage_model_execution_claim(
+        claim,
+        independent_current_tip_anchor=claim_tip,
+    ) == claim["claim_sha256"]
+
+    no_carry_tip = _next_tip(
+        state,
+        carry_tip,
+        development_root_carry_in_reader_receipts={},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exactly one stage-correct carry",
+    ):
+        build_stage_model_execution_claim(
+            bundle,
+            independent_current_tip_anchor=no_carry_tip,
+            execution_source_hashes=_bundle_model_source_hashes(bundle),
+        )
+
+
+def test_stage_model_reader_and_abort_are_exact_distinct_terminals() -> None:
+    state, _carry_tip, claim_tip, claim, binding = _stage_model_fixture()
+    request_hash = binding["request_sha256"]
+    reader = binding["reader"]
+    assert reader["schema_version"] == STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION
+    for field in (
+        "development_root_scope_sha256",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "corpus_universe_sha256",
+        "sec_document_count",
+        "sec_acquisition_accession_order_sha256",
+        "event_count",
+        "event_plan_sha256",
+        "identity_lexicon_sha256",
+    ):
+        assert reader[field] == claim[field]
+    reader_tip = _next_tip(
+        state,
+        claim_tip,
+        stage_model_reader_receipts={request_hash: reader},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, reader_tip)
+    assert validate_stage_model_reader_receipt(
+        reader,
+        independent_current_tip_anchor=reader_tip,
+        byte_index=binding["byte_index"],
+        complete_marker_sha256=binding["complete_marker_sha256"],
+    ) == reader["receipt_sha256"]
+
+    abort = build_stage_model_execution_abort(
+        claim,
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    assert abort == build_stage_model_execution_abort(
+        claim,
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    assert abort["schema_version"] == STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION
+    abort_tip = _next_tip(
+        state,
+        claim_tip,
+        stage_model_execution_aborts={request_hash: abort},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, abort_tip)
+    assert validate_stage_model_execution_abort(
+        abort,
+        independent_current_tip_anchor=abort_tip,
+    ) == abort["abort_sha256"]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="both completed and aborted",
+    ):
+        _next_tip(
+            state,
+            claim_tip,
+            stage_model_reader_receipts={request_hash: reader},
+            stage_model_execution_aborts={request_hash: abort},
+        )
+
+
+def test_stage_model_rejects_source_and_claim_mutation() -> None:
+    state, carry_tip, _claim_tip, claim, binding = _stage_model_fixture()
+    request_hash = binding["request_sha256"]
+    bundle = carry_tip["authorization_bundles"][request_hash]
+    changed_sources = _bundle_model_source_hashes(bundle)
+    changed_sources[MODEL_EXECUTION_SOURCE_ROLES[0]] = _h("wrong model source")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="differ from the registered candidate",
+    ):
+        build_stage_model_execution_claim(
+            bundle,
+            independent_current_tip_anchor=carry_tip,
+            execution_source_hashes=changed_sources,
+        )
+
+    changed_claim = copy.deepcopy(claim)
+    changed_claim["model_runtime_limits"]["retries"] = 1
+    _rehash(changed_claim, "claim_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="frozen local-model limits",
+    ):
+        _next_tip(
+            state,
+            carry_tip,
+            stage_model_execution_claims={request_hash: changed_claim},
+        )
+
+
+def test_stage_model_rejects_rehashed_event_identity_and_root_mutations() -> None:
+    _state, carry_tip, claim_tip, claim, binding = _stage_model_fixture()
+    request_hash = binding["request_sha256"]
+
+    def reverse_chronology(value: dict) -> None:
+        value["event_plan"].reverse()
+        for ordinal, event in enumerate(value["event_plan"], start=1):
+            event["event_ordinal"] = ordinal
+
+    event_mutators = (
+        reverse_chronology,
+        lambda value: value["event_plan"][0].update(event_ordinal=99),
+        lambda value: value["event_plan"][0].update(
+            accession_number="0000320193-24-999999"
+        ),
+        lambda value: value["event_plan"][0].update(
+            form="10-Q" if value["event_plan"][0]["form"] == "10-K" else "10-K"
+        ),
+        lambda value: value["event_plan"][0].update(
+            availability_session="2024-12-31"
+        ),
+        lambda value: value["event_plan"][0].update(sec_document_ordinal=99),
+    )
+    mutators = [
+        *event_mutators,
+        lambda value: value.update(identity_lexicon_sha256=_h("forged lexicon")),
+        lambda value: value.update(
+            development_root_scope_sha256=_h("forged development root scope")
+        ),
+        lambda value: value.update(
+            development_sec_execution_claim_sha256=_h(
+                "forged development SEC root claim"
+            )
+        ),
+        lambda value: value.update(
+            development_sec_reader_receipt_sha256=_h(
+                "forged development SEC root reader"
+            )
+        ),
+    ]
+    for mutate in mutators:
+        forged_claim = copy.deepcopy(claim)
+        mutate(forged_claim)
+        if forged_claim["event_plan"] != claim["event_plan"]:
+            forged_claim["event_plan_sha256"] = canonical_sha256(
+                forged_claim["event_plan"]
+            )
+        _rehash(forged_claim, "claim_sha256")
+        forged_tip = copy.deepcopy(claim_tip)
+        forged_tip["stage_model_execution_claims"] = {
+            request_hash: forged_claim
+        }
+        _rehash(forged_tip, "tip_anchor_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_reveal_store_current_tip_anchor_transition(
+                carry_tip,
+                forged_tip,
+            )
+
+
+def test_active_stage_model_claim_blocks_output_and_wrong_terminal() -> None:
+    state, carry_tip, claim_tip, claim, binding = _stage_model_fixture()
+    request_hash = binding["request_sha256"]
+    bundle = carry_tip["authorization_bundles"][request_hash]
+    output = build_consumed_stage_output_receipt(
+        bundle,
+        stage_sec_execution_claim=carry_tip["stage_sec_execution_claims"][
+            request_hash
+        ],
+        stage_sec_reader_receipt=carry_tip["stage_sec_reader_receipts"][
+            request_hash
+        ],
+        **_output_binding(bundle["authorization_grant"], salt="model active"),
+    )
+    output_tip = _next_tip(
+        state,
+        claim_tip,
+        consumed_stage_output_receipts={request_hash: output},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="Active model execution claim blocks every transition",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(claim_tip, output_tip)
+
+    wrong_reader = copy.deepcopy(binding["reader"])
+    wrong_reader["request_sha256"] = _h("wrong request")
+    _rehash(wrong_reader, "receipt_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        _next_tip(
+            state,
+            claim_tip,
+            stage_model_reader_receipts={_h("wrong request"): wrong_reader},
+        )
+    assert claim["start_current_tip_anchor_sha256"] == carry_tip[
+        "tip_anchor_sha256"
+    ]
+
+
+def test_final_model_claim_uses_only_final_stage_carry() -> None:
+    _state, carry_tip, claim_tip, claim, binding = _stage_model_fixture("final")
+    assert claim["authorized_stage"] == "final"
+    assert claim["carry_in_kind"] == "stage_carry_in"
+    assert claim["model_runtime_limits"]["model_call_cap"] == 12
+    assert claim["carry_in_reader_receipt_sha256"] == carry_tip[
+        "stage_carry_in_reader_receipts"
+    ][binding["request_sha256"]]["receipt_sha256"]
+    assert validate_stage_model_execution_claim(
+        claim,
+        independent_current_tip_anchor=claim_tip,
+    ) == claim["claim_sha256"]
+
+
+def test_development_model_lifecycle_is_request_free_and_has_no_carry() -> None:
+    state, root_tip, claim_tip, claim, binding = _development_model_fixture()
+    scope_hash = binding["scope_sha256"]
+    replay = build_development_model_execution_claim(
+        state,
+        development_root_scope_sha256=scope_hash,
+        independent_current_tip_anchor=root_tip,
+        execution_source_hashes=_development_model_source_hashes(state),
+    )
+    assert replay == claim
+    assert claim["schema_version"] == DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION
+    assert claim["authorized_stage"] == "development"
+    assert claim["carry_in_required"] is False
+    assert claim["reveal_request_consumption_permitted"] is False
+    assert claim["consumption_ledger_mutation_permitted"] is False
+    assert claim["model_runtime_limits"]["model_call_cap"] == 80
+    assert claim["identity_lexicon_sha256"] == CANONICAL_IDENTITY_LEXICON_SHA256
+    assert claim["event_count"] == len(claim["event_plan"])
+    assert [
+        (event["availability_session"], event["accession_number"])
+        for event in claim["event_plan"]
+    ] == sorted(
+        (event["availability_session"], event["accession_number"])
+        for event in claim["event_plan"]
+    )
+    assert [
+        event["accession_number"] for event in claim["event_plan"]
+    ] != claim["sec_acquisition_accession_order"]
+    development_acquisition_ordinal = {
+        accession: ordinal
+        for ordinal, accession in enumerate(
+            claim["sec_acquisition_accession_order"], start=1
+        )
+    }
+    assert all(
+        event["sec_document_ordinal"]
+        == development_acquisition_ordinal[event["accession_number"]]
+        for event in claim["event_plan"]
+    )
+    assert validate_development_model_execution_claim(
+        claim,
+        independent_current_tip_anchor=claim_tip,
+    ) == claim["claim_sha256"]
+
+    reader = binding["reader"]
+    assert reader["schema_version"] == DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION
+    for field in (
+        "sec_document_count",
+        "sec_acquisition_accession_order_sha256",
+        "event_count",
+        "event_plan_sha256",
+        "identity_lexicon_sha256",
+    ):
+        assert reader[field] == claim[field]
+    reader_tip = _next_tip(
+        state,
+        claim_tip,
+        development_model_reader_receipts={scope_hash: reader},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, reader_tip)
+    assert validate_development_model_reader_receipt(
+        reader,
+        independent_current_tip_anchor=reader_tip,
+        byte_index=binding["byte_index"],
+        complete_marker_sha256=binding["complete_marker_sha256"],
+    ) == reader["receipt_sha256"]
+
+
+def test_development_model_claim_transition_rebuilds_every_candidate_model_source_binding() -> None:
+    state, root_tip, claim_tip, claim, binding = _development_model_fixture()
+    scope_hash = binding["scope_sha256"]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="requires the authenticated prior store snapshot",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(root_tip, claim_tip)
+
+    def change_source_map(value: dict) -> None:
+        value["execution_source_hashes"]["extractor"] = _h(
+            "forged development model extractor source"
+        )
+        value["execution_source_hashes_sha256"] = canonical_sha256(
+            value["execution_source_hashes"]
+        )
+
+    def change_runtime_limits(value: dict) -> None:
+        value["model_runtime_limits"]["read_timeout_seconds"] = 29
+        value["model_runtime_limits_sha256"] = canonical_sha256(
+            value["model_runtime_limits"]
+        )
+
+    def reverse_event_plan(value: dict) -> None:
+        value["event_plan"].reverse()
+        for ordinal, event in enumerate(value["event_plan"], start=1):
+            event["event_ordinal"] = ordinal
+        value["event_plan_sha256"] = canonical_sha256(value["event_plan"])
+
+    def change_event_field(value: dict, field: str, replacement: object) -> None:
+        value["event_plan"][0][field] = replacement
+        value["event_plan_sha256"] = canonical_sha256(value["event_plan"])
+
+    mutators = (
+        lambda value: value.update(candidate_sha256=_h("forged candidate")),
+        lambda value: value.update(
+            candidate_design_sha256=_h("forged candidate design")
+        ),
+        lambda value: value.update(
+            registry_entry_sha256=_h("forged candidate registry entry")
+        ),
+        lambda value: value.update(
+            candidate_source_hashes_sha256=_h("forged candidate sources")
+        ),
+        lambda value: value.update(model_name="gemma4:99b"),
+        lambda value: value.update(model_digest=_h("forged model digest")),
+        lambda value: value.update(
+            runtime_fingerprint_sha256=_h("forged runtime fingerprint")
+        ),
+        lambda value: value.update(
+            model_transport_sha256=_h("forged model transport")
+        ),
+        change_source_map,
+        lambda value: value.update(
+            execution_source_hashes_sha256=_h("forged source closure hash")
+        ),
+        lambda value: value.update(
+            execution_source_role_count=value["execution_source_role_count"] + 1
+        ),
+        change_runtime_limits,
+        reverse_event_plan,
+        lambda value: change_event_field(value, "event_ordinal", 99),
+        lambda value: change_event_field(
+            value,
+            "accession_number",
+            "0000320193-23-999999",
+        ),
+        lambda value: change_event_field(
+            value,
+            "form",
+            "10-Q" if value["event_plan"][0]["form"] == "10-K" else "10-K",
+        ),
+        lambda value: change_event_field(
+            value,
+            "availability_session",
+            "2023-12-29",
+        ),
+        lambda value: change_event_field(value, "sec_document_ordinal", 99),
+        lambda value: value.update(
+            identity_lexicon_sha256=_h("forged development identity lexicon")
+        ),
+    )
+    for mutate in mutators:
+        forged_claim = copy.deepcopy(claim)
+        mutate(forged_claim)
+        _rehash(forged_claim, "claim_sha256")
+        forged_tip = copy.deepcopy(claim_tip)
+        forged_tip["development_model_execution_claims"] = {
+            scope_hash: forged_claim
+        }
+        _rehash(forged_tip, "tip_anchor_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_reveal_store_current_tip_anchor_transition(
+                root_tip,
+                forged_tip,
+                authenticated_store_snapshot=state,
+            )
+
+
+def test_development_model_abort_and_chronology_are_fail_closed() -> None:
+    state, _root_tip, claim_tip, claim, binding = _development_model_fixture()
+    scope_hash = binding["scope_sha256"]
+    abort = build_development_model_execution_abort(
+        claim,
+        reason="claim_recovered_without_terminal_receipt",
+    )
+    assert abort["schema_version"] == DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION
+    abort_tip = _next_tip(
+        state,
+        claim_tip,
+        development_model_execution_aborts={scope_hash: abort},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, abort_tip)
+    assert validate_development_model_execution_abort(
+        abort,
+        independent_current_tip_anchor=abort_tip,
+    ) == abort["abort_sha256"]
+
+    child_state, child_tip, _carry, child_binding = (
+        _development_root_carry_in_fixture()
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="precede reveal-request consumption",
+    ):
+        build_development_model_execution_claim(
+            child_state,
+            development_root_scope_sha256=child_binding["root_scope_sha256"],
+            independent_current_tip_anchor=child_tip,
+            execution_source_hashes=_development_model_source_hashes(
+                child_state
+            ),
+        )
+
+
+def test_stage_and_development_model_claims_share_one_global_effect_slot() -> None:
+    state, carry_tip, _claim_tip, _claim, binding = _stage_model_fixture()
+    _root_state, _root_tip, development_claim_tip, development_claim, dev_binding = (
+        _development_model_fixture()
+    )
+    active_cross_tip = _next_tip(
+        state,
+        carry_tip,
+        development_model_execution_claims={
+            dev_binding["scope_sha256"]: development_claim
+        },
+    )
+    request_hash = binding["request_sha256"]
+    bundle = active_cross_tip["authorization_bundles"][request_hash]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="Another owned external effect is already active",
+    ):
+        build_stage_model_execution_claim(
+            bundle,
+            independent_current_tip_anchor=active_cross_tip,
+            execution_source_hashes=_bundle_model_source_hashes(bundle),
+        )
+    assert development_claim_tip["development_model_execution_claims"][
+        dev_binding["scope_sha256"]
+    ] == development_claim

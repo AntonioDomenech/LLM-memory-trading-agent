@@ -11,6 +11,7 @@ import pytest
 
 import agent_benchmark.sec_filing_gemma_reveal_registry as registry_module
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
     canonical_sha256,
@@ -65,7 +66,7 @@ def _candidate(
         calendar_sessions_sha256=session_calendar_sha256(EXPECTED_SESSIONS),
         corpus_universe_sha256=_digest(f"{evidence}:universe"),
         corpus_universe_semantic_sha256=_digest(f"{salt}:semantic-universe"),
-        identity_lexicon_sha256=_digest(f"{salt}:lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=(
             predecessor_registry["registry_sha256"]
             if bound_registry_sha256 is None

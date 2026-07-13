@@ -236,18 +236,32 @@ The frozen preprocessor is
 - contains no prices, returns, labels, actions, forecasts, or benchmark
   results.
 
+Executive-name removal combines a frozen historical/current leadership roster
+with bounded deterministic context rules for honorifics, leadership titles,
+title appositions, appointment transitions, and speech attribution. Those
+generic rules cover one-to-three capitalized tokens and a bounded set of
+one-or-two lowercase name particles. They are not general named-entity
+recognition: names with other casing or scripts, longer structures, unlisted
+particles/titles/verbs/transitions, or unrelated prose contexts are not
+guaranteed to be removed. Every accepted sentence must still pass the exact
+roster and bounded-context residual checks.
+
 The exact prompt, schema, preprocessor, model digest, generation options,
 calendar, audit, and implementation sources are part of the candidate
-identity. The identity also binds a checksum-bound contract-specific lexicon
-of known issuer/product/executive/location identities, the Ollama runtime
+identity. The identity also binds the exact contract-owned canonical lexicon
+and hash for known issuer/product/executive/location identities, while source
+identity binds the bounded generic context grammar, the Ollama runtime
 template/system/parameter fingerprint, the clean Git source commit, the
 source-tree hash, official calendar-source evidence, the exact session hash,
 both the reproducibility and semantic hashes of the sealed corpus universe,
 and every
 decision/security-critical dependency. Current/prior filing hashes and each
 exact model-payload hash are bound by a separate per-event redacted-input
-receipt. A fresh preprocessing worker receives only that current filing and
-its immediate prior same-form filing; it never receives the rest of the stage.
+receipt. Version 3 also binds the exact owned preprocessing receipt,
+preprocessed-event hash, SEC reader receipt, and, outside development, carry-in
+reader receipt. A fresh preprocessing worker receives only that current filing
+and its immediate prior same-form filing; it never receives the rest of the
+stage.
 Development cannot read or preprocess intermediate or final filing text.
 
 Filing identity, form, stage, availability, accession, and source hashes live
@@ -719,11 +733,11 @@ At the current implementation checkpoint:
   2000-2018 development filings from the complete candidate-bound corpus
   universe. It embeds that exact universe for recovery, fixes a 64 MiB raw-byte
   ceiling, and grants no reveal-request, outcome, market, model, future-stage,
-  or consumption-ledger authority. Current-tip anchor version 7 includes separate
-  append-only development claim, reader, and abort maps keyed by the root-scope
+  or consumption-ledger authority. Current-tip anchor version 8 includes
+  separate append-only development claim, reader, and abort maps keyed by the root-scope
   hash plus the dedicated development-root carry receipt map keyed by the
-  intermediate request. It permits only one globally active SEC effect across ordinary stage
-  requests and this root. Claiming the root leaves the registry, state, and
+  intermediate request. It permits only one globally active SEC effect across
+  ordinary stage requests and this root. Claiming the root leaves the registry, state, and
   consumption ledger unchanged. The owned root runner derives URLs and budgets
   only from the persisted claim, performs one strict no-cache/no-retry SEC
   acquisition, and seals raw and normalized filings, request receipts, the byte
@@ -739,6 +753,26 @@ At the current implementation checkpoint:
   refetching. Together with the separate carry finalizer, this proves a durable
   pre-reveal training-corpus root and its exact intermediate carry-in, but not
   yet the downstream preprocessing, Gemma, market, or stage-evidence ancestry;
+- current-tip version 8 also defines two separate append-only model-effect
+  lifecycles. Development model claims are keyed by the request-free root scope,
+  bind its terminal SEC root reader, and require no carry. Intermediate/final
+  model claims are keyed by consumed request, bind the terminal child SEC reader
+  and exactly the correct current-tip carry receipt. Both bind the SEC
+  acquisition order separately from a chronological event plan sorted by
+  availability session then accession. Every row binds its event ordinal,
+  accession, form, availability session, and mapped SEC-document ordinal.
+  Development derives this plan from its authenticated root universe;
+  intermediate/final additionally require exactly one terminal matching
+  development-root SEC claim and reader and derive their stage rows from that
+  candidate/registry-bound full universe. Both bind candidate
+  model/runtime/source identities, the canonical identity-lexicon hash, and
+  fixed limits, grant no
+  caller path, filing text, market, outcome, future-stage, paid-API, or external-
+  network authority, and share a single globally active model-effect exclusion.
+  Dedicated reader or terminal abort transitions are the only allowed successors
+  to an active model claim. These are pure authorization contracts only at this
+  checkpoint: the reveal store does not yet expose the owned claim/finalizer APIs,
+  and no model call has occurred;
 - the fixed verifier now produces a version-6 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
@@ -769,10 +803,30 @@ At the current implementation checkpoint:
   binds its map hash and count into both the claim and reader receipt. It checks
   the disk-source map again immediately before SEC I/O and receipt finalization.
   The new bounded stage runner is a distinct resolved and candidate-pinned
-  source owner. This still cannot prove that current disk bytes created every
-  already-running Python code object or exclude monkeypatching, so a fresh
-  owned startup/import attestation remains blocked. Four conceptual owners also remain unresolved:
-  extractor prompt, extractor schema, ledger, and market acquirer;
+  source owner. The extractor prompt and JSON schema now also have distinct
+  frozen repository owners instead of sharing an unresolved contract alias, and
+  the preprocessor exports the exact immutable production identity lexicon plus
+  its canonical hash and applies the bounded executive-context grammar above.
+  This still cannot prove that current disk bytes created
+  every already-running Python code object or exclude monkeypatching, so a fresh
+  owned startup/import attestation remains blocked. Two conceptual owners remain
+  unresolved: ledger and market acquirer;
+- the pure preprocessor now builds and independently replays a canonical owned
+  preprocessing receipt. It binds the development-root or stage-request scope,
+  candidate and model claim, exact SEC/carry reader ancestry, event identity,
+  current and optional prior normalized-byte descriptors, prior provenance,
+  frozen lexicon, bounded-context implementation source, preprocessed event,
+  and model payload.
+  Filing chronology remains independent of SEC acquisition-file ordinal. This
+  receipt performs no I/O and does not yet prove that the reveal store supplied
+  the bytes;
+- the Ollama client now has a strict two-request local runtime probe for the
+  fixed `/api/version` and `/api/show` endpoints. It seals and replays bounded
+  raw responses, derives the exact active model blob digest from the generated
+  Modelfile, and fingerprints canonical version/show semantics. Its hardened
+  transport inherits no proxy, redirect, retry, or pull behavior. All tests use
+  injected fake loopback responses; no real runtime probe or model call has run.
+  The probe is not yet connected to an owned model-batch claim/finalizer;
 - supplied learner matrices and targets must match the fold-bound feature,
   target, membership, count, and maturity identities before any deterministic
   refit. Intermediate stage identity remains explicitly blocked: recursive
@@ -836,14 +890,17 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is separately pinned extractor prompt/schema
-ownership plus an owned preprocessing and Ollama model-batch claim/receipt that
-binds the exact current-tip carry receipt into every relevant attempt. The
-request-only runner must derive all text and authority from the reveal store,
+The next implementation milestone is the reveal-store-owned preprocessing and
+Ollama model-batch runner/finalizer for both the request-free development root
+and consumed intermediate/final requests. It must bind the exact current-tip
+model claim and carry receipt into every relevant attempt. The request/scope-only
+runner must derive all text and authority from the reveal store,
 make exactly one bounded loopback call per filing, seal valid and invalid
 outputs without repair, and recover an already complete batch without another
-call. The same owned chain
-must then cover presealed market
+call. It must choose filing order by availability chronology, use carry bytes
+only for the first same-form filing in a later stage, use earlier same-stage
+bytes thereafter, and terminally abort rather than retry an orphaned call
+intent. The same owned chain must then cover presealed market
 reads, prediction sealing, and canonical stage-evidence assembly. A distinct
 zero-cost market acquirer must also preserve upstream provider bytes
 and a deterministic normalization receipt. This is required to turn the

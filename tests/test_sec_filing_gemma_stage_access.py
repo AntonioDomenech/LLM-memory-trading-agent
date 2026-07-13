@@ -10,6 +10,7 @@ from types import MappingProxyType
 import pytest
 
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
@@ -100,7 +101,7 @@ def _candidate(universe: dict) -> dict:
         corpus_universe_semantic_sha256=universe[
             "universe_semantic_sha256"
         ],
-        identity_lexicon_sha256=_h("identity-lexicon"),
+        identity_lexicon_sha256=CANONICAL_IDENTITY_LEXICON_SHA256,
         predecessor_reveal_registry_sha256=_h("predecessor-registry"),
         holdout_attempt_id=f"{CONTRACT_VERSION}-attempt-001",
         experiment_source_commit=_h("experiment-commit"),
