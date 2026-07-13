@@ -25,6 +25,7 @@ from typing import Any, Final
 from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
     REQUIRED_STAGE_VERIFIER_CHECKS,
+    build_stage_content_manifest,
     canonical_sha256,
     validate_candidate_manifest,
 )
@@ -36,6 +37,7 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
     DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION,
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
     validate_development_content_root_plan,
+    validate_prior_same_form_carry_in_scope,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     STAGE_EVIDENCE_SCHEMA_VERSION,
@@ -89,8 +91,11 @@ DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
 DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-sec-execution-abort-v1"
 )
+DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-root-carry-in-reader-receipt-v1"
+)
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v6"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v7"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -553,6 +558,62 @@ _DEVELOPMENT_SEC_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
         "abort_sha256",
     }
 )
+_DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "contract_version",
+            "receipt_kind",
+            "request_sha256",
+            "consumption_entry_sha256",
+            "consumption_entry_sequence",
+            "attempt_id",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "registered_entry_count",
+            "input_prerequisite_stage",
+            "authorized_stage",
+            "input_stage_evidence_sha256",
+            "stage_access_manifest_sha256",
+            "output_namespace",
+            "authorization_bundle_sha256",
+            "authorization_grant_sha256",
+            "grant_store_state_sha256",
+            "grant_consumption_ledger_sha256",
+            "grant_consumption_ledger_tip_sha256",
+            "child_sec_execution_claim_sha256",
+            "child_sec_reader_receipt_sha256",
+            "development_root_scope_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "development_content_root_plan_sha256",
+            "development_content_manifest_sha256",
+            "corpus_universe_sha256",
+            "corpus_universe_semantic_sha256",
+            "prerequisite_stage_artifact_sha256",
+            "prerequisite_external_seal_receipt_sha256",
+            "selection_policy",
+            "artifact_scope",
+            "carry_in_record_count",
+            "carry_in_records_sha256",
+            "carry_in_records",
+            "carry_in_byte_index",
+            "carry_in_byte_index_sha256",
+            "carry_in_byte_count_total",
+            "carry_in_complete_marker_sha256",
+            "reader_source_sha256",
+            "reader_output_recomputed_by_store",
+            "network_refetch_permitted",
+            "write_permitted",
+            "general_cross_stage_access_permitted",
+            "fresh_carry_in_provenance_claimed",
+            "receipt_sha256",
+        }
+    )
+)
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -577,6 +638,7 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "development_sec_execution_claims",
         "development_sec_reader_receipts",
         "development_sec_execution_aborts",
+        "development_root_carry_in_reader_receipts",
         "tip_anchor_sha256",
     }
 )
@@ -2726,6 +2788,104 @@ def _validated_development_sec_execution_aborts(
     return validated
 
 
+def _validated_development_root_carry_in_reader_receipts(
+    raw: Any,
+    *,
+    authorization_bundles: Mapping[str, Any],
+    sec_execution_claims: Mapping[str, Any],
+    sec_reader_receipts: Mapping[str, Any],
+    development_sec_execution_claims: Mapping[str, Any],
+    development_sec_reader_receipts: Mapping[str, Any],
+    development_sec_execution_aborts: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(
+        raw,
+        "current-tip development-root carry-in reader receipts",
+    )
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_request_sha256, raw_receipt in receipts.items():
+        request_hash = _sha256(
+            raw_request_sha256,
+            "development-root carry-in receipt map key",
+        )
+        receipt = _mapping(
+            raw_receipt,
+            f"development-root carry-in reader receipt {request_hash}",
+        )
+        _expect_keys(
+            receipt,
+            _DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_KEYS,
+            f"development-root carry-in reader receipt {request_hash}",
+        )
+        if (
+            receipt["schema_version"]
+            != DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "store_rehashed_intermediate_child_development_root_carry_in"
+            or receipt["request_sha256"] != request_hash
+            or receipt["authorized_stage"] != "intermediate"
+            or receipt["input_prerequisite_stage"] != "development"
+            or receipt["reader_output_recomputed_by_store"] is not True
+            or receipt["network_refetch_permitted"] is not False
+            or receipt["write_permitted"] is not False
+            or receipt["general_cross_stage_access_permitted"] is not False
+            or receipt["fresh_carry_in_provenance_claimed"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in reader receipt semantics changed"
+            )
+        _self_hash(
+            receipt,
+            "receipt_sha256",
+            "development-root carry-in reader receipt",
+        )
+        root_scope_hash = _sha256(
+            receipt["development_root_scope_sha256"],
+            "development-root carry-in root scope hash",
+        )
+        child_bundle = authorization_bundles.get(request_hash)
+        child_claim = sec_execution_claims.get(request_hash)
+        child_reader = sec_reader_receipts.get(request_hash)
+        root_claim = development_sec_execution_claims.get(root_scope_hash)
+        root_reader = development_sec_reader_receipts.get(root_scope_hash)
+        if root_scope_hash in development_sec_execution_aborts:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in cannot descend from an aborted root"
+            )
+        if any(
+            type(value) is not dict
+            for value in (
+                child_bundle,
+                child_claim,
+                child_reader,
+                root_claim,
+                root_reader,
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in receipt lost its persisted ancestry"
+            )
+        expected = build_development_root_carry_in_reader_receipt(
+            child_bundle,
+            stage_sec_execution_claim=child_claim,
+            stage_sec_reader_receipt=child_reader,
+            development_sec_execution_claim=root_claim,
+            development_sec_reader_receipt=root_reader,
+            carry_in_byte_index=receipt["carry_in_byte_index"],
+            carry_in_complete_marker_sha256=receipt[
+                "carry_in_complete_marker_sha256"
+            ],
+            reader_source_sha256=receipt["reader_source_sha256"],
+        )
+        if receipt != expected:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in receipt differs from its exact ancestry"
+            )
+        validated[request_hash] = receipt
+    return validated
+
+
 def validate_reveal_store_current_tip_anchor_structure(
     current_tip_anchor: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -2828,6 +2988,29 @@ def validate_reveal_store_current_tip_anchor_structure(
             ],
         )
     )
+    anchor["development_root_carry_in_reader_receipts"] = (
+        _validated_development_root_carry_in_reader_receipts(
+            anchor["development_root_carry_in_reader_receipts"],
+            authorization_bundles=anchor["authorization_bundles"],
+            sec_execution_claims=anchor["stage_sec_execution_claims"],
+            sec_reader_receipts=anchor["stage_sec_reader_receipts"],
+            development_sec_execution_claims=anchor[
+                "development_sec_execution_claims"
+            ],
+            development_sec_reader_receipts=anchor[
+                "development_sec_reader_receipts"
+            ],
+            development_sec_execution_aborts=anchor[
+                "development_sec_execution_aborts"
+            ],
+        )
+    )
+    if set(anchor["stage_carry_in_reader_receipts"]) & set(
+        anchor["development_root_carry_in_reader_receipts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final and development-root carry-in receipts cannot share a request"
+        )
     if set(anchor["stage_sec_reader_receipts"]) & set(
         anchor["stage_sec_execution_aborts"]
     ):
@@ -2871,6 +3054,7 @@ def build_reveal_store_current_tip_anchor(
     development_sec_execution_claims: Mapping[str, Any] | None = None,
     development_sec_reader_receipts: Mapping[str, Any] | None = None,
     development_sec_execution_aborts: Mapping[str, Any] | None = None,
+    development_root_carry_in_reader_receipts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the separately persisted CAS anchor for one exact store state."""
 
@@ -2967,6 +3151,25 @@ def build_reveal_store_current_tip_anchor(
         sec_reader_receipts=sec_receipts,
         consumed_stage_output_receipts=output_receipts,
     )
+    development_root_carry_in_receipts = (
+        _validated_development_root_carry_in_reader_receipts(
+            (
+                {}
+                if development_root_carry_in_reader_receipts is None
+                else development_root_carry_in_reader_receipts
+            ),
+            authorization_bundles=bundles,
+            sec_execution_claims=sec_claims,
+            sec_reader_receipts=sec_receipts,
+            development_sec_execution_claims=development_claims,
+            development_sec_reader_receipts=development_receipts,
+            development_sec_execution_aborts=development_aborts,
+        )
+    )
+    if set(carry_in_receipts) & set(development_root_carry_in_receipts):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final and development-root carry-in receipts cannot share a request"
+        )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -2991,6 +3194,9 @@ def build_reveal_store_current_tip_anchor(
         "development_sec_execution_claims": development_claims,
         "development_sec_reader_receipts": development_receipts,
         "development_sec_execution_aborts": development_aborts,
+        "development_root_carry_in_reader_receipts": (
+            development_root_carry_in_receipts
+        ),
     }
     return {**body, "tip_anchor_sha256": canonical_sha256(body)}
 
@@ -3205,6 +3411,110 @@ def validate_reveal_store_current_tip_anchor_transition(
             "Non-carry-in transition changed stage carry-in receipt membership"
         )
 
+    prior_development_root_carry_ins = prior[
+        "development_root_carry_in_reader_receipts"
+    ]
+    next_development_root_carry_ins = next_anchor[
+        "development_root_carry_in_reader_receipts"
+    ]
+    if any(
+        next_development_root_carry_ins.get(key) != value
+        for key, value in prior_development_root_carry_ins.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition removed or changed a development-root carry-in receipt"
+        )
+    development_root_carry_in_delta = len(
+        next_development_root_carry_ins
+    ) - len(prior_development_root_carry_ins)
+    if development_root_carry_in_delta not in {0, 1}:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one development-root carry-in receipt"
+        )
+    if development_root_carry_in_delta:
+        execution_maps_unchanged = all(
+            next_anchor[name] == prior[name]
+            for name in (
+                "stage_sec_execution_claims",
+                "stage_sec_reader_receipts",
+                "stage_sec_execution_aborts",
+                "development_sec_execution_claims",
+                "development_sec_reader_receipts",
+                "development_sec_execution_aborts",
+            )
+        )
+        if (
+            consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+            or carry_in_delta
+            or not execution_maps_unchanged
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in append changed authenticated store state"
+            )
+        request_hash = next(
+            iter(
+                set(next_development_root_carry_ins)
+                - set(prior_development_root_carry_ins)
+            )
+        )
+        receipt = next_development_root_carry_ins[request_hash]
+        root_scope_hash = receipt["development_root_scope_sha256"]
+        current_bindings = {
+            "grant_store_state_sha256": prior["state_sha256"],
+            "grant_consumption_ledger_sha256": prior[
+                "consumption_ledger_sha256"
+            ],
+            "grant_consumption_ledger_tip_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sequence": prior["consumed_request_count"],
+        }
+        if request_hash in prior_outputs:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in receipt must precede the same request's consumed-stage output receipt"
+            )
+        if (
+            request_hash not in prior_bundles
+            or request_hash not in prior["stage_sec_execution_claims"]
+            or request_hash not in prior["stage_sec_reader_receipts"]
+            or root_scope_hash not in prior["development_sec_execution_claims"]
+            or root_scope_hash not in prior["development_sec_reader_receipts"]
+            or root_scope_hash in prior["development_sec_execution_aborts"]
+            or any(
+                receipt[field] != expected
+                for field, expected in current_bindings.items()
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in does not bind prior terminal ancestry and the exact current grant tip"
+            )
+    elif set(next_development_root_carry_ins) != set(
+        prior_development_root_carry_ins
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Non-carry-in transition changed development-root carry-in membership"
+        )
+
     prior_development_claims = prior["development_sec_execution_claims"]
     next_development_claims = next_anchor["development_sec_execution_claims"]
     prior_development_receipts = prior["development_sec_reader_receipts"]
@@ -3310,6 +3620,7 @@ def validate_reveal_store_current_tip_anchor_transition(
             or pin_delta
             or output_delta
             or carry_in_delta
+            or development_root_carry_in_delta
             or development_delta_count
         ):
             raise SecFilingGemmaStageAuthorizationError(
@@ -3322,6 +3633,7 @@ def validate_reveal_store_current_tip_anchor_transition(
             or pin_delta
             or output_delta
             or carry_in_delta
+            or development_root_carry_in_delta
             or development_delta_count
         ):
             raise SecFilingGemmaStageAuthorizationError(
@@ -3414,6 +3726,7 @@ def validate_reveal_store_current_tip_anchor_transition(
             or pin_delta
             or output_delta
             or carry_in_delta
+            or development_root_carry_in_delta
             or sec_delta_count
         ):
             raise SecFilingGemmaStageAuthorizationError(
@@ -3426,6 +3739,7 @@ def validate_reveal_store_current_tip_anchor_transition(
             or pin_delta
             or output_delta
             or carry_in_delta
+            or development_root_carry_in_delta
             or sec_delta_count
         ):
             raise SecFilingGemmaStageAuthorizationError(
@@ -3517,6 +3831,9 @@ def validate_reveal_store_current_tip_anchor(
         ],
         development_sec_execution_aborts=observed[
             "development_sec_execution_aborts"
+        ],
+        development_root_carry_in_reader_receipts=observed[
+            "development_root_carry_in_reader_receipts"
         ],
     )
     if observed != expected:
@@ -4451,6 +4768,547 @@ def build_stage_sec_execution_abort(
     return {**body, "abort_sha256": canonical_sha256(body)}
 
 
+def _reconstruct_development_content_manifest_from_root(
+    development_sec_execution_claim: Mapping[str, Any],
+    development_sec_reader_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebuild the development content identity from only persisted root ancestry."""
+
+    root_claim = _mapping(
+        development_sec_execution_claim,
+        "development-root carry-in execution claim",
+    )
+    root_reader = _mapping(
+        development_sec_reader_receipt,
+        "development-root carry-in reader receipt",
+    )
+    plan = _mapping(
+        root_claim.get("development_content_root_plan"),
+        "development-root carry-in content plan",
+    )
+    sec_plan = _mapping(
+        plan.get("sec_access_plan"),
+        "development-root carry-in SEC plan",
+    )
+    documents_plan = sec_plan.get("documents")
+    if type(documents_plan) is not list or not documents_plan:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in has no exact root document plan"
+        )
+    root_index = _validated_sec_byte_index(root_reader.get("byte_index"))
+    expected_layout: list[tuple[str, str]] = []
+    for ordinal in range(1, len(documents_plan) + 1):
+        prefix = f"document-{ordinal:04d}"
+        expected_layout.extend(
+            (
+                (f"{prefix}-raw", f"{prefix}.raw"),
+                (f"{prefix}-normalized", f"{prefix}.normalized.txt"),
+            )
+        )
+    expected_layout.extend(
+        (
+            ("request-receipts-json", "request-receipts.json"),
+            ("byte-manifest-json", "byte-manifest.json"),
+            ("corpus-universe-json", "corpus-universe.json"),
+            (
+                "development-content-manifest-json",
+                "development-content-manifest.json",
+            ),
+        )
+    )
+    if [
+        (item["logical_id"], item["relative_path"]) for item in root_index
+    ] != expected_layout:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in ancestry has an inexact root byte layout"
+        )
+    rows_by_logical_id = {item["logical_id"]: item for item in root_index}
+    content_documents: list[dict[str, Any]] = []
+    for ordinal, raw_document in enumerate(documents_plan, start=1):
+        document = _mapping(
+            raw_document,
+            f"development-root carry-in document {ordinal}",
+        )
+        raw_row = rows_by_logical_id[f"document-{ordinal:04d}-raw"]
+        normalized_row = rows_by_logical_id[
+            f"document-{ordinal:04d}-normalized"
+        ]
+        content_documents.append(
+            {
+                "accession_number": document.get("accession_number"),
+                "primary_document_sha256": raw_row["sha256"],
+                "normalized_text_sha256": normalized_row["sha256"],
+                "primary_document_bytes": raw_row["byte_count"],
+                "normalized_text_bytes": normalized_row["byte_count"],
+            }
+        )
+    universe = _mapping(
+        plan.get("corpus_universe_manifest"),
+        "development-root carry-in corpus universe",
+    )
+    try:
+        content_manifest = build_stage_content_manifest(
+            artifact_stage="development",
+            corpus_universe_sha256=root_claim["corpus_universe_sha256"],
+            documents=content_documents,
+            universe_manifest=universe,
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in content manifest cannot be reconstructed"
+        ) from exc
+    if (
+        content_manifest["content_manifest_sha256"]
+        != root_reader.get("content_manifest_sha256")
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in content identity differs from its root receipt"
+        )
+    for logical_id, value, label in (
+        (
+            "corpus-universe-json",
+            universe,
+            "development-root carry-in universe bytes",
+        ),
+        (
+            "development-content-manifest-json",
+            content_manifest,
+            "development-root carry-in content-manifest bytes",
+        ),
+    ):
+        encoded = _encoded_store_snapshot(value)
+        row = rows_by_logical_id[logical_id]
+        if (
+            row["byte_count"] != len(encoded)
+            or row["sha256"] != hashlib.sha256(encoded).hexdigest()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                f"{label} differ from the persisted root reader index"
+            )
+    return content_manifest
+
+
+def build_development_root_carry_in_reader_receipt(
+    authorization_bundle: Mapping[str, Any],
+    *,
+    stage_sec_execution_claim: Mapping[str, Any],
+    stage_sec_reader_receipt: Mapping[str, Any],
+    development_sec_execution_claim: Mapping[str, Any],
+    development_sec_reader_receipt: Mapping[str, Any],
+    carry_in_byte_index: list[dict[str, Any]],
+    carry_in_complete_marker_sha256: str,
+    reader_source_sha256: str,
+) -> dict[str, Any]:
+    """Bind an intermediate request's exact two-text read from its development root."""
+
+    raw_bundle = _mapping(
+        authorization_bundle,
+        "development-root carry-in child authorization bundle",
+    )
+    raw_grant = _mapping(
+        raw_bundle.get("authorization_grant"),
+        "development-root carry-in child authorization grant",
+    )
+    request_hash = _sha256(
+        raw_grant.get("request_sha256"),
+        "development-root carry-in child request hash",
+    )
+    bundles = _validated_authorization_bundles({request_hash: raw_bundle})
+    child_bundle = bundles[request_hash]
+    child_grant = child_bundle["authorization_grant"]
+    child_claim = _validated_stage_sec_execution_claims(
+        {request_hash: stage_sec_execution_claim},
+        authorization_bundles=bundles,
+    )[request_hash]
+    child_reader = _validated_stage_sec_reader_receipts(
+        {request_hash: stage_sec_reader_receipt},
+        claims={request_hash: child_claim},
+    )[request_hash]
+    root_claim_input = _mapping(
+        development_sec_execution_claim,
+        "development-root carry-in root claim",
+    )
+    root_scope_hash = _sha256(
+        root_claim_input.get("development_root_scope_sha256"),
+        "development-root carry-in root scope hash",
+    )
+    root_claim = _validated_development_sec_execution_claims(
+        {root_scope_hash: root_claim_input},
+        authenticated_store_snapshot=child_bundle["authenticated_store_snapshot"],
+    )[root_scope_hash]
+    root_reader = _validated_development_sec_reader_receipts(
+        {root_scope_hash: development_sec_reader_receipt},
+        claims={root_scope_hash: root_claim},
+    )[root_scope_hash]
+    child_entry, child_request, child_access = _validated_latest_consumption(
+        child_bundle["authenticated_store_snapshot"],
+        expected_entry_sha256=child_grant["consumption_entry_sha256"],
+    )
+    if (
+        child_grant["stage"] != "intermediate"
+        or child_grant["prerequisite_stage"] != "development"
+        or child_request["stage"] != "intermediate"
+        or child_request["prerequisite_stage"] != "development"
+        or child_entry["stage"] != "intermediate"
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in is restricted to development-to-intermediate"
+        )
+    identity_bindings = {
+        "attempt_id": root_claim["attempt_id"],
+        "candidate_sha256": root_claim["candidate_sha256"],
+        "candidate_design_sha256": root_claim["candidate_design_sha256"],
+        "registry_entry_sha256": root_claim["registry_entry_sha256"],
+        "registry_sha256": root_claim["registry_sha256"],
+        "registry_tip_sha256": root_claim["registry_tip_sha256"],
+        "registered_entry_count": root_claim["registered_entry_count"],
+    }
+    if any(
+        child_request.get(field) != expected
+        for field, expected in identity_bindings.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in child crossed its registered root candidate"
+        )
+    child_access_candidate = _mapping(
+        child_access.get("candidate"),
+        "development-root carry-in child candidate",
+    )
+    if any(
+        child_access_candidate.get(field) != identity_bindings[field]
+        for field in ("attempt_id", "candidate_sha256", "candidate_design_sha256")
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in stage access crossed its root candidate"
+        )
+    child_ledger = child_bundle["authenticated_store_snapshot"][
+        "consumption_ledger"
+    ]
+    child_entries = child_ledger["entries"]
+    root_start_count = _strict_int(
+        root_claim["start_consumed_request_count"],
+        "development-root carry-in root start consumption count",
+    )
+    child_sequence = _strict_int(
+        child_grant["consumption_entry_sequence"],
+        "development-root carry-in child consumption sequence",
+        minimum=1,
+    )
+    if root_start_count >= child_sequence or root_start_count > len(child_entries):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in root did not predate child consumption"
+        )
+    expected_root_start_tip = (
+        child_ledger["chain"]["genesis_tip_sha256"]
+        if root_start_count == 0
+        else child_entries[root_start_count - 1]["entry_sha256"]
+    )
+    if root_claim["start_consumption_ledger_tip_sha256"] != expected_root_start_tip:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in root is not bound to the child's exact earlier ledger prefix"
+        )
+    if child_claim["execution_source_hashes"] != root_claim[
+        "execution_source_hashes"
+    ]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in child changed its registered execution bytes"
+        )
+    root_plan = root_claim["development_content_root_plan"]
+    root_provenance = root_plan["corpus_provenance"]
+    child_provenance = _mapping(
+        child_access.get("corpus_provenance"),
+        "development-root carry-in child corpus provenance",
+    )
+    frozen_base = _mapping(
+        child_provenance.get("frozen_base_universe"),
+        "development-root carry-in child frozen universe",
+    )
+    expected_frozen_base = {
+        "corpus_universe_sha256": root_claim["corpus_universe_sha256"],
+        "corpus_universe_semantic_sha256": root_claim[
+            "corpus_universe_semantic_sha256"
+        ],
+        "sec_catalog_artifact_sha256": root_provenance[
+            "sec_catalog_artifact_sha256"
+        ],
+        "calendar_source_evidence_sha256": root_provenance[
+            "calendar_source_evidence_sha256"
+        ],
+        "session_calendar_sha256": root_provenance["session_calendar_sha256"],
+    }
+    if any(
+        frozen_base.get(field) != expected
+        for field, expected in expected_frozen_base.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in child changed its frozen corpus identity"
+        )
+    content_manifest = _reconstruct_development_content_manifest_from_root(
+        root_claim,
+        root_reader,
+    )
+    evidence_pin = _mapping(
+        child_access.get("prerequisite_evidence_pin"),
+        "development-root carry-in prerequisite evidence pin",
+    )
+    _expect_keys(
+        evidence_pin,
+        {
+            "stage",
+            "content_manifest_sha256",
+            "stage_artifact_sha256",
+            "external_seal_receipt_sha256",
+        },
+        "development-root carry-in prerequisite evidence pin",
+    )
+    if (
+        evidence_pin["stage"] != "development"
+        or evidence_pin["content_manifest_sha256"]
+        != content_manifest["content_manifest_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in prerequisite pin differs from the root content"
+        )
+    try:
+        records = validate_prior_same_form_carry_in_scope(
+            child_access,
+            corpus_universe_manifest=root_plan["corpus_universe_manifest"],
+            prerequisite_content_manifest=content_manifest,
+            expected_prerequisite_stage="development",
+            expected_requested_stage="intermediate",
+            expected_prerequisite_stage_evidence_sha256=child_grant[
+                "prerequisite_stage_evidence_sha256"
+            ],
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in scope is not the exact canonical two-text read"
+        ) from exc
+    if len(records) != 2 or [record.get("form") for record in records] != [
+        "10-K",
+        "10-Q",
+    ]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in must contain exactly 10-K then 10-Q"
+        )
+    carry_plan = _mapping(
+        child_access.get("prior_same_form_carry_in"),
+        "development-root carry-in access plan",
+    )
+    documents_plan = root_plan["sec_access_plan"]["documents"]
+    source_ordinal_by_accession = {
+        document["accession_number"]: ordinal
+        for ordinal, document in enumerate(documents_plan, start=1)
+    }
+    root_rows_by_logical_id = {
+        item["logical_id"]: item for item in root_reader["byte_index"]
+    }
+    expected_copy_index: list[dict[str, Any]] = []
+    for copy_ordinal, record in enumerate(records, start=1):
+        source_ordinal = source_ordinal_by_accession.get(record["accession_number"])
+        source_row = root_rows_by_logical_id.get(
+            (
+                ""
+                if type(source_ordinal) is not int
+                else f"document-{source_ordinal:04d}-normalized"
+            )
+        )
+        if (
+            type(source_ordinal) is not int
+            or type(source_row) is not dict
+            or source_row.get("relative_path")
+            != f"document-{source_ordinal:04d}.normalized.txt"
+            or source_row.get("sha256") != record["normalized_text_sha256"]
+            or source_row.get("byte_count") != record["normalized_text_bytes"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development-root carry-in bytes differ from the persisted root"
+            )
+        expected_copy_index.append(
+            {
+                "ordinal": copy_ordinal,
+                "logical_id": f"carry-in-{copy_ordinal:04d}-normalized",
+                "relative_path": f"carry-in-{copy_ordinal:04d}.normalized.txt",
+                "byte_count": source_row["byte_count"],
+                "sha256": source_row["sha256"],
+            }
+        )
+    copied_index = _validated_sec_byte_index(carry_in_byte_index)
+    if copied_index != expected_copy_index:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in copied-byte index differs from its root bytes"
+        )
+    marker_hash = _sha256(
+        carry_in_complete_marker_sha256,
+        "development-root carry-in complete-marker hash",
+    )
+    source_hash = _sha256(
+        reader_source_sha256,
+        "development-root carry-in reader source hash",
+    )
+    if source_hash != child_claim["execution_source_hashes"].get("reveal_store"):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in reader source differs from child execution bytes"
+        )
+    body = {
+        "schema_version": DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": (
+            "store_rehashed_intermediate_child_development_root_carry_in"
+        ),
+        "request_sha256": request_hash,
+        "consumption_entry_sha256": child_grant["consumption_entry_sha256"],
+        "consumption_entry_sequence": child_grant["consumption_entry_sequence"],
+        "attempt_id": child_grant["attempt_id"],
+        "candidate_sha256": child_grant["candidate_sha256"],
+        "candidate_design_sha256": child_request["candidate_design_sha256"],
+        "registry_entry_sha256": child_grant["registry_entry_sha256"],
+        "registry_sha256": child_request["registry_sha256"],
+        "registry_tip_sha256": child_request["registry_tip_sha256"],
+        "registered_entry_count": child_request["registered_entry_count"],
+        "input_prerequisite_stage": child_grant["prerequisite_stage"],
+        "authorized_stage": child_grant["stage"],
+        "input_stage_evidence_sha256": child_grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": child_grant[
+            "stage_access_manifest_sha256"
+        ],
+        "output_namespace": child_grant["output_namespace"],
+        "authorization_bundle_sha256": child_bundle["bundle_sha256"],
+        "authorization_grant_sha256": child_grant["authorization_grant_sha256"],
+        "grant_store_state_sha256": child_grant["store_state_sha256"],
+        "grant_consumption_ledger_sha256": child_grant[
+            "consumption_ledger_sha256"
+        ],
+        "grant_consumption_ledger_tip_sha256": child_grant[
+            "consumption_ledger_tip_sha256"
+        ],
+        "child_sec_execution_claim_sha256": child_claim["claim_sha256"],
+        "child_sec_reader_receipt_sha256": child_reader["receipt_sha256"],
+        "development_root_scope_sha256": root_scope_hash,
+        "development_sec_execution_claim_sha256": root_claim["claim_sha256"],
+        "development_sec_reader_receipt_sha256": root_reader["receipt_sha256"],
+        "development_content_root_plan_sha256": root_claim[
+            "development_content_root_plan_sha256"
+        ],
+        "development_content_manifest_sha256": content_manifest[
+            "content_manifest_sha256"
+        ],
+        "corpus_universe_sha256": root_claim["corpus_universe_sha256"],
+        "corpus_universe_semantic_sha256": root_claim[
+            "corpus_universe_semantic_sha256"
+        ],
+        "prerequisite_stage_artifact_sha256": evidence_pin[
+            "stage_artifact_sha256"
+        ],
+        "prerequisite_external_seal_receipt_sha256": evidence_pin[
+            "external_seal_receipt_sha256"
+        ],
+        "selection_policy": carry_plan["selection_policy"],
+        "artifact_scope": carry_plan["artifact_scope"],
+        "carry_in_record_count": len(records),
+        "carry_in_records_sha256": canonical_sha256(records),
+        "carry_in_records": records,
+        "carry_in_byte_index": copied_index,
+        "carry_in_byte_index_sha256": canonical_sha256(copied_index),
+        "carry_in_byte_count_total": sum(
+            item["byte_count"] for item in copied_index
+        ),
+        "carry_in_complete_marker_sha256": marker_hash,
+        "reader_source_sha256": source_hash,
+        "reader_output_recomputed_by_store": True,
+        "network_refetch_permitted": False,
+        "write_permitted": False,
+        "general_cross_stage_access_permitted": False,
+        "fresh_carry_in_provenance_claimed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def validate_development_root_carry_in_reader_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    authenticated_store_snapshot: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    carry_in_byte_index: list[dict[str, Any]],
+    carry_in_complete_marker_sha256: str,
+    reader_source_sha256: str,
+) -> str:
+    """Require current-tip root ancestry and revalidate the copied development bytes."""
+
+    observed = _mapping(receipt, "development-root carry-in reader receipt")
+    _expect_keys(
+        observed,
+        _DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_KEYS,
+        "development-root carry-in reader receipt",
+    )
+    observed_hash = _self_hash(
+        observed,
+        "receipt_sha256",
+        "development-root carry-in reader receipt",
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        authenticated_store_snapshot,
+        independent_current_tip_anchor,
+    )
+    request_hash = _sha256(
+        observed.get("request_sha256"),
+        "development-root carry-in child request hash",
+    )
+    root_scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development-root carry-in root scope hash",
+    )
+    if current_tip["development_root_carry_in_reader_receipts"].get(
+        request_hash
+    ) != observed:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in receipt is not persisted at the current tip"
+        )
+    if root_scope_hash in current_tip["development_sec_execution_aborts"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in cannot descend from an aborted root"
+        )
+    child_bundle = current_tip["authorization_bundles"].get(request_hash)
+    child_claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+    child_reader = current_tip["stage_sec_reader_receipts"].get(request_hash)
+    root_claim = current_tip["development_sec_execution_claims"].get(
+        root_scope_hash
+    )
+    root_reader = current_tip["development_sec_reader_receipts"].get(
+        root_scope_hash
+    )
+    if any(
+        type(value) is not dict
+        for value in (
+            child_bundle,
+            child_claim,
+            child_reader,
+            root_claim,
+            root_reader,
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in receipt lost its persisted ancestry"
+        )
+    expected = build_development_root_carry_in_reader_receipt(
+        child_bundle,
+        stage_sec_execution_claim=child_claim,
+        stage_sec_reader_receipt=child_reader,
+        development_sec_execution_claim=root_claim,
+        development_sec_reader_receipt=root_reader,
+        carry_in_byte_index=carry_in_byte_index,
+        carry_in_complete_marker_sha256=carry_in_complete_marker_sha256,
+        reader_source_sha256=reader_source_sha256,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-root carry-in receipt differs from revalidated durable inputs"
+        )
+    return observed_hash
+
+
 def build_stage_carry_in_reader_receipt(
     authorization_bundle: Mapping[str, Any],
     *,
@@ -5119,6 +5977,7 @@ __all__ = [
     "DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION",
+    "DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
     "OWNED_SEC_RAW_BATCH_MAX_BYTES",
     "SEC_EXECUTION_RESOLVED_SOURCE_PATHS",
@@ -5140,6 +5999,7 @@ __all__ = [
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
     "build_development_sec_reader_receipt",
+    "build_development_root_carry_in_reader_receipt",
     "build_stage_carry_in_reader_receipt",
     "build_stage_sec_execution_abort",
     "build_stage_sec_execution_claim",
@@ -5150,6 +6010,7 @@ __all__ = [
     "validate_consumed_stage_authorization_grant",
     "validate_consumed_stage_output_receipt",
     "validate_consumed_stage_store_state_pin",
+    "validate_development_root_carry_in_reader_receipt",
     "validate_reveal_store_current_tip_anchor",
     "validate_reveal_store_current_tip_anchor_structure",
     "validate_reveal_store_current_tip_anchor_transition",

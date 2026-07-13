@@ -280,6 +280,7 @@ def _grant_request(
     sec_documents: list[dict] | None = None,
     prior_same_form_carry_in: dict | None = None,
     prerequisite_evidence_pin: dict | None = None,
+    corpus_provenance: dict | None = None,
 ) -> tuple[dict, dict]:
     prerequisite = "development" if stage == "intermediate" else "intermediate"
     attempt = candidate["bindings"]["holdout_attempt_id"]
@@ -326,6 +327,8 @@ def _grant_request(
         access_body["prerequisite_evidence_pin"] = copy.deepcopy(
             prerequisite_evidence_pin
         )
+    if corpus_provenance is not None:
+        access_body["corpus_provenance"] = copy.deepcopy(corpus_provenance)
     if include_sec_plan:
         documents = (
             [
@@ -994,13 +997,7 @@ def _registered_development_root(
     return registered, candidate, universe, plan
 
 
-def _write_fixed_development_sec_root(
-    store: SecFilingGemmaRevealStore,
-    claim: dict,
-    plan: dict,
-) -> tuple[Path, Path, list[dict], dict]:
-    """Persist a complete synthetic development batch without network access."""
-
+def _fixed_development_sec_root_batch(plan: dict):
     documents_plan = plan["sec_access_plan"]["documents"]
     budgets = plan["budgets"]
     transport_plan = {
@@ -1043,6 +1040,17 @@ def _write_fixed_development_sec_root(
         ],
         universe_manifest=plan["corpus_universe_manifest"],
     )
+    return batch, content_manifest
+
+
+def _write_fixed_development_sec_root(
+    store: SecFilingGemmaRevealStore,
+    claim: dict,
+    plan: dict,
+) -> tuple[Path, Path, list[dict], dict]:
+    """Persist a complete synthetic development batch without network access."""
+
+    batch, content_manifest = _fixed_development_sec_root_batch(plan)
     component_directory = (
         store.store_directory
         / STAGE_OUTPUTS_DIRECTORY_NAME
@@ -1130,6 +1138,175 @@ def _write_fixed_development_sec_root(
     marker_path = component_directory / SEC_BATCH_COMPLETE_MARKER_FILENAME
     marker_path.write_bytes(reveal_store_module._encoded_state(marker))
     return component_directory, marker_path, byte_index, content_manifest
+
+
+def _prepare_intermediate_development_root_carry_in_chain(
+    store: SecFilingGemmaRevealStore,
+    *,
+    salt: str,
+    root_after_child: bool = False,
+) -> dict:
+    registered, candidate, universe, plan = _registered_development_root(
+        store,
+        salt=salt,
+    )
+    if root_after_child:
+        _batch, content_manifest = _fixed_development_sec_root_batch(plan)
+    else:
+        root_claim = store.claim_owned_development_sec_root_execution(
+            development_content_root_plan=plan,
+            sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+        )["claim"]
+        root_directory, root_marker_path, _root_index, content_manifest = (
+            _write_fixed_development_sec_root(store, root_claim, plan)
+        )
+        root_reader = store._record_owned_development_sec_root_reader_output(
+            development_root_scope_sha256=plan["development_root_scope_sha256"],
+        )
+    carry_records = _prior_same_form_carry_ins(
+        universe,
+        content_manifest,
+        prerequisite_stage="development",
+        requested_stage="intermediate",
+        prerequisite_content_manifest_sha256=content_manifest[
+            "content_manifest_sha256"
+        ],
+    )
+    carry_scope = {
+        "selection_policy": (
+            "latest_prerequisite_stage_filing_of_each_requested_stage_form"
+        ),
+        "artifact_scope": "sealed_normalized_text_only",
+        "network_refetch_permitted": False,
+        "write_permitted": False,
+        "bound_by_prerequisite_stage_evidence_sha256": None,
+        "prerequisite_content_manifest_sha256": content_manifest[
+            "content_manifest_sha256"
+        ],
+        "record_count": len(carry_records),
+        "records_sha256": canonical_sha256(carry_records),
+        "records": carry_records,
+    }
+    development_evidence = _evidence(
+        "development",
+        candidate,
+        salt=f"{salt}-development-evidence",
+    )
+    carry_scope["bound_by_prerequisite_stage_evidence_sha256"] = (
+        _stage_evidence_hash(development_evidence)
+    )
+    intermediate_records = sorted(
+        (
+            record
+            for record in universe["records"]
+            if record["artifact_stage"] == "intermediate"
+        ),
+        key=lambda record: record["accession_number"],
+    )[:2]
+    intermediate_documents = [
+        _sec_plan_document(
+            record["accession_number"],
+            record["primary_document"],
+        )
+        for record in intermediate_records
+    ]
+    intermediate_request, intermediate_access = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=development_evidence,
+        include_sec_plan=True,
+        sec_documents=intermediate_documents,
+        prior_same_form_carry_in=carry_scope,
+        prerequisite_evidence_pin={
+            "stage": "development",
+            "content_manifest_sha256": content_manifest[
+                "content_manifest_sha256"
+            ],
+            "stage_artifact_sha256": _digest(
+                f"{salt}:development:stage-artifact"
+            ),
+            "external_seal_receipt_sha256": _digest(
+                f"{salt}:development:external-seal"
+            ),
+        },
+        corpus_provenance={
+            "frozen_base_universe": {
+                key: plan["corpus_provenance"][key]
+                for key in (
+                    "corpus_universe_sha256",
+                    "corpus_universe_semantic_sha256",
+                    "sec_catalog_artifact_sha256",
+                    "calendar_source_evidence_sha256",
+                    "session_calendar_sha256",
+                )
+            }
+        },
+    )
+    intermediate_bundle = _consume_with_grant(
+        store,
+        intermediate_request,
+        candidate,
+        development_evidence,
+        stage="intermediate",
+        access_manifest=intermediate_access,
+    )
+    if root_after_child:
+        root_claim = store.claim_owned_development_sec_root_execution(
+            development_content_root_plan=plan,
+            sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+        )["claim"]
+        root_directory, root_marker_path, _root_index, persisted_manifest = (
+            _write_fixed_development_sec_root(store, root_claim, plan)
+        )
+        assert persisted_manifest == content_manifest
+        root_reader = store._record_owned_development_sec_root_reader_output(
+            development_root_scope_sha256=plan["development_root_scope_sha256"],
+        )
+    child_claim, child_reader = _complete_fixed_sec_ancestry(
+        store,
+        intermediate_request["request_sha256"],
+        payloads=(
+            b"<html><body><p>Owned intermediate filing one.</p></body></html>",
+            b"<html><body><p>Owned intermediate filing two.</p></body></html>",
+        ),
+    )
+    root_document_ordinal_by_accession = {
+        document["accession_number"]: ordinal
+        for ordinal, document in enumerate(
+            plan["sec_access_plan"]["documents"],
+            start=1,
+        )
+    }
+    expected_carry_payloads = tuple(
+        (
+            root_directory
+            / (
+                "document-"
+                f"{root_document_ordinal_by_accession[record['accession_number']]:04d}"
+                ".normalized.txt"
+            )
+        ).read_bytes()
+        for record in carry_records
+    )
+    return {
+        "registered": registered,
+        "candidate": candidate,
+        "universe": universe,
+        "plan": plan,
+        "root_claim": root_claim,
+        "root_reader": root_reader,
+        "root_directory": root_directory,
+        "root_marker_path": root_marker_path,
+        "content_manifest": content_manifest,
+        "intermediate_request": intermediate_request,
+        "intermediate_access": intermediate_access,
+        "intermediate_bundle": intermediate_bundle,
+        "child_claim": child_claim,
+        "child_reader": child_reader,
+        "carry_records": carry_records,
+        "expected_carry_payloads": expected_carry_payloads,
+    }
 
 
 def _prepare_final_owned_carry_in_chain(
@@ -2965,6 +3142,358 @@ def test_owned_stage_output_finalizer_has_no_public_caller_mapping_api() -> None
     assert signature.parameters["request_sha256"].kind is (
         inspect.Parameter.KEYWORD_ONLY
     )
+
+
+def test_owned_development_root_carry_in_rejects_root_claimed_after_child(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="owned-development-root-carry-in-reverse-chronology",
+        root_after_child=True,
+    )
+    request = prepared["intermediate_request"]
+    request_hash = request["request_sha256"]
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    assert not component_directory.exists()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="root was not claimed before its child",
+    ):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert not component_directory.exists()
+    assert store.load_current_tip_anchor()[
+        "development_root_carry_in_reader_receipts"
+    ] == {}
+
+
+def test_owned_development_root_carry_in_rejects_child_output_retrofit(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="owned-development-root-carry-in-output-retrofit",
+    )
+    request = prepared["intermediate_request"]
+    request_hash = request["request_sha256"]
+    _prepare_fixed_stage_evidence_output(
+        store,
+        request,
+        prepared["candidate"],
+        salt="owned-development-root-carry-in-output-retrofit-evidence",
+    )
+    output_receipt = store._record_owned_stage_evidence_output(
+        request_sha256=request_hash,
+    )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    assert not component_directory.exists()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="cannot be added after child stage output",
+    ):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert not component_directory.exists()
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    tip = store.load_current_tip_anchor()
+    assert tip["consumed_stage_output_receipts"][request_hash] == output_receipt
+    assert tip["development_root_carry_in_reader_receipts"] == {}
+
+
+def test_owned_intermediate_development_root_carry_in_is_offline_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="owned-development-root-carry-in-happy",
+    )
+    request = prepared["intermediate_request"]
+    request_hash = request["request_sha256"]
+    state_bytes = store.state_path.read_bytes()
+
+    with patch.object(
+        stage_runner_module,
+        "_owned_transport_factory",
+        side_effect=AssertionError("offline carry-in must not construct transport"),
+    ):
+        receipt = store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    tip = store.load_current_tip_anchor()
+    assert tip["development_root_carry_in_reader_receipts"] == {
+        request_hash: receipt
+    }
+    assert tip["stage_carry_in_reader_receipts"] == {}
+    assert receipt["request_sha256"] == request_hash
+    assert receipt["authorized_stage"] == "intermediate"
+    assert receipt["input_prerequisite_stage"] == "development"
+    assert receipt["development_root_scope_sha256"] == prepared["plan"][
+        "development_root_scope_sha256"
+    ]
+    assert receipt["carry_in_records"] == prepared["carry_records"]
+    assert [record["form"] for record in receipt["carry_in_records"]] == [
+        "10-K",
+        "10-Q",
+    ]
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    assert sorted(path.name for path in component_directory.iterdir()) == [
+        "carry-in-0001.normalized.txt",
+        "carry-in-0002.normalized.txt",
+        reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPLETE_MARKER_FILENAME,
+    ]
+    assert tuple(
+        (
+            component_directory
+            / f"carry-in-{ordinal:04d}.normalized.txt"
+        ).read_bytes()
+        for ordinal in (1, 2)
+    ) == prepared["expected_carry_payloads"]
+    marker_bytes = (
+        component_directory
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPLETE_MARKER_FILENAME
+    ).read_bytes()
+    marker = json.loads(marker_bytes)
+    assert marker_bytes == reveal_store_module._encoded_state(marker)
+    assert (
+        marker["schema_version"]
+        == reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPLETE_MARKER_SCHEMA_VERSION
+    )
+    assert marker["component_id"] == (
+        reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_ID
+    )
+    assert marker["development_claim_sha256"] == prepared["root_claim"][
+        "claim_sha256"
+    ]
+    assert marker["development_sec_reader_receipt_sha256"] == prepared[
+        "root_reader"
+    ]["receipt_sha256"]
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    repeated = store._record_owned_development_root_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+    assert repeated == receipt
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+
+    _prepare_fixed_stage_evidence_output(
+        store,
+        request,
+        prepared["candidate"],
+        salt="owned-development-root-carry-in-post-carry-output",
+    )
+    output_receipt = store._record_owned_stage_evidence_output(
+        request_sha256=request_hash,
+    )
+    tip_after_output_bytes = store.current_tip_anchor_path.read_bytes()
+    assert store.load_current_tip_anchor()["consumed_stage_output_receipts"][
+        request_hash
+    ] == output_receipt
+    assert store._record_owned_development_root_carry_in_reader_output(
+        request_sha256=request_hash,
+    ) == receipt
+    assert store.current_tip_anchor_path.read_bytes() == tip_after_output_bytes
+
+    (
+        component_directory
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPLETE_MARKER_FILENAME
+    ).write_bytes(b'{"tampered_after_receipt":true}\n')
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    assert store.load_current_tip_anchor()[
+        "development_root_carry_in_reader_receipts"
+    ][request_hash] == receipt
+
+    shutil.rmtree(component_directory)
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    assert not component_directory.exists()
+
+    public_names = {
+        name for name, _value in inspect.getmembers(store) if not name.startswith("_")
+    }
+    assert "record_owned_development_root_carry_in_reader_output" not in public_names
+    signature = inspect.signature(
+        SecFilingGemmaRevealStore._record_owned_development_root_carry_in_reader_output
+    )
+    assert tuple(signature.parameters) == ("self", "request_sha256")
+
+
+@pytest.mark.parametrize("partial_artifact", ["copied_file", "marker"])
+def test_owned_development_root_carry_in_recovers_only_before_marker_commit(
+    tmp_path: Path,
+    partial_artifact: str,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt=f"owned-development-root-carry-in-recover-{partial_artifact}",
+    )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir()
+    if partial_artifact == "copied_file":
+        (component_directory / "carry-in-0001.normalized.txt").write_bytes(
+            b"interrupted partial carry-in bytes"
+        )
+    else:
+        (
+            component_directory
+            / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPLETE_MARKER_FILENAME
+        ).write_bytes(b'{"partial":')
+
+    receipt = store._record_owned_development_root_carry_in_reader_output(
+        request_sha256=prepared["intermediate_request"]["request_sha256"],
+    )
+
+    assert receipt["carry_in_records"] == prepared["carry_records"]
+    assert tuple(
+        (
+            component_directory
+            / f"carry-in-{ordinal:04d}.normalized.txt"
+        ).read_bytes()
+        for ordinal in (1, 2)
+    ) == prepared["expected_carry_payloads"]
+
+
+def test_owned_development_root_carry_in_recovers_valid_marker_before_receipt(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="owned-development-root-carry-in-marker-retry",
+    )
+    request_hash = prepared["intermediate_request"]["request_sha256"]
+    original_commit = store._commit_state_and_tip_locked
+
+    def crash_before_receipt(**kwargs: object) -> tuple[dict, dict]:
+        if kwargs.get("development_root_carry_in_reader_receipt") is not None:
+            raise SystemExit("simulated crash after carry marker")
+        return original_commit(**kwargs)
+
+    store._commit_state_and_tip_locked = crash_before_receipt
+    with pytest.raises(SystemExit, match="simulated crash after carry marker"):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    assert store.load_current_tip_anchor()[
+        "development_root_carry_in_reader_receipts"
+    ] == {}
+    store._commit_state_and_tip_locked = original_commit
+
+    receipt = store._record_owned_development_root_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+    assert store.load_current_tip_anchor()[
+        "development_root_carry_in_reader_receipts"
+    ][request_hash] == receipt
+
+
+def test_owned_development_root_carry_in_fails_closed_after_marker_tamper(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="owned-development-root-carry-in-sealed-tamper",
+    )
+    request_hash = prepared["intermediate_request"]["request_sha256"]
+    original_commit = store._commit_state_and_tip_locked
+
+    def crash_before_receipt(**kwargs: object) -> tuple[dict, dict]:
+        if kwargs.get("development_root_carry_in_reader_receipt") is not None:
+            raise SystemExit("simulated crash after carry marker")
+        return original_commit(**kwargs)
+
+    store._commit_state_and_tip_locked = crash_before_receipt
+    with pytest.raises(SystemExit):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    store._commit_state_and_tip_locked = original_commit
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    (component_directory / "carry-in-0001.normalized.txt").write_bytes(
+        b"tampered after complete marker"
+    )
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    assert store.load_current_tip_anchor()[
+        "development_root_carry_in_reader_receipts"
+    ] == {}
+
+
+def test_owned_development_root_carry_in_rejects_root_source_tamper(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="owned-development-root-carry-in-root-tamper",
+    )
+    first_record = prepared["carry_records"][0]
+    ordinal_by_accession = {
+        document["accession_number"]: ordinal
+        for ordinal, document in enumerate(
+            prepared["plan"]["sec_access_plan"]["documents"],
+            start=1,
+        )
+    }
+    source_path = prepared["root_directory"] / (
+        f"document-{ordinal_by_accession[first_record['accession_number']]:04d}"
+        ".normalized.txt"
+    )
+    source_path.write_bytes(b"tampered root normalized text")
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_development_root_carry_in_reader_output(
+            request_sha256=prepared["intermediate_request"]["request_sha256"],
+        )
+    assert store.load_current_tip_anchor()[
+        "development_root_carry_in_reader_receipts"
+    ] == {}
 
 
 def test_owned_final_carry_in_reader_is_request_only_durable_and_idempotent(

@@ -4,6 +4,7 @@ import copy
 from datetime import date
 from functools import lru_cache
 import hashlib
+import json
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     REQUIRED_STAGE_VERIFIER_CHECKS,
     build_candidate_manifest,
     build_corpus_universe_manifest,
+    build_stage_content_manifest,
     canonical_sha256,
     session_calendar_sha256,
 )
@@ -42,6 +44,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION,
+    DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
@@ -58,6 +61,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
+    build_development_root_carry_in_reader_receipt,
     build_stage_carry_in_reader_receipt,
     build_stage_sec_execution_abort,
     build_stage_sec_execution_claim,
@@ -67,6 +71,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_consumed_stage_authorization_grant,
     validate_consumed_stage_output_receipt,
     validate_consumed_stage_store_state_pin,
+    validate_development_root_carry_in_reader_receipt,
     validate_reveal_store_current_tip_anchor_transition,
     validate_stage_carry_in_reader_receipt,
     validate_trusted_stage_content_authentication_receipt,
@@ -636,6 +641,7 @@ def _next_tip(
             "development_sec_execution_claims",
             "development_sec_reader_receipts",
             "development_sec_execution_aborts",
+            "development_root_carry_in_reader_receipts",
         )
     }
     maps.update(map_overrides)
@@ -1121,6 +1127,377 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
     }
 
 
+@lru_cache(maxsize=1)
+def _development_root_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
+    root_state, plan, root_tip, execution_sources = _development_root_context()
+    root_claim = build_development_sec_execution_claim(
+        root_state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=root_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    root_scope_hash = plan["development_root_scope_sha256"]
+    root_claim_tip = _next_tip(
+        root_state,
+        root_tip,
+        development_sec_execution_claims={root_scope_hash: root_claim},
+    )
+    content_inputs: list[dict] = []
+    root_byte_index: list[dict] = []
+    root_normalized_by_accession: dict[str, tuple[int, str]] = {}
+    for document_ordinal, document in enumerate(
+        plan["sec_access_plan"]["documents"],
+        start=1,
+    ):
+        raw_bytes = 200 + document_ordinal
+        normalized_bytes = 100 + document_ordinal
+        raw_hash = _h(f"development raw {document['accession_number']}")
+        normalized_hash = _h(
+            f"development normalized {document['accession_number']}"
+        )
+        content_inputs.append(
+            {
+                "accession_number": document["accession_number"],
+                "primary_document_sha256": raw_hash,
+                "normalized_text_sha256": normalized_hash,
+                "primary_document_bytes": raw_bytes,
+                "normalized_text_bytes": normalized_bytes,
+            }
+        )
+        root_normalized_by_accession[document["accession_number"]] = (
+            normalized_bytes,
+            normalized_hash,
+        )
+        for logical_suffix, path_suffix, byte_count, digest in (
+            ("raw", "raw", raw_bytes, raw_hash),
+            ("normalized", "normalized.txt", normalized_bytes, normalized_hash),
+        ):
+            root_byte_index.append(
+                {
+                    "ordinal": len(root_byte_index) + 1,
+                    "logical_id": (
+                        f"document-{document_ordinal:04d}-{logical_suffix}"
+                    ),
+                    "relative_path": (
+                        f"document-{document_ordinal:04d}.{path_suffix}"
+                    ),
+                    "byte_count": byte_count,
+                    "sha256": digest,
+                }
+            )
+    content_manifest = build_stage_content_manifest(
+        artifact_stage="development",
+        corpus_universe_sha256=plan["corpus_universe_manifest"]["universe_sha256"],
+        documents=content_inputs,
+        universe_manifest=plan["corpus_universe_manifest"],
+    )
+
+    def encoded(value: dict) -> bytes:
+        return (
+            json.dumps(
+                value,
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+
+    for logical_id, relative_path, payload in (
+        (
+            "request-receipts-json",
+            "request-receipts.json",
+            b"synthetic request receipts",
+        ),
+        ("byte-manifest-json", "byte-manifest.json", b"synthetic byte manifest"),
+        (
+            "corpus-universe-json",
+            "corpus-universe.json",
+            encoded(plan["corpus_universe_manifest"]),
+        ),
+        (
+            "development-content-manifest-json",
+            "development-content-manifest.json",
+            encoded(content_manifest),
+        ),
+    ):
+        root_byte_index.append(
+            {
+                "ordinal": len(root_byte_index) + 1,
+                "logical_id": logical_id,
+                "relative_path": relative_path,
+                "byte_count": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    root_reader = build_development_sec_reader_receipt(
+        root_claim,
+        content_manifest_sha256=content_manifest["content_manifest_sha256"],
+        byte_index=root_byte_index,
+        complete_marker_sha256=_h("development root complete marker"),
+    )
+    root_reader_tip = _next_tip(
+        root_state,
+        root_claim_tip,
+        development_sec_reader_receipts={root_scope_hash: root_reader},
+    )
+
+    candidate = root_state["latest_registry"]["entries"][0]["candidate_manifest"]
+    root_registry_entry = root_state["latest_registry"]["entries"][0]
+    child_raw = _entry(
+        sequence=1,
+        prior_tip=root_state["consumption_ledger"]["chain"]["tip_sha256"],
+        stage="intermediate",
+        candidate_sha256_override=candidate["candidate_sha256"],
+    )
+    child_access = copy.deepcopy(child_raw["stage_access_manifest"])
+    universe = plan["corpus_universe_manifest"]
+    intermediate_records = sorted(
+        (
+            record
+            for record in universe["records"]
+            if record["artifact_stage"] == "intermediate"
+        ),
+        key=lambda record: (
+            record["availability_session"],
+            record["accession_number"],
+        ),
+    )
+    child_documents = sorted(
+        (
+            {
+                "accession_number": record["accession_number"],
+                "official_url": (
+                    "https://www.sec.gov/Archives/edgar/data/320193/"
+                    f"{record['accession_number'].replace('-', '')}/"
+                    f"{record['primary_document']}"
+                ),
+            }
+            for record in intermediate_records
+        ),
+        key=lambda document: document["accession_number"],
+    )
+    child_access["sec_access_plan"] = {
+        "selection_policy": "all_and_only_requested_stage_universe_primary_documents",
+        "method": "GET",
+        "network_scope": "official_sec_https_only",
+        "redirects_permitted": False,
+        "retries_permitted": False,
+        "cache_substitution_permitted": False,
+        "document_count": len(child_documents),
+        "accessions_sha256": canonical_sha256(
+            [document["accession_number"] for document in child_documents]
+        ),
+        "official_urls_sha256": canonical_sha256(
+            [document["official_url"] for document in child_documents]
+        ),
+        "documents": child_documents,
+    }
+    child_access["budgets"] = {
+        "max_sec_requests": len(child_documents),
+        "max_sec_response_bytes": 1_000_000,
+        "max_sec_acquisition_seconds": 30.0,
+    }
+    prerequisite_evidence_hash = _h("development stage evidence")
+    child_access["prerequisite_evidence_pin"] = {
+        "stage": "development",
+        "content_manifest_sha256": content_manifest["content_manifest_sha256"],
+        "stage_artifact_sha256": _h("development stage artifact"),
+        "external_seal_receipt_sha256": _h("development external seal"),
+    }
+    child_access["corpus_provenance"] = {
+        "frozen_base_universe": {
+            "corpus_universe_sha256": universe["universe_sha256"],
+            "corpus_universe_semantic_sha256": universe[
+                "universe_semantic_sha256"
+            ],
+            "sec_catalog_artifact_sha256": universe["catalog_artifact_sha256"],
+            "calendar_source_evidence_sha256": universe[
+                "calendar_artifact_sha256"
+            ],
+            "session_calendar_sha256": universe["calendar_sessions_sha256"],
+            "identity_role": "immutable_holdout_base",
+        }
+    }
+    content_by_accession = {
+        document["accession_number"]: document
+        for document in content_manifest["documents"]
+    }
+    carry_records: list[dict] = []
+    for form in ("10-K", "10-Q"):
+        first_requested = next(
+            record for record in intermediate_records if record["form"] == form
+        )
+        selected = max(
+            (
+                record
+                for record in universe["records"]
+                if record["form"] == form
+                and (
+                    record["availability_session"],
+                    record["accession_number"],
+                )
+                < (
+                    first_requested["availability_session"],
+                    first_requested["accession_number"],
+                )
+            ),
+            key=lambda record: (
+                record["availability_session"],
+                record["accession_number"],
+            ),
+        )
+        content_record = content_by_accession[selected["accession_number"]]
+        carry_records.append(
+            {
+                "accession_number": selected["accession_number"],
+                "form": selected["form"],
+                "availability_session": selected["availability_session"],
+                "artifact_stage": selected["artifact_stage"],
+                "source_record_sha256": selected["source_record_sha256"],
+                "normalized_text_sha256": content_record[
+                    "normalized_text_sha256"
+                ],
+                "normalized_text_bytes": content_record[
+                    "normalized_text_bytes"
+                ],
+                "content_record_sha256": canonical_sha256(content_record),
+                "content_manifest_sha256": content_manifest[
+                    "content_manifest_sha256"
+                ],
+            }
+        )
+    child_access["prior_same_form_carry_in"] = {
+        "selection_policy": "latest_prerequisite_stage_filing_of_each_requested_stage_form",
+        "artifact_scope": "sealed_normalized_text_only",
+        "network_refetch_permitted": False,
+        "write_permitted": False,
+        "bound_by_prerequisite_stage_evidence_sha256": (
+            prerequisite_evidence_hash
+        ),
+        "prerequisite_content_manifest_sha256": content_manifest[
+            "content_manifest_sha256"
+        ],
+        "record_count": 2,
+        "records_sha256": canonical_sha256(carry_records),
+        "records": carry_records,
+    }
+    child_access["scope"].update(
+        {
+            "prohibited_stages": ["development", "final"],
+            "general_cross_stage_access_permitted": False,
+            "exact_prior_same_form_carry_in_read_permitted": True,
+        }
+    )
+    identity_request = {
+        "registry_sha256": root_state["latest_registry"]["registry_sha256"],
+        "registry_tip_sha256": root_state["latest_registry_pin"]["tip_sha256"],
+        "registered_entry_count": root_state["latest_registry_pin"][
+            "registered_entry_count"
+        ],
+        "historical_final_reveal_count_lower_bound": 10,
+        "attempt_id": root_claim["attempt_id"],
+        "candidate_sha256": root_claim["candidate_sha256"],
+        "candidate_design_sha256": root_claim["candidate_design_sha256"],
+        "registry_entry_sha256": root_registry_entry["entry_sha256"],
+    }
+    child_entry = _rewrite_entry(
+        child_raw,
+        access=child_access,
+        identity_request=identity_request,
+        prerequisite_evidence_sha256=prerequisite_evidence_hash,
+    )
+    child_state = _state_from_entries([child_entry], candidate)
+    child_state["latest_registry"] = copy.deepcopy(root_state["latest_registry"])
+    child_state["latest_registry_pin"] = copy.deepcopy(
+        root_state["latest_registry_pin"]
+    )
+    _rehash(child_state, "state_sha256")
+    child_entry, child_grant, child_bundle = _bundle_for_state(child_state)
+    child_request_hash = child_entry["request_sha256"]
+    child_tip = build_reveal_store_current_tip_anchor(
+        child_state,
+        revision=root_reader_tip["revision"] + 1,
+        previous_tip_anchor_sha256=root_reader_tip["tip_anchor_sha256"],
+        authorization_bundles={child_request_hash: child_bundle},
+        development_sec_execution_claims={root_scope_hash: root_claim},
+        development_sec_reader_receipts={root_scope_hash: root_reader},
+    )
+    child_claim = build_stage_sec_execution_claim(
+        child_bundle,
+        independent_current_tip_anchor=child_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    child_claim_tip = _next_tip(
+        child_state,
+        child_tip,
+        stage_sec_execution_claims={child_request_hash: child_claim},
+    )
+    child_reader = build_stage_sec_reader_receipt(
+        child_claim,
+        byte_index=[
+            {
+                "ordinal": 1,
+                "logical_id": "intermediate-stage-byte",
+                "relative_path": "intermediate-stage-byte.raw",
+                "byte_count": 1,
+                "sha256": _h("intermediate stage byte"),
+            }
+        ],
+        complete_marker_sha256=_h("intermediate SEC marker"),
+    )
+    child_reader_tip = _next_tip(
+        child_state,
+        child_claim_tip,
+        stage_sec_reader_receipts={child_request_hash: child_reader},
+    )
+    copied_index = [
+        {
+            "ordinal": ordinal,
+            "logical_id": f"carry-in-{ordinal:04d}-normalized",
+            "relative_path": f"carry-in-{ordinal:04d}.normalized.txt",
+            "byte_count": root_normalized_by_accession[record["accession_number"]][
+                0
+            ],
+            "sha256": root_normalized_by_accession[record["accession_number"]][1],
+        }
+        for ordinal, record in enumerate(carry_records, start=1)
+    ]
+    receipt = build_development_root_carry_in_reader_receipt(
+        child_bundle,
+        stage_sec_execution_claim=child_claim,
+        stage_sec_reader_receipt=child_reader,
+        development_sec_execution_claim=root_claim,
+        development_sec_reader_receipt=root_reader,
+        carry_in_byte_index=copied_index,
+        carry_in_complete_marker_sha256=_h(
+            "development-root carry-in complete marker"
+        ),
+        reader_source_sha256=child_claim["execution_source_hashes"][
+            "reveal_store"
+        ],
+    )
+    return child_state, child_reader_tip, receipt, {
+        "byte_index": copied_index,
+        "complete_marker_sha256": _h(
+            "development-root carry-in complete marker"
+        ),
+        "reader_source_sha256": child_claim["execution_source_hashes"][
+            "reveal_store"
+        ],
+        "request_sha256": child_request_hash,
+        "root_scope_sha256": root_scope_hash,
+        "root_claim": root_claim,
+        "root_reader": root_reader,
+        "child_claim": child_claim,
+        "child_reader": child_reader,
+        "child_claim_tip": child_claim_tip,
+    }
+
+
 def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     state, pin, entry, grant, current_tip = _grant_context()
     assert pin["schema_version"] == CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION
@@ -1187,6 +1564,370 @@ def test_final_carry_in_receipt_is_exact_dedicated_current_tip_append() -> None:
             independent_current_tip_anchor=next_tip,
             carry_in_byte_index=binding["byte_index"],
             carry_in_complete_marker_sha256=_h("substituted marker"),
+            reader_source_sha256=binding["reader_source_sha256"],
+        )
+
+
+def test_development_root_carry_in_is_exact_dedicated_intermediate_append() -> None:
+    state, reader_tip, receipt, binding = copy.deepcopy(
+        _development_root_carry_in_fixture()
+    )
+    request_hash = binding["request_sha256"]
+    next_tip = _next_tip(
+        state,
+        reader_tip,
+        development_root_carry_in_reader_receipts={request_hash: receipt},
+    )
+    prior, validated = validate_reveal_store_current_tip_anchor_transition(
+        reader_tip,
+        next_tip,
+    )
+
+    assert prior == reader_tip
+    assert validated == next_tip
+    assert receipt["schema_version"] == (
+        DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION
+    )
+    assert receipt["authorized_stage"] == "intermediate"
+    assert receipt["input_prerequisite_stage"] == "development"
+    assert receipt["development_root_scope_sha256"] == binding[
+        "root_scope_sha256"
+    ]
+    assert receipt["development_sec_execution_claim_sha256"] == binding[
+        "root_claim"
+    ]["claim_sha256"]
+    assert receipt["development_sec_reader_receipt_sha256"] == binding[
+        "root_reader"
+    ]["receipt_sha256"]
+    assert receipt["child_sec_execution_claim_sha256"] == binding["child_claim"][
+        "claim_sha256"
+    ]
+    assert receipt["child_sec_reader_receipt_sha256"] == binding["child_reader"][
+        "receipt_sha256"
+    ]
+    assert [record["form"] for record in receipt["carry_in_records"]] == [
+        "10-K",
+        "10-Q",
+    ]
+    assert receipt["carry_in_record_count"] == 2
+    assert receipt["network_refetch_permitted"] is False
+    assert receipt["write_permitted"] is False
+    assert receipt["general_cross_stage_access_permitted"] is False
+    assert receipt["fresh_carry_in_provenance_claimed"] is False
+    assert next_tip["stage_carry_in_reader_receipts"] == {}
+    assert next_tip["development_root_carry_in_reader_receipts"] == {
+        request_hash: receipt
+    }
+    assert validate_development_root_carry_in_reader_receipt(
+        receipt,
+        authenticated_store_snapshot=state,
+        independent_current_tip_anchor=next_tip,
+        carry_in_byte_index=binding["byte_index"],
+        carry_in_complete_marker_sha256=binding["complete_marker_sha256"],
+        reader_source_sha256=binding["reader_source_sha256"],
+    ) == receipt["receipt_sha256"]
+
+
+def test_development_root_carry_in_reconstructs_content_and_rejects_substitution() -> None:
+    state, reader_tip, receipt, binding = copy.deepcopy(
+        _development_root_carry_in_fixture()
+    )
+    child_bundle = reader_tip["authorization_bundles"][binding["request_sha256"]]
+    substituted_root_reader = copy.deepcopy(binding["root_reader"])
+    substituted_root_reader["content_manifest_sha256"] = _h(
+        "substituted development content manifest"
+    )
+    _rehash(substituted_root_reader, "receipt_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="content identity differs from its root receipt",
+    ):
+        build_development_root_carry_in_reader_receipt(
+            child_bundle,
+            stage_sec_execution_claim=binding["child_claim"],
+            stage_sec_reader_receipt=binding["child_reader"],
+            development_sec_execution_claim=binding["root_claim"],
+            development_sec_reader_receipt=substituted_root_reader,
+            carry_in_byte_index=binding["byte_index"],
+            carry_in_complete_marker_sha256=binding[
+                "complete_marker_sha256"
+            ],
+            reader_source_sha256=binding["reader_source_sha256"],
+        )
+
+    substituted_index = copy.deepcopy(binding["byte_index"])
+    substituted_index[0]["sha256"] = _h("substituted carry-in bytes")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="copied-byte index differs from its root bytes",
+    ):
+        build_development_root_carry_in_reader_receipt(
+            child_bundle,
+            stage_sec_execution_claim=binding["child_claim"],
+            stage_sec_reader_receipt=binding["child_reader"],
+            development_sec_execution_claim=binding["root_claim"],
+            development_sec_reader_receipt=binding["root_reader"],
+            carry_in_byte_index=substituted_index,
+            carry_in_complete_marker_sha256=binding[
+                "complete_marker_sha256"
+            ],
+            reader_source_sha256=binding["reader_source_sha256"],
+        )
+
+
+def test_development_root_carry_in_is_append_only_and_cannot_share_transition() -> None:
+    state, reader_tip, receipt, binding = copy.deepcopy(
+        _development_root_carry_in_fixture()
+    )
+    request_hash = binding["request_sha256"]
+    persisted_tip = _next_tip(
+        state,
+        reader_tip,
+        development_root_carry_in_reader_receipts={request_hash: receipt},
+    )
+    validate_reveal_store_current_tip_anchor_transition(reader_tip, persisted_tip)
+
+    replaced = copy.deepcopy(receipt)
+    replaced["carry_in_complete_marker_sha256"] = _h("replacement carry marker")
+    _rehash(replaced, "receipt_sha256")
+    replacement_tip = _next_tip(
+        state,
+        persisted_tip,
+        development_root_carry_in_reader_receipts={request_hash: replaced},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="removed or changed a development-root carry-in receipt",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            persisted_tip,
+            replacement_tip,
+        )
+
+    combined_tip = _next_tip(
+        state,
+        binding["child_claim_tip"],
+        stage_sec_reader_receipts={request_hash: binding["child_reader"]},
+        development_root_carry_in_reader_receipts={request_hash: receipt},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="dedicated tip-only transition",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            binding["child_claim_tip"],
+            combined_tip,
+        )
+
+
+def test_development_root_carry_in_must_precede_same_request_stage_output() -> None:
+    state, reader_tip, receipt, binding = copy.deepcopy(
+        _development_root_carry_in_fixture()
+    )
+    request_hash = binding["request_sha256"]
+    child_bundle = reader_tip["authorization_bundles"][request_hash]
+    child_output = build_consumed_stage_output_receipt(
+        child_bundle,
+        stage_sec_execution_claim=binding["child_claim"],
+        stage_sec_reader_receipt=binding["child_reader"],
+        **_output_binding(
+            child_bundle["authorization_grant"],
+            salt="intermediate output before development-root carry",
+        ),
+    )
+    output_first_tip = _next_tip(
+        state,
+        reader_tip,
+        consumed_stage_output_receipts={request_hash: child_output},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        reader_tip,
+        output_first_tip,
+    )
+    late_carry_tip = _next_tip(
+        state,
+        output_first_tip,
+        development_root_carry_in_reader_receipts={request_hash: receipt},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="must precede the same request's consumed-stage output receipt",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            output_first_tip,
+            late_carry_tip,
+        )
+
+    carry_first_tip = _next_tip(
+        state,
+        reader_tip,
+        development_root_carry_in_reader_receipts={request_hash: receipt},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        reader_tip,
+        carry_first_tip,
+    )
+    output_after_carry_tip = _next_tip(
+        state,
+        carry_first_tip,
+        consumed_stage_output_receipts={request_hash: child_output},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        carry_first_tip,
+        output_after_carry_tip,
+    )
+    assert validate_development_root_carry_in_reader_receipt(
+        receipt,
+        authenticated_store_snapshot=state,
+        independent_current_tip_anchor=output_after_carry_tip,
+        carry_in_byte_index=binding["byte_index"],
+        carry_in_complete_marker_sha256=binding["complete_marker_sha256"],
+        reader_source_sha256=binding["reader_source_sha256"],
+    ) == receipt["receipt_sha256"]
+
+
+def test_development_root_carry_in_rejects_abort_and_current_byte_mismatch() -> None:
+    state, reader_tip, receipt, binding = copy.deepcopy(
+        _development_root_carry_in_fixture()
+    )
+    request_hash = binding["request_sha256"]
+    persisted_tip = _next_tip(
+        state,
+        reader_tip,
+        development_root_carry_in_reader_receipts={request_hash: receipt},
+    )
+    abort = build_development_sec_execution_abort(
+        binding["root_claim"],
+        reason="durable_output_verification_failed",
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="cannot be both completed and aborted",
+    ):
+        _next_tip(
+            state,
+            reader_tip,
+            development_sec_execution_aborts={
+                binding["root_scope_sha256"]: abort
+            },
+            development_root_carry_in_reader_receipts={request_hash: receipt},
+        )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="differs from revalidated durable inputs",
+    ):
+        validate_development_root_carry_in_reader_receipt(
+            receipt,
+            authenticated_store_snapshot=state,
+            independent_current_tip_anchor=persisted_tip,
+            carry_in_byte_index=binding["byte_index"],
+            carry_in_complete_marker_sha256=_h("substituted current marker"),
+            reader_source_sha256=binding["reader_source_sha256"],
+        )
+
+
+def test_development_root_carry_in_rejects_transition_valid_reverse_chronology() -> None:
+    child_state, normal_reader_tip, _receipt, binding = copy.deepcopy(
+        _development_root_carry_in_fixture()
+    )
+    root_state, plan, root_tip, execution_sources = _development_root_context()
+    request_hash = binding["request_sha256"]
+    child_bundle = normal_reader_tip["authorization_bundles"][request_hash]
+    child_tip = build_reveal_store_current_tip_anchor(
+        child_state,
+        revision=root_tip["revision"] + 1,
+        previous_tip_anchor_sha256=root_tip["tip_anchor_sha256"],
+        authorization_bundles={request_hash: child_bundle},
+    )
+    validate_reveal_store_current_tip_anchor_transition(root_tip, child_tip)
+    child_claim = build_stage_sec_execution_claim(
+        child_bundle,
+        independent_current_tip_anchor=child_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    child_claim_tip = _next_tip(
+        child_state,
+        child_tip,
+        stage_sec_execution_claims={request_hash: child_claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        child_tip,
+        child_claim_tip,
+    )
+    child_reader = build_stage_sec_reader_receipt(
+        child_claim,
+        byte_index=binding["child_reader"]["byte_index"],
+        complete_marker_sha256=binding["child_reader"][
+            "complete_marker_sha256"
+        ],
+    )
+    child_reader_tip = _next_tip(
+        child_state,
+        child_claim_tip,
+        stage_sec_reader_receipts={request_hash: child_reader},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        child_claim_tip,
+        child_reader_tip,
+    )
+
+    reverse_root_claim = build_development_sec_execution_claim(
+        child_state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=child_reader_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    root_scope_hash = reverse_root_claim["development_root_scope_sha256"]
+    assert reverse_root_claim["start_consumed_request_count"] == 1
+    assert reverse_root_claim["start_consumption_ledger_tip_sha256"] == (
+        child_state["consumption_ledger"]["chain"]["tip_sha256"]
+    )
+    reverse_root_claim_tip = _next_tip(
+        child_state,
+        child_reader_tip,
+        development_sec_execution_claims={root_scope_hash: reverse_root_claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        child_reader_tip,
+        reverse_root_claim_tip,
+    )
+    reverse_root_reader = build_development_sec_reader_receipt(
+        reverse_root_claim,
+        content_manifest_sha256=binding["root_reader"][
+            "content_manifest_sha256"
+        ],
+        byte_index=binding["root_reader"]["byte_index"],
+        complete_marker_sha256=binding["root_reader"][
+            "complete_marker_sha256"
+        ],
+    )
+    reverse_root_reader_tip = _next_tip(
+        child_state,
+        reverse_root_claim_tip,
+        development_sec_reader_receipts={root_scope_hash: reverse_root_reader},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        reverse_root_claim_tip,
+        reverse_root_reader_tip,
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="root did not predate child consumption",
+    ):
+        build_development_root_carry_in_reader_receipt(
+            child_bundle,
+            stage_sec_execution_claim=child_claim,
+            stage_sec_reader_receipt=child_reader,
+            development_sec_execution_claim=reverse_root_claim,
+            development_sec_reader_receipt=reverse_root_reader,
+            carry_in_byte_index=binding["byte_index"],
+            carry_in_complete_marker_sha256=binding[
+                "complete_marker_sha256"
+            ],
             reader_source_sha256=binding["reader_source_sha256"],
         )
 
