@@ -326,7 +326,8 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "artifact_replay": (
         "detached SEC catalogue and document bytes replay within the current "
-        "envelope, but preprocessing, extraction and feature proofs, labels, the "
+        "envelope; the request-free development path now also owns preprocessing, "
+        "extraction, causal market prefixes, and feature proofs, but labels, the "
         "prelabel ledger, and full seal chain do not; parent lineage is bound to "
         "the prior consumed entry and grant, but that does not replace the missing "
         "end-to-end artifact derivation proofs"
@@ -336,15 +337,16 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "frozen session semantics from those bytes"
     ),
     "chronology": (
-        "prediction-row chronology is structurally replayed, but authoritative "
-        "event bindings and training rows are not yet derived from replayed filing "
-        "bytes through preprocessing, features, and matured-label evidence"
+        "development event bindings and feature rows are now derived chronologically "
+        "from replayed filing, model, and causal market evidence, but training rows "
+        "are not yet derived through owned matured-label evidence"
     ),
     "market_source_byte_reconciliation": (
         "the fixed provider responses now replay through a store-attested market "
-        "reader into canonical snapshots, but this detached stage verifier still "
-        "accepts caller-supplied market snapshots and no owned feature/label "
-        "assembler yet loads only the reader-bound canonical rows"
+        "reader into canonical snapshots, and the request-free development feature "
+        "assembler loads only reader-bound causal prefixes; this detached stage "
+        "verifier still accepts caller-supplied market snapshots and no owned label "
+        "or later-stage assembler has replaced that path"
     ),
     "model_attempt_replay": (
         "exact attempt bytes replay, but the independently expected payload is "
@@ -356,9 +358,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "prerequisite_evidence_identity": (
         "the directly invoked verifier replays raw catalogue and content bytes but "
-        "still omits preprocessing, feature, label, prelabel-ledger, and full "
-        "seal-chain proofs; the reveal store now pins trusted stage content and the "
-        "owned SEC batch requires a consumed grant, but remaining downstream readers "
+        "still omits owned label, prelabel-ledger, and full seal-chain proofs; the "
+        "request-free development feature projection now binds preprocessing, model "
+        "extraction, and causal market evidence, but remaining downstream readers "
         "are not yet grant-bound"
     ),
     "runtime_budget": (
@@ -374,8 +376,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     "stage_access_identity": (
         "the owned runner now claims the exact current grant before the SEC batch and "
         "the store rehashes its durable actual bytes; model, carry-in, and development "
-        "market reads are owned and cross-bound, but downstream artifact and "
-        "stage-evidence readers are not yet forced through the same authenticated lineage"
+        "market reads plus request-free development feature assembly are owned and "
+        "cross-bound, but label, learner, prediction, ledger, and stage-evidence "
+        "readers are not yet forced through the same authenticated lineage"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "

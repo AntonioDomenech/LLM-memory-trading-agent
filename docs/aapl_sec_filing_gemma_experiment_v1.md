@@ -725,8 +725,10 @@ At the current implementation checkpoint:
   chronological, or post-receipt-deleted artifacts fail closed without network
   access. Both carry receipt families set
   `fresh_carry_in_provenance_claimed=false`, are bound into the owned
-  preprocessor and model attempt, but not yet into the downstream feature,
-  learner, ledger, or stage-evidence assembler, and do not enable promotion.
+  preprocessor and model attempt, but not yet into a downstream later-stage
+  feature, label, learner, ledger, or stage-evidence assembler, and do not
+  enable promotion. The request-free development feature projection is
+  root-scoped and requires no carry;
   Like the stage-evidence receipt, each attests a sequence of
   store-observed snapshots rather than making the same-user Windows namespace
   immutable; a later exact retry detects post-closure mutation;
@@ -752,9 +754,10 @@ At the current implementation checkpoint:
   terminally aborted without another SEC request, while a transient receipt
   failure after a valid marker leaves that marker recoverable without
   refetching. Together with the separate carry finalizer, this proves a durable
-  pre-reveal training-corpus root and its exact intermediate carry-in, but not
-  yet the downstream feature, label, prediction, learner, ledger, or
-  stage-evidence ancestry;
+  pre-reveal training-corpus root and its exact intermediate carry-in. The
+  request-free development feature projection now consumes the terminal root
+  only; the carry remains reserved for the future intermediate path, and label,
+  prediction, learner, ledger, and stage-evidence ancestry remain absent;
 - current-tip version 10 also defines two separate append-only model-effect
   lifecycles. Development model claims are keyed by the request-free root scope,
   bind its terminal SEC root reader, and require no carry. Intermediate/final
@@ -816,8 +819,9 @@ At the current implementation checkpoint:
   unresolved: ledger. The fixed-provider development market acquirer now has a
   distinct candidate-pinned source owner and a local reveal-store-owned claim,
   reader, abort, and replay lifecycle. This does not externally attest the
-  network effect or a fresh process, and no owned canonical-market feature
-  assembler exists yet;
+  network effect or a fresh process. A request-free development feature
+  assembler now privately replays this reader into exact causal prefixes, but
+  no owned label or later-stage market assembler exists yet;
 - the pure preprocessor now builds and independently replays a canonical owned
   preprocessing receipt. It binds the development-root or stage-request scope,
   candidate and model claim, exact SEC/carry reader ancestry, event identity,
@@ -870,12 +874,13 @@ At the current implementation checkpoint:
   private and test-only. A noncanonical or invalid private SEC contact is rejected
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
-  no SEC request was made. `stage_access_identity` remains `BLOCKED` because the
-  canonical-market feature/label assembler, prediction sealing, learner output,
-  ledger, and final stage-evidence generation are not yet forced through owned
-  components. The SEC, local market acquisition/replay, model, and carry-in paths
-  are now owned and cross-bound. The store no longer accepts
-  a caller mapping at the output-receipt boundary, but a same-user process can
+  no SEC request was made. `stage_access_identity` remains `BLOCKED` because
+  owned label assembly, prediction sealing, learner output, ledger, and final
+  stage-evidence generation are not yet forced through owned components. The
+  SEC, local market acquisition/replay, model, carry-in, and request-free
+  development feature paths are now owned and cross-bound. The store no longer
+  accepts a caller mapping at the output-receipt boundary, but a same-user
+  process can
   still place coherently formed bytes in the fixed directory, so this milestone is
   durable replay rather than fresh end-to-end provenance. The owned SEC batch
   runner's final component-directory creation rejects even a pre-existing empty
@@ -931,9 +936,10 @@ the verifier/store API contract, but the same-user directory is not OS/ACL
 isolation or an external trust boundary. The Gemma event-input contract accepts
 only normalized SEC text and fixed ancestry hashes, has
 `market_access_permitted = false`, and rejects extra input fields, so provider
-metadata is not serialized to Gemma. A future feature/prediction worker must
-receive only canonical dated market rows from a store-owned accessor, never the
-raw-response directory. The acquirer deliberately stops at 2018 and does not
+metadata is not serialized to Gemma. The request-free development feature worker
+now receives only exact 253-session canonical prefixes from a store-owned
+accessor, never the raw-response directory. A future prediction worker must keep
+that same boundary. The acquirer deliberately stops at 2018 and does not
 claim that a later Yahoo download can extend the prefix byte-for-byte, because
 adjusted-close history can be revised. Before live extension, the development
 dataset must be globally versioned and sealed so different candidates cannot
@@ -952,18 +958,32 @@ same-root successful, non-aborted, store-attested market reader and bind its
 claim, receipt, acquisition, manifest, reconciliation, and byte-index hashes.
 This freezes the experiment ancestry without granting Gemma market access.
 Promotion remains false: the detached stage verifier can still accept
-caller-supplied market snapshots, and no store-owned feature/label/prediction/
-learner/ledger assembler yet consumes only the terminal SEC, Gemma, and market
-receipts. The ledger source role is the sole unresolved source role.
+caller-supplied market snapshots. The new store-owned development feature
+assembler consumes only the terminal SEC, Gemma, and market receipts and emits
+self-hashed development feature rows with explicit flags denying labels,
+outcomes, training membership, learner fit, promotion, and production use. No
+owned label/prediction/learner/ledger assembler exists yet. The ledger source
+role is the sole unresolved source role.
 
-The next implementation milestone is that request-free development assembler.
-It must load the canonical market rows only through the terminal reader,
-rebuild preprocessing, extraction, feature rows, matured labels, training
-membership, predictions, learner state, and the continuous no-leverage ledger,
-and remove caller-supplied market snapshots from every authorizing path. It must
-also parse official calendar semantics, chain every artifact from genesis, and
-bind the development winner/output state to the intermediate learner input. A
-production trust domain must retain the current
+The completed feature-only checkpoint is deliberately non-authorizing. Under one
+store lock it replays terminal non-aborted same-root SEC, market, and development
+Gemma readers, requires zero consumed reveals and no active effect, reconstructs
+each valid or sealed-invalid extraction, isolates exactly sessions `t-252..t`,
+and returns only compact proofs to the runner. The public runner emits derived
+feature rows and hashes; it cannot request paths, text, market rows, model calls,
+labels, outcomes, holdouts, training membership, predictions, ledger mutation,
+or stage promotion. The complete corpus-universe metadata is revalidated
+internally only to prove the fixed split identity; the operation emits none of
+the 2019-2026 filing text, market observations, outcomes, labels, learner inputs,
+or later-stage metadata.
+
+The next implementation milestone is the separate request-free development
+label and training-membership assembler, followed by owned learner state,
+predictions, and the continuous no-leverage ledger. Those later components must
+remove caller-supplied market snapshots from every authorizing path, parse
+official calendar semantics, chain every artifact from genesis, and bind the
+development winner/output state to the intermediate learner input. A production
+trust domain must retain the current
 store tip outside the mutable store directory, and a fresh owned process must
 attest the executing verifier rather than only the current source files. That
 machinery must be committed and pass the five-filing preflight before any

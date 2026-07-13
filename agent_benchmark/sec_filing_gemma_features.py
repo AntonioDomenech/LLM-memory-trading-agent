@@ -38,6 +38,7 @@ from agent_benchmark.downside_features import (
 from agent_benchmark.sec_filing_gemma_contract import (
     ACTIVE_EDGE_TOLERANCE,
     ADVERSE_FLAG_NAMES,
+    CONTRACT_VERSION,
     DIMENSION_NAMES,
     DOCUMENT_QUALITIES,
     FLAG_NAMES,
@@ -72,6 +73,15 @@ from agent_benchmark.sec_session_calendar import (
 
 
 FEATURE_ROW_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-feature-row-v1"
+OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-feature-inputs-v1"
+)
+OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-feature-batch-v1"
+)
+DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-feature-assembly-plan-v1"
+)
 MARKET_FEATURE_ROW_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-market-feature-row-v1"
 )
@@ -229,6 +239,143 @@ _CONTENT_RECORD_KEYS = {
     "normalized_text_bytes",
 }
 _SENTENCE_ID_RE = re.compile(r"[CP][0-9]{4}\Z")
+_MODEL_EVENT_PLAN_ITEM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "event_ordinal",
+        "accession_number",
+        "form",
+        "availability_session",
+        "sec_document_ordinal",
+    }
+)
+_DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "corpus_universe_sha256",
+        "development_cutoff_session",
+        "start_consumed_request_count",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
+        "development_model_execution_claim_sha256",
+        "development_model_reader_receipt_sha256",
+        "event_count",
+        "event_plan",
+        "event_plan_sha256",
+        "execution_source_hashes_sha256",
+        "canonical_market_rows_required",
+        "raw_market_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "feature_rows_output_permitted",
+        "outcome_access_permitted",
+        "label_access_permitted",
+        "training_membership_access_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "feature_assembly_plan_sha256",
+    }
+)
+_FEATURE_ROW_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "accession_number",
+        "form",
+        "artifact_stage",
+        "decision_session",
+        "extraction_status",
+        "extraction_evidence_authenticated",
+        "document_quality",
+        "semantic_available",
+        "market_available",
+        "prediction_available",
+        "fit_eligible",
+        "unavailable_reasons",
+        "missing_market_observations",
+        "missing_market_observations_sha256",
+        "bindings",
+        "bindings_sha256",
+        "market_feature_row_sha256",
+        "price_regime_features_hex",
+        "market_sentiment_features_hex",
+        "filing_calendar_features_hex",
+        "semantic_aggregate_features_hex",
+        "semantic_feature_names",
+        "semantic_feature_schema_sha256",
+        "semantic_feature_values_hex",
+        "ablation_feature_names",
+        "ablation_feature_schema_sha256",
+        "ablation_feature_values_hex",
+        "feature_row_sha256",
+    }
+)
+_FEATURE_BINDING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "contract_sha256",
+        "corpus_universe_sha256",
+        "universe_event_proof_sha256",
+        "current_universe_record_sha256",
+        "prior_same_form_universe_record_sha256",
+        "current_source_record_sha256",
+        "prior_same_form_source_record_sha256",
+        "current_filing_sha256",
+        "prior_same_form_filing_sha256",
+        "extraction_event_proof_sha256",
+        "extraction_identity_sha256",
+        "extraction_evidence_sha256",
+        "extraction_output_sha256",
+        "extraction_output_canonical_sha256",
+        "market_prefix_sha256",
+        "market_prefix_proof_sha256",
+        "market_stage_manifest_sha256",
+        "source_manifest_sha256",
+        "market_prefix_chain_identity_sha256",
+    }
+)
+_OWNED_DEVELOPMENT_FEATURE_BATCH_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "development_root_scope_sha256",
+        "feature_assembly_plan_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "development_sec_reader_receipt_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_model_reader_receipt_sha256",
+        "event_count",
+        "event_plan_sha256",
+        "feature_row_schema_version",
+        "feature_row_sha256s",
+        "feature_rows_sha256",
+        "feature_rows",
+        "labels_included",
+        "outcomes_included",
+        "post_decision_market_rows_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+        "feature_batch_sha256",
+    }
+)
 
 
 class SecFilingGemmaFeatureError(SecFilingGemmaContractError):
@@ -1740,6 +1887,501 @@ def validate_sec_filing_gemma_feature_row(
     return observed
 
 
+def _validated_development_feature_assembly_plan(
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the feature-only subset of the authorization-owned plan."""
+
+    value = _expect_mapping(plan, "development feature assembly plan")
+    _expect_keys(
+        value,
+        set(_DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS),
+        "development feature assembly plan",
+    )
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["plan_kind"] != "request_free_development_feature_assembly"
+        or value["artifact_stage"] != "development"
+        or value["development_cutoff_session"] != STAGE_WINDOWS["development"][1]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly plan identity changed"
+        )
+    hash_fields = (
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "corpus_universe_sha256",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
+        "development_model_execution_claim_sha256",
+        "development_model_reader_receipt_sha256",
+        "event_plan_sha256",
+        "execution_source_hashes_sha256",
+        "feature_assembly_plan_sha256",
+    )
+    for field in hash_fields:
+        _sha256(value[field], f"development feature assembly plan.{field}")
+    consumed_count = value["start_consumed_request_count"]
+    if (
+        isinstance(consumed_count, bool)
+        or not isinstance(consumed_count, int)
+        or consumed_count != 0
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly plan consumed count is invalid"
+        )
+    event_count = _strict_positive_int(
+        value["event_count"], "development feature assembly plan.event_count"
+    )
+    raw_event_plan = value["event_plan"]
+    if type(raw_event_plan) is not list or len(raw_event_plan) != event_count:
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly event plan count changed"
+        )
+    event_plan: list[dict[str, Any]] = []
+    observed_document_ordinals: list[int] = []
+    observed_accessions: list[str] = []
+    for ordinal, raw_item in enumerate(raw_event_plan, start=1):
+        item = _expect_mapping(
+            raw_item, f"development feature assembly event plan {ordinal}"
+        )
+        _expect_keys(
+            item,
+            set(_MODEL_EVENT_PLAN_ITEM_KEYS),
+            f"development feature assembly event plan {ordinal}",
+        )
+        accession = item["accession_number"]
+        availability = _iso_date(
+            item["availability_session"],
+            f"development feature assembly event plan {ordinal}.availability_session",
+        )
+        document_ordinal = item["sec_document_ordinal"]
+        if (
+            isinstance(item["event_ordinal"], bool)
+            or not isinstance(item["event_ordinal"], int)
+            or item["event_ordinal"] != ordinal
+            or not isinstance(accession, str)
+            or _ACCESSION_RE.fullmatch(accession) is None
+            or item["form"] not in {"10-K", "10-Q"}
+            or not (
+                STAGE_WINDOWS["development"][0]
+                <= availability
+                <= STAGE_WINDOWS["development"][1]
+            )
+            or isinstance(document_ordinal, bool)
+            or not isinstance(document_ordinal, int)
+            or document_ordinal < 1
+        ):
+            raise SecFilingGemmaFeatureError(
+                "Development feature assembly event plan item is invalid"
+            )
+        event_plan.append(dict(item))
+        observed_document_ordinals.append(document_ordinal)
+        observed_accessions.append(accession)
+    if len(observed_accessions) != len(set(observed_accessions)):
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly event-plan accessions are duplicated"
+        )
+    if event_plan != sorted(
+        event_plan,
+        key=lambda item: (item["availability_session"], item["accession_number"]),
+    ) or sorted(observed_document_ordinals) != list(
+        range(1, event_count + 1)
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly event order is not canonical"
+        )
+    if canonical_sha256(event_plan) != value["event_plan_sha256"]:
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly event-plan checksum changed"
+        )
+    expected_flags = {
+        "canonical_market_rows_required": True,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "feature_rows_output_permitted": True,
+        "outcome_access_permitted": False,
+        "label_access_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+    }
+    if any(value[field] is not expected for field, expected in expected_flags.items()):
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly plan crossed its feature-only authority"
+        )
+    body = {
+        key: value[key]
+        for key in value
+        if key != "feature_assembly_plan_sha256"
+    }
+    if canonical_sha256(body) != value["feature_assembly_plan_sha256"]:
+        raise SecFilingGemmaFeatureError(
+            "Development feature assembly plan checksum changed"
+        )
+    return copy.deepcopy(dict(value))
+
+
+def _validated_feature_hex_mapping(
+    value: Any,
+    *,
+    names: Sequence[str],
+    location: str,
+) -> dict[str, str | None]:
+    mapping = _expect_mapping(value, location)
+    _expect_keys(mapping, set(names), location)
+    result: dict[str, str | None] = {}
+    for name in names:
+        raw = mapping[name]
+        if raw is None:
+            result[name] = None
+            continue
+        if not isinstance(raw, str):
+            raise SecFilingGemmaFeatureError(f"{location}.{name} is not float.hex text")
+        try:
+            number = float.fromhex(raw)
+        except ValueError as exc:
+            raise SecFilingGemmaFeatureError(
+                f"{location}.{name} is not float.hex text"
+            ) from exc
+        if not math.isfinite(number) or number.hex() != raw:
+            raise SecFilingGemmaFeatureError(
+                f"{location}.{name} is not canonical finite float.hex text"
+            )
+        result[name] = raw
+    return result
+
+
+def _validated_batch_feature_row(
+    row: Mapping[str, Any],
+    *,
+    event_plan_item: Mapping[str, Any],
+    feature_assembly_plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = _expect_mapping(row, "owned development feature row")
+    _expect_keys(value, set(_FEATURE_ROW_KEYS), "owned development feature row")
+    if (
+        value["schema_version"] != FEATURE_ROW_SCHEMA_VERSION
+        or value["accession_number"] != event_plan_item["accession_number"]
+        or value["form"] != event_plan_item["form"]
+        or value["artifact_stage"] != "development"
+        or value["decision_session"] != event_plan_item["availability_session"]
+        or value["extraction_status"] not in EXTRACTION_STATUSES
+        or value["document_quality"] not in {None, *DOCUMENT_QUALITIES}
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature row crossed its event identity"
+        )
+    boolean_fields = (
+        "extraction_evidence_authenticated",
+        "semantic_available",
+        "market_available",
+        "prediction_available",
+        "fit_eligible",
+    )
+    if any(type(value[field]) is not bool for field in boolean_fields):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature availability flags are invalid"
+        )
+    expected_semantic_available = bool(
+        value["extraction_evidence_authenticated"]
+        and value["extraction_status"] == "valid"
+        and value["document_quality"] in {"usable", "thin"}
+    )
+    if value["semantic_available"] is not expected_semantic_available:
+        raise SecFilingGemmaFeatureError(
+            "Owned development semantic availability changed"
+        )
+    missing = value["missing_market_observations"]
+    reasons = value["unavailable_reasons"]
+    if (
+        type(missing) is not list
+        or any(type(item) is not str for item in missing)
+        or len(missing) != len(set(missing))
+        or type(reasons) is not list
+        or any(reason not in FEATURE_UNAVAILABLE_REASONS for reason in reasons)
+        or len(reasons) != len(set(reasons))
+        or value["missing_market_observations_sha256"] != canonical_sha256(missing)
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature missingness evidence changed"
+        )
+    expected_reasons: list[str] = []
+    if not value["market_available"]:
+        expected_reasons.append("missing_required_market_history")
+    if not value["extraction_evidence_authenticated"]:
+        expected_reasons.append("missing_or_unauthenticated_extraction_evidence")
+    if (
+        reasons != expected_reasons
+        or value["prediction_available"] is not (not expected_reasons)
+        or value["fit_eligible"] is not value["prediction_available"]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature readiness changed"
+        )
+
+    bindings = _expect_mapping(value["bindings"], "owned development feature bindings")
+    _expect_keys(bindings, set(_FEATURE_BINDING_KEYS), "owned development feature bindings")
+    required_binding_hashes = (
+        "contract_sha256",
+        "corpus_universe_sha256",
+        "universe_event_proof_sha256",
+        "current_universe_record_sha256",
+        "current_source_record_sha256",
+        "current_filing_sha256",
+        "extraction_event_proof_sha256",
+        "extraction_identity_sha256",
+        "market_prefix_sha256",
+        "market_prefix_proof_sha256",
+        "market_stage_manifest_sha256",
+        "source_manifest_sha256",
+        "market_prefix_chain_identity_sha256",
+    )
+    optional_binding_hashes = (
+        "prior_same_form_universe_record_sha256",
+        "prior_same_form_source_record_sha256",
+        "prior_same_form_filing_sha256",
+        "extraction_evidence_sha256",
+        "extraction_output_sha256",
+        "extraction_output_canonical_sha256",
+    )
+    for field in required_binding_hashes:
+        _sha256(bindings[field], f"owned development feature bindings.{field}")
+    for field in optional_binding_hashes:
+        _optional_sha256(
+            bindings[field], f"owned development feature bindings.{field}"
+        )
+    if (
+        bindings["contract_sha256"] != canonical_sha256(build_contract_manifest())
+        or bindings["corpus_universe_sha256"]
+        != feature_assembly_plan["corpus_universe_sha256"]
+        or bindings["market_stage_manifest_sha256"]
+        != feature_assembly_plan["development_market_stage_manifest_sha256"]
+        or bindings["source_manifest_sha256"]
+        != feature_assembly_plan["development_market_source_manifest_sha256"]
+        or value["bindings_sha256"] != canonical_sha256(bindings)
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature bindings crossed the assembly plan"
+        )
+
+    price = _validated_feature_hex_mapping(
+        value["price_regime_features_hex"],
+        names=PRICE_FEATURE_COLUMNS,
+        location="owned development price features",
+    )
+    sentiment = _validated_feature_hex_mapping(
+        value["market_sentiment_features_hex"],
+        names=MARKET_SENTIMENT_FEATURE_COLUMNS,
+        location="owned development sentiment features",
+    )
+    calendar = _validated_feature_hex_mapping(
+        value["filing_calendar_features_hex"],
+        names=FILING_CALENDAR_FEATURE_COLUMNS,
+        location="owned development calendar features",
+    )
+    semantic = _validated_feature_hex_mapping(
+        value["semantic_aggregate_features_hex"],
+        names=SEMANTIC_AGGREGATE_FEATURE_COLUMNS,
+        location="owned development semantic features",
+    )
+    expected_market_available = not missing and all(
+        item is not None for item in (*price.values(), *sentiment.values())
+    )
+    if value["market_available"] is not expected_market_available:
+        raise SecFilingGemmaFeatureError(
+            "Owned development market feature availability changed"
+        )
+    if (
+        value["semantic_feature_names"] != list(SEMANTIC_FEATURE_COLUMNS)
+        or value["ablation_feature_names"] != list(ABLATION_FEATURE_COLUMNS)
+        or value["semantic_feature_schema_sha256"]
+        != canonical_sha256(list(SEMANTIC_FEATURE_COLUMNS))
+        or value["ablation_feature_schema_sha256"]
+        != canonical_sha256(list(ABLATION_FEATURE_COLUMNS))
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature schema changed"
+        )
+    expected_semantic_vector = [
+        *(price[name] for name in PRICE_FEATURE_COLUMNS),
+        *(sentiment[name] for name in MARKET_SENTIMENT_FEATURE_COLUMNS),
+        *(calendar[name] for name in FILING_CALENDAR_FEATURE_COLUMNS),
+        *(semantic[name] for name in SEMANTIC_AGGREGATE_FEATURE_COLUMNS),
+    ]
+    expected_ablation_vector = [
+        *(price[name] for name in PRICE_FEATURE_COLUMNS),
+        *(sentiment[name] for name in MARKET_SENTIMENT_FEATURE_COLUMNS),
+        *(calendar[name] for name in FILING_CALENDAR_FEATURE_COLUMNS),
+        *(float(0.0).hex() for _ in SEMANTIC_AGGREGATE_FEATURE_COLUMNS),
+    ]
+    if value["prediction_available"]:
+        if (
+            any(item is None for item in expected_semantic_vector)
+            or value["semantic_feature_values_hex"] != expected_semantic_vector
+            or value["ablation_feature_values_hex"] != expected_ablation_vector
+        ):
+            raise SecFilingGemmaFeatureError(
+                "Owned development available feature vector changed"
+            )
+    elif (
+        value["semantic_feature_values_hex"] is not None
+        or value["ablation_feature_values_hex"] is not None
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development unavailable feature row exposed a vector"
+        )
+
+    market_feature_body = {
+        "schema_version": MARKET_FEATURE_ROW_SCHEMA_VERSION,
+        "accession_number": value["accession_number"],
+        "decision_session": value["decision_session"],
+        "market_prefix_chain_identity_sha256": bindings[
+            "market_prefix_chain_identity_sha256"
+        ],
+        "market_available": value["market_available"],
+        "missing_market_observations": missing,
+        "missing_market_observations_sha256": value[
+            "missing_market_observations_sha256"
+        ],
+        "price_regime_features_hex": price,
+        "market_sentiment_features_hex": sentiment,
+    }
+    if value["market_feature_row_sha256"] != canonical_sha256(market_feature_body):
+        raise SecFilingGemmaFeatureError(
+            "Owned development market feature-row checksum changed"
+        )
+    body = {key: value[key] for key in value if key != "feature_row_sha256"}
+    observed = _sha256(value["feature_row_sha256"], "feature_row_sha256")
+    if observed != canonical_sha256(body):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature-row checksum changed"
+        )
+    return copy.deepcopy(dict(value))
+
+
+def build_owned_development_feature_batch(
+    *,
+    feature_assembly_plan: Mapping[str, Any],
+    feature_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build a self-hashed, explicitly non-authorizing development feature batch."""
+
+    plan = _validated_development_feature_assembly_plan(feature_assembly_plan)
+    if isinstance(feature_rows, (str, bytes)) or not isinstance(feature_rows, Sequence):
+        raise SecFilingGemmaFeatureError("Owned development feature rows must be a sequence")
+    rows = list(feature_rows)
+    if len(rows) != plan["event_count"]:
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature-row count differs from the assembly plan"
+        )
+    validated_rows = [
+        _validated_batch_feature_row(
+            row,
+            event_plan_item=event_plan_item,
+            feature_assembly_plan=plan,
+        )
+        for row, event_plan_item in zip(rows, plan["event_plan"], strict=True)
+    ]
+    row_hashes = [row["feature_row_sha256"] for row in validated_rows]
+    body = {
+        "schema_version": OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION,
+        "development_root_scope_sha256": plan[
+            "development_root_scope_sha256"
+        ],
+        "feature_assembly_plan_sha256": plan["feature_assembly_plan_sha256"],
+        "candidate_sha256": plan["candidate_sha256"],
+        "corpus_universe_sha256": plan["corpus_universe_sha256"],
+        "development_sec_reader_receipt_sha256": plan[
+            "development_sec_reader_receipt_sha256"
+        ],
+        "development_market_reader_receipt_sha256": plan[
+            "development_market_reader_receipt_sha256"
+        ],
+        "development_model_reader_receipt_sha256": plan[
+            "development_model_reader_receipt_sha256"
+        ],
+        "event_count": plan["event_count"],
+        "event_plan_sha256": plan["event_plan_sha256"],
+        "feature_row_schema_version": FEATURE_ROW_SCHEMA_VERSION,
+        "feature_row_sha256s": row_hashes,
+        "feature_rows_sha256": canonical_sha256(validated_rows),
+        "feature_rows": validated_rows,
+        "labels_included": False,
+        "outcomes_included": False,
+        "post_decision_market_rows_included": False,
+        "training_membership_included": False,
+        "learner_fit_authorized": False,
+        "stage_promotion_authorized": False,
+        "production_authorized": False,
+    }
+    return {**body, "feature_batch_sha256": canonical_sha256(body)}
+
+
+def validate_owned_development_feature_batch(
+    batch: Mapping[str, Any],
+    *,
+    feature_assembly_plan: Mapping[str, Any],
+    expected_feature_assembly_plan_sha256: str,
+    expected_feature_batch_sha256: str,
+) -> str:
+    """Rebuild an owned development feature batch and require both external pins."""
+
+    value = _expect_mapping(batch, "owned development feature batch")
+    _expect_keys(
+        value,
+        set(_OWNED_DEVELOPMENT_FEATURE_BATCH_KEYS),
+        "owned development feature batch",
+    )
+    plan = _validated_development_feature_assembly_plan(feature_assembly_plan)
+    expected_plan_hash = _sha256(
+        expected_feature_assembly_plan_sha256,
+        "expected_feature_assembly_plan_sha256",
+    )
+    if plan["feature_assembly_plan_sha256"] != expected_plan_hash:
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature assembly plan is not externally pinned"
+        )
+    rows = value["feature_rows"]
+    if type(rows) is not list:
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch rows must be an exact list"
+        )
+    rebuilt = build_owned_development_feature_batch(
+        feature_assembly_plan=plan,
+        feature_rows=rows,
+    )
+    if dict(value) != rebuilt:
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch differs from exact replay"
+        )
+    observed = _sha256(value["feature_batch_sha256"], "feature_batch_sha256")
+    if observed != _sha256(
+        expected_feature_batch_sha256, "expected_feature_batch_sha256"
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch is not externally pinned"
+        )
+    return observed
+
+
 def _cash_round_trip_log_factor(cost_bps: int) -> float:
     rate = cost_bps / 10_000.0
     return math.log1p(-rate) - math.log1p(rate)
@@ -1980,6 +2622,7 @@ __all__ = [
     "ABLATION_FEATURE_COLUMNS",
     "COMPARATIVE_CHANGE_ENCODING",
     "CURRENT_IMPACT_ENCODING",
+    "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DIMENSION_GROUPS",
     "EXTRACTION_STATUSES",
     "FEATURE_ROW_SCHEMA_VERSION",
@@ -1990,11 +2633,14 @@ __all__ = [
     "LABEL_MATURITY_OFFSET",
     "MARKET_FEATURE_ROW_SCHEMA_VERSION",
     "MARKET_PREFIX_PROOF_SCHEMA_VERSION",
+    "OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION",
+    "OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION",
     "SEMANTIC_AGGREGATE_FEATURE_COLUMNS",
     "SEMANTIC_FEATURE_COLUMNS",
     "UNIVERSE_EVENT_PROOF_SCHEMA_VERSION",
     "EXTRACTION_EVENT_PROOF_SCHEMA_VERSION",
     "SecFilingGemmaFeatureError",
+    "build_owned_development_feature_batch",
     "build_sec_filing_gemma_feature_row",
     "build_twenty_session_label_evidence",
     "build_validated_extraction_event_proof",
@@ -2002,6 +2648,7 @@ __all__ = [
     "build_validated_universe_event_proof",
     "validate_extraction_event_proof",
     "validate_market_prefix_proof",
+    "validate_owned_development_feature_batch",
     "validate_sec_filing_gemma_feature_row",
     "validate_twenty_session_label_evidence",
     "validate_universe_event_proof",

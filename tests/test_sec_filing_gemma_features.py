@@ -20,6 +20,7 @@ from agent_benchmark.downside_features import (
 )
 from agent_benchmark.sec_filing_gemma_contract import (
     ACTIVE_EDGE_TOLERANCE,
+    CONTRACT_VERSION,
     DIMENSION_NAMES,
     FLAG_NAMES,
     build_corpus_universe_manifest,
@@ -30,15 +31,18 @@ from agent_benchmark.sec_filing_gemma_features import (
     ABLATION_FEATURE_COLUMNS,
     FILING_CALENDAR_FEATURE_COLUMNS,
     LABEL_MATURITY_OFFSET,
+    OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION,
     SEMANTIC_AGGREGATE_FEATURE_COLUMNS,
     SEMANTIC_FEATURE_COLUMNS,
     SecFilingGemmaFeatureError,
+    build_owned_development_feature_batch,
     build_sec_filing_gemma_feature_row,
     build_twenty_session_label_evidence,
     build_validated_extraction_event_proof,
     build_validated_market_prefix_proof,
     build_validated_universe_event_proof,
     validate_extraction_event_proof,
+    validate_owned_development_feature_batch,
     validate_sec_filing_gemma_feature_row,
     validate_twenty_session_label_evidence,
     validate_universe_event_proof,
@@ -522,6 +526,94 @@ def _label_kwargs(case: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _feature_assembly_plan(
+    feature_row: Mapping[str, Any],
+    *,
+    event_plan: Sequence[Mapping[str, Any]] | None = None,
+    start_consumed_request_count: int = 0,
+) -> dict[str, Any]:
+    events = list(
+        event_plan
+        if event_plan is not None
+        else (
+            {
+                "event_ordinal": 1,
+                "accession_number": feature_row["accession_number"],
+                "form": feature_row["form"],
+                "availability_session": feature_row["decision_session"],
+                "sec_document_ordinal": 1,
+            },
+        )
+    )
+    body = {
+        "schema_version": "aapl-sec-gemma-development-feature-assembly-plan-v1",
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_feature_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": _digest("feature-root"),
+        "development_content_root_plan_sha256": _digest("content-root-plan"),
+        "candidate_sha256": _digest("candidate"),
+        "candidate_design_sha256": _digest("candidate-design"),
+        "corpus_universe_sha256": feature_row["bindings"][
+            "corpus_universe_sha256"
+        ],
+        "development_cutoff_session": "2018-12-31",
+        "start_consumed_request_count": start_consumed_request_count,
+        "development_sec_execution_claim_sha256": _digest("sec-claim"),
+        "development_sec_reader_receipt_sha256": _digest("sec-reader"),
+        "development_market_execution_claim_sha256": _digest("market-claim"),
+        "development_market_reader_receipt_sha256": _digest("market-reader"),
+        "development_market_acquisition_receipt_sha256": _digest(
+            "market-acquisition-receipt"
+        ),
+        "development_market_acquisition_bundle_sha256": _digest(
+            "market-acquisition-bundle"
+        ),
+        "development_market_acquisition_validation_sha256": _digest(
+            "market-acquisition-validation"
+        ),
+        "development_market_source_manifest_sha256": feature_row["bindings"][
+            "source_manifest_sha256"
+        ],
+        "development_market_stage_manifest_sha256": feature_row["bindings"][
+            "market_stage_manifest_sha256"
+        ],
+        "development_market_source_reconciliation_sha256": _digest(
+            "market-reconciliation"
+        ),
+        "development_market_byte_index_sha256": _digest("market-byte-index"),
+        "development_model_execution_claim_sha256": _digest("model-claim"),
+        "development_model_reader_receipt_sha256": _digest("model-reader"),
+        "event_count": len(events),
+        "event_plan": events,
+        "event_plan_sha256": canonical_sha256(events),
+        "execution_source_hashes_sha256": _digest("execution-sources"),
+        "canonical_market_rows_required": True,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "feature_rows_output_permitted": True,
+        "outcome_access_permitted": False,
+        "label_access_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+    }
+    return {**body, "feature_assembly_plan_sha256": canonical_sha256(body)}
+
+
+def _rehash_feature_assembly_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    plan["event_plan_sha256"] = canonical_sha256(plan["event_plan"])
+    body = {
+        key: plan[key] for key in plan if key != "feature_assembly_plan_sha256"
+    }
+    plan["feature_assembly_plan_sha256"] = canonical_sha256(body)
+    return plan
+
+
 @pytest.fixture(scope="module")
 def case() -> dict[str, Any]:
     decision_index = EXPECTED_MARKET_HISTORY_SESSIONS.index(DECISION_SESSION)
@@ -688,6 +780,219 @@ def test_exact_features_semantics_order_schema_and_independent_hash(
         expected_feature_row_sha256=row["feature_row_sha256"],
         **_feature_validate_kwargs(case),
     ) == row["feature_row_sha256"]
+
+
+def test_owned_development_feature_batch_is_exact_and_non_authorizing(
+    case: Mapping[str, Any],
+) -> None:
+    plan = _feature_assembly_plan(case["feature"])
+    batch = build_owned_development_feature_batch(
+        feature_assembly_plan=plan,
+        feature_rows=[case["feature"]],
+    )
+    assert set(batch) == {
+        "schema_version",
+        "development_root_scope_sha256",
+        "feature_assembly_plan_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "development_sec_reader_receipt_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_model_reader_receipt_sha256",
+        "event_count",
+        "event_plan_sha256",
+        "feature_row_schema_version",
+        "feature_row_sha256s",
+        "feature_rows_sha256",
+        "feature_rows",
+        "labels_included",
+        "outcomes_included",
+        "post_decision_market_rows_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+        "feature_batch_sha256",
+    }
+    assert batch["schema_version"] == OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION
+    assert batch["feature_rows"] == [case["feature"]]
+    assert batch["feature_rows_sha256"] == canonical_sha256([case["feature"]])
+    assert batch["feature_row_sha256s"] == [case["feature"]["feature_row_sha256"]]
+    assert batch["feature_rows"][0]["fit_eligible"] is True
+    for field in (
+        "labels_included",
+        "outcomes_included",
+        "post_decision_market_rows_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+    ):
+        assert batch[field] is False
+    assert validate_owned_development_feature_batch(
+        batch,
+        feature_assembly_plan=plan,
+        expected_feature_assembly_plan_sha256=plan[
+            "feature_assembly_plan_sha256"
+        ],
+        expected_feature_batch_sha256=batch["feature_batch_sha256"],
+    ) == batch["feature_batch_sha256"]
+
+
+def test_owned_feature_batch_exposes_no_raw_label_or_model_envelope_values(
+    case: Mapping[str, Any],
+) -> None:
+    plan = _feature_assembly_plan(case["feature"])
+    batch = build_owned_development_feature_batch(
+        feature_assembly_plan=plan,
+        feature_rows=[case["feature"]],
+    )
+    forbidden_keys = {
+        "raw_response_bytes_by_symbol",
+        "artifact_bytes_by_symbol",
+        "window_bytes_by_symbol",
+        "lookback_rows",
+        "observations",
+        "current_normalized_text",
+        "prior_same_form_normalized_text",
+        "primary_document_bytes",
+        "normalized_text_bytes",
+        "model_payload",
+        "request_bytes_base64",
+        "response_bytes_base64",
+        "extractor_output_bytes_base64",
+        "call_intent",
+        "model_attempt_receipt",
+        "runtime_guard",
+        "label_evidence_sha256",
+        "future_market_rows",
+        "adjusted_open_path",
+        "training_set_membership",
+        "learner_state",
+        "prediction_rows",
+        "consumption_ledger",
+    }
+    observed_keys: set[str] = set()
+    observed_bytes: list[bytes] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            observed_keys.update(value)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+        elif isinstance(value, bytes):
+            observed_bytes.append(value)
+
+    walk(batch)
+    assert forbidden_keys.isdisjoint(observed_keys)
+    assert observed_bytes == []
+    encoded = json.dumps(batch, sort_keys=True)
+    for sentinel in (
+        "RAW-YAHOO-SENTINEL",
+        "NORMALIZED-SEC-TEXT-SENTINEL",
+        "OLLAMA-REQUEST-ENVELOPE-SENTINEL",
+        "HOLDOUT-OUTCOME-SENTINEL",
+    ):
+        assert sentinel not in encoded
+
+
+@pytest.mark.parametrize("consumed_count", [1, False])
+def test_owned_feature_batch_rejects_non_genesis_consumption_count(
+    case: Mapping[str, Any], consumed_count: Any
+) -> None:
+    plan = _feature_assembly_plan(
+        case["feature"], start_consumed_request_count=consumed_count
+    )
+    with pytest.raises(SecFilingGemmaFeatureError, match="consumed count"):
+        build_owned_development_feature_batch(
+            feature_assembly_plan=plan,
+            feature_rows=[case["feature"]],
+        )
+
+
+def test_owned_feature_batch_rejects_bool_ordinal_and_duplicate_accession(
+    case: Mapping[str, Any],
+) -> None:
+    bool_ordinal = _feature_assembly_plan(case["feature"])
+    bool_ordinal["event_plan"][0]["event_ordinal"] = True
+    _rehash_feature_assembly_plan(bool_ordinal)
+    with pytest.raises(SecFilingGemmaFeatureError, match="event plan item"):
+        build_owned_development_feature_batch(
+            feature_assembly_plan=bool_ordinal,
+            feature_rows=[case["feature"]],
+        )
+
+    first = copy.deepcopy(_feature_assembly_plan(case["feature"])["event_plan"][0])
+    second = {
+        **first,
+        "event_ordinal": 2,
+        "availability_session": EXPECTED_SESSIONS[
+            EXPECTED_SESSIONS.index(first["availability_session"]) + 1
+        ],
+        "sec_document_ordinal": 2,
+    }
+    duplicate = _feature_assembly_plan(
+        case["feature"], event_plan=[first, second]
+    )
+    with pytest.raises(SecFilingGemmaFeatureError, match="accessions are duplicated"):
+        build_owned_development_feature_batch(
+            feature_assembly_plan=duplicate,
+            feature_rows=[case["feature"], case["feature"]],
+        )
+
+
+def test_owned_feature_batch_rejects_extra_cross_root_and_tampered_values(
+    case: Mapping[str, Any],
+) -> None:
+    plan = _feature_assembly_plan(case["feature"])
+    batch = build_owned_development_feature_batch(
+        feature_assembly_plan=plan,
+        feature_rows=[case["feature"]],
+    )
+    extra = copy.deepcopy(batch)
+    extra["label"] = True
+    with pytest.raises(SecFilingGemmaFeatureError, match="Invalid owned development"):
+        validate_owned_development_feature_batch(
+            extra,
+            feature_assembly_plan=plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "feature_assembly_plan_sha256"
+            ],
+            expected_feature_batch_sha256=batch["feature_batch_sha256"],
+        )
+
+    cross_root = copy.deepcopy(batch)
+    cross_root["development_root_scope_sha256"] = _digest("other-root")
+    cross_body = {
+        key: cross_root[key]
+        for key in cross_root
+        if key != "feature_batch_sha256"
+    }
+    cross_root["feature_batch_sha256"] = canonical_sha256(cross_body)
+    with pytest.raises(SecFilingGemmaFeatureError, match="exact replay"):
+        validate_owned_development_feature_batch(
+            cross_root,
+            feature_assembly_plan=plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "feature_assembly_plan_sha256"
+            ],
+            expected_feature_batch_sha256=cross_root["feature_batch_sha256"],
+        )
+
+    tampered = copy.deepcopy(batch)
+    tampered["feature_rows"][0]["fit_eligible"] = False
+    with pytest.raises(SecFilingGemmaFeatureError):
+        validate_owned_development_feature_batch(
+            tampered,
+            feature_assembly_plan=plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "feature_assembly_plan_sha256"
+            ],
+            expected_feature_batch_sha256=batch["feature_batch_sha256"],
+        )
 
 
 def test_random_frame_matches_existing_pandas_implementations(

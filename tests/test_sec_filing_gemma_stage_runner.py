@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
@@ -13,7 +14,7 @@ import pytest
 import agent_benchmark.sec_filing_gemma_corpus as corpus_module
 import agent_benchmark.sec_filing_gemma_stage_runner as runner_module
 from agent_benchmark.sec_audit_transport import ResponseAudit
-from agent_benchmark.sec_filing_gemma_contract import canonical_sha256
+from agent_benchmark.sec_filing_gemma_contract import CONTRACT_VERSION, canonical_sha256
 from agent_benchmark.sec_filing_gemma_reveal_store import (
     DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION,
     SEC_BATCH_COMPLETE_MARKER_FILENAME,
@@ -33,11 +34,13 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
 from agent_benchmark.sec_filing_gemma_stage_runner import (
     SecFilingGemmaStageRunnerError,
     run_authorized_sec_stage,
+    run_owned_development_feature_batch,
     run_owned_development_model_batch,
     run_owned_development_sec_root,
     run_owned_stage_model_batch,
 )
 from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
+from agent_benchmark.sec_session_calendar import EXPECTED_MARKET_HISTORY_SESSIONS
 
 
 USER_AGENT = "Private Owner owner-contact@real-domain-for-tests.dev"
@@ -162,6 +165,184 @@ def _development_model_claim(
         "model_component_id": "owned_stage_gemma_model_batch",
     }
     return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def _development_feature_plan(
+    *,
+    scope_sha256: str = "9" * 64,
+    event_plan: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    events = event_plan or [
+        {
+            "event_ordinal": 1,
+            "accession_number": "0000320193-02-000001",
+            "form": "10-Q",
+            "availability_session": "2002-02-01",
+            "sec_document_ordinal": 1,
+        }
+    ]
+    body = {
+        "schema_version": "aapl-sec-gemma-development-feature-assembly-plan-v1",
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_feature_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": scope_sha256,
+        "development_content_root_plan_sha256": "1" * 64,
+        "candidate_sha256": "2" * 64,
+        "candidate_design_sha256": "3" * 64,
+        "corpus_universe_sha256": "4" * 64,
+        "development_cutoff_session": "2018-12-31",
+        "start_consumed_request_count": 0,
+        "development_sec_execution_claim_sha256": "5" * 64,
+        "development_sec_reader_receipt_sha256": "6" * 64,
+        "development_market_execution_claim_sha256": "7" * 64,
+        "development_market_reader_receipt_sha256": "8" * 64,
+        "development_market_acquisition_receipt_sha256": "a" * 64,
+        "development_market_acquisition_bundle_sha256": "b" * 64,
+        "development_market_acquisition_validation_sha256": "c" * 64,
+        "development_market_source_manifest_sha256": "d" * 64,
+        "development_market_stage_manifest_sha256": "e" * 64,
+        "development_market_source_reconciliation_sha256": "f" * 64,
+        "development_market_byte_index_sha256": hashlib.sha256(
+            b"market-byte-index"
+        ).hexdigest(),
+        "development_model_execution_claim_sha256": hashlib.sha256(
+            b"model-claim"
+        ).hexdigest(),
+        "development_model_reader_receipt_sha256": hashlib.sha256(
+            b"model-reader"
+        ).hexdigest(),
+        "event_count": len(events),
+        "event_plan": events,
+        "event_plan_sha256": canonical_sha256(events),
+        "execution_source_hashes_sha256": hashlib.sha256(
+            b"feature-sources"
+        ).hexdigest(),
+        "canonical_market_rows_required": True,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "feature_rows_output_permitted": True,
+        "outcome_access_permitted": False,
+        "label_access_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+    }
+    return {**body, "feature_assembly_plan_sha256": canonical_sha256(body)}
+
+
+def _rehash_development_feature_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    plan["event_plan_sha256"] = canonical_sha256(plan["event_plan"])
+    body = {
+        key: plan[key] for key in plan if key != "feature_assembly_plan_sha256"
+    }
+    plan["feature_assembly_plan_sha256"] = canonical_sha256(body)
+    return plan
+
+
+def _development_feature_projection(plan: dict[str, Any]) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+    for event_plan_item in plan["event_plan"]:
+        decision_session = event_plan_item["availability_session"]
+        decision_index = EXPECTED_MARKET_HISTORY_SESSIONS.index(decision_session)
+        sessions = EXPECTED_MARKET_HISTORY_SESSIONS[
+            decision_index - 252 : decision_index + 1
+        ]
+        prefix = {
+            "artifact_stage": "development",
+            "decision_event_id": event_plan_item["accession_number"],
+            "decision_session": decision_session,
+            "market_cutoff_session": decision_session,
+            "market_stage_manifest_sha256": plan[
+                "development_market_stage_manifest_sha256"
+            ],
+            "source_manifest_sha256": plan[
+                "development_market_source_manifest_sha256"
+            ],
+            "lookback_row_count": 253,
+            "lookback_rows": [{"session": session} for session in sessions],
+        }
+        events.append(
+            {
+                "event_ordinal": event_plan_item["event_ordinal"],
+                "event_plan_item": event_plan_item,
+                "market_prefix": prefix,
+                "market_prefix_proof": {
+                    "market_prefix_proof_sha256": hashlib.sha256(
+                        f"market-proof-{event_plan_item['event_ordinal']}".encode()
+                    ).hexdigest()
+                },
+                "universe_event_proof": {
+                    "universe_event_proof_sha256": hashlib.sha256(
+                        f"universe-proof-{event_plan_item['event_ordinal']}".encode()
+                    ).hexdigest()
+                },
+                "extraction_event_proof": {
+                    "extraction_event_proof_sha256": hashlib.sha256(
+                        f"extraction-proof-{event_plan_item['event_ordinal']}".encode()
+                    ).hexdigest()
+                },
+            }
+        )
+    body = {
+        "schema_version": "aapl-sec-gemma-owned-development-feature-inputs-v1",
+        "feature_assembly_plan": plan,
+        "events": events,
+    }
+    return {**body, "feature_inputs_sha256": canonical_sha256(body)}
+
+
+def _rehash_development_feature_projection(
+    projection: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        key: projection[key]
+        for key in projection
+        if key != "feature_inputs_sha256"
+    }
+    projection["feature_inputs_sha256"] = canonical_sha256(body)
+    return projection
+
+
+def _fake_feature_batch(
+    plan: dict[str, Any], feature_rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    body = {
+        "schema_version": "aapl-sec-gemma-owned-development-feature-batch-v1",
+        "development_root_scope_sha256": plan[
+            "development_root_scope_sha256"
+        ],
+        "feature_assembly_plan_sha256": plan["feature_assembly_plan_sha256"],
+        "candidate_sha256": plan["candidate_sha256"],
+        "corpus_universe_sha256": plan["corpus_universe_sha256"],
+        "development_sec_reader_receipt_sha256": plan[
+            "development_sec_reader_receipt_sha256"
+        ],
+        "development_market_reader_receipt_sha256": plan[
+            "development_market_reader_receipt_sha256"
+        ],
+        "development_model_reader_receipt_sha256": plan[
+            "development_model_reader_receipt_sha256"
+        ],
+        "event_count": plan["event_count"],
+        "event_plan_sha256": plan["event_plan_sha256"],
+        "feature_row_schema_version": "aapl-sec-gemma-feature-row-v1",
+        "feature_row_sha256s": [row["feature_row_sha256"] for row in feature_rows],
+        "feature_rows_sha256": canonical_sha256(feature_rows),
+        "feature_rows": feature_rows,
+        "labels_included": False,
+        "outcomes_included": False,
+        "post_decision_market_rows_included": False,
+        "training_membership_included": False,
+        "learner_fit_authorized": False,
+        "stage_promotion_authorized": False,
+        "production_authorized": False,
+    }
+    return {**body, "feature_batch_sha256": canonical_sha256(body)}
 
 
 def _component_plan() -> dict[str, Any]:
@@ -518,6 +699,7 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
     assert runner_module.__all__ == [
         "SecFilingGemmaStageRunnerError",
         "run_authorized_sec_stage",
+        "run_owned_development_feature_batch",
         "run_owned_development_market_batch",
         "run_owned_development_model_batch",
         "run_owned_development_sec_root",
@@ -574,6 +756,259 @@ def test_public_model_runner_signatures_are_hash_only_and_keyword_only() -> None
     }
     assert forbidden.isdisjoint(development.parameters)
     assert forbidden.isdisjoint(stage.parameters)
+
+
+def test_public_feature_runner_signature_is_scope_only_and_keyword_only() -> None:
+    signature = inspect.signature(run_owned_development_feature_batch)
+    assert tuple(signature.parameters) == (
+        "reveal_store",
+        "development_root_scope_sha256",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    assert {
+        "request_sha256",
+        "stage",
+        "candidate",
+        "event",
+        "rows",
+        "snapshot",
+        "label",
+        "outcome",
+        "holdout",
+        "path",
+        "bytes",
+        "payload",
+        "model",
+        "transport",
+        "session",
+    }.isdisjoint(signature.parameters)
+
+
+def test_feature_runner_consumes_only_compact_causal_projection_and_is_non_authorizing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_benchmark.sec_filing_gemma_features as features_module
+    import agent_benchmark.sec_filing_gemma_learner as learner_module
+    import agent_benchmark.sec_filing_gemma_prediction_evidence as prediction_module
+    import agent_benchmark.sec_filing_gemma_stage_verifier as verifier_module
+
+    store = _new_store(tmp_path)
+    plan = _development_feature_plan()
+    projection = _development_feature_projection(plan)
+    loader_calls: list[str] = []
+
+    def load_projection(*, development_root_scope_sha256: str) -> dict[str, Any]:
+        loader_calls.append(development_root_scope_sha256)
+        return copy.deepcopy(projection)
+
+    store._load_owned_development_feature_inputs = load_projection
+    feature_calls: list[dict[str, Any]] = []
+
+    def build_feature(**kwargs: Any) -> dict[str, Any]:
+        feature_calls.append(kwargs)
+        prefix = kwargs["market_prefix"]
+        assert set(kwargs) == {
+            "market_prefix",
+            "market_prefix_proof",
+            "expected_market_prefix_proof_sha256",
+            "universe_event_proof",
+            "expected_universe_event_proof_sha256",
+            "extraction_event_proof",
+            "expected_extraction_event_proof_sha256",
+        }
+        assert len(prefix["lookback_rows"]) == 253
+        assert prefix["lookback_rows"][-1]["session"] == prefix["decision_session"]
+        assert all(
+            row["session"] <= prefix["decision_session"]
+            for row in prefix["lookback_rows"]
+        )
+        assert "stage_manifest" not in kwargs
+        assert "future_market_rows" not in kwargs
+        body = {
+            "accession_number": prefix["decision_event_id"],
+            "decision_session": prefix["decision_session"],
+            "fit_eligible": True,
+        }
+        return {**body, "feature_row_sha256": canonical_sha256(body)}
+
+    monkeypatch.setattr(runner_module, "build_sec_filing_gemma_feature_row", build_feature)
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_feature_batch",
+        lambda *, feature_assembly_plan, feature_rows: _fake_feature_batch(
+            feature_assembly_plan, feature_rows
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_feature_batch",
+        lambda batch, **_kwargs: batch["feature_batch_sha256"],
+    )
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("feature-only runner entered a forbidden path")
+
+    for name in (
+        "_acquire_owned_development_market_evidence",
+        "probe_owned_ollama_runtime",
+        "call_ollama_extractor_attempt",
+        "_owned_transport_factory",
+    ):
+        monkeypatch.setattr(runner_module, name, forbidden)
+    monkeypatch.setattr(
+        features_module, "build_twenty_session_label_evidence", forbidden
+    )
+    monkeypatch.setattr(
+        features_module, "validate_twenty_session_label_evidence", forbidden
+    )
+    monkeypatch.setattr(learner_module, "SecFilingGemmaTwoHeadLearner", forbidden)
+    monkeypatch.setattr(prediction_module, "validate_prediction_prefix", forbidden)
+    monkeypatch.setattr(
+        verifier_module, "validate_market_snapshot_stage_replay", forbidden
+    )
+    monkeypatch.setattr(store, "_load_owned_development_model_event_inputs", forbidden)
+    monkeypatch.setattr(store, "_load_authorized_model_stage_event_inputs", forbidden)
+    assert {
+        "build_twenty_session_label_evidence",
+        "validate_twenty_session_label_evidence",
+        "SecFilingGemmaTwoHeadLearner",
+        "validate_prediction_prefix",
+        "validate_market_snapshot_stage_replay",
+        "validate_raw_scores_gates_and_ranking",
+        "validate_sec_gemma_no_leverage_proof",
+        "authoritative_prerequisite_validator",
+    }.isdisjoint(runner_module.__dict__)
+
+    result = run_owned_development_feature_batch(
+        reveal_store=store,
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    assert loader_calls == [plan["development_root_scope_sha256"]]
+    assert len(feature_calls) == 1
+    assert result == _fake_feature_batch(plan, result["feature_rows"])
+    assert result["feature_rows"][0]["fit_eligible"] is True
+    for field in (
+        "labels_included",
+        "outcomes_included",
+        "post_decision_market_rows_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+    ):
+        assert result[field] is False
+
+    forbidden_public_keys = {
+        "lookback_rows",
+        "observations",
+        "raw_response_bytes_by_symbol",
+        "artifact_bytes_by_symbol",
+        "window_bytes_by_symbol",
+        "current_normalized_text",
+        "prior_same_form_normalized_text",
+        "model_payload",
+        "request_bytes_base64",
+        "response_bytes_base64",
+        "model_attempt_receipt",
+        "label_evidence_sha256",
+        "future_market_rows",
+        "learner_state",
+        "prediction_rows",
+        "consumption_ledger",
+    }
+    observed_keys: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            observed_keys.update(value)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        else:
+            assert not isinstance(value, bytes)
+
+    walk(result)
+    assert forbidden_public_keys.isdisjoint(observed_keys)
+
+
+def test_feature_runner_rejects_extra_cross_root_reordered_and_malformed_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+
+    def forbidden_builder(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("invalid compact input reached the feature builder")
+
+    monkeypatch.setattr(
+        runner_module, "build_sec_filing_gemma_feature_row", forbidden_builder
+    )
+
+    def rejected(projection: dict[str, Any], match: str) -> None:
+        store._load_owned_development_feature_inputs = (
+            lambda **_kwargs: copy.deepcopy(projection)
+        )
+        with pytest.raises(SecFilingGemmaStageRunnerError, match=match):
+            run_owned_development_feature_batch(
+                reveal_store=store,
+                development_root_scope_sha256=scope,
+            )
+
+    extra = _development_feature_projection(_development_feature_plan())
+    extra["label_evidence"] = {}
+    rejected(extra, "exact store projection")
+
+    cross_root_plan = _development_feature_plan(scope_sha256="0" * 64)
+    cross_root = _development_feature_projection(cross_root_plan)
+    rejected(cross_root, "crossed their root scope")
+
+    first = _development_feature_plan()["event_plan"][0]
+    first_position = EXPECTED_MARKET_HISTORY_SESSIONS.index(
+        first["availability_session"]
+    )
+    second = {
+        "event_ordinal": 2,
+        "accession_number": "0000320193-02-000002",
+        "form": "10-K",
+        "availability_session": EXPECTED_MARKET_HISTORY_SESSIONS[
+            first_position + 20
+        ],
+        "sec_document_ordinal": 2,
+    }
+    ordered_plan = _development_feature_plan(event_plan=[first, second])
+    reordered = _development_feature_projection(ordered_plan)
+    reordered["events"].reverse()
+    _rehash_development_feature_projection(reordered)
+    rejected(reordered, "reordered or cross-event")
+
+    malformed = _development_feature_projection(_development_feature_plan())
+    del malformed["events"][0]["extraction_event_proof"][
+        "extraction_event_proof_sha256"
+    ]
+    _rehash_development_feature_projection(malformed)
+    rejected(malformed, "proof pin is unavailable")
+
+    post_decision = _development_feature_projection(_development_feature_plan())
+    decision = post_decision["events"][0]["event_plan_item"][
+        "availability_session"
+    ]
+    decision_position = EXPECTED_MARKET_HISTORY_SESSIONS.index(decision)
+    post_decision["events"][0]["market_prefix"]["lookback_rows"][-1][
+        "session"
+    ] = EXPECTED_MARKET_HISTORY_SESSIONS[decision_position + 1]
+    _rehash_development_feature_projection(post_decision)
+    rejected(post_decision, "post-decision row")
+
+    tampered = _development_feature_projection(_development_feature_plan())
+    tampered["feature_inputs_sha256"] = "0" * 64
+    rejected(tampered, "checksum changed")
 
 
 def test_runner_persists_exact_raw_normalized_and_canonical_batch_bytes(

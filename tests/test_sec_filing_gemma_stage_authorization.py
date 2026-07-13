@@ -46,6 +46,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION,
     CONSUMPTION_ENTRY_SCHEMA_VERSION,
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
+    DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION,
@@ -78,6 +79,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_market_execution_abort,
     build_development_market_execution_claim,
     build_development_market_reader_receipt,
+    build_development_feature_assembly_plan,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
@@ -100,6 +102,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_market_execution_abort,
     validate_development_market_execution_claim,
     validate_development_market_reader_receipt,
+    validate_development_feature_assembly_plan,
     validate_development_root_carry_in_reader_receipt,
     validate_development_model_execution_abort,
     validate_development_model_execution_claim,
@@ -1871,6 +1874,51 @@ _MODEL_MARKET_SHA_FIELDS = (
     "development_market_byte_index_sha256",
 )
 
+_DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS = {
+    "schema_version",
+    "contract_version",
+    "plan_kind",
+    "artifact_stage",
+    "development_root_scope_sha256",
+    "development_content_root_plan_sha256",
+    "candidate_sha256",
+    "candidate_design_sha256",
+    "corpus_universe_sha256",
+    "development_cutoff_session",
+    "start_consumed_request_count",
+    "development_sec_execution_claim_sha256",
+    "development_sec_reader_receipt_sha256",
+    "development_market_execution_claim_sha256",
+    "development_market_reader_receipt_sha256",
+    "development_market_acquisition_receipt_sha256",
+    "development_market_acquisition_bundle_sha256",
+    "development_market_acquisition_validation_sha256",
+    "development_market_source_manifest_sha256",
+    "development_market_stage_manifest_sha256",
+    "development_market_source_reconciliation_sha256",
+    "development_market_byte_index_sha256",
+    "development_model_execution_claim_sha256",
+    "development_model_reader_receipt_sha256",
+    "event_count",
+    "event_plan",
+    "event_plan_sha256",
+    "execution_source_hashes_sha256",
+    "canonical_market_rows_required",
+    "raw_market_output_permitted",
+    "normalized_filing_text_output_permitted",
+    "model_transport_envelope_output_permitted",
+    "feature_rows_output_permitted",
+    "outcome_access_permitted",
+    "label_access_permitted",
+    "training_membership_access_permitted",
+    "learner_fit_permitted",
+    "prediction_access_permitted",
+    "holdout_access_permitted",
+    "ledger_mutation_permitted",
+    "stage_promotion_permitted",
+    "feature_assembly_plan_sha256",
+}
+
 
 def _assert_model_market_bindings(value: dict, tip: dict, scope_hash: str) -> None:
     market_claim = tip["development_market_execution_claims"][scope_hash]
@@ -1987,6 +2035,23 @@ def _development_model_fixture() -> tuple[dict, dict, dict, dict, dict]:
         "byte_index": byte_index,
         "complete_marker_sha256": _h("development:model complete marker"),
     }
+
+
+def _development_feature_assembly_plan_fixture() -> tuple[dict, dict, dict, dict]:
+    state, _root_tip, claim_tip, claim, binding = _development_model_fixture()
+    scope_hash = binding["scope_sha256"]
+    reader_tip = _next_tip(
+        state,
+        claim_tip,
+        development_model_reader_receipts={scope_hash: binding["reader"]},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, reader_tip)
+    plan = build_development_feature_assembly_plan(
+        state,
+        development_root_scope_sha256=scope_hash,
+        independent_current_tip_anchor=reader_tip,
+    )
+    return state, reader_tip, claim, plan
 
 
 def _development_market_fixture() -> tuple[dict, dict, dict, dict, dict]:
@@ -4570,3 +4635,239 @@ def test_stage_and_development_model_claims_share_one_global_effect_slot() -> No
     assert development_claim_tip["development_model_execution_claims"][
         dev_binding["scope_sha256"]
     ] == development_claim
+
+
+def test_development_feature_assembly_plan_is_exact_feature_only_and_deterministic() -> None:
+    state, reader_tip, model_claim, plan = (
+        _development_feature_assembly_plan_fixture()
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    state_before = copy.deepcopy(state)
+    tip_before = copy.deepcopy(reader_tip)
+
+    assert set(plan) == _DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS
+    assert (
+        plan["schema_version"]
+        == DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION
+    )
+    assert plan["plan_kind"] == "request_free_development_feature_assembly"
+    assert plan["artifact_stage"] == "development"
+    assert plan["development_cutoff_session"] == "2018-12-31"
+    assert plan["start_consumed_request_count"] == 0
+    assert plan["canonical_market_rows_required"] is True
+    assert plan["feature_rows_output_permitted"] is True
+    for field in (
+        "raw_market_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "outcome_access_permitted",
+        "label_access_permitted",
+        "training_membership_access_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+    ):
+        assert plan[field] is False
+    assert plan["event_count"] == len(plan["event_plan"])
+    assert plan["event_plan"] == model_claim["event_plan"]
+    assert plan["event_plan_sha256"] == canonical_sha256(plan["event_plan"])
+    assert [
+        (event["availability_session"], event["accession_number"])
+        for event in plan["event_plan"]
+    ] == sorted(
+        (event["availability_session"], event["accession_number"])
+        for event in plan["event_plan"]
+    )
+    assert all(
+        event["availability_session"] <= plan["development_cutoff_session"]
+        for event in plan["event_plan"]
+    )
+
+    sec_claim = reader_tip["development_sec_execution_claims"][scope_hash]
+    sec_reader = reader_tip["development_sec_reader_receipts"][scope_hash]
+    market_claim = reader_tip["development_market_execution_claims"][scope_hash]
+    market_reader = reader_tip["development_market_reader_receipts"][scope_hash]
+    model_reader = reader_tip["development_model_reader_receipts"][scope_hash]
+    assert plan["development_sec_execution_claim_sha256"] == sec_claim["claim_sha256"]
+    assert (
+        plan["development_sec_reader_receipt_sha256"]
+        == sec_reader["receipt_sha256"]
+    )
+    assert (
+        plan["development_market_execution_claim_sha256"]
+        == market_claim["claim_sha256"]
+    )
+    assert (
+        plan["development_market_reader_receipt_sha256"]
+        == market_reader["receipt_sha256"]
+    )
+    assert (
+        plan["development_model_execution_claim_sha256"]
+        == model_claim["claim_sha256"]
+    )
+    assert (
+        plan["development_model_reader_receipt_sha256"]
+        == model_reader["receipt_sha256"]
+    )
+    assert validate_development_feature_assembly_plan(
+        plan,
+        expected_feature_assembly_plan_sha256=plan[
+            "feature_assembly_plan_sha256"
+        ],
+    ) == plan["feature_assembly_plan_sha256"]
+    assert build_development_feature_assembly_plan(
+        state,
+        development_root_scope_sha256=scope_hash,
+        independent_current_tip_anchor=reader_tip,
+    ) == plan
+    assert state == state_before
+    assert reader_tip == tip_before
+
+
+def test_development_feature_assembly_plan_requires_terminal_non_aborted_model() -> None:
+    state, _root_tip, claim_tip, claim, binding = _development_model_fixture()
+    scope_hash = binding["scope_sha256"]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="terminal non-aborted SEC, market, and model ancestry",
+    ):
+        build_development_feature_assembly_plan(
+            state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=claim_tip,
+        )
+
+    abort = build_development_model_execution_abort(
+        claim,
+        reason="claim_recovered_without_terminal_receipt",
+    )
+    abort_tip = _next_tip(
+        state,
+        claim_tip,
+        development_model_execution_aborts={scope_hash: abort},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, abort_tip)
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="terminal non-aborted SEC, market, and model ancestry",
+    ):
+        build_development_feature_assembly_plan(
+            state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=abort_tip,
+        )
+
+
+def test_development_feature_assembly_plan_rejects_consumption_and_active_effects() -> None:
+    root_state, _root_tip, model_claim_tip, model_claim, model_binding = (
+        _development_model_fixture()
+    )
+    scope_hash = model_binding["scope_sha256"]
+    model_reader_tip = _next_tip(
+        root_state,
+        model_claim_tip,
+        development_model_reader_receipts={scope_hash: model_binding["reader"]},
+    )
+    child_state, child_reader_tip, _carry, child_binding = (
+        _development_root_carry_in_fixture()
+    )
+    consumed_tip = _next_tip(
+        child_state,
+        child_reader_tip,
+        development_model_execution_claims={scope_hash: model_claim},
+        development_model_reader_receipts={scope_hash: model_binding["reader"]},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="precede every reveal-request consumption",
+    ):
+        build_development_feature_assembly_plan(
+            child_state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=consumed_tip,
+        )
+
+    active_tip = _next_tip(
+        child_state,
+        child_binding["child_claim_tip"],
+        development_model_execution_claims={scope_hash: model_claim},
+        development_model_reader_receipts={scope_hash: model_binding["reader"]},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="requires no active owned external effect",
+    ):
+        build_development_feature_assembly_plan(
+            child_state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=active_tip,
+        )
+    assert model_reader_tip["consumed_request_count"] == 0
+
+
+def test_development_feature_assembly_plan_validation_fails_closed() -> None:
+    _state, _reader_tip, _model_claim, plan = (
+        _development_feature_assembly_plan_fixture()
+    )
+
+    for field, replacement in (
+        ("outcome_access_permitted", True),
+        ("label_access_permitted", True),
+        ("learner_fit_permitted", True),
+        ("feature_rows_output_permitted", False),
+        ("development_cutoff_session", "2019-01-02"),
+        ("start_consumed_request_count", 1),
+        ("start_consumed_request_count", False),
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = replacement
+        _rehash(changed, "feature_assembly_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_feature_assembly_plan(
+                changed,
+                expected_feature_assembly_plan_sha256=changed[
+                    "feature_assembly_plan_sha256"
+                ],
+            )
+
+    reordered = copy.deepcopy(plan)
+    reordered["event_plan"].reverse()
+    for ordinal, event in enumerate(reordered["event_plan"], start=1):
+        event["event_ordinal"] = ordinal
+    reordered["event_plan_sha256"] = canonical_sha256(reordered["event_plan"])
+    _rehash(reordered, "feature_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not in exact chronological order",
+    ):
+        validate_development_feature_assembly_plan(
+            reordered,
+            expected_feature_assembly_plan_sha256=reordered[
+                "feature_assembly_plan_sha256"
+            ],
+        )
+
+    with_extra = copy.deepcopy(plan)
+    with_extra["unexpected"] = False
+    _rehash(with_extra, "feature_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="keys changed",
+    ):
+        validate_development_feature_assembly_plan(
+            with_extra,
+            expected_feature_assembly_plan_sha256=with_extra[
+                "feature_assembly_plan_sha256"
+            ],
+        )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not externally pinned",
+    ):
+        validate_development_feature_assembly_plan(
+            plan,
+            expected_feature_assembly_plan_sha256=_h("other feature plan"),
+        )

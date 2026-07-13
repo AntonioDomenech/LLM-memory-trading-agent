@@ -31,6 +31,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     MAX_SENTENCE_CHARACTERS,
     MAX_SENTENCES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
+    STAGE_WINDOWS,
     STAGE_MODEL_CALL_CAPS,
     build_stage_content_manifest,
     canonical_sha256,
@@ -138,6 +139,9 @@ DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-model-execution-abort-v1"
+)
+DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-feature-assembly-plan-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
@@ -1049,6 +1053,52 @@ _DEVELOPMENT_MARKET_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
         "reason",
         "external_effect_retry_permitted",
         "abort_sha256",
+    }
+)
+_DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "corpus_universe_sha256",
+        "development_cutoff_session",
+        "start_consumed_request_count",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
+        "development_model_execution_claim_sha256",
+        "development_model_reader_receipt_sha256",
+        "event_count",
+        "event_plan",
+        "event_plan_sha256",
+        "execution_source_hashes_sha256",
+        "canonical_market_rows_required",
+        "raw_market_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "feature_rows_output_permitted",
+        "outcome_access_permitted",
+        "label_access_permitted",
+        "training_membership_access_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "feature_assembly_plan_sha256",
     }
 )
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
@@ -9191,6 +9241,411 @@ def validate_development_model_execution_abort(
     )
 
 
+def _validated_development_feature_event_plan(raw: Any) -> list[dict[str, Any]]:
+    if type(raw) is not list or not raw:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly event plan must be a non-empty exact list"
+        )
+    event_keys = frozenset(
+        {
+            "event_ordinal",
+            "accession_number",
+            "form",
+            "availability_session",
+            "sec_document_ordinal",
+        }
+    )
+    stage_start, stage_end = STAGE_WINDOWS["development"]
+    events: list[dict[str, Any]] = []
+    accessions: set[str] = set()
+    sec_document_ordinals: set[int] = set()
+    for ordinal, raw_event in enumerate(raw, start=1):
+        event = _mapping(
+            raw_event,
+            f"development feature assembly event {ordinal}",
+        )
+        _expect_keys(
+            event,
+            event_keys,
+            f"development feature assembly event {ordinal}",
+        )
+        if (
+            _strict_int(
+                event["event_ordinal"],
+                "development feature assembly event ordinal",
+                minimum=1,
+            )
+            != ordinal
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development feature assembly event ordinals are not contiguous"
+            )
+        accession = _safe_id(
+            event["accession_number"],
+            "development feature assembly accession",
+        )
+        session = event["availability_session"]
+        sec_document_ordinal = _strict_int(
+            event["sec_document_ordinal"],
+            "development feature assembly SEC document ordinal",
+            minimum=1,
+        )
+        if (
+            _AAPL_ACCESSION_RE.fullmatch(accession) is None
+            or type(event["form"]) is not str
+            or event["form"] not in {"10-K", "10-Q"}
+            or type(session) is not str
+            or _ISO_DATE_RE.fullmatch(session) is None
+            or not (stage_start <= session <= stage_end)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development feature assembly event identity is invalid or outside development"
+            )
+        if accession in accessions or sec_document_ordinal in sec_document_ordinals:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development feature assembly events contain duplicate source identities"
+            )
+        accessions.add(accession)
+        sec_document_ordinals.add(sec_document_ordinal)
+        events.append(event)
+    chronology = [
+        (event["availability_session"], event["accession_number"])
+        for event in events
+    ]
+    if chronology != sorted(chronology):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly events are not in exact chronological order"
+        )
+    if sec_document_ordinals != set(range(1, len(events) + 1)):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly SEC document ordinals are not an exact permutation"
+        )
+    return events
+
+
+def build_development_feature_assembly_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a request-free, feature-only plan from one terminal development root."""
+
+    authenticated_state, _ledger = _validated_store_snapshot(
+        authenticated_store_snapshot
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        authenticated_state,
+        independent_current_tip_anchor,
+    )
+    scope_hash = _sha256(
+        development_root_scope_sha256,
+        "development feature assembly root scope hash",
+    )
+    sec_claim = current_tip["development_sec_execution_claims"].get(scope_hash)
+    sec_reader = current_tip["development_sec_reader_receipts"].get(scope_hash)
+    market_claim = current_tip["development_market_execution_claims"].get(
+        scope_hash
+    )
+    market_reader = current_tip["development_market_reader_receipts"].get(
+        scope_hash
+    )
+    model_claim = current_tip["development_model_execution_claims"].get(scope_hash)
+    model_reader = current_tip["development_model_reader_receipts"].get(scope_hash)
+    if (
+        any(
+            type(value) is not dict
+            for value in (
+                sec_claim,
+                sec_reader,
+                market_claim,
+                market_reader,
+                model_claim,
+                model_reader,
+            )
+        )
+        or scope_hash in current_tip["development_sec_execution_aborts"]
+        or scope_hash in current_tip["development_market_execution_aborts"]
+        or scope_hash in current_tip["development_model_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly requires terminal non-aborted "
+            "SEC, market, and model ancestry"
+        )
+
+    active_lifecycles = (
+        (
+            current_tip["stage_sec_execution_claims"],
+            current_tip["stage_sec_reader_receipts"],
+            current_tip["stage_sec_execution_aborts"],
+        ),
+        (
+            current_tip["development_sec_execution_claims"],
+            current_tip["development_sec_reader_receipts"],
+            current_tip["development_sec_execution_aborts"],
+        ),
+        (
+            current_tip["development_market_execution_claims"],
+            current_tip["development_market_reader_receipts"],
+            current_tip["development_market_execution_aborts"],
+        ),
+        (
+            current_tip["stage_model_execution_claims"],
+            current_tip["stage_model_reader_receipts"],
+            current_tip["stage_model_execution_aborts"],
+        ),
+        (
+            current_tip["development_model_execution_claims"],
+            current_tip["development_model_reader_receipts"],
+            current_tip["development_model_execution_aborts"],
+        ),
+    )
+    if any(
+        set(claims) - set(receipts) - set(aborts)
+        for claims, receipts, aborts in active_lifecycles
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly requires no active owned external effect"
+        )
+    if (
+        current_tip["consumed_request_count"] != 0
+        or sec_claim["start_consumed_request_count"] != 0
+        or market_claim["start_consumed_request_count"] != 0
+        or model_claim["start_consumed_request_count"] != 0
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly must precede every reveal-request consumption"
+        )
+
+    market_bindings = _development_market_model_bindings(
+        development_root_scope_sha256=scope_hash,
+        development_market_execution_claims=current_tip[
+            "development_market_execution_claims"
+        ],
+        development_market_reader_receipts=current_tip[
+            "development_market_reader_receipts"
+        ],
+        development_market_execution_aborts=current_tip[
+            "development_market_execution_aborts"
+        ],
+        location="Development feature assembly",
+    )
+    exact_model_ancestry = {
+        "development_root_scope_sha256": scope_hash,
+        "development_content_root_plan_sha256": sec_claim[
+            "development_content_root_plan_sha256"
+        ],
+        "candidate_sha256": sec_claim["candidate_sha256"],
+        "candidate_design_sha256": sec_claim["candidate_design_sha256"],
+        "corpus_universe_sha256": sec_claim["corpus_universe_sha256"],
+        "development_sec_execution_claim_sha256": sec_claim["claim_sha256"],
+        "development_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        **market_bindings,
+    }
+    if any(
+        model_claim[field] != expected
+        for field, expected in exact_model_ancestry.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly model claim crossed its terminal root ancestry"
+        )
+    if (
+        model_reader["development_root_scope_sha256"] != scope_hash
+        or model_reader["claim_sha256"] != model_claim["claim_sha256"]
+        or any(
+            model_reader[field] != model_claim[field]
+            for field in (
+                "development_content_root_plan_sha256",
+                "candidate_sha256",
+                "development_sec_execution_claim_sha256",
+                "development_sec_reader_receipt_sha256",
+                *tuple(market_bindings),
+                "event_count",
+                "event_plan_sha256",
+                "execution_source_hashes_sha256",
+            )
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly model reader crossed its execution claim"
+        )
+
+    content_root_plan = _validated_development_content_root_plan(
+        sec_claim["development_content_root_plan"]
+    )
+    planned_accessions = _validated_model_accession_order(
+        [
+            document["accession_number"]
+            for document in content_root_plan["sec_access_plan"]["documents"]
+        ],
+        location="development feature assembly SEC acquisition order",
+    )
+    event_plan = _validated_model_event_plan(
+        model_claim["event_plan"],
+        universe_manifest=content_root_plan["corpus_universe_manifest"],
+        stage="development",
+        sec_acquisition_accession_order=planned_accessions,
+    )
+    event_plan = _validated_development_feature_event_plan(event_plan)
+    event_plan_hash = canonical_sha256(event_plan)
+    if (
+        model_claim["event_count"] != len(event_plan)
+        or model_claim["event_plan_sha256"] != event_plan_hash
+        or model_reader["event_count"] != len(event_plan)
+        or model_reader["event_plan_sha256"] != event_plan_hash
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly event plan crossed its terminal model batch"
+        )
+
+    body = {
+        "schema_version": DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_feature_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": scope_hash,
+        "development_content_root_plan_sha256": model_claim[
+            "development_content_root_plan_sha256"
+        ],
+        "candidate_sha256": model_claim["candidate_sha256"],
+        "candidate_design_sha256": model_claim["candidate_design_sha256"],
+        "corpus_universe_sha256": model_claim["corpus_universe_sha256"],
+        "development_cutoff_session": STAGE_WINDOWS["development"][1],
+        "start_consumed_request_count": 0,
+        "development_sec_execution_claim_sha256": sec_claim["claim_sha256"],
+        "development_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        **market_bindings,
+        "development_model_execution_claim_sha256": model_claim["claim_sha256"],
+        "development_model_reader_receipt_sha256": model_reader[
+            "receipt_sha256"
+        ],
+        "event_count": len(event_plan),
+        "event_plan": event_plan,
+        "event_plan_sha256": event_plan_hash,
+        "execution_source_hashes_sha256": model_claim[
+            "execution_source_hashes_sha256"
+        ],
+        "canonical_market_rows_required": True,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "feature_rows_output_permitted": True,
+        "outcome_access_permitted": False,
+        "label_access_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+    }
+    return {
+        **body,
+        "feature_assembly_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_feature_assembly_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_feature_assembly_plan_sha256: str,
+) -> str:
+    """Validate the exact detached capability and chronology of one feature plan."""
+
+    value = _mapping(plan, "development feature assembly plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS,
+        "development feature assembly plan",
+    )
+    expected_capabilities = {
+        "canonical_market_rows_required": True,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "feature_rows_output_permitted": True,
+        "outcome_access_permitted": False,
+        "label_access_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+    }
+    start_consumed_request_count = _strict_int(
+        value["start_consumed_request_count"],
+        "development feature assembly start consumed-request count",
+    )
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["plan_kind"] != "request_free_development_feature_assembly"
+        or value["artifact_stage"] != "development"
+        or value["development_cutoff_session"]
+        != STAGE_WINDOWS["development"][1]
+        or start_consumed_request_count != 0
+        or any(
+            value[field] is not expected
+            for field, expected in expected_capabilities.items()
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly plan semantics or capability boundary changed"
+        )
+    for field in (
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "corpus_universe_sha256",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
+        "development_model_execution_claim_sha256",
+        "development_model_reader_receipt_sha256",
+        "event_plan_sha256",
+        "execution_source_hashes_sha256",
+    ):
+        _sha256(value[field], f"development feature assembly plan {field}")
+    event_plan = _validated_development_feature_event_plan(value["event_plan"])
+    if (
+        _strict_int(
+            value["event_count"],
+            "development feature assembly event count",
+            minimum=1,
+        )
+        != len(event_plan)
+        or value["event_plan_sha256"] != canonical_sha256(event_plan)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly event plan count or hash changed"
+        )
+    observed = _self_hash(
+        value,
+        "feature_assembly_plan_sha256",
+        "development feature assembly plan",
+    )
+    expected = _sha256(
+        expected_feature_assembly_plan_sha256,
+        "expected development feature assembly plan hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development feature assembly plan is not externally pinned"
+        )
+    return observed
+
+
 def _reconstruct_development_content_manifest_from_root(
     development_sec_execution_claim: Mapping[str, Any],
     development_sec_reader_receipt: Mapping[str, Any],
@@ -10397,6 +10852,7 @@ __all__ = [
     "CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION",
     "DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID",
     "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
     "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION",
@@ -10435,6 +10891,7 @@ __all__ = [
     "build_development_market_execution_abort",
     "build_development_market_execution_claim",
     "build_development_market_reader_receipt",
+    "build_development_feature_assembly_plan",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
     "build_development_sec_reader_receipt",
@@ -10458,6 +10915,7 @@ __all__ = [
     "validate_development_market_execution_abort",
     "validate_development_market_execution_claim",
     "validate_development_market_reader_receipt",
+    "validate_development_feature_assembly_plan",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",
     "validate_development_model_execution_claim",

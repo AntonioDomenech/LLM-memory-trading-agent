@@ -9,14 +9,17 @@ derived from the atomically persisted claim.  A claim is never retried after
 an indeterminate process exit.
 
 Private SEC contact and raw Yahoo metadata exist only inside their owned call
-stacks and fixed quarantine components.  Public results expose only the exact
-claim and store-recomputed reader receipt.
+stacks and fixed quarantine components.  Effectful public results expose only
+the exact claim and store-recomputed reader receipt.  The request-free feature
+checkpoint exposes only derived, self-hashed development feature rows and is
+explicitly non-authorizing.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+import copy
 import hashlib
 import json
 import math
@@ -48,6 +51,14 @@ from .sec_filing_gemma_corpus import (
     _reconcile_detached_transport_usage,
     _reconcile_authenticated_stage_access_receipt,
     _validate_persisted_authenticated_stage_access_batch,
+)
+from .sec_filing_gemma_features import (
+    MARKET_LOOKBACK_ROW_COUNT,
+    OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION,
+    SecFilingGemmaFeatureError,
+    build_owned_development_feature_batch,
+    build_sec_filing_gemma_feature_row,
+    validate_owned_development_feature_batch,
 )
 from .sec_filing_gemma_reveal_store import (
     DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME,
@@ -100,6 +111,7 @@ from .sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     _sec_component_plan_from_bundle,
+    validate_development_feature_assembly_plan,
 )
 from .sec_point_in_time import validate_sec_user_agent
 
@@ -118,6 +130,24 @@ _OWNED_MODEL_ATTEMPT_TRANSPORT_MODE: Final[str] = (
 )
 _OWNED_RUNTIME_PROBE_TRANSPORT_MODE: Final[str] = (
     "owned_hardened_loopback_runtime_probe_unattested"
+)
+_OWNED_DEVELOPMENT_FEATURE_INPUT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "feature_assembly_plan",
+        "events",
+        "feature_inputs_sha256",
+    }
+)
+_OWNED_DEVELOPMENT_FEATURE_EVENT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "event_ordinal",
+        "event_plan_item",
+        "market_prefix",
+        "market_prefix_proof",
+        "universe_event_proof",
+        "extraction_event_proof",
+    }
 )
 
 
@@ -3223,9 +3253,228 @@ def run_owned_development_market_batch(
         execution_lock.__exit__(None, None, None)
 
 
+def _validated_owned_development_feature_inputs(
+    loaded: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Require the exact store-owned, causal feature projection."""
+
+    if type(loaded) is not dict or set(loaded) != set(
+        _OWNED_DEVELOPMENT_FEATURE_INPUT_KEYS
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature inputs are not an exact store projection"
+        )
+    if loaded["schema_version"] != OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature-input schema changed"
+        )
+    plan = loaded["feature_assembly_plan"]
+    if type(plan) is not dict or not _is_bare_sha256(
+        plan.get("feature_assembly_plan_sha256")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature assembly plan is unavailable"
+        )
+    try:
+        validated_plan_hash = validate_development_feature_assembly_plan(
+            plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "feature_assembly_plan_sha256"
+            ],
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature assembly plan failed exact validation"
+        ) from None
+    if (
+        validated_plan_hash != plan["feature_assembly_plan_sha256"]
+        or plan.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature inputs crossed their root scope"
+        )
+    events = loaded["events"]
+    event_plan = plan.get("event_plan")
+    if (
+        type(events) is not list
+        or type(event_plan) is not list
+        or len(events) != plan.get("event_count")
+        or len(events) != len(event_plan)
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature-input event count changed"
+        )
+    for ordinal, (event, planned) in enumerate(
+        zip(events, event_plan, strict=True), start=1
+    ):
+        if (
+            type(event) is not dict
+            or set(event) != set(_OWNED_DEVELOPMENT_FEATURE_EVENT_KEYS)
+            or isinstance(event["event_ordinal"], bool)
+            or type(event["event_ordinal"]) is not int
+            or event["event_ordinal"] != ordinal
+            or type(event["event_plan_item"]) is not dict
+            or event["event_plan_item"] != planned
+            or planned.get("event_ordinal") != ordinal
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned development feature inputs are reordered or cross-event"
+            )
+        prefix = event["market_prefix"]
+        prefix_proof = event["market_prefix_proof"]
+        universe_proof = event["universe_event_proof"]
+        extraction_proof = event["extraction_event_proof"]
+        if any(
+            type(value) is not dict
+            for value in (
+                prefix,
+                prefix_proof,
+                universe_proof,
+                extraction_proof,
+            )
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned development feature event proofs are not exact mappings"
+            )
+        rows = prefix.get("lookback_rows")
+        decision_session = planned.get("availability_session")
+        if (
+            prefix.get("artifact_stage") != "development"
+            or prefix.get("decision_event_id") != planned.get("accession_number")
+            or prefix.get("decision_session") != decision_session
+            or prefix.get("market_cutoff_session") != decision_session
+            or prefix.get("market_stage_manifest_sha256")
+            != plan.get("development_market_stage_manifest_sha256")
+            or prefix.get("source_manifest_sha256")
+            != plan.get("development_market_source_manifest_sha256")
+            or prefix.get("lookback_row_count") != MARKET_LOOKBACK_ROW_COUNT
+            or type(rows) is not list
+            or len(rows) != MARKET_LOOKBACK_ROW_COUNT
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned development feature event did not isolate the exact market prefix"
+            )
+        row_sessions = [
+            row.get("session") if type(row) is dict else None for row in rows
+        ]
+        if (
+            any(type(session) is not str for session in row_sessions)
+            or row_sessions != sorted(row_sessions)
+            or len(row_sessions) != len(set(row_sessions))
+            or row_sessions[-1] != decision_session
+            or any(session > decision_session for session in row_sessions)
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned development feature prefix contains a post-decision row"
+            )
+        proof_hash_fields = (
+            (prefix_proof, "market_prefix_proof_sha256"),
+            (universe_proof, "universe_event_proof_sha256"),
+            (extraction_proof, "extraction_event_proof_sha256"),
+        )
+        if any(
+            not _is_bare_sha256(proof.get(field))
+            for proof, field in proof_hash_fields
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned development feature proof pin is unavailable"
+            )
+    feature_inputs_hash = loaded["feature_inputs_sha256"]
+    if not _is_bare_sha256(feature_inputs_hash):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature-input checksum is invalid"
+        )
+    body = {
+        key: loaded[key] for key in loaded if key != "feature_inputs_sha256"
+    }
+    try:
+        calculated_inputs_hash = canonical_sha256(body)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature inputs are not canonical JSON"
+        ) from None
+    if calculated_inputs_hash != feature_inputs_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature-input checksum changed"
+        )
+    return copy.deepcopy(loaded)
+
+
+def run_owned_development_feature_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Build the non-authorizing development feature batch from one owned projection."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development feature scope must be a bare lowercase SHA-256"
+        )
+    try:
+        loaded = reveal_store._load_owned_development_feature_inputs(
+            development_root_scope_sha256=development_root_scope_sha256
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature inputs could not be loaded"
+        ) from None
+    inputs = _validated_owned_development_feature_inputs(
+        loaded,
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    plan = inputs["feature_assembly_plan"]
+    feature_rows: list[dict[str, Any]] = []
+    try:
+        for event in inputs["events"]:
+            prefix_proof = event["market_prefix_proof"]
+            universe_proof = event["universe_event_proof"]
+            extraction_proof = event["extraction_event_proof"]
+            feature_rows.append(
+                build_sec_filing_gemma_feature_row(
+                    market_prefix=event["market_prefix"],
+                    market_prefix_proof=prefix_proof,
+                    expected_market_prefix_proof_sha256=prefix_proof[
+                        "market_prefix_proof_sha256"
+                    ],
+                    universe_event_proof=universe_proof,
+                    expected_universe_event_proof_sha256=universe_proof[
+                        "universe_event_proof_sha256"
+                    ],
+                    extraction_event_proof=extraction_proof,
+                    expected_extraction_event_proof_sha256=extraction_proof[
+                        "extraction_event_proof_sha256"
+                    ],
+                )
+            )
+        batch = build_owned_development_feature_batch(
+            feature_assembly_plan=plan,
+            feature_rows=feature_rows,
+        )
+        validate_owned_development_feature_batch(
+            batch,
+            feature_assembly_plan=plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "feature_assembly_plan_sha256"
+            ],
+            expected_feature_batch_sha256=batch["feature_batch_sha256"],
+        )
+    except (KeyError, TypeError, ValueError, SecFilingGemmaFeatureError):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development feature batch failed causal replay"
+        ) from None
+    return batch
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
+    "run_owned_development_feature_batch",
     "run_owned_development_market_batch",
     "run_owned_development_model_batch",
     "run_owned_development_sec_root",
