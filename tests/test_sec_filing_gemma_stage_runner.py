@@ -35,9 +35,13 @@ from agent_benchmark.sec_filing_gemma_stage_runner import (
     SecFilingGemmaStageRunnerError,
     run_authorized_sec_stage,
     run_owned_development_feature_batch,
+    run_owned_development_label_batch,
     run_owned_development_model_batch,
     run_owned_development_sec_root,
     run_owned_stage_model_batch,
+)
+from agent_benchmark.sec_filing_gemma_market_evidence import (
+    market_session_calendar_sha256,
 )
 from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
 from agent_benchmark.sec_session_calendar import EXPECTED_MARKET_HISTORY_SESSIONS
@@ -343,6 +347,130 @@ def _fake_feature_batch(
         "production_authorized": False,
     }
     return {**body, "feature_batch_sha256": canonical_sha256(body)}
+
+
+def _development_label_plan(feature_plan: dict[str, Any]) -> dict[str, Any]:
+    maturity_plan: list[dict[str, Any]] = []
+    for event in feature_plan["event_plan"]:
+        decision_index = EXPECTED_MARKET_HISTORY_SESSIONS.index(
+            event["availability_session"]
+        )
+        maturity = EXPECTED_MARKET_HISTORY_SESSIONS[decision_index + 21]
+        maturity_plan.append(
+            {
+                "event_ordinal": event["event_ordinal"],
+                "accession_number": event["accession_number"],
+                "form": event["form"],
+                "decision_session": event["availability_session"],
+                "sec_document_ordinal": event["sec_document_ordinal"],
+                "label_maturity_session": maturity,
+                "matured_by_development_cutoff": maturity <= "2018-12-31",
+            }
+        )
+    matured = sum(item["matured_by_development_cutoff"] for item in maturity_plan)
+    body = {
+        "schema_version": "aapl-sec-gemma-development-label-assembly-plan-v1",
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_label_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": feature_plan[
+            "development_root_scope_sha256"
+        ],
+        "start_consumed_request_count": 0,
+        "source_feature_assembly_plan": copy.deepcopy(feature_plan),
+        "source_feature_assembly_plan_sha256": feature_plan[
+            "feature_assembly_plan_sha256"
+        ],
+        "calendar_sessions_sha256": market_session_calendar_sha256(
+            EXPECTED_MARKET_HISTORY_SESSIONS
+        ),
+        "development_cutoff_session": "2018-12-31",
+        "label_horizon_sessions": 20,
+        "label_entry_session_offset": 1,
+        "label_maturity_session_offset": 21,
+        "maturity_rule": "t_plus_21_session_lte_development_cutoff_inclusive",
+        "event_count": len(maturity_plan),
+        "maturity_plan": maturity_plan,
+        "maturity_plan_sha256": canonical_sha256(maturity_plan),
+        "matured_event_count": matured,
+        "unmatured_event_count": len(maturity_plan) - matured,
+        "canonical_market_rows_required": True,
+        "development_outcome_derivation_permitted": True,
+        "development_label_rows_output_permitted": True,
+        "post_cutoff_market_access_permitted": False,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+    return {**body, "label_assembly_plan_sha256": canonical_sha256(body)}
+
+
+def _development_label_projection(
+    plan: dict[str, Any],
+    source_feature_batch: dict[str, Any],
+) -> dict[str, Any]:
+    audits: list[dict[str, Any]] = []
+    labels: list[dict[str, Any]] = []
+    feature_rows = source_feature_batch["feature_rows"]
+    for maturity_item, feature_row in zip(
+        plan["maturity_plan"], feature_rows, strict=True
+    ):
+        label_hash = (
+            hashlib.sha256(
+                f"label-{maturity_item['event_ordinal']}".encode()
+            ).hexdigest()
+            if maturity_item["matured_by_development_cutoff"]
+            else None
+        )
+        audits.append(
+            {
+                "event_ordinal": maturity_item["event_ordinal"],
+                "accession_number": maturity_item["accession_number"],
+                "decision_session": maturity_item["decision_session"],
+                "feature_row_sha256": feature_row["feature_row_sha256"],
+                "label_maturity_session": maturity_item[
+                    "label_maturity_session"
+                ],
+                "matured_by_development_cutoff": maturity_item[
+                    "matured_by_development_cutoff"
+                ],
+                "label_evidence_sha256": label_hash,
+            }
+        )
+        if label_hash is not None:
+            labels.append(
+                {
+                    "accession_number": maturity_item["accession_number"],
+                    "label_evidence_sha256": label_hash,
+                }
+            )
+    body = {
+        "schema_version": "aapl-sec-gemma-owned-development-label-projection-v1",
+        "label_assembly_plan": plan,
+        "source_feature_batch": source_feature_batch,
+        "maturity_audit_rows": audits,
+        "label_evidence_rows": labels,
+    }
+    return {**body, "label_projection_sha256": canonical_sha256(body)}
+
+
+def _rehash_development_label_projection(
+    projection: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        key: projection[key]
+        for key in projection
+        if key != "label_projection_sha256"
+    }
+    projection["label_projection_sha256"] = canonical_sha256(body)
+    return projection
 
 
 def _component_plan() -> dict[str, Any]:
@@ -700,6 +828,7 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
         "SecFilingGemmaStageRunnerError",
         "run_authorized_sec_stage",
         "run_owned_development_feature_batch",
+        "run_owned_development_label_batch",
         "run_owned_development_market_batch",
         "run_owned_development_model_batch",
         "run_owned_development_sec_root",
@@ -775,6 +904,36 @@ def test_public_feature_runner_signature_is_scope_only_and_keyword_only() -> Non
         "event",
         "rows",
         "snapshot",
+        "label",
+        "outcome",
+        "holdout",
+        "path",
+        "bytes",
+        "payload",
+        "model",
+        "transport",
+        "session",
+    }.isdisjoint(signature.parameters)
+
+
+def test_public_label_runner_signature_is_scope_only_and_keyword_only() -> None:
+    signature = inspect.signature(run_owned_development_label_batch)
+    assert tuple(signature.parameters) == (
+        "reveal_store",
+        "development_root_scope_sha256",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    assert {
+        "request_sha256",
+        "stage",
+        "candidate",
+        "event",
+        "rows",
+        "snapshot",
+        "feature_batch",
         "label",
         "outcome",
         "holdout",
@@ -1008,6 +1167,172 @@ def test_feature_runner_rejects_extra_cross_root_reordered_and_malformed_inputs(
 
     tampered = _development_feature_projection(_development_feature_plan())
     tampered["feature_inputs_sha256"] = "0" * 64
+    rejected(tampered, "checksum changed")
+
+
+def test_label_runner_consumes_only_owned_compact_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    feature_plan = _development_feature_plan()
+    feature_rows = [
+        {
+            "accession_number": feature_plan["event_plan"][0][
+                "accession_number"
+            ],
+            "decision_session": feature_plan["event_plan"][0][
+                "availability_session"
+            ],
+            "feature_row_sha256": hashlib.sha256(b"feature-row").hexdigest(),
+        }
+    ]
+    source_batch = _fake_feature_batch(feature_plan, feature_rows)
+    label_plan = _development_label_plan(feature_plan)
+    projection = _development_label_projection(label_plan, source_batch)
+    loader_calls: list[str] = []
+
+    def load_projection(*, development_root_scope_sha256: str) -> dict[str, Any]:
+        loader_calls.append(development_root_scope_sha256)
+        return copy.deepcopy(projection)
+
+    store._load_owned_development_label_projection = load_projection
+    build_calls: list[dict[str, Any]] = []
+
+    def build_batch(**kwargs: Any) -> dict[str, Any]:
+        build_calls.append(kwargs)
+        assert set(kwargs) == {
+            "label_assembly_plan",
+            "source_feature_batch",
+            "maturity_audit_rows",
+            "label_evidence_rows",
+        }
+        body = {
+            "development_root_scope_sha256": kwargs["label_assembly_plan"][
+                "development_root_scope_sha256"
+            ],
+            "matured_label_count": len(kwargs["label_evidence_rows"]),
+            "training_membership_included": False,
+            "learner_fit_authorized": False,
+            "prediction_authorized": False,
+            "holdout_access_authorized": False,
+            "ledger_mutation_authorized": False,
+            "stage_promotion_authorized": False,
+            "production_authorized": False,
+        }
+        return {**body, "label_batch_sha256": canonical_sha256(body)}
+
+    monkeypatch.setattr(
+        runner_module, "build_owned_development_label_batch", build_batch
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_label_batch",
+        lambda batch, **_kwargs: batch["label_batch_sha256"],
+    )
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("label runner entered a forbidden path")
+
+    for name in (
+        "_acquire_owned_development_market_evidence",
+        "probe_owned_ollama_runtime",
+        "call_ollama_extractor_attempt",
+        "_owned_transport_factory",
+        "build_sec_filing_gemma_feature_row",
+    ):
+        monkeypatch.setattr(runner_module, name, forbidden)
+
+    result = run_owned_development_label_batch(
+        reveal_store=store,
+        development_root_scope_sha256=feature_plan[
+            "development_root_scope_sha256"
+        ],
+    )
+    assert loader_calls == [feature_plan["development_root_scope_sha256"]]
+    assert len(build_calls) == 1
+    assert result["matured_label_count"] == 1
+    for field in (
+        "training_membership_included",
+        "learner_fit_authorized",
+        "prediction_authorized",
+        "holdout_access_authorized",
+        "ledger_mutation_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+    ):
+        assert result[field] is False
+
+
+def test_label_runner_rejects_extra_cross_root_bad_counts_and_checksum(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+    feature_plan = _development_feature_plan(scope_sha256=scope)
+    feature_rows = [
+        {
+            "accession_number": feature_plan["event_plan"][0][
+                "accession_number"
+            ],
+            "decision_session": feature_plan["event_plan"][0][
+                "availability_session"
+            ],
+            "feature_row_sha256": hashlib.sha256(b"feature-row").hexdigest(),
+        }
+    ]
+    source_batch = _fake_feature_batch(feature_plan, feature_rows)
+    plan = _development_label_plan(feature_plan)
+
+    def forbidden_builder(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("invalid label projection reached the batch builder")
+
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_label_batch",
+        forbidden_builder,
+    )
+
+    def rejected(projection: dict[str, Any], match: str) -> None:
+        store._load_owned_development_label_projection = (
+            lambda **_kwargs: copy.deepcopy(projection)
+        )
+        with pytest.raises(SecFilingGemmaStageRunnerError, match=match):
+            run_owned_development_label_batch(
+                reveal_store=store,
+                development_root_scope_sha256=scope,
+            )
+
+    extra = _development_label_projection(plan, source_batch)
+    extra["training_membership"] = []
+    rejected(extra, "not exact")
+
+    other_feature_plan = _development_feature_plan(scope_sha256="0" * 64)
+    other_source_batch = _fake_feature_batch(other_feature_plan, feature_rows)
+    cross_root = _development_label_projection(
+        _development_label_plan(other_feature_plan), other_source_batch
+    )
+    rejected(cross_root, "crossed its root scope")
+
+    bad_count = _development_label_projection(plan, source_batch)
+    bad_count["maturity_audit_rows"] = []
+    _rehash_development_label_projection(bad_count)
+    rejected(bad_count, "row counts changed")
+
+    bool_count_source = copy.deepcopy(source_batch)
+    bool_count_source["event_count"] = True
+    source_body = {
+        key: bool_count_source[key]
+        for key in bool_count_source
+        if key != "feature_batch_sha256"
+    }
+    bool_count_source["feature_batch_sha256"] = canonical_sha256(source_body)
+    bool_count = _development_label_projection(plan, bool_count_source)
+    rejected(bool_count, "source feature batch crossed its plan")
+
+    tampered = _development_label_projection(plan, source_batch)
+    tampered["label_projection_sha256"] = "0" * 64
     rejected(tampered, "checksum changed")
 
 

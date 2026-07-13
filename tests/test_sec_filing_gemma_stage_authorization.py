@@ -20,9 +20,13 @@ from agent_benchmark.sec_filing_gemma_contract import (
     build_corpus_universe_manifest,
     build_stage_content_manifest,
     canonical_sha256,
+    market_session_calendar_sha256,
     session_calendar_sha256,
 )
-from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
+from agent_benchmark.sec_session_calendar import (
+    EXPECTED_MARKET_HISTORY_SESSIONS,
+    EXPECTED_SESSIONS,
+)
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
     candidate_design_sha256,
@@ -47,6 +51,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMPTION_ENTRY_SCHEMA_VERSION,
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
     DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION,
+    DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION,
@@ -80,6 +85,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_market_execution_claim,
     build_development_market_reader_receipt,
     build_development_feature_assembly_plan,
+    build_development_label_assembly_plan,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
@@ -103,6 +109,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_market_execution_claim,
     validate_development_market_reader_receipt,
     validate_development_feature_assembly_plan,
+    validate_development_label_assembly_plan,
     validate_development_root_carry_in_reader_receipt,
     validate_development_model_execution_abort,
     validate_development_model_execution_claim,
@@ -1919,6 +1926,43 @@ _DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS = {
     "feature_assembly_plan_sha256",
 }
 
+_DEVELOPMENT_LABEL_ASSEMBLY_PLAN_KEYS = {
+    "schema_version",
+    "contract_version",
+    "plan_kind",
+    "artifact_stage",
+    "development_root_scope_sha256",
+    "start_consumed_request_count",
+    "source_feature_assembly_plan",
+    "source_feature_assembly_plan_sha256",
+    "calendar_sessions_sha256",
+    "development_cutoff_session",
+    "label_horizon_sessions",
+    "label_entry_session_offset",
+    "label_maturity_session_offset",
+    "maturity_rule",
+    "event_count",
+    "maturity_plan",
+    "maturity_plan_sha256",
+    "matured_event_count",
+    "unmatured_event_count",
+    "canonical_market_rows_required",
+    "development_outcome_derivation_permitted",
+    "development_label_rows_output_permitted",
+    "post_cutoff_market_access_permitted",
+    "raw_market_output_permitted",
+    "normalized_filing_text_output_permitted",
+    "model_transport_envelope_output_permitted",
+    "training_membership_access_permitted",
+    "learner_fit_permitted",
+    "prediction_access_permitted",
+    "holdout_access_permitted",
+    "ledger_mutation_permitted",
+    "stage_promotion_permitted",
+    "production_permitted",
+    "label_assembly_plan_sha256",
+}
+
 
 def _assert_model_market_bindings(value: dict, tip: dict, scope_hash: str) -> None:
     market_claim = tip["development_market_execution_claims"][scope_hash]
@@ -2052,6 +2096,21 @@ def _development_feature_assembly_plan_fixture() -> tuple[dict, dict, dict, dict
         independent_current_tip_anchor=reader_tip,
     )
     return state, reader_tip, claim, plan
+
+
+def _development_label_assembly_plan_fixture() -> tuple[dict, dict, dict, dict]:
+    state, reader_tip, _claim, feature_plan = (
+        _development_feature_assembly_plan_fixture()
+    )
+    label_plan = build_development_label_assembly_plan(
+        state,
+        development_root_scope_sha256=feature_plan[
+            "development_root_scope_sha256"
+        ],
+        source_feature_assembly_plan=feature_plan,
+        independent_current_tip_anchor=reader_tip,
+    )
+    return state, reader_tip, feature_plan, label_plan
 
 
 def _development_market_fixture() -> tuple[dict, dict, dict, dict, dict]:
@@ -4870,4 +4929,279 @@ def test_development_feature_assembly_plan_validation_fails_closed() -> None:
         validate_development_feature_assembly_plan(
             plan,
             expected_feature_assembly_plan_sha256=_h("other feature plan"),
+        )
+
+
+def test_development_label_assembly_plan_is_exact_narrow_and_deterministic() -> None:
+    state, reader_tip, feature_plan, plan = (
+        _development_label_assembly_plan_fixture()
+    )
+    state_before = copy.deepcopy(state)
+    tip_before = copy.deepcopy(reader_tip)
+
+    assert set(plan) == _DEVELOPMENT_LABEL_ASSEMBLY_PLAN_KEYS
+    assert plan["schema_version"] == DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION
+    assert plan["plan_kind"] == "request_free_development_label_assembly"
+    assert plan["artifact_stage"] == "development"
+    assert plan["development_root_scope_sha256"] == feature_plan[
+        "development_root_scope_sha256"
+    ]
+    assert plan["start_consumed_request_count"] == 0
+    assert plan["source_feature_assembly_plan"] == feature_plan
+    assert plan["source_feature_assembly_plan_sha256"] == feature_plan[
+        "feature_assembly_plan_sha256"
+    ]
+    assert plan["calendar_sessions_sha256"] == market_session_calendar_sha256(
+        EXPECTED_MARKET_HISTORY_SESSIONS
+    )
+    assert plan["development_cutoff_session"] == "2018-12-31"
+    assert plan["label_horizon_sessions"] == 20
+    assert plan["label_entry_session_offset"] == 1
+    assert plan["label_maturity_session_offset"] == 21
+    assert (
+        plan["maturity_rule"]
+        == "t_plus_21_session_lte_development_cutoff_inclusive"
+    )
+    assert plan["canonical_market_rows_required"] is True
+    assert plan["development_outcome_derivation_permitted"] is True
+    assert plan["development_label_rows_output_permitted"] is True
+    for field in (
+        "post_cutoff_market_access_permitted",
+        "raw_market_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "training_membership_access_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+    ):
+        assert plan[field] is False
+    assert feature_plan["outcome_access_permitted"] is False
+    assert feature_plan["label_access_permitted"] is False
+    assert plan["event_count"] == len(feature_plan["event_plan"])
+    assert plan["event_count"] == len(plan["maturity_plan"])
+    assert plan["maturity_plan_sha256"] == canonical_sha256(
+        plan["maturity_plan"]
+    )
+    assert plan["matured_event_count"] + plan["unmatured_event_count"] == plan[
+        "event_count"
+    ]
+    assert validate_development_label_assembly_plan(
+        plan,
+        expected_label_assembly_plan_sha256=plan[
+            "label_assembly_plan_sha256"
+        ],
+    ) == plan["label_assembly_plan_sha256"]
+    assert build_development_label_assembly_plan(
+        state,
+        development_root_scope_sha256=feature_plan[
+            "development_root_scope_sha256"
+        ],
+        source_feature_assembly_plan=feature_plan,
+        independent_current_tip_anchor=reader_tip,
+    ) == plan
+    assert state == state_before
+    assert reader_tip == tip_before
+
+
+def test_development_label_maturity_boundary_is_cutoff_inclusive() -> None:
+    state, reader_tip, feature_plan, _plan = (
+        _development_label_assembly_plan_fixture()
+    )
+    boundary_feature_plan = copy.deepcopy(feature_plan)
+    cutoff_index = EXPECTED_MARKET_HISTORY_SESSIONS.index("2018-12-31")
+    boundary_decision = EXPECTED_MARKET_HISTORY_SESSIONS[cutoff_index - 21]
+    post_cutoff_decision = EXPECTED_MARKET_HISTORY_SESSIONS[cutoff_index - 20]
+    boundary_feature_plan["event_plan"][-2][
+        "availability_session"
+    ] = boundary_decision
+    boundary_feature_plan["event_plan"][-1][
+        "availability_session"
+    ] = post_cutoff_decision
+    boundary_feature_plan["event_plan_sha256"] = canonical_sha256(
+        boundary_feature_plan["event_plan"]
+    )
+    _rehash(boundary_feature_plan, "feature_assembly_plan_sha256")
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_stage_authorization."
+        "build_development_feature_assembly_plan",
+        return_value=boundary_feature_plan,
+    ):
+        plan = build_development_label_assembly_plan(
+            state,
+            development_root_scope_sha256=boundary_feature_plan[
+                "development_root_scope_sha256"
+            ],
+            source_feature_assembly_plan=boundary_feature_plan,
+            independent_current_tip_anchor=reader_tip,
+        )
+
+    boundary, post_cutoff = plan["maturity_plan"][-2:]
+    assert boundary["decision_session"] == boundary_decision
+    assert boundary["label_maturity_session"] == "2018-12-31"
+    assert boundary["matured_by_development_cutoff"] is True
+    assert post_cutoff["decision_session"] == post_cutoff_decision
+    assert post_cutoff["label_maturity_session"] > "2018-12-31"
+    assert post_cutoff["matured_by_development_cutoff"] is False
+    assert plan["matured_event_count"] == plan["event_count"] - 1
+    assert plan["unmatured_event_count"] == 1
+    assert validate_development_label_assembly_plan(
+        plan,
+        expected_label_assembly_plan_sha256=plan[
+            "label_assembly_plan_sha256"
+        ],
+    ) == plan["label_assembly_plan_sha256"]
+
+
+def test_development_label_plan_rejects_a_different_supplied_feature_plan() -> None:
+    state, reader_tip, feature_plan, _plan = (
+        _development_label_assembly_plan_fixture()
+    )
+    changed = copy.deepcopy(feature_plan)
+    changed["candidate_sha256"] = _h("different candidate")
+    _rehash(changed, "feature_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="differs from the terminal store replay",
+    ):
+        build_development_label_assembly_plan(
+            state,
+            development_root_scope_sha256=feature_plan[
+                "development_root_scope_sha256"
+            ],
+            source_feature_assembly_plan=changed,
+            independent_current_tip_anchor=reader_tip,
+        )
+
+
+def test_development_label_assembly_plan_validation_fails_closed() -> None:
+    _state, _reader_tip, _feature_plan, plan = (
+        _development_label_assembly_plan_fixture()
+    )
+
+    for field, replacement in (
+        ("canonical_market_rows_required", False),
+        ("development_outcome_derivation_permitted", False),
+        ("development_label_rows_output_permitted", False),
+        ("post_cutoff_market_access_permitted", True),
+        ("training_membership_access_permitted", True),
+        ("learner_fit_permitted", True),
+        ("prediction_access_permitted", True),
+        ("holdout_access_permitted", True),
+        ("ledger_mutation_permitted", True),
+        ("stage_promotion_permitted", True),
+        ("production_permitted", True),
+        ("calendar_sessions_sha256", _h("changed market calendar")),
+        ("label_horizon_sessions", False),
+        ("label_entry_session_offset", False),
+        ("label_maturity_session_offset", False),
+        ("event_count", False),
+        ("matured_event_count", False),
+        ("unmatured_event_count", False),
+        ("start_consumed_request_count", False),
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = replacement
+        _rehash(changed, "label_assembly_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_label_assembly_plan(
+                changed,
+                expected_label_assembly_plan_sha256=changed[
+                    "label_assembly_plan_sha256"
+                ],
+            )
+
+    changed_maturity = copy.deepcopy(plan)
+    changed_maturity["maturity_plan"][-1][
+        "label_maturity_session"
+    ] = "2018-12-31"
+    changed_maturity["maturity_plan_sha256"] = canonical_sha256(
+        changed_maturity["maturity_plan"]
+    )
+    _rehash(changed_maturity, "label_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="frozen calendar derivation",
+    ):
+        validate_development_label_assembly_plan(
+            changed_maturity,
+            expected_label_assembly_plan_sha256=changed_maturity[
+                "label_assembly_plan_sha256"
+            ],
+        )
+
+    changed_boundary = copy.deepcopy(plan)
+    changed_boundary["maturity_plan"][-1][
+        "matured_by_development_cutoff"
+    ] = not changed_boundary["maturity_plan"][-1][
+        "matured_by_development_cutoff"
+    ]
+    changed_boundary["maturity_plan_sha256"] = canonical_sha256(
+        changed_boundary["maturity_plan"]
+    )
+    _rehash(changed_boundary, "label_assembly_plan_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        validate_development_label_assembly_plan(
+            changed_boundary,
+            expected_label_assembly_plan_sha256=changed_boundary[
+                "label_assembly_plan_sha256"
+            ],
+        )
+
+    reordered = copy.deepcopy(plan)
+    reordered["maturity_plan"].reverse()
+    reordered["maturity_plan_sha256"] = canonical_sha256(
+        reordered["maturity_plan"]
+    )
+    _rehash(reordered, "label_assembly_plan_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        validate_development_label_assembly_plan(
+            reordered,
+            expected_label_assembly_plan_sha256=reordered[
+                "label_assembly_plan_sha256"
+            ],
+        )
+
+    extra_item_key = copy.deepcopy(plan)
+    extra_item_key["maturity_plan"][0]["unexpected"] = False
+    extra_item_key["maturity_plan_sha256"] = canonical_sha256(
+        extra_item_key["maturity_plan"]
+    )
+    _rehash(extra_item_key, "label_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="keys changed",
+    ):
+        validate_development_label_assembly_plan(
+            extra_item_key,
+            expected_label_assembly_plan_sha256=extra_item_key[
+                "label_assembly_plan_sha256"
+            ],
+        )
+
+    extra_plan_key = copy.deepcopy(plan)
+    extra_plan_key["unexpected"] = False
+    _rehash(extra_plan_key, "label_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="keys changed",
+    ):
+        validate_development_label_assembly_plan(
+            extra_plan_key,
+            expected_label_assembly_plan_sha256=extra_plan_key[
+                "label_assembly_plan_sha256"
+            ],
+        )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not externally pinned",
+    ):
+        validate_development_label_assembly_plan(
+            plan,
+            expected_label_assembly_plan_sha256=_h("other label plan"),
         )

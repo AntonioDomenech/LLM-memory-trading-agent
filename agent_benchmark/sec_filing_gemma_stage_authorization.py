@@ -26,6 +26,8 @@ from typing import Any, Final
 from agent_benchmark.sec_filing_gemma_contract import (
     CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
+    HORIZON_SESSIONS,
+    LABEL_MATURITY_OFFSET,
     MAX_INPUT_BYTES,
     MAX_MODEL_SECONDS,
     MAX_SENTENCE_CHARACTERS,
@@ -35,6 +37,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     STAGE_MODEL_CALL_CAPS,
     build_stage_content_manifest,
     canonical_sha256,
+    market_session_calendar_sha256,
     validate_candidate_manifest,
 )
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
@@ -65,6 +68,7 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
 from agent_benchmark.sec_filing_gemma_source_identity import (
     CANONICAL_SOURCE_ROLE_PATHS,
 )
+from agent_benchmark.sec_session_calendar import EXPECTED_MARKET_HISTORY_SESSIONS
 
 
 STORE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-reveal-store-v1"
@@ -142,6 +146,9 @@ DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-feature-assembly-plan-v1"
+)
+DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-label-assembly-plan-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
@@ -1100,6 +1107,59 @@ _DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_KEYS: Final[frozenset[str]] = frozenset(
         "stage_promotion_permitted",
         "feature_assembly_plan_sha256",
     }
+)
+_DEVELOPMENT_LABEL_ASSEMBLY_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_consumed_request_count",
+        "source_feature_assembly_plan",
+        "source_feature_assembly_plan_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+        "label_horizon_sessions",
+        "label_entry_session_offset",
+        "label_maturity_session_offset",
+        "maturity_rule",
+        "event_count",
+        "maturity_plan",
+        "maturity_plan_sha256",
+        "matured_event_count",
+        "unmatured_event_count",
+        "canonical_market_rows_required",
+        "development_outcome_derivation_permitted",
+        "development_label_rows_output_permitted",
+        "post_cutoff_market_access_permitted",
+        "raw_market_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "training_membership_access_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+        "label_assembly_plan_sha256",
+    }
+)
+_DEVELOPMENT_LABEL_MATURITY_ITEM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "event_ordinal",
+        "accession_number",
+        "form",
+        "decision_session",
+        "sec_document_ordinal",
+        "label_maturity_session",
+        "matured_by_development_cutoff",
+    }
+)
+_DEVELOPMENT_LABEL_ENTRY_SESSION_OFFSET: Final[int] = 1
+_DEVELOPMENT_LABEL_MATURITY_RULE: Final[str] = (
+    "t_plus_21_session_lte_development_cutoff_inclusive"
 )
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -9646,6 +9706,328 @@ def validate_development_feature_assembly_plan(
     return observed
 
 
+def _expected_development_label_maturity_plan(
+    source_feature_assembly_plan: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Derive the exact t+21 maturity boundary without opening market values."""
+
+    events = _validated_development_feature_event_plan(
+        source_feature_assembly_plan.get("event_plan")
+    )
+    calendar = EXPECTED_MARKET_HISTORY_SESSIONS
+    session_positions = {session: index for index, session in enumerate(calendar)}
+    cutoff = STAGE_WINDOWS["development"][1]
+    maturity_plan: list[dict[str, Any]] = []
+    for event in events:
+        decision_session = event["availability_session"]
+        decision_index = session_positions.get(decision_session)
+        if decision_index is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development label decision session is outside the frozen market calendar"
+            )
+        maturity_index = decision_index + LABEL_MATURITY_OFFSET
+        if maturity_index >= len(calendar):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development label maturity is outside the frozen market calendar"
+            )
+        maturity_session = calendar[maturity_index]
+        maturity_plan.append(
+            {
+                "event_ordinal": event["event_ordinal"],
+                "accession_number": event["accession_number"],
+                "form": event["form"],
+                "decision_session": decision_session,
+                "sec_document_ordinal": event["sec_document_ordinal"],
+                "label_maturity_session": maturity_session,
+                "matured_by_development_cutoff": maturity_session <= cutoff,
+            }
+        )
+    return maturity_plan
+
+
+def _validated_development_label_maturity_plan(
+    raw: Any,
+    *,
+    source_feature_assembly_plan: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    expected = _expected_development_label_maturity_plan(
+        source_feature_assembly_plan
+    )
+    if type(raw) is not list or len(raw) != len(expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development label maturity plan count changed"
+        )
+    observed: list[dict[str, Any]] = []
+    for ordinal, (raw_item, expected_item) in enumerate(
+        zip(raw, expected, strict=True),
+        start=1,
+    ):
+        item = _mapping(raw_item, f"development label maturity item {ordinal}")
+        _expect_keys(
+            item,
+            _DEVELOPMENT_LABEL_MATURITY_ITEM_KEYS,
+            f"development label maturity item {ordinal}",
+        )
+        _strict_int(
+            item["event_ordinal"],
+            f"development label maturity item {ordinal} event ordinal",
+            minimum=1,
+        )
+        _safe_id(
+            item["accession_number"],
+            f"development label maturity item {ordinal} accession",
+        )
+        if (
+            type(item["form"]) is not str
+            or item["form"] not in {"10-K", "10-Q"}
+            or type(item["decision_session"]) is not str
+            or _ISO_DATE_RE.fullmatch(item["decision_session"]) is None
+            or type(item["label_maturity_session"]) is not str
+            or _ISO_DATE_RE.fullmatch(item["label_maturity_session"]) is None
+            or type(item["matured_by_development_cutoff"]) is not bool
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development label maturity item identity or boundary type changed"
+            )
+        _strict_int(
+            item["sec_document_ordinal"],
+            f"development label maturity item {ordinal} SEC document ordinal",
+            minimum=1,
+        )
+        if item != expected_item:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development label maturity item differs from the frozen calendar derivation"
+            )
+        observed.append(item)
+    return observed
+
+
+def build_development_label_assembly_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    source_feature_assembly_plan: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a request-free plan for development labels matured by the cutoff."""
+
+    supplied_feature_plan = _mapping(
+        source_feature_assembly_plan,
+        "development label source feature assembly plan",
+    )
+    supplied_feature_hash = _sha256(
+        supplied_feature_plan.get("feature_assembly_plan_sha256"),
+        "development label source feature assembly plan hash",
+    )
+    validate_development_feature_assembly_plan(
+        supplied_feature_plan,
+        expected_feature_assembly_plan_sha256=supplied_feature_hash,
+    )
+    rebuilt_feature_plan = build_development_feature_assembly_plan(
+        authenticated_store_snapshot,
+        development_root_scope_sha256=development_root_scope_sha256,
+        independent_current_tip_anchor=independent_current_tip_anchor,
+    )
+    if supplied_feature_plan != rebuilt_feature_plan:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development label source feature plan differs from the terminal store replay"
+        )
+    maturity_plan = _expected_development_label_maturity_plan(
+        supplied_feature_plan
+    )
+    matured_event_count = sum(
+        item["matured_by_development_cutoff"] for item in maturity_plan
+    )
+    body = {
+        "schema_version": DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_label_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": supplied_feature_plan[
+            "development_root_scope_sha256"
+        ],
+        "start_consumed_request_count": supplied_feature_plan[
+            "start_consumed_request_count"
+        ],
+        "source_feature_assembly_plan": supplied_feature_plan,
+        "source_feature_assembly_plan_sha256": supplied_feature_hash,
+        "calendar_sessions_sha256": market_session_calendar_sha256(
+            EXPECTED_MARKET_HISTORY_SESSIONS
+        ),
+        "development_cutoff_session": STAGE_WINDOWS["development"][1],
+        "label_horizon_sessions": HORIZON_SESSIONS,
+        "label_entry_session_offset": _DEVELOPMENT_LABEL_ENTRY_SESSION_OFFSET,
+        "label_maturity_session_offset": LABEL_MATURITY_OFFSET,
+        "maturity_rule": _DEVELOPMENT_LABEL_MATURITY_RULE,
+        "event_count": len(maturity_plan),
+        "maturity_plan": maturity_plan,
+        "maturity_plan_sha256": canonical_sha256(maturity_plan),
+        "matured_event_count": matured_event_count,
+        "unmatured_event_count": len(maturity_plan) - matured_event_count,
+        "canonical_market_rows_required": True,
+        "development_outcome_derivation_permitted": True,
+        "development_label_rows_output_permitted": True,
+        "post_cutoff_market_access_permitted": False,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+    return {**body, "label_assembly_plan_sha256": canonical_sha256(body)}
+
+
+def validate_development_label_assembly_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_label_assembly_plan_sha256: str,
+) -> str:
+    """Validate the exact development-only maturity plan and narrow boundary."""
+
+    value = _mapping(plan, "development label assembly plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_LABEL_ASSEMBLY_PLAN_KEYS,
+        "development label assembly plan",
+    )
+    source_feature_plan = _mapping(
+        value["source_feature_assembly_plan"],
+        "development label source feature assembly plan",
+    )
+    source_feature_hash = _sha256(
+        value["source_feature_assembly_plan_sha256"],
+        "development label source feature assembly plan hash",
+    )
+    validate_development_feature_assembly_plan(
+        source_feature_plan,
+        expected_feature_assembly_plan_sha256=source_feature_hash,
+    )
+    capabilities = {
+        "canonical_market_rows_required": True,
+        "development_outcome_derivation_permitted": True,
+        "development_label_rows_output_permitted": True,
+        "post_cutoff_market_access_permitted": False,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+    event_count = _strict_int(
+        value["event_count"],
+        "development label event count",
+        minimum=1,
+    )
+    matured_count = _strict_int(
+        value["matured_event_count"],
+        "development label matured event count",
+    )
+    unmatured_count = _strict_int(
+        value["unmatured_event_count"],
+        "development label unmatured event count",
+    )
+    start_consumed_request_count = _strict_int(
+        value["start_consumed_request_count"],
+        "development label start consumed-request count",
+    )
+    label_horizon_sessions = _strict_int(
+        value["label_horizon_sessions"],
+        "development label horizon sessions",
+        minimum=1,
+    )
+    label_entry_session_offset = _strict_int(
+        value["label_entry_session_offset"],
+        "development label entry session offset",
+        minimum=1,
+    )
+    label_maturity_session_offset = _strict_int(
+        value["label_maturity_session_offset"],
+        "development label maturity session offset",
+        minimum=1,
+    )
+    _sha256(
+        value["calendar_sessions_sha256"],
+        "development label calendar sessions hash",
+    )
+    _sha256(
+        value["maturity_plan_sha256"],
+        "development label maturity plan hash",
+    )
+    _sha256(
+        value["development_root_scope_sha256"],
+        "development label root scope hash",
+    )
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["plan_kind"] != "request_free_development_label_assembly"
+        or value["artifact_stage"] != "development"
+        or value["development_root_scope_sha256"]
+        != source_feature_plan["development_root_scope_sha256"]
+        or value["development_cutoff_session"]
+        != STAGE_WINDOWS["development"][1]
+        or start_consumed_request_count != 0
+        or start_consumed_request_count
+        != source_feature_plan["start_consumed_request_count"]
+        or label_horizon_sessions != HORIZON_SESSIONS
+        or label_entry_session_offset
+        != _DEVELOPMENT_LABEL_ENTRY_SESSION_OFFSET
+        or label_maturity_session_offset != LABEL_MATURITY_OFFSET
+        or value["maturity_rule"] != _DEVELOPMENT_LABEL_MATURITY_RULE
+        or value["calendar_sessions_sha256"]
+        != market_session_calendar_sha256(EXPECTED_MARKET_HISTORY_SESSIONS)
+        or event_count != source_feature_plan["event_count"]
+        or matured_count + unmatured_count != event_count
+        or any(
+            value[field] is not expected
+            for field, expected in capabilities.items()
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development label assembly semantics or capability boundary changed"
+        )
+    maturity_plan = _validated_development_label_maturity_plan(
+        value["maturity_plan"],
+        source_feature_assembly_plan=source_feature_plan,
+    )
+    expected_matured_count = sum(
+        item["matured_by_development_cutoff"] for item in maturity_plan
+    )
+    if (
+        value["maturity_plan_sha256"] != canonical_sha256(maturity_plan)
+        or matured_count != expected_matured_count
+        or unmatured_count != event_count - expected_matured_count
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development label maturity plan hash or counts changed"
+        )
+    observed = _self_hash(
+        value,
+        "label_assembly_plan_sha256",
+        "development label assembly plan",
+    )
+    expected = _sha256(
+        expected_label_assembly_plan_sha256,
+        "expected development label assembly plan hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development label assembly plan is not externally pinned"
+        )
+    return observed
+
+
 def _reconstruct_development_content_manifest_from_root(
     development_sec_execution_claim: Mapping[str, Any],
     development_sec_reader_receipt: Mapping[str, Any],
@@ -10853,6 +11235,7 @@ __all__ = [
     "DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID",
     "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
     "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION",
@@ -10892,6 +11275,7 @@ __all__ = [
     "build_development_market_execution_claim",
     "build_development_market_reader_receipt",
     "build_development_feature_assembly_plan",
+    "build_development_label_assembly_plan",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
     "build_development_sec_reader_receipt",
@@ -10916,6 +11300,7 @@ __all__ = [
     "validate_development_market_execution_claim",
     "validate_development_market_reader_receipt",
     "validate_development_feature_assembly_plan",
+    "validate_development_label_assembly_plan",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",
     "validate_development_model_execution_claim",

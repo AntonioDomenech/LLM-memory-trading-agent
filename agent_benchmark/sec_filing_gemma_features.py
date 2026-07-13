@@ -79,8 +79,17 @@ OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION: Final[str] = (
 OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-owned-development-feature-batch-v1"
 )
+OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-label-projection-v1"
+)
+OWNED_DEVELOPMENT_LABEL_BATCH_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-label-batch-v1"
+)
 DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-feature-assembly-plan-v1"
+)
+DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-label-assembly-plan-v1"
 )
 MARKET_FEATURE_ROW_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-market-feature-row-v1"
@@ -374,6 +383,104 @@ _OWNED_DEVELOPMENT_FEATURE_BATCH_KEYS: Final[frozenset[str]] = frozenset(
         "stage_promotion_authorized",
         "production_authorized",
         "feature_batch_sha256",
+    }
+)
+_DEVELOPMENT_LABEL_MATURITY_ITEM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "event_ordinal",
+        "accession_number",
+        "form",
+        "decision_session",
+        "sec_document_ordinal",
+        "label_maturity_session",
+        "matured_by_development_cutoff",
+    }
+)
+_DEVELOPMENT_LABEL_AUDIT_ROW_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "event_ordinal",
+        "accession_number",
+        "decision_session",
+        "feature_row_sha256",
+        "label_maturity_session",
+        "matured_by_development_cutoff",
+        "label_evidence_sha256",
+    }
+)
+_COMPACT_ADJUSTED_OPEN_PATH_ITEM_KEYS: Final[frozenset[str]] = frozenset(
+    {"session", "adjusted_open_hex", "source_market_row_sha256"}
+)
+_LABEL_EVIDENCE_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "accession_number",
+        "decision_session",
+        "entry_session",
+        "exit_session",
+        "label_maturity_session",
+        "horizon_sessions",
+        "entry_session_offset",
+        "label_maturity_session_offset",
+        "market_prefix_sha256",
+        "market_prefix_proof_sha256",
+        "market_stage_manifest_sha256",
+        "source_manifest_sha256",
+        "feature_row_sha256",
+        "market_feature_row_sha256",
+        "extraction_identity_sha256",
+        "future_market_rows_sha256",
+        "future_market_row_count",
+        "future_market_row_chain_tip_sha256",
+        "entry_source_market_row_sha256",
+        "exit_source_market_row_sha256",
+        "adjusted_open_path",
+        "adjusted_open_path_sha256",
+        "entry_adjusted_open_hex",
+        "exit_adjusted_open_hex",
+        "aapl_forward_log_return_20_hex",
+        "cash_round_trip_log_cost_5bps_hex",
+        "cash_round_trip_log_cost_10bps_hex",
+        "cash_active_log_edge_5bps_hex",
+        "cash_active_log_edge_10bps_hex",
+        "cash_beats_long_5bps",
+        "cash_beats_long_10bps",
+        "binary_comparison_tolerance_hex",
+        "label_evidence_sha256",
+    }
+)
+_OWNED_DEVELOPMENT_LABEL_BATCH_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "development_root_scope_sha256",
+        "label_assembly_plan_sha256",
+        "source_feature_assembly_plan_sha256",
+        "source_feature_batch_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_cutoff_session",
+        "event_count",
+        "matured_label_count",
+        "unmatured_event_count",
+        "maturity_audit_rows",
+        "maturity_audit_rows_sha256",
+        "label_evidence_schema_version",
+        "label_evidence_sha256s",
+        "label_evidence_rows",
+        "label_evidence_rows_sha256",
+        "development_labels_included",
+        "development_outcomes_included",
+        "compact_adjusted_open_paths_included",
+        "full_market_rows_included",
+        "post_cutoff_market_data_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "prediction_authorized",
+        "holdout_access_authorized",
+        "ledger_mutation_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+        "label_batch_sha256",
     }
 )
 
@@ -2350,6 +2457,35 @@ def validate_owned_development_feature_batch(
         set(_OWNED_DEVELOPMENT_FEATURE_BATCH_KEYS),
         "owned development feature batch",
     )
+    if type(value["event_count"]) is not int or value["event_count"] < 1:
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch event_count must be an exact positive integer"
+        )
+    expected_flags = {
+        "labels_included": False,
+        "outcomes_included": False,
+        "post_decision_market_rows_included": False,
+        "training_membership_included": False,
+        "learner_fit_authorized": False,
+        "stage_promotion_authorized": False,
+        "production_authorized": False,
+    }
+    if any(type(value[field]) is not bool for field in expected_flags):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch authority flags must be exact booleans"
+        )
+    if any(value[field] is not expected for field, expected in expected_flags.items()):
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch crossed its non-authorizing boundary"
+        )
+    observed = _sha256(value["feature_batch_sha256"], "feature_batch_sha256")
+    supplied_body = {
+        key: value[key] for key in value if key != "feature_batch_sha256"
+    }
+    if canonical_sha256(supplied_body) != observed:
+        raise SecFilingGemmaFeatureError(
+            "Owned development feature batch checksum changed"
+        )
     plan = _validated_development_feature_assembly_plan(feature_assembly_plan)
     expected_plan_hash = _sha256(
         expected_feature_assembly_plan_sha256,
@@ -2372,12 +2508,533 @@ def validate_owned_development_feature_batch(
         raise SecFilingGemmaFeatureError(
             "Owned development feature batch differs from exact replay"
         )
-    observed = _sha256(value["feature_batch_sha256"], "feature_batch_sha256")
     if observed != _sha256(
         expected_feature_batch_sha256, "expected_feature_batch_sha256"
     ):
         raise SecFilingGemmaFeatureError(
             "Owned development feature batch is not externally pinned"
+        )
+    return observed
+
+
+def _validated_development_label_assembly_plan(
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Replay the authorization-owned development label plan exactly."""
+
+    value = _expect_mapping(plan, "development label assembly plan")
+    try:
+        from agent_benchmark.sec_filing_gemma_stage_authorization import (
+            validate_development_label_assembly_plan,
+        )
+
+        observed = validate_development_label_assembly_plan(
+            value,
+            expected_label_assembly_plan_sha256=value.get(
+                "label_assembly_plan_sha256"
+            ),
+        )
+    except Exception:
+        raise SecFilingGemmaFeatureError(
+            "Development label assembly plan failed exact authorization replay"
+        ) from None
+    if (
+        value.get("schema_version")
+        != DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION
+        or observed != value.get("label_assembly_plan_sha256")
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development label assembly plan identity changed"
+        )
+    return copy.deepcopy(dict(value))
+
+
+def _positive_float_hex(value: Any, location: str) -> float:
+    if type(value) is not str:
+        raise SecFilingGemmaFeatureError(
+            f"{location} must be canonical positive float.hex text"
+        )
+    try:
+        number = float.fromhex(value)
+    except ValueError as exc:
+        raise SecFilingGemmaFeatureError(
+            f"{location} must be canonical positive float.hex text"
+        ) from exc
+    if not math.isfinite(number) or number <= 0.0 or number.hex() != value:
+        raise SecFilingGemmaFeatureError(
+            f"{location} must be canonical positive float.hex text"
+        )
+    return number
+
+
+def _validated_compact_development_label_evidence(
+    row: Mapping[str, Any],
+    *,
+    maturity_item: Mapping[str, Any],
+    audit_row: Mapping[str, Any],
+    feature_row: Mapping[str, Any],
+    label_assembly_plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate one compact t+1..t+21 label without accepting full market rows."""
+
+    value = _expect_mapping(row, "owned development label evidence")
+    _expect_keys(
+        value,
+        set(_LABEL_EVIDENCE_KEYS),
+        "owned development label evidence",
+    )
+    if maturity_item["matured_by_development_cutoff"] is not True:
+        raise SecFilingGemmaFeatureError(
+            "An unmatured development event cannot carry label evidence"
+        )
+    decision_session = maturity_item["decision_session"]
+    try:
+        decision_index = EXPECTED_MARKET_HISTORY_SESSIONS.index(decision_session)
+    except ValueError:
+        raise SecFilingGemmaFeatureError(
+            "Development label decision session is outside the frozen calendar"
+        ) from None
+    expected_sessions = list(
+        EXPECTED_MARKET_HISTORY_SESSIONS[
+            decision_index + LABEL_ENTRY_OFFSET :
+            decision_index + LABEL_MATURITY_OFFSET + 1
+        ]
+    )
+    if (
+        len(expected_sessions) != LABEL_MATURITY_OFFSET
+        or expected_sessions[-1] != maturity_item["label_maturity_session"]
+        or expected_sessions[-1] > label_assembly_plan["development_cutoff_session"]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development label horizon crossed its frozen maturity boundary"
+        )
+
+    bindings = _expect_mapping(
+        feature_row.get("bindings"), "owned development label feature bindings"
+    )
+    source_feature_plan = label_assembly_plan["source_feature_assembly_plan"]
+    identity_matches = (
+        value["schema_version"] == LABEL_EVIDENCE_SCHEMA_VERSION
+        and value["accession_number"] == maturity_item["accession_number"]
+        and value["accession_number"] == audit_row["accession_number"]
+        and value["decision_session"] == decision_session
+        and value["decision_session"] == audit_row["decision_session"]
+        and value["entry_session"] == expected_sessions[0]
+        and value["exit_session"] == expected_sessions[-1]
+        and value["label_maturity_session"] == expected_sessions[-1]
+        and type(value["horizon_sessions"]) is int
+        and value["horizon_sessions"] == HORIZON_SESSIONS
+        and type(value["entry_session_offset"]) is int
+        and value["entry_session_offset"] == LABEL_ENTRY_OFFSET
+        and type(value["label_maturity_session_offset"]) is int
+        and value["label_maturity_session_offset"] == LABEL_MATURITY_OFFSET
+        and value["feature_row_sha256"] == feature_row["feature_row_sha256"]
+        and value["feature_row_sha256"] == audit_row["feature_row_sha256"]
+        and value["market_feature_row_sha256"]
+        == feature_row["market_feature_row_sha256"]
+        and value["extraction_identity_sha256"]
+        == bindings.get("extraction_identity_sha256")
+        and value["market_prefix_sha256"]
+        == bindings.get("market_prefix_sha256")
+        and value["market_prefix_proof_sha256"]
+        == bindings.get("market_prefix_proof_sha256")
+        and value["market_stage_manifest_sha256"]
+        == bindings.get("market_stage_manifest_sha256")
+        and value["market_stage_manifest_sha256"]
+        == source_feature_plan["development_market_stage_manifest_sha256"]
+        and value["source_manifest_sha256"]
+        == bindings.get("source_manifest_sha256")
+        and value["source_manifest_sha256"]
+        == source_feature_plan["development_market_source_manifest_sha256"]
+    )
+    if not identity_matches:
+        raise SecFilingGemmaFeatureError(
+            "Owned development label evidence crossed its event or feature binding"
+        )
+    hash_fields = (
+        "market_prefix_sha256",
+        "market_prefix_proof_sha256",
+        "market_stage_manifest_sha256",
+        "source_manifest_sha256",
+        "feature_row_sha256",
+        "market_feature_row_sha256",
+        "extraction_identity_sha256",
+        "future_market_rows_sha256",
+        "future_market_row_chain_tip_sha256",
+        "entry_source_market_row_sha256",
+        "exit_source_market_row_sha256",
+        "adjusted_open_path_sha256",
+        "label_evidence_sha256",
+    )
+    for field in hash_fields:
+        _sha256(value[field], f"owned development label evidence.{field}")
+
+    path = value["adjusted_open_path"]
+    if type(path) is not list or len(path) != LABEL_MATURITY_OFFSET:
+        raise SecFilingGemmaFeatureError(
+            "Owned development adjusted-open path must contain exactly 21 sessions"
+        )
+    normalized_path: list[dict[str, str]] = []
+    for index, (raw_item, expected_session) in enumerate(
+        zip(path, expected_sessions, strict=True)
+    ):
+        item = _expect_mapping(
+            raw_item, f"owned development adjusted-open path {index}"
+        )
+        _expect_keys(
+            item,
+            set(_COMPACT_ADJUSTED_OPEN_PATH_ITEM_KEYS),
+            f"owned development adjusted-open path {index}",
+        )
+        if item["session"] != expected_session:
+            raise SecFilingGemmaFeatureError(
+                "Owned development adjusted-open path sessions changed"
+            )
+        _positive_float_hex(
+            item["adjusted_open_hex"],
+            f"owned development adjusted-open path {index}.adjusted_open_hex",
+        )
+        _sha256(
+            item["source_market_row_sha256"],
+            f"owned development adjusted-open path {index}.source_market_row_sha256",
+        )
+        normalized_path.append(dict(item))
+    if (
+        type(value["future_market_row_count"]) is not int
+        or value["future_market_row_count"] != LABEL_MATURITY_OFFSET
+        or value["adjusted_open_path_sha256"] != canonical_sha256(normalized_path)
+        or value["future_market_row_chain_tip_sha256"]
+        != normalized_path[-1]["source_market_row_sha256"]
+        or value["entry_source_market_row_sha256"]
+        != normalized_path[0]["source_market_row_sha256"]
+        or value["exit_source_market_row_sha256"]
+        != normalized_path[-1]["source_market_row_sha256"]
+        or value["entry_adjusted_open_hex"]
+        != normalized_path[0]["adjusted_open_hex"]
+        or value["exit_adjusted_open_hex"]
+        != normalized_path[-1]["adjusted_open_hex"]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development adjusted-open path identity changed"
+        )
+    source_row_hashes = [
+        item["source_market_row_sha256"] for item in normalized_path
+    ]
+    if len(source_row_hashes) != len(set(source_row_hashes)):
+        raise SecFilingGemmaFeatureError(
+            "Owned development adjusted-open path repeats a market row"
+        )
+
+    entry = _positive_float_hex(
+        value["entry_adjusted_open_hex"], "entry_adjusted_open_hex"
+    )
+    exit_value = _positive_float_hex(
+        value["exit_adjusted_open_hex"], "exit_adjusted_open_hex"
+    )
+    forward_return = math.log(exit_value / entry)
+    cost_5 = _cash_round_trip_log_factor(5)
+    cost_10 = _cash_round_trip_log_factor(10)
+    edge_5 = cost_5 - forward_return
+    edge_10 = cost_10 - forward_return
+    if not all(
+        math.isfinite(number)
+        for number in (forward_return, cost_5, cost_10, edge_5, edge_10)
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label arithmetic is non-finite"
+        )
+    expected_hex = {
+        "aapl_forward_log_return_20_hex": forward_return.hex(),
+        "cash_round_trip_log_cost_5bps_hex": cost_5.hex(),
+        "cash_round_trip_log_cost_10bps_hex": cost_10.hex(),
+        "cash_active_log_edge_5bps_hex": edge_5.hex(),
+        "cash_active_log_edge_10bps_hex": edge_10.hex(),
+        "binary_comparison_tolerance_hex": float(ACTIVE_EDGE_TOLERANCE).hex(),
+    }
+    if any(value[field] != expected for field, expected in expected_hex.items()):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label arithmetic changed"
+        )
+    if (
+        type(value["cash_beats_long_5bps"]) is not bool
+        or type(value["cash_beats_long_10bps"]) is not bool
+        or value["cash_beats_long_5bps"] is not (edge_5 > ACTIVE_EDGE_TOLERANCE)
+        or value["cash_beats_long_10bps"] is not (edge_10 > ACTIVE_EDGE_TOLERANCE)
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development binary label boundary changed"
+        )
+    body = {key: value[key] for key in value if key != "label_evidence_sha256"}
+    observed = _sha256(
+        value["label_evidence_sha256"], "label_evidence_sha256"
+    )
+    if (
+        observed != canonical_sha256(body)
+        or observed != audit_row["label_evidence_sha256"]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label evidence checksum changed"
+        )
+    return copy.deepcopy(dict(value))
+
+
+def build_owned_development_label_batch(
+    *,
+    label_assembly_plan: Mapping[str, Any],
+    source_feature_batch: Mapping[str, Any],
+    maturity_audit_rows: Sequence[Mapping[str, Any]],
+    label_evidence_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build the development-only label batch without authorizing learner use."""
+
+    plan = _validated_development_label_assembly_plan(label_assembly_plan)
+    source_feature_plan = plan["source_feature_assembly_plan"]
+    source_batch = _expect_mapping(
+        source_feature_batch, "owned development source feature batch"
+    )
+    try:
+        validate_owned_development_feature_batch(
+            source_batch,
+            feature_assembly_plan=source_feature_plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "source_feature_assembly_plan_sha256"
+            ],
+            expected_feature_batch_sha256=source_batch.get(
+                "feature_batch_sha256"
+            ),
+        )
+    except Exception:
+        raise SecFilingGemmaFeatureError(
+            "Development label source feature batch failed exact replay"
+        ) from None
+    if (
+        source_batch["development_root_scope_sha256"]
+        != plan["development_root_scope_sha256"]
+        or source_batch["feature_assembly_plan_sha256"]
+        != plan["source_feature_assembly_plan_sha256"]
+        or source_batch["event_count"] != plan["event_count"]
+        or source_batch["event_plan_sha256"]
+        != source_feature_plan["event_plan_sha256"]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development label source feature batch crossed its assembly plan"
+        )
+    if (
+        isinstance(maturity_audit_rows, (str, bytes))
+        or not isinstance(maturity_audit_rows, Sequence)
+        or isinstance(label_evidence_rows, (str, bytes))
+        or not isinstance(label_evidence_rows, Sequence)
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development label audit and evidence rows must be sequences"
+        )
+    audits = list(maturity_audit_rows)
+    labels = list(label_evidence_rows)
+    maturity_plan = plan["maturity_plan"]
+    feature_rows = source_batch["feature_rows"]
+    if (
+        len(audits) != plan["event_count"]
+        or len(audits) != len(maturity_plan)
+        or len(audits) != len(feature_rows)
+        or len(labels) != plan["matured_event_count"]
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Development label audit or evidence count changed"
+        )
+
+    normalized_audits: list[dict[str, Any]] = []
+    for ordinal, (raw_audit, maturity_item, feature_row) in enumerate(
+        zip(audits, maturity_plan, feature_rows, strict=True), start=1
+    ):
+        audit = _expect_mapping(
+            raw_audit, f"owned development label maturity audit {ordinal}"
+        )
+        _expect_keys(
+            audit,
+            set(_DEVELOPMENT_LABEL_AUDIT_ROW_KEYS),
+            f"owned development label maturity audit {ordinal}",
+        )
+        matured = maturity_item["matured_by_development_cutoff"]
+        if (
+            type(audit["event_ordinal"]) is not int
+            or audit["event_ordinal"] != ordinal
+            or audit["event_ordinal"] != maturity_item["event_ordinal"]
+            or audit["accession_number"] != maturity_item["accession_number"]
+            or audit["accession_number"] != feature_row["accession_number"]
+            or audit["decision_session"] != maturity_item["decision_session"]
+            or audit["decision_session"] != feature_row["decision_session"]
+            or audit["feature_row_sha256"] != feature_row["feature_row_sha256"]
+            or audit["label_maturity_session"]
+            != maturity_item["label_maturity_session"]
+            or type(audit["matured_by_development_cutoff"]) is not bool
+            or audit["matured_by_development_cutoff"] is not matured
+        ):
+            raise SecFilingGemmaFeatureError(
+                "Development label maturity audit crossed or reordered an event"
+            )
+        _sha256(audit["feature_row_sha256"], "feature_row_sha256")
+        if matured:
+            _sha256(
+                audit["label_evidence_sha256"], "label_evidence_sha256"
+            )
+        elif audit["label_evidence_sha256"] is not None:
+            raise SecFilingGemmaFeatureError(
+                "An unmatured development event exposed label evidence"
+            )
+        normalized_audits.append(copy.deepcopy(dict(audit)))
+
+    matured_triplets = [
+        (maturity_item, audit, feature_row)
+        for maturity_item, audit, feature_row in zip(
+            maturity_plan, normalized_audits, feature_rows, strict=True
+        )
+        if maturity_item["matured_by_development_cutoff"]
+    ]
+    normalized_labels = [
+        _validated_compact_development_label_evidence(
+            raw_label,
+            maturity_item=maturity_item,
+            audit_row=audit,
+            feature_row=feature_row,
+            label_assembly_plan=plan,
+        )
+        for raw_label, (maturity_item, audit, feature_row) in zip(
+            labels, matured_triplets, strict=True
+        )
+    ]
+    label_hashes = [row["label_evidence_sha256"] for row in normalized_labels]
+    body = {
+        "schema_version": OWNED_DEVELOPMENT_LABEL_BATCH_SCHEMA_VERSION,
+        "development_root_scope_sha256": plan[
+            "development_root_scope_sha256"
+        ],
+        "label_assembly_plan_sha256": plan["label_assembly_plan_sha256"],
+        "source_feature_assembly_plan_sha256": plan[
+            "source_feature_assembly_plan_sha256"
+        ],
+        "source_feature_batch_sha256": source_batch["feature_batch_sha256"],
+        "candidate_sha256": source_feature_plan["candidate_sha256"],
+        "corpus_universe_sha256": source_feature_plan[
+            "corpus_universe_sha256"
+        ],
+        "development_market_reader_receipt_sha256": source_feature_plan[
+            "development_market_reader_receipt_sha256"
+        ],
+        "development_cutoff_session": plan["development_cutoff_session"],
+        "event_count": plan["event_count"],
+        "matured_label_count": plan["matured_event_count"],
+        "unmatured_event_count": plan["unmatured_event_count"],
+        "maturity_audit_rows": normalized_audits,
+        "maturity_audit_rows_sha256": canonical_sha256(normalized_audits),
+        "label_evidence_schema_version": LABEL_EVIDENCE_SCHEMA_VERSION,
+        "label_evidence_sha256s": label_hashes,
+        "label_evidence_rows": normalized_labels,
+        "label_evidence_rows_sha256": canonical_sha256(normalized_labels),
+        "development_labels_included": True,
+        "development_outcomes_included": True,
+        "compact_adjusted_open_paths_included": True,
+        "full_market_rows_included": False,
+        "post_cutoff_market_data_included": False,
+        "training_membership_included": False,
+        "learner_fit_authorized": False,
+        "prediction_authorized": False,
+        "holdout_access_authorized": False,
+        "ledger_mutation_authorized": False,
+        "stage_promotion_authorized": False,
+        "production_authorized": False,
+    }
+    return {**body, "label_batch_sha256": canonical_sha256(body)}
+
+
+def validate_owned_development_label_batch(
+    batch: Mapping[str, Any],
+    *,
+    label_assembly_plan: Mapping[str, Any],
+    expected_label_assembly_plan_sha256: str,
+    source_feature_batch: Mapping[str, Any],
+    expected_source_feature_batch_sha256: str,
+    expected_label_batch_sha256: str,
+) -> str:
+    """Rebuild the compact label batch and require all three external pins."""
+
+    value = _expect_mapping(batch, "owned development label batch")
+    _expect_keys(
+        value,
+        set(_OWNED_DEVELOPMENT_LABEL_BATCH_KEYS),
+        "owned development label batch",
+    )
+    for field in (
+        "event_count",
+        "matured_label_count",
+        "unmatured_event_count",
+    ):
+        if type(value[field]) is not int or value[field] < 0:
+            raise SecFilingGemmaFeatureError(
+                f"Owned development label batch {field} must be an exact nonnegative integer"
+            )
+    expected_flags = {
+        "development_labels_included": True,
+        "development_outcomes_included": True,
+        "compact_adjusted_open_paths_included": True,
+        "full_market_rows_included": False,
+        "post_cutoff_market_data_included": False,
+        "training_membership_included": False,
+        "learner_fit_authorized": False,
+        "prediction_authorized": False,
+        "holdout_access_authorized": False,
+        "ledger_mutation_authorized": False,
+        "stage_promotion_authorized": False,
+        "production_authorized": False,
+    }
+    if any(type(value[field]) is not bool for field in expected_flags):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label batch authority flags must be exact booleans"
+        )
+    if any(value[field] is not expected for field, expected in expected_flags.items()):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label batch crossed its non-authorizing boundary"
+        )
+    observed = _sha256(value["label_batch_sha256"], "label_batch_sha256")
+    supplied_body = {
+        key: value[key] for key in value if key != "label_batch_sha256"
+    }
+    if canonical_sha256(supplied_body) != observed:
+        raise SecFilingGemmaFeatureError(
+            "Owned development label batch checksum changed"
+        )
+    plan = _validated_development_label_assembly_plan(label_assembly_plan)
+    if plan["label_assembly_plan_sha256"] != _sha256(
+        expected_label_assembly_plan_sha256,
+        "expected_label_assembly_plan_sha256",
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label assembly plan is not externally pinned"
+        )
+    source_batch = _expect_mapping(
+        source_feature_batch, "owned development source feature batch"
+    )
+    if source_batch.get("feature_batch_sha256") != _sha256(
+        expected_source_feature_batch_sha256,
+        "expected_source_feature_batch_sha256",
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development source feature batch is not externally pinned"
+        )
+    rebuilt = build_owned_development_label_batch(
+        label_assembly_plan=plan,
+        source_feature_batch=source_batch,
+        maturity_audit_rows=value["maturity_audit_rows"],
+        label_evidence_rows=value["label_evidence_rows"],
+    )
+    if dict(value) != rebuilt:
+        raise SecFilingGemmaFeatureError(
+            "Owned development label batch differs from exact replay"
+        )
+    if observed != _sha256(
+        expected_label_batch_sha256, "expected_label_batch_sha256"
+    ):
+        raise SecFilingGemmaFeatureError(
+            "Owned development label batch is not externally pinned"
         )
     return observed
 
@@ -2623,6 +3280,7 @@ __all__ = [
     "COMPARATIVE_CHANGE_ENCODING",
     "CURRENT_IMPACT_ENCODING",
     "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DIMENSION_GROUPS",
     "EXTRACTION_STATUSES",
     "FEATURE_ROW_SCHEMA_VERSION",
@@ -2635,12 +3293,15 @@ __all__ = [
     "MARKET_PREFIX_PROOF_SCHEMA_VERSION",
     "OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION",
     "OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION",
+    "OWNED_DEVELOPMENT_LABEL_BATCH_SCHEMA_VERSION",
+    "OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION",
     "SEMANTIC_AGGREGATE_FEATURE_COLUMNS",
     "SEMANTIC_FEATURE_COLUMNS",
     "UNIVERSE_EVENT_PROOF_SCHEMA_VERSION",
     "EXTRACTION_EVENT_PROOF_SCHEMA_VERSION",
     "SecFilingGemmaFeatureError",
     "build_owned_development_feature_batch",
+    "build_owned_development_label_batch",
     "build_sec_filing_gemma_feature_row",
     "build_twenty_session_label_evidence",
     "build_validated_extraction_event_proof",
@@ -2649,6 +3310,7 @@ __all__ = [
     "validate_extraction_event_proof",
     "validate_market_prefix_proof",
     "validate_owned_development_feature_batch",
+    "validate_owned_development_label_batch",
     "validate_sec_filing_gemma_feature_row",
     "validate_twenty_session_label_evidence",
     "validate_universe_event_proof",

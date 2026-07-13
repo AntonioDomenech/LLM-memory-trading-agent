@@ -32,10 +32,12 @@ from agent_benchmark.sec_filing_gemma_features import (
     FILING_CALENDAR_FEATURE_COLUMNS,
     LABEL_MATURITY_OFFSET,
     OWNED_DEVELOPMENT_FEATURE_BATCH_SCHEMA_VERSION,
+    OWNED_DEVELOPMENT_LABEL_BATCH_SCHEMA_VERSION,
     SEMANTIC_AGGREGATE_FEATURE_COLUMNS,
     SEMANTIC_FEATURE_COLUMNS,
     SecFilingGemmaFeatureError,
     build_owned_development_feature_batch,
+    build_owned_development_label_batch,
     build_sec_filing_gemma_feature_row,
     build_twenty_session_label_evidence,
     build_validated_extraction_event_proof,
@@ -43,6 +45,7 @@ from agent_benchmark.sec_filing_gemma_features import (
     build_validated_universe_event_proof,
     validate_extraction_event_proof,
     validate_owned_development_feature_batch,
+    validate_owned_development_label_batch,
     validate_sec_filing_gemma_feature_row,
     validate_twenty_session_label_evidence,
     validate_universe_event_proof,
@@ -614,6 +617,97 @@ def _rehash_feature_assembly_plan(plan: dict[str, Any]) -> dict[str, Any]:
     return plan
 
 
+def _label_assembly_plan(feature_plan: Mapping[str, Any]) -> dict[str, Any]:
+    maturity_plan: list[dict[str, Any]] = []
+    for event in feature_plan["event_plan"]:
+        decision_index = EXPECTED_MARKET_HISTORY_SESSIONS.index(
+            event["availability_session"]
+        )
+        maturity = EXPECTED_MARKET_HISTORY_SESSIONS[
+            decision_index + LABEL_MATURITY_OFFSET
+        ]
+        maturity_plan.append(
+            {
+                "event_ordinal": event["event_ordinal"],
+                "accession_number": event["accession_number"],
+                "form": event["form"],
+                "decision_session": event["availability_session"],
+                "sec_document_ordinal": event["sec_document_ordinal"],
+                "label_maturity_session": maturity,
+                "matured_by_development_cutoff": maturity <= "2018-12-31",
+            }
+        )
+    matured = sum(item["matured_by_development_cutoff"] for item in maturity_plan)
+    body = {
+        "schema_version": "aapl-sec-gemma-development-label-assembly-plan-v1",
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_label_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": feature_plan[
+            "development_root_scope_sha256"
+        ],
+        "start_consumed_request_count": 0,
+        "source_feature_assembly_plan": copy.deepcopy(dict(feature_plan)),
+        "source_feature_assembly_plan_sha256": feature_plan[
+            "feature_assembly_plan_sha256"
+        ],
+        "calendar_sessions_sha256": market_session_calendar_sha256(
+            EXPECTED_MARKET_HISTORY_SESSIONS
+        ),
+        "development_cutoff_session": "2018-12-31",
+        "label_horizon_sessions": 20,
+        "label_entry_session_offset": 1,
+        "label_maturity_session_offset": 21,
+        "maturity_rule": "t_plus_21_session_lte_development_cutoff_inclusive",
+        "event_count": len(maturity_plan),
+        "maturity_plan": maturity_plan,
+        "maturity_plan_sha256": canonical_sha256(maturity_plan),
+        "matured_event_count": matured,
+        "unmatured_event_count": len(maturity_plan) - matured,
+        "canonical_market_rows_required": True,
+        "development_outcome_derivation_permitted": True,
+        "development_label_rows_output_permitted": True,
+        "post_cutoff_market_access_permitted": False,
+        "raw_market_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "training_membership_access_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+    return {**body, "label_assembly_plan_sha256": canonical_sha256(body)}
+
+
+def _label_batch_inputs(case: Mapping[str, Any]) -> dict[str, Any]:
+    feature_plan = _feature_assembly_plan(case["feature"])
+    feature_batch = build_owned_development_feature_batch(
+        feature_assembly_plan=feature_plan,
+        feature_rows=[case["feature"]],
+    )
+    label_plan = _label_assembly_plan(feature_plan)
+    label = build_twenty_session_label_evidence(**_label_kwargs(case))
+    audit = {
+        "event_ordinal": 1,
+        "accession_number": case["feature"]["accession_number"],
+        "decision_session": case["feature"]["decision_session"],
+        "feature_row_sha256": case["feature"]["feature_row_sha256"],
+        "label_maturity_session": label["label_maturity_session"],
+        "matured_by_development_cutoff": True,
+        "label_evidence_sha256": label["label_evidence_sha256"],
+    }
+    return {
+        "feature_plan": feature_plan,
+        "feature_batch": feature_batch,
+        "label_plan": label_plan,
+        "audit_rows": [audit],
+        "label_rows": [label],
+    }
+
+
 @pytest.fixture(scope="module")
 def case() -> dict[str, Any]:
     decision_index = EXPECTED_MARKET_HISTORY_SESSIONS.index(DECISION_SESSION)
@@ -992,6 +1086,276 @@ def test_owned_feature_batch_rejects_extra_cross_root_and_tampered_values(
                 "feature_assembly_plan_sha256"
             ],
             expected_feature_batch_sha256=batch["feature_batch_sha256"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "rehash", "match"),
+    [
+        ("event_count", True, True, "exact positive integer"),
+        ("labels_included", 0, True, "exact booleans"),
+        ("learner_fit_authorized", 0, True, "exact booleans"),
+        ("candidate_sha256", "0" * 64, False, "checksum changed"),
+    ],
+)
+def test_owned_feature_batch_rejects_bool_int_aliases_and_stale_hash(
+    case: Mapping[str, Any],
+    field: str,
+    replacement: Any,
+    rehash: bool,
+    match: str,
+) -> None:
+    plan = _feature_assembly_plan(case["feature"])
+    batch = build_owned_development_feature_batch(
+        feature_assembly_plan=plan,
+        feature_rows=[case["feature"]],
+    )
+    changed = copy.deepcopy(batch)
+    changed[field] = replacement
+    if rehash:
+        body = {
+            key: changed[key]
+            for key in changed
+            if key != "feature_batch_sha256"
+        }
+        changed["feature_batch_sha256"] = canonical_sha256(body)
+    with pytest.raises(SecFilingGemmaFeatureError, match=match):
+        validate_owned_development_feature_batch(
+            changed,
+            feature_assembly_plan=plan,
+            expected_feature_assembly_plan_sha256=plan[
+                "feature_assembly_plan_sha256"
+            ],
+            expected_feature_batch_sha256=changed["feature_batch_sha256"],
+        )
+
+
+def test_owned_development_label_batch_is_exact_compact_and_non_authorizing(
+    case: Mapping[str, Any],
+) -> None:
+    inputs = _label_batch_inputs(case)
+    batch = build_owned_development_label_batch(
+        label_assembly_plan=inputs["label_plan"],
+        source_feature_batch=inputs["feature_batch"],
+        maturity_audit_rows=inputs["audit_rows"],
+        label_evidence_rows=inputs["label_rows"],
+    )
+    assert set(batch) == {
+        "schema_version",
+        "development_root_scope_sha256",
+        "label_assembly_plan_sha256",
+        "source_feature_assembly_plan_sha256",
+        "source_feature_batch_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_cutoff_session",
+        "event_count",
+        "matured_label_count",
+        "unmatured_event_count",
+        "maturity_audit_rows",
+        "maturity_audit_rows_sha256",
+        "label_evidence_schema_version",
+        "label_evidence_sha256s",
+        "label_evidence_rows",
+        "label_evidence_rows_sha256",
+        "development_labels_included",
+        "development_outcomes_included",
+        "compact_adjusted_open_paths_included",
+        "full_market_rows_included",
+        "post_cutoff_market_data_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "prediction_authorized",
+        "holdout_access_authorized",
+        "ledger_mutation_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+        "label_batch_sha256",
+    }
+    assert batch["schema_version"] == OWNED_DEVELOPMENT_LABEL_BATCH_SCHEMA_VERSION
+    assert batch["matured_label_count"] == 1
+    assert batch["unmatured_event_count"] == 0
+    assert batch["maturity_audit_rows"] == inputs["audit_rows"]
+    assert batch["label_evidence_rows"] == inputs["label_rows"]
+    assert len(batch["label_evidence_rows"][0]["adjusted_open_path"]) == 21
+    for field in (
+        "development_labels_included",
+        "development_outcomes_included",
+        "compact_adjusted_open_paths_included",
+    ):
+        assert batch[field] is True
+    for field in (
+        "full_market_rows_included",
+        "post_cutoff_market_data_included",
+        "training_membership_included",
+        "learner_fit_authorized",
+        "prediction_authorized",
+        "holdout_access_authorized",
+        "ledger_mutation_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+    ):
+        assert batch[field] is False
+    assert validate_owned_development_label_batch(
+        batch,
+        label_assembly_plan=inputs["label_plan"],
+        expected_label_assembly_plan_sha256=inputs["label_plan"][
+            "label_assembly_plan_sha256"
+        ],
+        source_feature_batch=inputs["feature_batch"],
+        expected_source_feature_batch_sha256=inputs["feature_batch"][
+            "feature_batch_sha256"
+        ],
+        expected_label_batch_sha256=batch["label_batch_sha256"],
+    ) == batch["label_batch_sha256"]
+
+    forbidden = {
+        "future_market_rows",
+        "lookback_rows",
+        "observations",
+        "raw_response_bytes_by_symbol",
+        "current_normalized_text",
+        "model_attempt_receipt",
+        "training_set_membership",
+        "learner_state",
+        "prediction_rows",
+        "holdout_rows",
+        "consumption_ledger",
+    }
+    observed: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            observed.update(value)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        else:
+            assert not isinstance(value, bytes)
+
+    walk(batch)
+    assert forbidden.isdisjoint(observed)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("edge", "arithmetic"),
+        ("path_session", "path sessions"),
+        ("nonpositive_open", "positive float.hex"),
+        ("cross_feature", "event or feature binding"),
+        ("bool_offset", "event or feature binding"),
+    ],
+)
+def test_owned_development_label_batch_rejects_rehashed_compact_forgery(
+    case: Mapping[str, Any], mutation: str, match: str
+) -> None:
+    inputs = _label_batch_inputs(case)
+    label = copy.deepcopy(inputs["label_rows"][0])
+    if mutation == "edge":
+        label["cash_active_log_edge_10bps_hex"] = float(0.25).hex()
+    elif mutation == "path_session":
+        label["adjusted_open_path"][1]["session"] = label[
+            "adjusted_open_path"
+        ][0]["session"]
+        label["adjusted_open_path_sha256"] = canonical_sha256(
+            label["adjusted_open_path"]
+        )
+    elif mutation == "nonpositive_open":
+        label["adjusted_open_path"][0]["adjusted_open_hex"] = float(0.0).hex()
+        label["entry_adjusted_open_hex"] = float(0.0).hex()
+        label["adjusted_open_path_sha256"] = canonical_sha256(
+            label["adjusted_open_path"]
+        )
+    elif mutation == "cross_feature":
+        label["extraction_identity_sha256"] = _digest("replacement extraction")
+    else:
+        label["entry_session_offset"] = True
+    label_body = {
+        key: label[key] for key in label if key != "label_evidence_sha256"
+    }
+    label["label_evidence_sha256"] = canonical_sha256(label_body)
+    audit = copy.deepcopy(inputs["audit_rows"])
+    audit[0]["label_evidence_sha256"] = label["label_evidence_sha256"]
+    with pytest.raises(SecFilingGemmaFeatureError, match=match):
+        build_owned_development_label_batch(
+            label_assembly_plan=inputs["label_plan"],
+            source_feature_batch=inputs["feature_batch"],
+            maturity_audit_rows=audit,
+            label_evidence_rows=[label],
+        )
+
+
+def test_owned_development_label_batch_rejects_audit_omission_and_extra_key(
+    case: Mapping[str, Any],
+) -> None:
+    inputs = _label_batch_inputs(case)
+    with pytest.raises(SecFilingGemmaFeatureError, match="count"):
+        build_owned_development_label_batch(
+            label_assembly_plan=inputs["label_plan"],
+            source_feature_batch=inputs["feature_batch"],
+            maturity_audit_rows=[],
+            label_evidence_rows=inputs["label_rows"],
+        )
+    extra = copy.deepcopy(inputs["label_rows"])
+    extra[0]["training_membership"] = []
+    with pytest.raises(SecFilingGemmaFeatureError, match="Invalid owned development"):
+        build_owned_development_label_batch(
+            label_assembly_plan=inputs["label_plan"],
+            source_feature_batch=inputs["feature_batch"],
+            maturity_audit_rows=inputs["audit_rows"],
+            label_evidence_rows=extra,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "rehash", "match"),
+    [
+        ("event_count", True, False, "exact nonnegative integer"),
+        ("matured_label_count", True, True, "exact nonnegative integer"),
+        ("development_labels_included", 1, True, "exact booleans"),
+        ("learner_fit_authorized", 0, True, "exact booleans"),
+        ("candidate_sha256", "0" * 64, False, "checksum changed"),
+    ],
+)
+def test_owned_development_label_batch_rejects_bool_int_aliases(
+    case: Mapping[str, Any],
+    field: str,
+    replacement: Any,
+    rehash: bool,
+    match: str,
+) -> None:
+    inputs = _label_batch_inputs(case)
+    batch = build_owned_development_label_batch(
+        label_assembly_plan=inputs["label_plan"],
+        source_feature_batch=inputs["feature_batch"],
+        maturity_audit_rows=inputs["audit_rows"],
+        label_evidence_rows=inputs["label_rows"],
+    )
+    changed = copy.deepcopy(batch)
+    changed[field] = replacement
+    if rehash:
+        body = {
+            key: changed[key]
+            for key in changed
+            if key != "label_batch_sha256"
+        }
+        changed["label_batch_sha256"] = canonical_sha256(body)
+    with pytest.raises(SecFilingGemmaFeatureError, match=match):
+        validate_owned_development_label_batch(
+            changed,
+            label_assembly_plan=inputs["label_plan"],
+            expected_label_assembly_plan_sha256=inputs["label_plan"][
+                "label_assembly_plan_sha256"
+            ],
+            source_feature_batch=inputs["feature_batch"],
+            expected_source_feature_batch_sha256=inputs["feature_batch"][
+                "feature_batch_sha256"
+            ],
+            expected_label_batch_sha256=changed["label_batch_sha256"],
         )
 
 

@@ -327,10 +327,11 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     "artifact_replay": (
         "detached SEC catalogue and document bytes replay within the current "
         "envelope; the request-free development path now also owns preprocessing, "
-        "extraction, causal market prefixes, and feature proofs, but labels, the "
-        "prelabel ledger, and full seal chain do not; parent lineage is bound to "
-        "the prior consumed entry and grant, but that does not replace the missing "
-        "end-to-end artifact derivation proofs"
+        "extraction, causal market prefixes, feature proofs, and the mature-label "
+        "projection, but the detached envelope does not yet chain that label "
+        "projection, the prelabel ledger, or the full seal chain; parent lineage "
+        "is bound to the prior consumed entry and grant, but that does not replace "
+        "the missing end-to-end artifact derivation proofs"
     ),
     "calendar_source_semantics": (
         "official calendar bytes are hash-bound but no pure parser proves the "
@@ -338,15 +339,17 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "chronology": (
         "development event bindings and feature rows are now derived chronologically "
-        "from replayed filing, model, and causal market evidence, but training rows "
-        "are not yet derived through owned matured-label evidence"
+        "from replayed filing, model, and causal market evidence, and development "
+        "labels are derived only when mature by the frozen cutoff; training "
+        "membership and rows are not yet assembled through an owned reader"
     ),
     "market_source_byte_reconciliation": (
         "the fixed provider responses now replay through a store-attested market "
         "reader into canonical snapshots, and the request-free development feature "
         "assembler loads only reader-bound causal prefixes; this detached stage "
-        "verifier still accepts caller-supplied market snapshots and no owned label "
-        "or later-stage assembler has replaced that path"
+        "verifier still accepts caller-supplied market snapshots, and the owned "
+        "development label projection has not yet been extended into owned training "
+        "membership or later-stage assembly"
     ),
     "model_attempt_replay": (
         "exact attempt bytes replay, but the independently expected payload is "
@@ -358,10 +361,10 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "prerequisite_evidence_identity": (
         "the directly invoked verifier replays raw catalogue and content bytes but "
-        "still omits owned label, prelabel-ledger, and full seal-chain proofs; the "
-        "request-free development feature projection now binds preprocessing, model "
-        "extraction, and causal market evidence, but remaining downstream readers "
-        "are not yet grant-bound"
+        "still omits the owned development-label projection, prelabel-ledger, and "
+        "full seal-chain proofs; the request-free feature and label projections bind "
+        "preprocessing, model extraction, causal market evidence, and mature outcomes, "
+        "but training-membership and later downstream readers are not yet grant-bound"
     ),
     "runtime_budget": (
         "stage-specific measurements are internally reconciled but the owned "
@@ -376,9 +379,10 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     "stage_access_identity": (
         "the owned runner now claims the exact current grant before the SEC batch and "
         "the store rehashes its durable actual bytes; model, carry-in, and development "
-        "market reads plus request-free development feature assembly are owned and "
-        "cross-bound, but label, learner, prediction, ledger, and stage-evidence "
-        "readers are not yet forced through the same authenticated lineage"
+        "market reads plus request-free development feature and mature-label assembly "
+        "are owned and cross-bound, but training-membership, learner, prediction, "
+        "ledger, and stage-evidence readers are not yet forced through the same "
+        "authenticated lineage"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "

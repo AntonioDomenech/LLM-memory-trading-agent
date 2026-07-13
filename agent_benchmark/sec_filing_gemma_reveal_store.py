@@ -80,9 +80,16 @@ from agent_benchmark.sec_filing_gemma_market_acquirer import (
 )
 from agent_benchmark.sec_filing_gemma_features import (
     OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION,
+    OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaFeatureError,
+    build_owned_development_feature_batch,
+    build_sec_filing_gemma_feature_row,
+    build_twenty_session_label_evidence,
     build_validated_extraction_event_proof,
     build_validated_market_prefix_proof,
     build_validated_universe_event_proof,
+    validate_owned_development_feature_batch,
+    validate_twenty_session_label_evidence,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     MARKET_SYMBOLS,
@@ -126,6 +133,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
+    build_development_label_assembly_plan,
     build_development_model_execution_abort,
     build_development_model_execution_claim,
     build_development_model_reader_receipt,
@@ -153,6 +161,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_consumed_stage_output_receipt,
     validate_development_root_carry_in_reader_receipt,
     validate_development_feature_assembly_plan,
+    validate_development_label_assembly_plan,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
     validate_reveal_store_current_tip_anchor_transition,
@@ -6625,6 +6634,18 @@ class SecFilingGemmaRevealStore:
         """Project causal development feature inputs from terminal owned evidence."""
 
         with self._locked():
+            return self._load_owned_development_feature_inputs_locked(
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+
+    def _load_owned_development_feature_inputs_locked(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project feature inputs while the caller holds the reveal-store lock."""
+
+        def project_locked() -> dict[str, Any]:
             _cleanup_interrupted_temporaries(self.store_directory)
             tracked_anchor = _load_tracked_anchor(self.repository_root)
             current, current_tip, _state_bytes, _tip_bytes = (
@@ -6970,6 +6991,443 @@ class SecFilingGemmaRevealStore:
             return {
                 **detached,
                 "feature_inputs_sha256": canonical_sha256(detached),
+            }
+
+        return project_locked()
+
+    def _build_owned_development_feature_batch_from_inputs_locked(
+        self,
+        *,
+        feature_inputs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Rebuild the exact safe feature batch from one locked store projection."""
+
+        if type(feature_inputs) is not dict or set(feature_inputs) != {
+            "schema_version",
+            "feature_assembly_plan",
+            "events",
+            "feature_inputs_sha256",
+        }:
+            raise SecFilingGemmaRevealStoreError(
+                "Development label source feature inputs are not exact"
+            )
+        feature_plan = feature_inputs["feature_assembly_plan"]
+        events = feature_inputs["events"]
+        if (
+            feature_inputs["schema_version"]
+            != OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION
+            or type(feature_plan) is not dict
+            or type(events) is not list
+            or len(events) != feature_plan.get("event_count")
+            or feature_inputs["feature_inputs_sha256"]
+            != canonical_sha256(
+                {
+                    key: feature_inputs[key]
+                    for key in feature_inputs
+                    if key != "feature_inputs_sha256"
+                }
+            )
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development label source feature event count changed"
+            )
+        feature_rows: list[dict[str, Any]] = []
+        for ordinal, event in enumerate(events, start=1):
+            try:
+                if (
+                    type(event) is not dict
+                    or event.get("event_ordinal") != ordinal
+                    or event.get("event_plan_item")
+                    != feature_plan["event_plan"][ordinal - 1]
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Development label source feature event order changed"
+                    )
+                prefix_proof = event["market_prefix_proof"]
+                universe_proof = event["universe_event_proof"]
+                extraction_proof = event["extraction_event_proof"]
+                feature_rows.append(
+                    build_sec_filing_gemma_feature_row(
+                        market_prefix=event["market_prefix"],
+                        market_prefix_proof=prefix_proof,
+                        expected_market_prefix_proof_sha256=prefix_proof[
+                            "market_prefix_proof_sha256"
+                        ],
+                        universe_event_proof=universe_proof,
+                        expected_universe_event_proof_sha256=universe_proof[
+                            "universe_event_proof_sha256"
+                        ],
+                        extraction_event_proof=extraction_proof,
+                        expected_extraction_event_proof_sha256=extraction_proof[
+                            "extraction_event_proof_sha256"
+                        ],
+                    )
+                )
+            except SecFilingGemmaRevealStoreError:
+                raise
+            except (
+                KeyError,
+                IndexError,
+                TypeError,
+                ValueError,
+                SecFilingGemmaContractError,
+                SecFilingGemmaFeatureError,
+            ) as exc:
+                accession = (
+                    event.get("event_plan_item", {}).get("accession_number")
+                    if type(event) is dict
+                    and type(event.get("event_plan_item")) is dict
+                    else "unknown"
+                )
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label source feature event "
+                    f"{ordinal} ({accession}) failed causal replay"
+                ) from exc
+        try:
+            batch = build_owned_development_feature_batch(
+                feature_assembly_plan=feature_plan,
+                feature_rows=feature_rows,
+            )
+            validate_owned_development_feature_batch(
+                batch,
+                feature_assembly_plan=feature_plan,
+                expected_feature_assembly_plan_sha256=feature_plan[
+                    "feature_assembly_plan_sha256"
+                ],
+                expected_feature_batch_sha256=batch["feature_batch_sha256"],
+            )
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaContractError,
+            SecFilingGemmaFeatureError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development label source feature batch failed exact replay"
+            ) from exc
+        return batch
+
+    def _load_owned_development_label_projection(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Derive only development labels matured by the frozen cutoff."""
+
+        with self._locked():
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "owned development label projection root scope hash",
+            )
+            feature_inputs = self._load_owned_development_feature_inputs_locked(
+                development_root_scope_sha256=scope_hash,
+            )
+            source_feature_batch = (
+                self._build_owned_development_feature_batch_from_inputs_locked(
+                    feature_inputs=feature_inputs,
+                )
+            )
+            source_feature_plan = feature_inputs["feature_assembly_plan"]
+
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            try:
+                label_plan = build_development_label_assembly_plan(
+                    current,
+                    development_root_scope_sha256=scope_hash,
+                    source_feature_assembly_plan=source_feature_plan,
+                    independent_current_tip_anchor=current_tip,
+                )
+                validate_development_label_assembly_plan(
+                    label_plan,
+                    expected_label_assembly_plan_sha256=label_plan[
+                        "label_assembly_plan_sha256"
+                    ],
+                )
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                SecFilingGemmaStageAuthorizationError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label assembly plan failed exact store replay"
+                ) from exc
+            if (
+                label_plan.get("development_root_scope_sha256") != scope_hash
+                or label_plan.get("start_consumed_request_count") != 0
+                or label_plan.get("source_feature_assembly_plan")
+                != source_feature_plan
+                or label_plan.get("source_feature_assembly_plan_sha256")
+                != source_feature_plan["feature_assembly_plan_sha256"]
+                or label_plan.get("event_count")
+                != source_feature_batch["event_count"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label assembly plan crossed its source feature batch"
+                )
+
+            market_claim = current_tip[
+                "development_market_execution_claims"
+            ].get(scope_hash)
+            market_reader = current_tip[
+                "development_market_reader_receipts"
+            ].get(scope_hash)
+            model_claim = current_tip[
+                "development_model_execution_claims"
+            ].get(scope_hash)
+            if (
+                type(market_claim) is not dict
+                or type(market_reader) is not dict
+                or type(model_claim) is not dict
+                or scope_hash
+                in current_tip["development_market_execution_aborts"]
+                or market_claim.get("development_root_scope_sha256") != scope_hash
+                or market_reader.get("development_root_scope_sha256") != scope_hash
+                or market_reader.get("claim_sha256")
+                != market_claim.get("claim_sha256")
+                or model_claim.get("development_root_scope_sha256") != scope_hash
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label projection lacks terminal same-root market/model ancestry"
+                )
+            market_replay = self._replay_owned_development_market_component_locked(
+                claim=market_claim,
+                development_root_scope_sha256=scope_hash,
+                expected_reader_receipt=market_reader,
+            )
+            source_manifest = market_replay["source_manifest"]
+            stage_manifest = market_replay["stage_manifest"]
+            if (
+                source_manifest.get("source_manifest_sha256")
+                != source_feature_plan["development_market_source_manifest_sha256"]
+                or stage_manifest.get("market_stage_manifest_sha256")
+                != source_feature_plan["development_market_stage_manifest_sha256"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label market evidence crossed its source feature plan"
+                )
+
+            events = feature_inputs["events"]
+            feature_rows = source_feature_batch["feature_rows"]
+            maturity_plan = label_plan["maturity_plan"]
+            if not (
+                type(events) is list
+                and type(feature_rows) is list
+                and type(maturity_plan) is list
+                and len(events) == len(feature_rows) == len(maturity_plan)
+                == label_plan["event_count"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label event, feature, and maturity counts differ"
+                )
+
+            maturity_audit_rows: list[dict[str, Any]] = []
+            label_evidence_rows: list[dict[str, Any]] = []
+            maturity_item_keys = {
+                "event_ordinal",
+                "accession_number",
+                "form",
+                "decision_session",
+                "sec_document_ordinal",
+                "label_maturity_session",
+                "matured_by_development_cutoff",
+            }
+            for ordinal, (event, feature_row, maturity_item) in enumerate(
+                zip(events, feature_rows, maturity_plan, strict=True),
+                start=1,
+            ):
+                event_plan_item = (
+                    event.get("event_plan_item") if type(event) is dict else None
+                )
+                if (
+                    type(event_plan_item) is not dict
+                    or type(feature_row) is not dict
+                    or type(maturity_item) is not dict
+                    or set(maturity_item) != maturity_item_keys
+                    or maturity_item.get("event_ordinal") != ordinal
+                    or event.get("event_ordinal") != ordinal
+                    or event_plan_item.get("event_ordinal") != ordinal
+                    or maturity_item.get("accession_number")
+                    != event_plan_item.get("accession_number")
+                    or maturity_item.get("form") != event_plan_item.get("form")
+                    or maturity_item.get("decision_session")
+                    != event_plan_item.get("availability_session")
+                    or maturity_item.get("sec_document_ordinal")
+                    != event_plan_item.get("sec_document_ordinal")
+                    or feature_row.get("accession_number")
+                    != maturity_item.get("accession_number")
+                    or feature_row.get("decision_session")
+                    != maturity_item.get("decision_session")
+                    or type(maturity_item.get("matured_by_development_cutoff"))
+                    is not bool
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        f"Development label event {ordinal} crossed its maturity plan"
+                    )
+
+                evidence_hash: str | None = None
+                if maturity_item["matured_by_development_cutoff"]:
+                    prefix_proof = event["market_prefix_proof"]
+                    universe_proof = event["universe_event_proof"]
+                    extraction_proof = event["extraction_event_proof"]
+                    label_kwargs = {
+                        "market_prefix": event["market_prefix"],
+                        "market_prefix_proof": prefix_proof,
+                        "expected_market_prefix_proof_sha256": prefix_proof[
+                            "market_prefix_proof_sha256"
+                        ],
+                        "stage_manifest": stage_manifest,
+                        "source_manifest": source_manifest,
+                        "expected_artifact_stage": "development",
+                        "expected_source_manifest_sha256": source_feature_plan[
+                            "development_market_source_manifest_sha256"
+                        ],
+                        "expected_market_stage_manifest_sha256": source_feature_plan[
+                            "development_market_stage_manifest_sha256"
+                        ],
+                        "feature_row": feature_row,
+                        "expected_feature_row_sha256": feature_row[
+                            "feature_row_sha256"
+                        ],
+                        "universe_event_proof": universe_proof,
+                        "expected_universe_event_proof_sha256": universe_proof[
+                            "universe_event_proof_sha256"
+                        ],
+                        "extraction_event_proof": extraction_proof,
+                        "expected_extraction_event_proof_sha256": extraction_proof[
+                            "extraction_event_proof_sha256"
+                        ],
+                    }
+                    context = (
+                        f"event {ordinal} ({maturity_item['accession_number']}) "
+                        f"decision={maturity_item['decision_session']} "
+                        f"maturity={maturity_item['label_maturity_session']}"
+                    )
+                    try:
+                        evidence = build_twenty_session_label_evidence(
+                            **label_kwargs,
+                        )
+                        validate_twenty_session_label_evidence(
+                            evidence,
+                            expected_label_evidence_sha256=evidence[
+                                "label_evidence_sha256"
+                            ],
+                            **label_kwargs,
+                        )
+                    except (
+                        KeyError,
+                        IndexError,
+                        TypeError,
+                        ValueError,
+                        SecFilingGemmaContractError,
+                        SecFilingGemmaFeatureError,
+                    ) as exc:
+                        raise SecFilingGemmaRevealStoreError(
+                            "Development label target path failed exact replay for "
+                            f"{context}: {exc}"
+                        ) from exc
+                    if (
+                        evidence.get("accession_number")
+                        != maturity_item["accession_number"]
+                        or evidence.get("decision_session")
+                        != maturity_item["decision_session"]
+                        or evidence.get("label_maturity_session")
+                        != maturity_item["label_maturity_session"]
+                        or evidence.get("feature_row_sha256")
+                        != feature_row["feature_row_sha256"]
+                    ):
+                        raise SecFilingGemmaRevealStoreError(
+                            "Development label evidence crossed its maturity item for "
+                            f"{context}"
+                        )
+                    evidence_hash = _sha256(
+                        evidence.get("label_evidence_sha256"),
+                        f"development label evidence {ordinal} hash",
+                    )
+                    label_evidence_rows.append(copy.deepcopy(evidence))
+
+                maturity_audit_rows.append(
+                    {
+                        "event_ordinal": ordinal,
+                        "accession_number": maturity_item["accession_number"],
+                        "decision_session": maturity_item["decision_session"],
+                        "feature_row_sha256": feature_row["feature_row_sha256"],
+                        "label_maturity_session": maturity_item[
+                            "label_maturity_session"
+                        ],
+                        "matured_by_development_cutoff": maturity_item[
+                            "matured_by_development_cutoff"
+                        ],
+                        "label_evidence_sha256": evidence_hash,
+                    }
+                )
+
+            if (
+                len(label_evidence_rows) != label_plan["matured_event_count"]
+                or len(maturity_audit_rows) != label_plan["event_count"]
+                or sum(
+                    row["label_evidence_sha256"] is None
+                    for row in maturity_audit_rows
+                )
+                != label_plan["unmatured_event_count"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label maturity audit counts changed"
+                )
+
+            closure_feature_inputs = (
+                self._load_owned_development_feature_inputs_locked(
+                    development_root_scope_sha256=scope_hash,
+                )
+            )
+            closure_feature_batch = (
+                self._build_owned_development_feature_batch_from_inputs_locked(
+                    feature_inputs=closure_feature_inputs,
+                )
+            )
+            closure_market_replay = (
+                self._replay_owned_development_market_component_locked(
+                    claim=market_claim,
+                    development_root_scope_sha256=scope_hash,
+                    expected_reader_receipt=market_reader,
+                )
+            )
+            if (
+                closure_feature_inputs != feature_inputs
+                or closure_feature_batch != source_feature_batch
+                or closure_market_replay != market_replay
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development label source ancestry changed during projection"
+                )
+            self._revalidate_authorized_market_execution_sources(market_claim)
+            self._revalidate_authorized_model_execution_sources(model_claim)
+
+            body = {
+                "schema_version": (
+                    OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION
+                ),
+                "label_assembly_plan": copy.deepcopy(label_plan),
+                "source_feature_batch": copy.deepcopy(source_feature_batch),
+                "maturity_audit_rows": maturity_audit_rows,
+                "label_evidence_rows": label_evidence_rows,
+            }
+            detached = _exact_builtin_json_copy(
+                body,
+                "owned development label projection",
+            )
+            if type(detached) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development label projection is not exact JSON"
+                )
+            return {
+                **detached,
+                "label_projection_sha256": canonical_sha256(detached),
             }
 
     def _record_owned_development_model_reader_output(

@@ -55,10 +55,13 @@ from .sec_filing_gemma_corpus import (
 from .sec_filing_gemma_features import (
     MARKET_LOOKBACK_ROW_COUNT,
     OWNED_DEVELOPMENT_FEATURE_INPUTS_SCHEMA_VERSION,
+    OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION,
     SecFilingGemmaFeatureError,
     build_owned_development_feature_batch,
+    build_owned_development_label_batch,
     build_sec_filing_gemma_feature_row,
     validate_owned_development_feature_batch,
+    validate_owned_development_label_batch,
 )
 from .sec_filing_gemma_reveal_store import (
     DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME,
@@ -111,6 +114,7 @@ from .sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     _sec_component_plan_from_bundle,
+    validate_development_label_assembly_plan,
     validate_development_feature_assembly_plan,
 )
 from .sec_point_in_time import validate_sec_user_agent
@@ -147,6 +151,16 @@ _OWNED_DEVELOPMENT_FEATURE_EVENT_KEYS: Final[frozenset[str]] = frozenset(
         "market_prefix_proof",
         "universe_event_proof",
         "extraction_event_proof",
+    }
+)
+_OWNED_DEVELOPMENT_LABEL_PROJECTION_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "label_assembly_plan",
+        "source_feature_batch",
+        "maturity_audit_rows",
+        "label_evidence_rows",
+        "label_projection_sha256",
     }
 )
 
@@ -3471,10 +3485,161 @@ def run_owned_development_feature_batch(
     return batch
 
 
+def _validated_owned_development_label_projection(
+    loaded: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Require the exact store-owned development label projection."""
+
+    if type(loaded) is not dict or set(loaded) != set(
+        _OWNED_DEVELOPMENT_LABEL_PROJECTION_KEYS
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection is not exact"
+        )
+    if (
+        loaded["schema_version"]
+        != OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection schema changed"
+        )
+    plan = loaded["label_assembly_plan"]
+    if type(plan) is not dict or not _is_bare_sha256(
+        plan.get("label_assembly_plan_sha256")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label assembly plan is unavailable"
+        )
+    try:
+        validated_plan_hash = validate_development_label_assembly_plan(
+            plan,
+            expected_label_assembly_plan_sha256=plan[
+                "label_assembly_plan_sha256"
+            ],
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label assembly plan failed exact validation"
+        ) from None
+    if (
+        validated_plan_hash != plan["label_assembly_plan_sha256"]
+        or plan.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection crossed its root scope"
+        )
+    source_batch = loaded["source_feature_batch"]
+    if (
+        type(source_batch) is not dict
+        or type(plan.get("event_count")) is not int
+        or type(plan.get("matured_event_count")) is not int
+        or type(plan.get("unmatured_event_count")) is not int
+        or type(source_batch.get("event_count")) is not int
+        or not _is_bare_sha256(source_batch.get("feature_batch_sha256"))
+        or source_batch.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or source_batch.get("feature_assembly_plan_sha256")
+        != plan.get("source_feature_assembly_plan_sha256")
+        or source_batch.get("event_count") != plan.get("event_count")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label source feature batch crossed its plan"
+        )
+    audits = loaded["maturity_audit_rows"]
+    labels = loaded["label_evidence_rows"]
+    if (
+        type(audits) is not list
+        or len(audits) != plan.get("event_count")
+        or type(labels) is not list
+        or len(labels) != plan.get("matured_event_count")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection row counts changed"
+        )
+    projection_hash = loaded["label_projection_sha256"]
+    if not _is_bare_sha256(projection_hash):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection checksum is invalid"
+        )
+    body = {
+        key: loaded[key]
+        for key in loaded
+        if key != "label_projection_sha256"
+    }
+    try:
+        calculated = canonical_sha256(body)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection is not canonical JSON"
+        ) from None
+    if calculated != projection_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection checksum changed"
+        )
+    return copy.deepcopy(loaded)
+
+
+def run_owned_development_label_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Build compact development labels from one store-owned projection."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development label scope must be a bare lowercase SHA-256"
+        )
+    try:
+        loaded = reveal_store._load_owned_development_label_projection(
+            development_root_scope_sha256=development_root_scope_sha256
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label projection could not be loaded"
+        ) from None
+    projection = _validated_owned_development_label_projection(
+        loaded,
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    plan = projection["label_assembly_plan"]
+    source_batch = projection["source_feature_batch"]
+    try:
+        batch = build_owned_development_label_batch(
+            label_assembly_plan=plan,
+            source_feature_batch=source_batch,
+            maturity_audit_rows=projection["maturity_audit_rows"],
+            label_evidence_rows=projection["label_evidence_rows"],
+        )
+        validate_owned_development_label_batch(
+            batch,
+            label_assembly_plan=plan,
+            expected_label_assembly_plan_sha256=plan[
+                "label_assembly_plan_sha256"
+            ],
+            source_feature_batch=source_batch,
+            expected_source_feature_batch_sha256=source_batch[
+                "feature_batch_sha256"
+            ],
+            expected_label_batch_sha256=batch["label_batch_sha256"],
+        )
+    except (KeyError, TypeError, ValueError, SecFilingGemmaFeatureError):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development label batch failed compact causal replay"
+        ) from None
+    return batch
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
     "run_owned_development_feature_batch",
+    "run_owned_development_label_batch",
     "run_owned_development_market_batch",
     "run_owned_development_model_batch",
     "run_owned_development_sec_root",

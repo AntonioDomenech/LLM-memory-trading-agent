@@ -961,9 +961,13 @@ Promotion remains false: the detached stage verifier can still accept
 caller-supplied market snapshots. The new store-owned development feature
 assembler consumes only the terminal SEC, Gemma, and market receipts and emits
 self-hashed development feature rows with explicit flags denying labels,
-outcomes, training membership, learner fit, promotion, and production use. No
-owned label/prediction/learner/ledger assembler exists yet. The ledger source
-role is the sole unresolved source role.
+outcomes, training membership, learner fit, promotion, and production use. A
+separate store-owned development label assembler now derives only outcomes
+whose `t+21` session is on or before 2018-12-31 and emits compact, self-hashed
+label evidence while still denying training membership, learner fit,
+prediction, holdout, ledger, promotion, and production use. No owned
+training-membership/prediction/learner/ledger assembler exists yet. The ledger
+source role is the sole unresolved source role.
 
 The completed feature-only checkpoint is deliberately non-authorizing. Under one
 store lock it replays terminal non-aborted same-root SEC, market, and development
@@ -977,9 +981,20 @@ internally only to prove the fixed split identity; the operation emits none of
 the 2019-2026 filing text, market observations, outcomes, labels, learner inputs,
 or later-stage metadata.
 
+The completed label checkpoint keeps one audit row for every development event,
+labels every event whose result is mature by the cutoff regardless of feature
+availability, and gives chronologically immature events a null label hash. It
+never opens a target path for those immature events. Any missing, nonpositive,
+or corrupt AAPL adjusted-open value in a mature `t+1..t+21` path fails the whole
+projection with event and session context. The public runner can receive only
+the owned store plus the development-root scope and exposes compact adjusted-open
+paths rather than full market rows. Frozen-source integration tests replayed the
+feature projection in 459.77 seconds and the new label projection in 609.29
+seconds, both without network or live-model calls.
+
 The next implementation milestone is the separate request-free development
-label and training-membership assembler, followed by owned learner state,
-predictions, and the continuous no-leverage ledger. Those later components must
+training-membership assembler, followed by owned learner state, predictions,
+and the continuous no-leverage ledger. Those later components must
 remove caller-supplied market snapshots from every authorizing path, parse
 official calendar semantics, chain every artifact from genesis, and bind the
 development winner/output state to the intermediate learner input. A production
