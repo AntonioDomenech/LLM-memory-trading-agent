@@ -57,6 +57,8 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     validate_single_candidate_reveal_request,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
+    STAGE_EVIDENCE_KEYS,
+    STAGE_EVIDENCE_SCHEMA_VERSION,
     STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
     authoritative_prerequisite_validator,
     detach_untrusted_stage_json,
@@ -66,6 +68,8 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
+    STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
+    STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
     build_reveal_store_current_tip_anchor,
@@ -114,6 +118,27 @@ SEC_BATCH_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
 SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-owned-sec-batch-complete-v1"
 )
+STAGE_EVIDENCE_COMPONENT_DIRECTORY_NAME: Final[str] = "stage_evidence"
+STAGE_EVIDENCE_FILENAME: Final[str] = "stage_evidence.json"
+STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
+STAGE_EVIDENCE_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-evidence-complete-v1"
+)
+_STAGE_EVIDENCE_COMPLETE_MARKER_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "request_sha256",
+        "claim_sha256",
+        "sec_reader_receipt_sha256",
+        "component_id",
+        "relative_path",
+        "byte_count",
+        "document_sha256",
+        "stage_evidence_sha256",
+        "marker_sha256",
+    }
+)
+MAX_STAGE_EVIDENCE_FILE_BYTES: Final[int] = 256 * 1024 * 1024
 MAX_SEC_BATCH_FILES: Final[int] = 4_096
 MAX_SEC_BATCH_FILE_BYTES: Final[int] = 128 * 1024 * 1024
 MAX_SEC_BATCH_TOTAL_BYTES: Final[int] = 1536 * 1024 * 1024
@@ -1547,7 +1572,6 @@ def _locate_parent_intermediate_predecessor(
     authenticated_store_snapshot: Mapping[str, Any],
     independent_current_tip_anchor: Mapping[str, Any],
     child_request: Mapping[str, Any],
-    prerequisite_stage_evidence: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     state = _expect_mapping(
         authenticated_store_snapshot,
@@ -1603,28 +1627,6 @@ def _locate_parent_intermediate_predecessor(
         raise SecFilingGemmaRevealStoreError(
             "Final request predecessor lacks its persisted first-output receipt"
         )
-    binding = _stage_evidence_output_binding(
-        prerequisite_stage_evidence,
-        authorization_grant=bundle["authorization_grant"],
-    )
-    if binding["output_stage_evidence_sha256"] != child_request[
-        "prerequisite_stage_evidence_sha256"
-    ]:
-        raise SecFilingGemmaRevealStoreError(
-            "Final request evidence differs from the parent output receipt"
-        )
-    try:
-        validate_consumed_stage_output_receipt(
-            output_receipt,
-            authenticated_store_snapshot=state,
-            independent_current_tip_anchor=current_tip,
-            authorization_bundle=bundle,
-            **binding,
-        )
-    except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
-        raise SecFilingGemmaRevealStoreError(
-            "Final request predecessor output receipt is not exact at the current tip"
-        ) from exc
     return entry, bundle, output_receipt
 
 
@@ -1637,6 +1639,7 @@ def _build_parent_consumption_binding(
     parent_bundle: Mapping[str, Any],
     parent_output_receipt: Mapping[str, Any],
     prerequisite_stage_evidence: Mapping[str, Any],
+    parent_output_binding: Mapping[str, Any],
 ) -> dict[str, Any]:
     state = _expect_mapping(
         authenticated_store_snapshot,
@@ -1769,9 +1772,9 @@ def _build_parent_consumption_binding(
             ],
             expected_output_namespace=parent_access["output"]["namespace"],
         )
-        output_binding = _stage_evidence_output_binding(
-            prerequisite_stage_evidence,
-            authorization_grant=bundle["authorization_grant"],
+        output_binding = _expect_mapping(
+            parent_output_binding,
+            "durable parent stage-evidence output binding",
         )
         if output_binding["output_stage_evidence_sha256"] != child_request[
             "prerequisite_stage_evidence_sha256"
@@ -1879,6 +1882,18 @@ def _build_parent_consumption_binding(
         ],
         "consumed_stage_output_receipts_sha256": canonical_sha256(
             current_tip["consumed_stage_output_receipts"]
+        ),
+        "stage_sec_execution_claims": current_tip[
+            "stage_sec_execution_claims"
+        ],
+        "stage_sec_execution_claims_sha256": canonical_sha256(
+            current_tip["stage_sec_execution_claims"]
+        ),
+        "stage_sec_reader_receipts": current_tip[
+            "stage_sec_reader_receipts"
+        ],
+        "stage_sec_reader_receipts_sha256": canonical_sha256(
+            current_tip["stage_sec_reader_receipts"]
         ),
     }
     body = {
@@ -3262,6 +3277,334 @@ class SecFilingGemmaRevealStore:
                 )
             return copy.deepcopy(persisted)
 
+    def _read_owned_stage_evidence_output_locked(
+        self,
+        *,
+        authenticated_store_snapshot: Mapping[str, Any],
+        independent_current_tip_anchor: Mapping[str, Any],
+        authorization_bundle: Mapping[str, Any],
+        request_sha256: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Replay one fixed durable stage-evidence document under the store lock."""
+
+        current = _expect_mapping(
+            authenticated_store_snapshot,
+            "owned stage-evidence authenticated store snapshot",
+        )
+        current_tip = _expect_mapping(
+            independent_current_tip_anchor,
+            "owned stage-evidence independent current tip",
+        )
+        request_hash = _sha256(
+            request_sha256,
+            "owned stage-evidence request hash",
+        )
+        bundle = _expect_mapping(
+            authorization_bundle,
+            "owned stage-evidence authorization bundle",
+        )
+        if current_tip["authorization_bundles"].get(request_hash) != bundle:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage evidence lost its exact authorization bundle"
+            )
+        grant = _expect_mapping(
+            bundle.get("authorization_grant"),
+            "owned stage-evidence authorization grant",
+        )
+        claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+        sec_reader = current_tip["stage_sec_reader_receipts"].get(request_hash)
+        if type(claim) is not dict or type(sec_reader) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage evidence requires its exact SEC claim and reader receipt"
+            )
+        if request_hash in current_tip["stage_sec_execution_aborts"]:
+            raise SecFilingGemmaRevealStoreError(
+                "Aborted SEC execution cannot publish stage evidence"
+            )
+        if (
+            sec_reader.get("claim_sha256") != claim.get("claim_sha256")
+            or sec_reader.get("request_sha256") != request_hash
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage evidence SEC ancestry is inconsistent"
+            )
+        try:
+            validate_consumed_stage_authorization_grant(
+                grant,
+                authenticated_store_snapshot=current,
+                external_store_state_pin=bundle["store_state_pin"],
+                independent_current_tip_anchor=current_tip,
+                expected_consumption_entry_sha256=grant[
+                    "consumption_entry_sha256"
+                ],
+                expected_request_sha256=request_hash,
+                expected_candidate_sha256=grant["candidate_sha256"],
+                expected_stage=grant["stage"],
+                expected_prerequisite_stage_evidence_sha256=grant[
+                    "prerequisite_stage_evidence_sha256"
+                ],
+                expected_stage_access_manifest_sha256=grant[
+                    "stage_access_manifest_sha256"
+                ],
+                expected_output_namespace=grant["output_namespace"],
+            )
+        except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage evidence lacks an exact current grant"
+            ) from exc
+        self._revalidate_authorized_sec_execution_sources(claim)
+
+        component_directory = (
+            self.store_directory
+            / STAGE_OUTPUTS_DIRECTORY_NAME
+            / claim["claim_sha256"]
+            / STAGE_EVIDENCE_COMPONENT_DIRECTORY_NAME
+        )
+        secured = _secure_directory(
+            component_directory,
+            create=False,
+            location="owned stage-evidence directory",
+        )
+        directory_before = _validate_real_directory(
+            secured,
+            "owned stage-evidence directory",
+        )
+        observed_names = [item.name for item in secured.iterdir()]
+        expected_names = {
+            STAGE_EVIDENCE_FILENAME,
+            STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME,
+        }
+        if (
+            len(observed_names) != len(expected_names)
+            or len({name.casefold() for name in observed_names})
+            != len(observed_names)
+            or set(observed_names) != expected_names
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence directory has missing, extra, or case-colliding files"
+            )
+
+        evidence_bytes = _read_regular_bytes(
+            secured / STAGE_EVIDENCE_FILENAME,
+            "owned stage-evidence document",
+            max_bytes=MAX_STAGE_EVIDENCE_FILE_BYTES,
+        )
+        evidence = _strict_json_bytes(
+            evidence_bytes,
+            "owned stage-evidence document",
+        )
+        if type(evidence) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence document must be an object"
+            )
+        try:
+            preflight_untrusted_stage_json(
+                evidence,
+                "owned stage-evidence document",
+            )
+            detached_evidence = detach_untrusted_stage_json(
+                evidence,
+                "owned stage-evidence document",
+            )
+        except Exception as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence document exceeds fixed allocation bounds"
+            ) from exc
+        if (
+            type(detached_evidence) is not dict
+            or set(detached_evidence) != STAGE_EVIDENCE_KEYS
+            or detached_evidence.get("schema_version")
+            != STAGE_EVIDENCE_SCHEMA_VERSION
+            or type(detached_evidence.get("parent_stage_evidence_sha256"))
+            is not str
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence document is not the exact v3 envelope"
+            )
+        try:
+            canonical_evidence_bytes = json.dumps(
+                detached_evidence,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (RecursionError, TypeError, ValueError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence document is not finite canonical JSON"
+            ) from exc
+        if evidence_bytes != canonical_evidence_bytes:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence bytes are not exact compact canonical JSON"
+            )
+        binding = _stage_evidence_output_binding(
+            detached_evidence,
+            authorization_grant=grant,
+        )
+        if (
+            binding["output_stage_evidence_schema_version"]
+            != STAGE_EVIDENCE_SCHEMA_VERSION
+            or binding["output_stage_evidence_document_sha256"]
+            != hashlib.sha256(evidence_bytes).hexdigest()
+            or binding["output_stage_evidence_canonical_byte_count"]
+            != len(evidence_bytes)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence binding differs from its durable bytes"
+            )
+
+        marker_bytes = _read_regular_bytes(
+            secured / STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME,
+            "owned stage-evidence complete marker",
+            max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+        )
+        marker = _strict_json_bytes(
+            marker_bytes,
+            "owned stage-evidence complete marker",
+        )
+        if type(marker) is not dict or set(marker) != _STAGE_EVIDENCE_COMPLETE_MARKER_KEYS:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence complete marker keys changed"
+            )
+        marker_body = {
+            key: marker[key] for key in marker if key != "marker_sha256"
+        }
+        if (
+            marker.get("schema_version")
+            != STAGE_EVIDENCE_COMPLETE_MARKER_SCHEMA_VERSION
+            or marker.get("request_sha256") != request_hash
+            or marker.get("claim_sha256") != claim["claim_sha256"]
+            or marker.get("sec_reader_receipt_sha256")
+            != sec_reader["receipt_sha256"]
+            or marker.get("component_id") != STAGE_EVIDENCE_OUTPUT_COMPONENT_ID
+            or marker.get("relative_path") != STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH
+            or type(marker.get("byte_count")) is not int
+            or marker.get("byte_count") != len(evidence_bytes)
+            or marker.get("document_sha256")
+            != binding["output_stage_evidence_document_sha256"]
+            or marker.get("stage_evidence_sha256")
+            != binding["output_stage_evidence_sha256"]
+            or marker.get("marker_sha256") != canonical_sha256(marker_body)
+            or marker_bytes != _encoded_state(marker)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence marker is not canonical or ancestry-bound"
+            )
+        self._revalidate_authorized_sec_execution_sources(claim)
+        if (
+            _read_regular_bytes(
+                secured / STAGE_EVIDENCE_FILENAME,
+                "owned stage-evidence document closure replay",
+                max_bytes=MAX_STAGE_EVIDENCE_FILE_BYTES,
+            )
+            != evidence_bytes
+            or _read_regular_bytes(
+                secured / STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME,
+                "owned stage-evidence complete marker closure replay",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            != marker_bytes
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence bytes changed during complete replay"
+            )
+        directory_after = _validate_real_directory(
+            secured,
+            "owned stage-evidence directory",
+        )
+        observed_names_after = [item.name for item in secured.iterdir()]
+        if (
+            (directory_before.st_dev, directory_before.st_ino)
+            != (directory_after.st_dev, directory_after.st_ino)
+            or len(observed_names_after) != len(expected_names)
+            or len({name.casefold() for name in observed_names_after})
+            != len(observed_names_after)
+            or set(observed_names_after) != expected_names
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned stage-evidence directory changed while replaying bytes"
+            )
+        self._revalidate_authorized_sec_execution_sources(claim)
+        return (
+            copy.deepcopy(detached_evidence),
+            {
+                **binding,
+                "output_stage_evidence_complete_marker_sha256": hashlib.sha256(
+                    marker_bytes
+                ).hexdigest(),
+            },
+        )
+
+    def _locate_owned_parent_intermediate_predecessor_locked(
+        self,
+        *,
+        authenticated_store_snapshot: Mapping[str, Any],
+        independent_current_tip_anchor: Mapping[str, Any],
+        child_request: Mapping[str, Any],
+        prerequisite_stage_evidence: Mapping[str, Any],
+    ) -> tuple[
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+    ]:
+        """Locate a parent and replace caller evidence with its durable replay."""
+
+        entry, bundle, output_receipt = _locate_parent_intermediate_predecessor(
+            authenticated_store_snapshot=authenticated_store_snapshot,
+            independent_current_tip_anchor=independent_current_tip_anchor,
+            child_request=child_request,
+        )
+        parent_request = _expect_mapping(
+            entry.get("request"),
+            "owned parent intermediate request",
+        )
+        durable_evidence, output_binding = (
+            self._read_owned_stage_evidence_output_locked(
+                authenticated_store_snapshot=authenticated_store_snapshot,
+                independent_current_tip_anchor=independent_current_tip_anchor,
+                authorization_bundle=bundle,
+                request_sha256=parent_request["request_sha256"],
+            )
+        )
+        caller_evidence = _json_value_copy(
+            dict(
+                _expect_mapping(
+                    prerequisite_stage_evidence,
+                    "caller parent stage evidence",
+                )
+            ),
+            "caller parent stage evidence",
+        )
+        if (
+            caller_evidence != durable_evidence
+            or output_binding["output_stage_evidence_sha256"]
+            != child_request["prerequisite_stage_evidence_sha256"]
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Final request prerequisite differs from the durable parent output"
+            )
+        try:
+            validate_consumed_stage_output_receipt(
+                output_receipt,
+                authenticated_store_snapshot=authenticated_store_snapshot,
+                independent_current_tip_anchor=independent_current_tip_anchor,
+                authorization_bundle=bundle,
+                **output_binding,
+            )
+        except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Final request predecessor output receipt is not exact at the current tip"
+            ) from exc
+        return (
+            entry,
+            bundle,
+            output_receipt,
+            durable_evidence,
+            output_binding,
+        )
+
     def compare_and_swap_append(
         self,
         *,
@@ -3487,6 +3830,8 @@ class SecFilingGemmaRevealStore:
             parent_entry: dict[str, Any] | None = None
             parent_bundle: dict[str, Any] | None = None
             parent_output_receipt: dict[str, Any] | None = None
+            parent_durable_evidence: dict[str, Any] | None = None
+            parent_output_binding: dict[str, Any] | None = None
             if stage == "final":
                 # Perform this exact predecessor/grant check before the monotonic
                 # final-request pin precommit. A missing or ungranted parent must
@@ -3495,7 +3840,9 @@ class SecFilingGemmaRevealStore:
                     parent_entry,
                     parent_bundle,
                     parent_output_receipt,
-                ) = _locate_parent_intermediate_predecessor(
+                    parent_durable_evidence,
+                    parent_output_binding,
+                ) = self._locate_owned_parent_intermediate_predecessor_locked(
                     authenticated_store_snapshot=current,
                     independent_current_tip_anchor=current_tip,
                     child_request=request_value,
@@ -3563,12 +3910,19 @@ class SecFilingGemmaRevealStore:
                     parent_entry,
                     parent_bundle,
                     parent_output_receipt,
-                ) = _locate_parent_intermediate_predecessor(
+                    parent_durable_evidence,
+                    parent_output_binding,
+                ) = self._locate_owned_parent_intermediate_predecessor_locked(
                     authenticated_store_snapshot=current,
                     independent_current_tip_anchor=current_tip,
                     child_request=request_value,
                     prerequisite_stage_evidence=evidence,
                 )
+                if parent_durable_evidence is None or parent_output_binding is None:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Final request lost its durable parent evidence"
+                    )
+                evidence = parent_durable_evidence
                 parent_consumption_binding = _build_parent_consumption_binding(
                     authenticated_store_snapshot=current,
                     independent_current_tip_anchor=current_tip,
@@ -3577,6 +3931,7 @@ class SecFilingGemmaRevealStore:
                     parent_bundle=parent_bundle,
                     parent_output_receipt=parent_output_receipt,
                     prerequisite_stage_evidence=evidence,
+                    parent_output_binding=parent_output_binding,
                 )
             authenticated_store_context = _authenticated_store_verifier_context(
                 trusted_stage_content_pin=trusted_content_pin,
@@ -3863,23 +4218,19 @@ class SecFilingGemmaRevealStore:
                 ) from exc
             return copy.deepcopy(persisted)
 
-    def record_consumed_stage_output_evidence(
+    def _record_owned_stage_evidence_output(
         self,
         *,
         request_sha256: str,
-        stage_evidence: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Persist the first exact evidence candidate recorded for one current grant.
+        """Replay and persist one fixed-path, store-recomputed stage output."""
 
-        The request-keyed receipt is a dedicated state-preserving CAS append.
-        An exact retry returns the original receipt without another revision;
-        a different second candidate for the same consumed grant is rejected.
-        This binds caller-supplied evidence to grant issuance, but it does not
-        attest that an authorized SEC/model/market reader produced those bytes.
-        Production must keep promotion disabled until the owned runner is the
-        only component permitted to call this method.
-        """
-
+        # Finalize or replay the durable SEC batch before taking this method's
+        # lock.  That helper owns its own transaction and must never be invoked
+        # recursively under the same non-reentrant store lock.
+        replayed_sec_reader = self._record_authorized_sec_stage_reader_output(
+            request_sha256=request_sha256,
+        )
         with self._locked():
             _cleanup_interrupted_temporaries(self.store_directory)
             tracked_anchor = _load_tracked_anchor(self.repository_root)
@@ -3888,63 +4239,39 @@ class SecFilingGemmaRevealStore:
             )
             request_hash = _sha256(
                 request_sha256,
-                "consumed-stage output request hash",
+                "owned stage-evidence output request hash",
             )
             bundle = current_tip["authorization_bundles"].get(request_hash)
-            if type(bundle) is not dict:
-                raise SecFilingGemmaRevealStoreError(
-                    "Consumed-stage output lacks its persisted authorization bundle"
-                )
-            grant = _expect_mapping(
-                bundle.get("authorization_grant"),
-                "consumed-stage output authorization grant",
+            claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+            sec_reader = current_tip["stage_sec_reader_receipts"].get(
+                request_hash
             )
-            if type(stage_evidence) is not dict:
+            if (
+                type(bundle) is not dict
+                or type(claim) is not dict
+                or type(sec_reader) is not dict
+                or sec_reader != replayed_sec_reader
+                or request_hash in current_tip["stage_sec_execution_aborts"]
+            ):
                 raise SecFilingGemmaRevealStoreError(
-                    "Consumed-stage output evidence must be an exact built-in dict"
+                    "Owned stage evidence lacks exact terminal SEC ancestry"
                 )
-            try:
-                detached_evidence = detach_untrusted_stage_json(
-                    stage_evidence,
-                    "consumed-stage output evidence",
-                )
-            except Exception as exc:
-                raise SecFilingGemmaRevealStoreError(
-                    "Consumed-stage output evidence exceeds fixed allocation bounds"
-                ) from exc
-            binding = _stage_evidence_output_binding(
-                detached_evidence,
-                authorization_grant=grant,
+            _durable_evidence, binding = self._read_owned_stage_evidence_output_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                authorization_bundle=bundle,
+                request_sha256=request_hash,
             )
             try:
-                validate_consumed_stage_authorization_grant(
-                    grant,
-                    authenticated_store_snapshot=current,
-                    external_store_state_pin=bundle["store_state_pin"],
-                    independent_current_tip_anchor=current_tip,
-                    expected_consumption_entry_sha256=grant[
-                        "consumption_entry_sha256"
-                    ],
-                    expected_request_sha256=request_hash,
-                    expected_candidate_sha256=binding["output_candidate_sha256"],
-                    expected_stage=binding[
-                        "output_stage_evidence_prerequisite_stage"
-                    ],
-                    expected_prerequisite_stage_evidence_sha256=binding[
-                        "output_parent_stage_evidence_sha256"
-                    ],
-                    expected_stage_access_manifest_sha256=grant[
-                        "stage_access_manifest_sha256"
-                    ],
-                    expected_output_namespace=grant["output_namespace"],
-                )
                 receipt = build_consumed_stage_output_receipt(
                     bundle,
+                    stage_sec_execution_claim=claim,
+                    stage_sec_reader_receipt=sec_reader,
                     **binding,
                 )
-            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+            except SecFilingGemmaStageAuthorizationError as exc:
                 raise SecFilingGemmaRevealStoreError(
-                    "Consumed-stage output is not authorized by the exact current grant"
+                    "Owned stage evidence is not authorized by its exact SEC ancestry"
                 ) from exc
             existing = current_tip["consumed_stage_output_receipts"].get(
                 request_hash
@@ -3952,7 +4279,7 @@ class SecFilingGemmaRevealStore:
             if existing is not None:
                 if existing != receipt:
                     raise SecFilingGemmaRevealStoreError(
-                        "Consumed grant already has a different first output"
+                        "Consumed grant already has a different durable first output"
                     )
                 try:
                     validate_consumed_stage_output_receipt(
@@ -3964,7 +4291,7 @@ class SecFilingGemmaRevealStore:
                     )
                 except SecFilingGemmaStageAuthorizationError as exc:
                     raise SecFilingGemmaRevealStoreError(
-                        "Persisted consumed-stage output receipt is invalid"
+                        "Persisted durable stage-output receipt is invalid"
                     ) from exc
                 return copy.deepcopy(existing)
             committed_state, committed_tip = self._commit_state_and_tip_locked(
@@ -3986,7 +4313,7 @@ class SecFilingGemmaRevealStore:
                 )
             except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
                 raise SecFilingGemmaRevealStoreError(
-                    "Committed consumed-stage output receipt failed validation"
+                    "Committed durable stage-output receipt failed validation"
                 ) from exc
             return copy.deepcopy(persisted)
 
@@ -4032,11 +4359,17 @@ __all__ = [
     "MAX_CURRENT_TIP_ANCHOR_FILE_BYTES",
     "MAX_RESTORE_PENDING_FILE_BYTES",
     "MAX_STATE_FILE_BYTES",
+    "MAX_STAGE_EVIDENCE_FILE_BYTES",
     "REQUIRED_SEMANTIC_CHECKS",
     "SEMANTIC_PREREQUISITE_SCHEMA_VERSION",
     "RESTORE_PENDING_FILENAME",
     "RESTORE_PENDING_SCHEMA_VERSION",
     "STATE_FILENAME",
+    "STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME",
+    "STAGE_EVIDENCE_COMPLETE_MARKER_SCHEMA_VERSION",
+    "STAGE_EVIDENCE_COMPONENT_DIRECTORY_NAME",
+    "STAGE_EVIDENCE_FILENAME",
+    "STAGE_OUTPUTS_DIRECTORY_NAME",
     "STORE_SCHEMA_VERSION",
     "SecFilingGemmaRevealStore",
     "SecFilingGemmaRevealStoreError",

@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import hashlib
 import inspect
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -44,6 +45,10 @@ from agent_benchmark.sec_filing_gemma_reveal_store import (
     SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION,
     SEC_STAGE_COMPONENT_DIRECTORY_NAME,
     STATE_FILENAME,
+    STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME,
+    STAGE_EVIDENCE_COMPLETE_MARKER_SCHEMA_VERSION,
+    STAGE_EVIDENCE_COMPONENT_DIRECTORY_NAME,
+    STAGE_EVIDENCE_FILENAME,
     STAGE_OUTPUTS_DIRECTORY_NAME,
     SecFilingGemmaRevealStore,
     SecFilingGemmaRevealStoreError,
@@ -55,6 +60,8 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
+    STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
+    STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     build_consumed_stage_authorization_grant,
     validate_consumed_stage_authorization_grant,
@@ -65,6 +72,8 @@ from agent_benchmark.sec_filing_gemma_source_identity import (
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     STAGE_AUDIT_RECEIPT_SCHEMA_VERSION,
+    STAGE_EVIDENCE_KEYS,
+    STAGE_EVIDENCE_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
@@ -160,6 +169,45 @@ def _evidence(stage: str, candidate: dict, *, salt: str) -> dict:
     }
 
 
+def _stage_evidence_hash(evidence: dict) -> str:
+    return evidence.get("stage_evidence_sha256", canonical_sha256(evidence))
+
+
+def _owned_v3_stage_evidence(
+    candidate: dict,
+    grant: dict,
+    *,
+    salt: str,
+) -> dict:
+    body = {
+        "schema_version": STAGE_EVIDENCE_SCHEMA_VERSION,
+        "prerequisite_stage": grant["stage"],
+        "parent_stage_evidence_sha256": grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "parent_stage_lineage": None,
+        "contract_manifest": {"fixture": salt},
+        "candidate_manifest": copy.deepcopy(candidate),
+        "source_bytes_base64_by_role": {},
+        "calendar_evidence_manifest": {},
+        "calendar_source_bytes_base64_by_name": {},
+        "corpus_universe_manifest": {},
+        "catalog_replay": {},
+        "content_replays_by_stage": {},
+        "prerequisite_content_manifest": {},
+        "model_batches_by_stage": {},
+        "market_replays_by_stage": {},
+        "prediction_replay": {},
+        "learner_replays": {},
+        "score_replay": {},
+        "stage_runtime_receipt": {},
+        "reveal_registry": {},
+        "registry_external_pin": {},
+    }
+    assert set(body) | {"stage_evidence_sha256"} == STAGE_EVIDENCE_KEYS
+    return {**body, "stage_evidence_sha256": canonical_sha256(body)}
+
+
 def _request(
     state: dict,
     candidate: dict,
@@ -206,7 +254,7 @@ def _request(
         candidate_manifest=candidate,
         stage=stage,
         stage_access_manifest_sha256=access_hash,
-        prerequisite_stage_evidence_sha256=canonical_sha256(evidence),
+        prerequisite_stage_evidence_sha256=_stage_evidence_hash(evidence),
     )
     return request, access_manifest
 
@@ -299,7 +347,7 @@ def _grant_request(
         stage_access_manifest_sha256=access_manifest[
             "stage_access_manifest_sha256"
         ],
-        prerequisite_stage_evidence_sha256=canonical_sha256(evidence),
+        prerequisite_stage_evidence_sha256=_stage_evidence_hash(evidence),
     )
     return request, access_manifest
 
@@ -311,8 +359,13 @@ def _semantic_validator(
     *,
     authenticated_store_context: dict,
 ) -> SemanticPrerequisiteValidation:
-    assert evidence["stage"] == context["prerequisite_stage"]
-    assert evidence["candidate_sha256"] == context["candidate_sha256"]
+    evidence_stage = evidence.get("stage", evidence.get("prerequisite_stage"))
+    candidate_manifest = evidence.get("candidate_manifest")
+    evidence_candidate = evidence.get("candidate_sha256")
+    if type(candidate_manifest) is dict:
+        evidence_candidate = candidate_manifest.get("candidate_sha256")
+    assert evidence_stage == context["prerequisite_stage"]
+    assert evidence_candidate == context["candidate_sha256"]
     assert access_manifest["stage_access_manifest_sha256"] == context[
         "stage_access_manifest_sha256"
     ]
@@ -626,6 +679,134 @@ def _rewrite_complete_marker(marker_path: Path, marker: dict) -> None:
         }
     )
     marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+
+
+def _complete_fixed_sec_ancestry(
+    store: SecFilingGemmaRevealStore,
+    request_sha256: str,
+) -> tuple[dict, dict]:
+    tip = store.load_current_tip_anchor()
+    claim = tip["stage_sec_execution_claims"].get(request_sha256)
+    if claim is None:
+        claim_result = store.claim_authorized_sec_stage_execution(
+            request_sha256=request_sha256,
+            sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+        )
+        claim = claim_result["claim"]
+    tip = store.load_current_tip_anchor()
+    reader = tip["stage_sec_reader_receipts"].get(request_sha256)
+    if reader is None:
+        _write_fixed_sec_component(store, claim)
+        reader = store._record_authorized_sec_stage_reader_output(
+            request_sha256=request_sha256,
+        )
+    return claim, reader
+
+
+def _write_fixed_stage_evidence_component(
+    store: SecFilingGemmaRevealStore,
+    claim: dict,
+    sec_reader: dict,
+    stage_evidence: dict,
+) -> tuple[Path, Path]:
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim["claim_sha256"]
+        / STAGE_EVIDENCE_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir(parents=True, exist_ok=True)
+    evidence_bytes = json.dumps(
+        stage_evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    evidence_path = component_directory / STAGE_EVIDENCE_FILENAME
+    evidence_path.write_bytes(evidence_bytes)
+    marker_body = {
+        "schema_version": STAGE_EVIDENCE_COMPLETE_MARKER_SCHEMA_VERSION,
+        "request_sha256": claim["request_sha256"],
+        "claim_sha256": claim["claim_sha256"],
+        "sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        "component_id": STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
+        "relative_path": STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
+        "byte_count": len(evidence_bytes),
+        "document_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "stage_evidence_sha256": stage_evidence["stage_evidence_sha256"],
+    }
+    marker = {**marker_body, "marker_sha256": canonical_sha256(marker_body)}
+    marker_path = component_directory / STAGE_EVIDENCE_COMPLETE_MARKER_FILENAME
+    marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    return evidence_path, marker_path
+
+
+def _rewrite_fixed_stage_evidence_component(
+    prepared: dict,
+    evidence: dict,
+    *,
+    recompute_self_hash: bool = True,
+) -> None:
+    body = {
+        key: value for key, value in evidence.items() if key != "stage_evidence_sha256"
+    }
+    if recompute_self_hash:
+        evidence["stage_evidence_sha256"] = canonical_sha256(body)
+    evidence_bytes = json.dumps(
+        evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    prepared["evidence_path"].write_bytes(evidence_bytes)
+    marker = json.loads(prepared["marker_path"].read_bytes())
+    marker["byte_count"] = len(evidence_bytes)
+    marker["document_sha256"] = hashlib.sha256(evidence_bytes).hexdigest()
+    marker["stage_evidence_sha256"] = evidence["stage_evidence_sha256"]
+    marker["marker_sha256"] = canonical_sha256(
+        {key: value for key, value in marker.items() if key != "marker_sha256"}
+    )
+    prepared["marker_path"].write_bytes(
+        reveal_store_module._encoded_state(marker)
+    )
+
+
+def _prepare_fixed_stage_evidence_output(
+    store: SecFilingGemmaRevealStore,
+    request: dict,
+    candidate: dict,
+    *,
+    salt: str,
+    stage_evidence: dict | None = None,
+) -> dict:
+    claim, sec_reader = _complete_fixed_sec_ancestry(
+        store,
+        request["request_sha256"],
+    )
+    tip = store.load_current_tip_anchor()
+    grant = tip["authorization_bundles"][request["request_sha256"]][
+        "authorization_grant"
+    ]
+    evidence = (
+        _owned_v3_stage_evidence(candidate, grant, salt=salt)
+        if stage_evidence is None
+        else copy.deepcopy(stage_evidence)
+    )
+    evidence_path, marker_path = _write_fixed_stage_evidence_component(
+        store,
+        claim,
+        sec_reader,
+        evidence,
+    )
+    return {
+        "stage_evidence": evidence,
+        "claim": claim,
+        "sec_reader_receipt": sec_reader,
+        "evidence_path": evidence_path,
+        "marker_path": marker_path,
+    }
 
 
 def test_sec_execution_claim_is_current_tip_only_and_idempotently_reports_created(
@@ -1010,28 +1191,12 @@ def test_active_sec_claim_blocks_registry_consumption_output_and_other_claim(
     tmp_path: Path,
 ) -> None:
     store = _store(tmp_path)
-    candidate, intermediate_request, intermediate_bundle = (
+    _candidate_value, intermediate_request, _intermediate_bundle = (
         _issued_intermediate_grant(
             store,
             salt="active-sec-consumption",
             include_sec_plan=True,
         )
-    )
-    intermediate_evidence = _evidence(
-        "intermediate",
-        candidate,
-        salt="active-sec-intermediate-output",
-    )
-    store.record_consumed_stage_output_evidence(
-        request_sha256=intermediate_request["request_sha256"],
-        stage_evidence=intermediate_evidence,
-    )
-    final_request, final_access = _grant_request(
-        intermediate_bundle["authenticated_store_snapshot"],
-        candidate,
-        stage="final",
-        evidence=intermediate_evidence,
-        include_sec_plan=True,
     )
     claimed = store.claim_authorized_sec_stage_execution(
         request_sha256=intermediate_request["request_sha256"],
@@ -1041,22 +1206,10 @@ def test_active_sec_claim_blocks_registry_consumption_output_and_other_claim(
     stable_state_bytes = store.state_path.read_bytes()
     stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
 
-    blocked_operations = (
-        lambda: _register(store, salt="active-sec-blocked-registry"),
-        lambda: _consume_with_grant(
-            store,
-            final_request,
-            candidate,
-            intermediate_evidence,
-            stage="final",
-            access_manifest=final_access,
-        ),
-    )
-    for operation in blocked_operations:
-        with pytest.raises(SecFilingGemmaRevealStoreError):
-            operation()
-        assert store.state_path.read_bytes() == stable_state_bytes
-        assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        _register(store, salt="active-sec-blocked-registry")
+    assert store.state_path.read_bytes() == stable_state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
 
     with pytest.raises(
         SecFilingGemmaRevealStoreError,
@@ -1084,13 +1237,8 @@ def test_active_sec_claim_blocks_registry_consumption_output_and_other_claim(
     output_state_bytes = output_store.state_path.read_bytes()
     output_tip_bytes = output_store.current_tip_anchor_path.read_bytes()
     with pytest.raises(SecFilingGemmaRevealStoreError):
-        output_store.record_consumed_stage_output_evidence(
+        output_store._record_owned_stage_evidence_output(
             request_sha256=output_request["request_sha256"],
-            stage_evidence=_evidence(
-                "intermediate",
-                output_candidate,
-                salt="active-sec-blocked-output",
-            ),
         )
     assert output_store.state_path.read_bytes() == output_state_bytes
     assert output_store.current_tip_anchor_path.read_bytes() == output_tip_bytes
@@ -1870,18 +2018,20 @@ def test_first_consumed_stage_output_is_persisted_once_and_exact_retry_is_idempo
     candidate, request, _bundle = _issued_intermediate_grant(
         store,
         salt="first-stage-output",
+        include_sec_plan=True,
     )
-    stage_evidence = _evidence(
-        "intermediate",
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        request,
         candidate,
         salt="first-stage-output-evidence",
     )
+    stage_evidence = prepared["stage_evidence"]
     state_bytes_before = store.state_path.read_bytes()
     tip_before = store.load_current_tip_anchor()
 
-    receipt = store.record_consumed_stage_output_evidence(
+    receipt = store._record_owned_stage_evidence_output(
         request_sha256=request["request_sha256"],
-        stage_evidence=stage_evidence,
     )
 
     tip_after_first = store.load_current_tip_anchor()
@@ -1895,20 +2045,469 @@ def test_first_consumed_stage_output_is_persisted_once_and_exact_retry_is_idempo
     }
     assert receipt["request_sha256"] == request["request_sha256"]
     assert receipt["output_stage"] == "intermediate"
-    assert receipt["output_stage_evidence_sha256"] == canonical_sha256(
-        stage_evidence
-    )
+    assert receipt["output_stage_evidence_sha256"] == stage_evidence[
+        "stage_evidence_sha256"
+    ]
+    assert receipt["output_stage_evidence_document_sha256"] == hashlib.sha256(
+        prepared["evidence_path"].read_bytes()
+    ).hexdigest()
+    assert receipt["output_stage_evidence_complete_marker_sha256"] == hashlib.sha256(
+        prepared["marker_path"].read_bytes()
+    ).hexdigest()
+    assert receipt["sec_execution_claim_sha256"] == prepared["claim"][
+        "claim_sha256"
+    ]
+    assert receipt["sec_reader_receipt_sha256"] == prepared[
+        "sec_reader_receipt"
+    ]["receipt_sha256"]
+    assert receipt["output_stage_evidence_recomputed_by_store"] is True
+    assert receipt["fresh_stage_evidence_provenance_claimed"] is False
     tip_bytes_after_first = store.current_tip_anchor_path.read_bytes()
 
-    repeated = store.record_consumed_stage_output_evidence(
+    repeated = store._record_owned_stage_evidence_output(
         request_sha256=request["request_sha256"],
-        stage_evidence=stage_evidence,
     )
 
     assert repeated == receipt
     assert store.state_path.read_bytes() == state_bytes_before
     assert store.current_tip_anchor_path.read_bytes() == tip_bytes_after_first
     assert store.load_current_tip_anchor()["revision"] == tip_after_first["revision"]
+
+
+def test_owned_stage_output_finalizer_has_no_public_caller_mapping_api() -> None:
+    assert not hasattr(
+        SecFilingGemmaRevealStore,
+        "record_consumed_stage_output_evidence",
+    )
+    signature = inspect.signature(
+        SecFilingGemmaRevealStore._record_owned_stage_evidence_output
+    )
+    assert tuple(signature.parameters) == ("self", "request_sha256")
+    assert signature.parameters["request_sha256"].kind is (
+        inspect.Parameter.KEYWORD_ONLY
+    )
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "missing_evidence",
+        "missing_marker",
+        "extra_file",
+        "duplicate_json",
+        "noncanonical_json",
+        "missing_v3_key",
+        "extra_v3_key",
+        "wrong_schema",
+        "wrong_parent",
+        "null_parent",
+        "wrong_candidate",
+        "wrong_stage",
+        "bad_self_hash",
+        "evidence_over_cap",
+        "marker_request",
+        "marker_claim",
+        "marker_reader",
+        "marker_component",
+        "marker_path",
+        "marker_count",
+        "marker_document",
+        "marker_evidence",
+        "marker_missing_key",
+        "marker_extra_key",
+        "marker_wrong_schema",
+        "marker_bad_self_hash",
+        "marker_duplicate_json",
+        "marker_noncanonical_json",
+        "marker_over_cap",
+        "marker_hardlink",
+        "marker_symlink",
+        "wrong_case_evidence",
+        "case_collision",
+        "directory_symlink",
+        "hardlink",
+        "symlink",
+    ),
+)
+def test_owned_stage_output_rejects_durable_substitution_without_tip_mutation(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt=f"durable-stage-attack-{attack}",
+        include_sec_plan=True,
+    )
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        request,
+        candidate,
+        salt=f"durable-stage-attack-{attack}",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+    evidence_path = prepared["evidence_path"]
+    marker_path = prepared["marker_path"]
+
+    if attack == "missing_evidence":
+        evidence_path.unlink()
+    elif attack == "missing_marker":
+        marker_path.unlink()
+    elif attack == "extra_file":
+        (evidence_path.parent / "unlisted.json").write_bytes(b"{}")
+    elif attack == "duplicate_json":
+        duplicate = (
+            b'{"schema_version":"'
+            + STAGE_EVIDENCE_SCHEMA_VERSION.encode("ascii")
+            + b'",'
+            + evidence_path.read_bytes()[1:]
+        )
+        evidence_path.write_bytes(duplicate)
+    elif attack == "noncanonical_json":
+        evidence_path.write_bytes(
+            (json.dumps(prepared["stage_evidence"], indent=2) + "\n").encode(
+                "utf-8"
+            )
+        )
+    elif attack in {
+        "missing_v3_key",
+        "extra_v3_key",
+        "wrong_schema",
+        "wrong_parent",
+        "null_parent",
+        "wrong_candidate",
+        "wrong_stage",
+        "bad_self_hash",
+    }:
+        evidence = copy.deepcopy(prepared["stage_evidence"])
+        if attack == "missing_v3_key":
+            evidence.pop("learner_replays")
+        elif attack == "extra_v3_key":
+            evidence["forged_stage_field"] = {}
+        elif attack == "wrong_schema":
+            evidence["schema_version"] = "aapl-sec-gemma-stage-evidence-audit-v4"
+        elif attack == "wrong_parent":
+            evidence["parent_stage_evidence_sha256"] = _digest(
+                "cross-grant parent evidence"
+            )
+        elif attack == "null_parent":
+            evidence["parent_stage_evidence_sha256"] = None
+        elif attack == "wrong_candidate":
+            evidence["candidate_manifest"]["candidate_sha256"] = _digest(
+                "cross-grant candidate"
+            )
+        elif attack == "wrong_stage":
+            evidence["prerequisite_stage"] = "final"
+        else:
+            evidence["stage_evidence_sha256"] = _digest(
+                "invalid evidence self hash"
+            )
+        _rewrite_fixed_stage_evidence_component(
+            prepared,
+            evidence,
+            recompute_self_hash=attack != "bad_self_hash",
+        )
+    elif attack == "evidence_over_cap":
+        pass
+    elif attack in {
+        "marker_missing_key",
+        "marker_extra_key",
+        "marker_wrong_schema",
+        "marker_bad_self_hash",
+        "marker_duplicate_json",
+        "marker_noncanonical_json",
+        "marker_over_cap",
+        "marker_hardlink",
+        "marker_symlink",
+    }:
+        marker = json.loads(marker_path.read_bytes())
+        if attack == "marker_missing_key":
+            marker.pop("relative_path")
+        elif attack == "marker_extra_key":
+            marker["forged_marker_field"] = True
+        elif attack == "marker_wrong_schema":
+            marker["schema_version"] = "aapl-sec-gemma-stage-evidence-complete-v2"
+        elif attack == "marker_bad_self_hash":
+            marker["marker_sha256"] = _digest("invalid marker self hash")
+        elif attack == "marker_duplicate_json":
+            marker_path.write_bytes(
+                b'{"schema_version":"'
+                + STAGE_EVIDENCE_COMPLETE_MARKER_SCHEMA_VERSION.encode("ascii")
+                + b'",'
+                + marker_path.read_bytes().lstrip()[1:]
+            )
+        elif attack == "marker_noncanonical_json":
+            marker_path.write_bytes(
+                (json.dumps(marker, indent=4, sort_keys=True) + "\n").encode(
+                    "utf-8"
+                )
+            )
+        elif attack == "marker_over_cap":
+            marker_path.write_bytes(
+                b" " * (reveal_store_module.MAX_TRACKED_ANCHOR_FILE_BYTES + 1)
+            )
+        else:
+            original = marker_path.read_bytes()
+            marker_path.unlink()
+            external = tmp_path / f"external-{attack}.json"
+            external.write_bytes(original)
+            try:
+                if attack == "marker_hardlink":
+                    os.link(external, marker_path)
+                else:
+                    marker_path.symlink_to(external)
+            except (OSError, NotImplementedError):
+                pytest.skip(f"{attack} creation is unavailable for this test user")
+        if attack in {
+            "marker_missing_key",
+            "marker_extra_key",
+            "marker_wrong_schema",
+        }:
+            marker["marker_sha256"] = canonical_sha256(
+                {
+                    key: value
+                    for key, value in marker.items()
+                    if key != "marker_sha256"
+                }
+            )
+            marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+        elif attack == "marker_bad_self_hash":
+            marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    elif attack == "wrong_case_evidence":
+        temporary = evidence_path.parent / "rename-temporary.json"
+        evidence_path.rename(temporary)
+        wrong_case = evidence_path.parent / "STAGE_EVIDENCE.JSON"
+        temporary.rename(wrong_case)
+        if wrong_case.name not in {item.name for item in wrong_case.parent.iterdir()}:
+            pytest.skip("filesystem did not preserve the wrong-case filename")
+    elif attack == "case_collision":
+        collision = evidence_path.parent / "STAGE_EVIDENCE.JSON"
+        collision.write_bytes(evidence_path.read_bytes())
+        names = [item.name for item in evidence_path.parent.iterdir()]
+        if len(names) == len({name.casefold() for name in names}):
+            pytest.skip("case-colliding filenames are unavailable on this filesystem")
+    elif attack == "directory_symlink":
+        component_directory = evidence_path.parent
+        external_directory = tmp_path / "external-stage-evidence-directory"
+        component_directory.rename(external_directory)
+        try:
+            component_directory.symlink_to(
+                external_directory,
+                target_is_directory=True,
+            )
+        except (OSError, NotImplementedError):
+            pytest.skip("directory symlinks are unavailable for this test user")
+    elif attack in {
+        "marker_request",
+        "marker_claim",
+        "marker_reader",
+        "marker_component",
+        "marker_path",
+        "marker_count",
+        "marker_document",
+        "marker_evidence",
+    }:
+        marker = json.loads(marker_path.read_bytes())
+        marker_field = {
+            "marker_request": "request_sha256",
+            "marker_claim": "claim_sha256",
+            "marker_reader": "sec_reader_receipt_sha256",
+            "marker_component": "component_id",
+            "marker_path": "relative_path",
+            "marker_count": "byte_count",
+            "marker_document": "document_sha256",
+            "marker_evidence": "stage_evidence_sha256",
+        }[attack]
+        marker[marker_field] = (
+            marker["byte_count"] + 1
+            if marker_field == "byte_count"
+            else _digest(f"substituted {marker_field}")
+        )
+        marker["marker_sha256"] = canonical_sha256(
+            {
+                key: value
+                for key, value in marker.items()
+                if key != "marker_sha256"
+            }
+        )
+        marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    else:
+        original = evidence_path.read_bytes()
+        evidence_path.unlink()
+        external = tmp_path / f"external-{attack}.json"
+        external.write_bytes(original)
+        try:
+            if attack == "hardlink":
+                os.link(external, evidence_path)
+            else:
+                evidence_path.symlink_to(external)
+        except (OSError, NotImplementedError):
+            pytest.skip(f"{attack} creation is unavailable for this test user")
+
+    evidence_cap = (
+        len(evidence_path.read_bytes()) - 1
+        if attack == "evidence_over_cap"
+        else 1
+    )
+    cap_patch = (
+        patch.object(
+            reveal_store_module,
+            "MAX_STAGE_EVIDENCE_FILE_BYTES",
+            evidence_cap,
+        )
+        if attack == "evidence_over_cap"
+        else None
+    )
+    try:
+        if cap_patch is not None:
+            cap_patch.start()
+        with pytest.raises(SecFilingGemmaRevealStoreError):
+            store._record_owned_stage_evidence_output(
+                request_sha256=request["request_sha256"],
+            )
+    finally:
+        if cap_patch is not None:
+            cap_patch.stop()
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert store.load_current_tip_anchor() == tip_before
+
+
+@pytest.mark.parametrize("race_target", ("evidence", "marker", "directory"))
+def test_owned_stage_output_detects_same_size_mutation_during_complete_replay(
+    tmp_path: Path,
+    race_target: str,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt=f"durable-stage-race-{race_target}",
+        include_sec_plan=True,
+    )
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        request,
+        candidate,
+        salt=f"durable-stage-race-{race_target}",
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    real_read = reveal_store_module._read_regular_bytes
+    mutated = False
+
+    def racing_read(
+        path,
+        location,
+        *,
+        max_bytes=reveal_store_module.MAX_TRACKED_ANCHOR_FILE_BYTES,
+    ):
+        nonlocal mutated
+        payload = real_read(path, location, max_bytes=max_bytes)
+        should_mutate = (
+            race_target == "evidence"
+            and location == "owned stage-evidence complete marker"
+        ) or (
+            race_target == "marker"
+            and location == "owned stage-evidence document closure replay"
+        ) or (
+            race_target == "directory"
+            and location == "owned stage-evidence complete marker"
+        )
+        if should_mutate and not mutated:
+            if race_target == "directory":
+                component_directory = prepared["evidence_path"].parent
+                replaced_directory = tmp_path / "replaced-stage-evidence-directory"
+                component_directory.rename(replaced_directory)
+                shutil.copytree(replaced_directory, component_directory)
+            else:
+                target = (
+                    prepared["evidence_path"]
+                    if race_target == "evidence"
+                    else prepared["marker_path"]
+                )
+                changed = bytearray(target.read_bytes())
+                changed[len(changed) // 2] ^= 1
+                target.write_bytes(bytes(changed))
+            mutated = True
+        return payload
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._read_regular_bytes",
+        racing_read,
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="changed during complete replay|directory changed",
+    ):
+        store._record_owned_stage_evidence_output(
+            request_sha256=request["request_sha256"],
+        )
+
+    assert mutated is True
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+
+
+def test_shifted_post_closure_mutation_is_snapshot_only_and_blocks_retry(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    candidate, request, _bundle = _issued_intermediate_grant(
+        store,
+        salt="durable-stage-shifted-race",
+        include_sec_plan=True,
+    )
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        request,
+        candidate,
+        salt="durable-stage-shifted-race",
+    )
+    real_read = reveal_store_module._read_regular_bytes
+    mutated = False
+
+    def shifted_read(
+        path,
+        location,
+        *,
+        max_bytes=reveal_store_module.MAX_TRACKED_ANCHOR_FILE_BYTES,
+    ):
+        nonlocal mutated
+        payload = real_read(path, location, max_bytes=max_bytes)
+        if (
+            location == "owned stage-evidence complete marker closure replay"
+            and not mutated
+        ):
+            evidence_path = prepared["evidence_path"]
+            before = evidence_path.read_bytes()
+            after = before.replace(b"shifted-race", b"shifted-racf", 1)
+            assert len(after) == len(before)
+            assert after != before
+            evidence_path.write_bytes(after)
+            mutated = True
+        return payload
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._read_regular_bytes",
+        shifted_read,
+    ):
+        receipt = store._record_owned_stage_evidence_output(
+            request_sha256=request["request_sha256"],
+        )
+
+    assert mutated is True
+    assert receipt["fresh_stage_evidence_provenance_claimed"] is False
+    assert receipt["output_stage_evidence_document_sha256"] != hashlib.sha256(
+        prepared["evidence_path"].read_bytes()
+    ).hexdigest()
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_stage_evidence_output(
+            request_sha256=request["request_sha256"],
+        )
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
 
 
 def test_different_second_consumed_stage_output_is_rejected_without_mutation(
@@ -1918,32 +2517,33 @@ def test_different_second_consumed_stage_output_is_rejected_without_mutation(
     candidate, request, _bundle = _issued_intermediate_grant(
         store,
         salt="different-second-stage-output",
+        include_sec_plan=True,
     )
-    first_evidence = _evidence(
-        "intermediate",
+    _prepare_fixed_stage_evidence_output(
+        store,
+        request,
         candidate,
         salt="different-second-stage-output-first",
     )
-    first_receipt = store.record_consumed_stage_output_evidence(
+    first_receipt = store._record_owned_stage_evidence_output(
         request_sha256=request["request_sha256"],
-        stage_evidence=first_evidence,
     )
     state_bytes = store.state_path.read_bytes()
     tip_bytes = store.current_tip_anchor_path.read_bytes()
     tip_before_rejection = store.load_current_tip_anchor()
-    different_evidence = _evidence(
-        "intermediate",
+    _prepare_fixed_stage_evidence_output(
+        store,
+        request,
         candidate,
         salt="different-second-stage-output-second",
     )
 
     with pytest.raises(
         SecFilingGemmaRevealStoreError,
-        match="already has a different first output",
+        match="already has a different durable first output",
     ):
-        store.record_consumed_stage_output_evidence(
+        store._record_owned_stage_evidence_output(
             request_sha256=request["request_sha256"],
-            stage_evidence=different_evidence,
         )
 
     assert store.state_path.read_bytes() == state_bytes
@@ -1964,15 +2564,16 @@ def test_rehashed_consumed_stage_output_receipt_or_map_tamper_fails_load(
     candidate, request, _bundle = _issued_intermediate_grant(
         store,
         salt=f"output-tamper-{tamper_kind}",
+        include_sec_plan=True,
     )
-    stage_evidence = _evidence(
-        "intermediate",
+    _prepare_fixed_stage_evidence_output(
+        store,
+        request,
         candidate,
         salt=f"output-tamper-{tamper_kind}-evidence",
     )
-    store.record_consumed_stage_output_evidence(
+    store._record_owned_stage_evidence_output(
         request_sha256=request["request_sha256"],
-        stage_evidence=stage_evidence,
     )
     tip = store.load_current_tip_anchor()
     receipts = tip["consumed_stage_output_receipts"]
@@ -2017,9 +2618,11 @@ def test_consumed_stage_output_receipt_cas_crash_recovers_once(
     candidate, request, _bundle = _issued_intermediate_grant(
         store,
         salt=f"output-crash-{crash_point}",
+        include_sec_plan=True,
     )
-    stage_evidence = _evidence(
-        "intermediate",
+    _prepare_fixed_stage_evidence_output(
+        store,
+        request,
         candidate,
         salt=f"output-crash-{crash_point}-evidence",
     )
@@ -2048,9 +2651,8 @@ def test_consumed_stage_output_receipt_cas_crash_recovers_once(
         "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
         crash_during_output_receipt_cas,
     ), pytest.raises(RuntimeError, match="simulated output receipt crash"):
-        store.record_consumed_stage_output_evidence(
+        store._record_owned_stage_evidence_output(
             request_sha256=request["request_sha256"],
-            stage_evidence=stage_evidence,
         )
 
     pending = json.loads(store.current_tip_anchor_path.read_bytes())
@@ -2059,9 +2661,8 @@ def test_consumed_stage_output_receipt_cas_crash_recovers_once(
         "consumed_stage_output_receipts"
     ][request["request_sha256"]]
 
-    recovered = store.record_consumed_stage_output_evidence(
+    recovered = store._record_owned_stage_evidence_output(
         request_sha256=request["request_sha256"],
-        stage_evidence=stage_evidence,
     )
 
     assert recovered == expected_receipt
@@ -2073,9 +2674,8 @@ def test_consumed_stage_output_receipt_cas_crash_recovers_once(
         request["request_sha256"]: expected_receipt
     }
     stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
-    assert store.record_consumed_stage_output_evidence(
+    assert store._record_owned_stage_evidence_output(
         request_sha256=request["request_sha256"],
-        stage_evidence=stage_evidence,
     ) == expected_receipt
     assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
 
@@ -2945,6 +3545,79 @@ def test_reloading_rehash_consistent_state_replays_semantic_invariants(
         store.load()
 
 
+@pytest.mark.parametrize("deleted_parent_file", ("evidence", "marker"))
+def test_final_consumption_replays_durable_parent_before_pin_or_verifier(
+    tmp_path: Path,
+    deleted_parent_file: str,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    registered, candidate = _register(
+        store,
+        salt=f"final-parent-replay-{deleted_parent_file}",
+    )
+    development_evidence = _evidence(
+        "development",
+        candidate,
+        salt=f"final-parent-replay-{deleted_parent_file}",
+    )
+    intermediate_request, intermediate_access = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=development_evidence,
+        include_sec_plan=True,
+    )
+    intermediate_bundle = _consume_with_grant(
+        store,
+        intermediate_request,
+        candidate,
+        development_evidence,
+        stage="intermediate",
+        access_manifest=intermediate_access,
+    )
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        intermediate_request,
+        candidate,
+        salt=f"final-parent-replay-{deleted_parent_file}",
+    )
+    intermediate_evidence = prepared["stage_evidence"]
+    store._record_owned_stage_evidence_output(
+        request_sha256=intermediate_request["request_sha256"],
+    )
+    final_request, final_access = _request(
+        intermediate_bundle["authenticated_store_snapshot"],
+        candidate,
+        stage="final",
+        evidence=intermediate_evidence,
+        salt=f"final-parent-replay-{deleted_parent_file}",
+    )
+    prepared[f"{deleted_parent_file}_path"].unlink()
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    def verifier_must_not_run(*_args, **_kwargs):
+        raise AssertionError("durable parent failure must precede verifier execution")
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        _consume(
+            store,
+            final_request,
+            candidate,
+            intermediate_evidence,
+            stage="final",
+            access_hash=final_access,
+            validator=verifier_must_not_run,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert final_request["request_sha256"] not in store.load_current_tip_anchor()[
+        "trusted_stage_content_pins"
+    ]
+
+
 def test_final_consumption_increments_actual_touch_exactly_once(
     tmp_path: Path,
 ) -> None:
@@ -2963,6 +3636,7 @@ def test_final_consumption_increments_actual_touch_exactly_once(
         candidate,
         stage="intermediate",
         evidence=development_evidence,
+        include_sec_plan=True,
     )
     intermediate_bundle = _consume_with_grant(
         store,
@@ -2977,12 +3651,15 @@ def test_final_consumption_increments_actual_touch_exactly_once(
         "actual_final_touch_count"
     ] == 0
 
-    intermediate_evidence = _evidence(
-        "intermediate", candidate, salt="final-count-final"
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        intermediate_request,
+        candidate,
+        salt="final-count-final",
     )
-    store.record_consumed_stage_output_evidence(
+    intermediate_evidence = prepared["stage_evidence"]
+    store._record_owned_stage_evidence_output(
         request_sha256=intermediate_request["request_sha256"],
-        stage_evidence=intermediate_evidence,
     )
     final_request, final_access = _request(
         after_intermediate,
@@ -3038,6 +3715,7 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
         candidate,
         stage="intermediate",
         evidence=development_evidence,
+        include_sec_plan=True,
     )
     intermediate_bundle = _consume_with_grant(
         store,
@@ -3048,12 +3726,15 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
         access_manifest=intermediate_access,
     )
     intermediate_state = intermediate_bundle["authenticated_store_snapshot"]
-    intermediate_evidence = _evidence(
-        "intermediate", candidate, salt="final-parent-context-final"
+    prepared = _prepare_fixed_stage_evidence_output(
+        store,
+        intermediate_request,
+        candidate,
+        salt="final-parent-context-final",
     )
-    intermediate_output_receipt = store.record_consumed_stage_output_evidence(
+    intermediate_evidence = prepared["stage_evidence"]
+    intermediate_output_receipt = store._record_owned_stage_evidence_output(
         request_sha256=intermediate_request["request_sha256"],
-        stage_evidence=intermediate_evidence,
     )
     final_request, final_access = _request(
         intermediate_state,
@@ -3289,10 +3970,22 @@ def test_final_verifier_receives_exact_internal_parent_consumption_binding(
         "consumed_stage_output_receipts": post_pin_tip[
             "consumed_stage_output_receipts"
         ],
-        "consumed_stage_output_receipts_sha256": canonical_sha256(
-            post_pin_tip["consumed_stage_output_receipts"]
-        ),
-    }
+            "consumed_stage_output_receipts_sha256": canonical_sha256(
+                post_pin_tip["consumed_stage_output_receipts"]
+            ),
+            "stage_sec_execution_claims": post_pin_tip[
+                "stage_sec_execution_claims"
+            ],
+            "stage_sec_execution_claims_sha256": canonical_sha256(
+                post_pin_tip["stage_sec_execution_claims"]
+            ),
+            "stage_sec_reader_receipts": post_pin_tip[
+                "stage_sec_reader_receipts"
+            ],
+            "stage_sec_reader_receipts_sha256": canonical_sha256(
+                post_pin_tip["stage_sec_reader_receipts"]
+            ),
+        }
     expected_binding_body = {
         "schema_version": (
             reveal_store_module.PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION

@@ -35,6 +35,7 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     OWNED_HARDENED_TRANSPORT_MODE,
+    STAGE_EVIDENCE_KEYS,
     STAGE_EVIDENCE_SCHEMA_VERSION,
     STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION,
     TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION,
@@ -1684,6 +1685,8 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
         ensure_ascii=True,
         allow_nan=False,
     ).encode("utf-8")
+    parent_sec_claim_hash = _h("parent SEC execution claim")
+    parent_sec_reader_hash = _h("parent SEC reader receipt")
     output_receipt_body = {
         "schema_version": (
             verifier_module.CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION
@@ -1709,6 +1712,8 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
         "authorization_grant_sha256": parent_consumption[
             "authorization_grant_sha256"
         ],
+        "sec_execution_claim_sha256": parent_sec_claim_hash,
+        "sec_reader_receipt_sha256": parent_sec_reader_hash,
         "grant_store_state_sha256": current_store_state_hash,
         "grant_consumption_ledger_sha256": current_tip[
             "consumption_ledger_sha256"
@@ -1718,16 +1723,27 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
         "output_stage_evidence_schema_version": current_stage_evidence[
             "schema_version"
         ],
+        "output_stage_evidence_component_id": (
+            verifier_module.STAGE_EVIDENCE_OUTPUT_COMPONENT_ID
+        ),
+        "output_stage_evidence_relative_path": (
+            verifier_module.STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH
+        ),
         "output_stage_evidence_sha256": child_evidence_hash,
         "output_stage_evidence_document_sha256": hashlib.sha256(
             current_stage_evidence_bytes
         ).hexdigest(),
+        "output_stage_evidence_complete_marker_sha256": _h(
+            "parent stage-evidence complete marker bytes"
+        ),
         "output_stage_evidence_canonical_byte_count": len(
             current_stage_evidence_bytes
         ),
         "output_stage_evidence_prerequisite_stage": "intermediate",
         "output_parent_stage_evidence_sha256": parent_evidence_hash,
         "output_candidate_sha256": candidate_hash,
+        "output_stage_evidence_recomputed_by_store": True,
+        "fresh_stage_evidence_provenance_claimed": False,
         "cross_stage_output_permitted": False,
         "grant_reuse_for_different_output_permitted": False,
     }
@@ -1743,6 +1759,27 @@ def _exact_parent_binding_fixture(parent_audit_builder=None) -> dict:
     current_tip["consumed_stage_output_receipts"] = output_receipts
     current_tip["consumed_stage_output_receipts_sha256"] = canonical_sha256(
         output_receipts
+    )
+    sec_claims = {
+        parent_consumption["request_sha256"]: {
+            "request_sha256": parent_consumption["request_sha256"],
+            "claim_sha256": parent_sec_claim_hash,
+        }
+    }
+    sec_readers = {
+        parent_consumption["request_sha256"]: {
+            "request_sha256": parent_consumption["request_sha256"],
+            "claim_sha256": parent_sec_claim_hash,
+            "receipt_sha256": parent_sec_reader_hash,
+        }
+    }
+    current_tip["stage_sec_execution_claims"] = sec_claims
+    current_tip["stage_sec_execution_claims_sha256"] = canonical_sha256(
+        sec_claims
+    )
+    current_tip["stage_sec_reader_receipts"] = sec_readers
+    current_tip["stage_sec_reader_receipts_sha256"] = canonical_sha256(
+        sec_readers
     )
     binding_body = {
         "schema_version": verifier_module.PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION,
@@ -2239,6 +2276,96 @@ def test_parent_output_receipt_rejects_authenticated_tip_map_substitution(
 
 @pytest.mark.parametrize(
     "target, expected_error",
+    (
+        ("claim_map_hash", "ancestry maps are inconsistent"),
+        ("reader_map_hash", "ancestry maps are inconsistent"),
+        ("claim_membership", "SEC execution claim"),
+        ("reader_membership", "SEC reader receipt"),
+        ("claim_request", "crossed its SEC claim or reader ancestry"),
+        ("reader_request", "crossed its SEC claim or reader ancestry"),
+        ("reader_claim_link", "crossed its SEC claim or reader ancestry"),
+        ("receipt_claim_hash", "crossed its SEC claim or reader ancestry"),
+        ("receipt_reader_hash", "crossed its SEC claim or reader ancestry"),
+    ),
+)
+def test_parent_output_receipt_rejects_sec_ancestry_substitution(
+    monkeypatch,
+    target: str,
+    expected_error: str,
+) -> None:
+    fixture = _exact_parent_binding_fixture()
+    original_audit = copy.deepcopy(fixture["parent_audit"])
+    binding = fixture["binding"]
+    tip = binding["authenticated_preconsumption_tip"]
+    parent = binding["parent_consumption"]
+    request_hash = parent["request_sha256"]
+    if target == "claim_map_hash":
+        tip["stage_sec_execution_claims_sha256"] = _h(
+            "substituted claim-map hash"
+        )
+    elif target == "reader_map_hash":
+        tip["stage_sec_reader_receipts_sha256"] = _h(
+            "substituted reader-map hash"
+        )
+    elif target == "claim_membership":
+        claim = tip["stage_sec_execution_claims"].pop(request_hash)
+        tip["stage_sec_execution_claims"][_h("substituted claim key")] = claim
+        tip["stage_sec_execution_claims_sha256"] = canonical_sha256(
+            tip["stage_sec_execution_claims"]
+        )
+    elif target == "reader_membership":
+        reader = tip["stage_sec_reader_receipts"].pop(request_hash)
+        tip["stage_sec_reader_receipts"][_h("substituted reader key")] = reader
+        tip["stage_sec_reader_receipts_sha256"] = canonical_sha256(
+            tip["stage_sec_reader_receipts"]
+        )
+    elif target == "claim_request":
+        tip["stage_sec_execution_claims"][request_hash]["request_sha256"] = _h(
+            "substituted claim request"
+        )
+        tip["stage_sec_execution_claims_sha256"] = canonical_sha256(
+            tip["stage_sec_execution_claims"]
+        )
+    elif target == "reader_request":
+        tip["stage_sec_reader_receipts"][request_hash]["request_sha256"] = _h(
+            "substituted reader request"
+        )
+        tip["stage_sec_reader_receipts_sha256"] = canonical_sha256(
+            tip["stage_sec_reader_receipts"]
+        )
+    elif target == "reader_claim_link":
+        tip["stage_sec_reader_receipts"][request_hash]["claim_sha256"] = _h(
+            "substituted reader claim"
+        )
+        tip["stage_sec_reader_receipts_sha256"] = canonical_sha256(
+            tip["stage_sec_reader_receipts"]
+        )
+    else:
+        _replace_bound_output_receipt(
+            fixture,
+            field=(
+                "sec_execution_claim_sha256"
+                if target == "receipt_claim_hash"
+                else "sec_reader_receipt_sha256"
+            ),
+            value=_h(f"substituted {target}"),
+        )
+        binding = fixture["binding"]
+    _rehash(binding, "parent_consumption_binding_sha256")
+    fixture["current_expected_context"][
+        "parent_consumption_binding_sha256"
+    ] = binding["parent_consumption_binding_sha256"]
+    monkeypatch.setattr(
+        verifier_module,
+        "audit_stage_evidence",
+        lambda *args, **kwargs: copy.deepcopy(original_audit),
+    )
+    with pytest.raises(SecFilingGemmaStageVerifierError, match=expected_error):
+        _validate_exact_parent_binding(fixture)
+
+
+@pytest.mark.parametrize(
+    "target, expected_error",
     [
         ("evidence", "declared parent hash"),
         ("access", "stage_artifact_sha256"),
@@ -2387,12 +2514,19 @@ def test_authorizing_entrypoint_always_fails_closed(monkeypatch) -> None:
         authoritative_prerequisite_validator({}, {}, {})
 
 
-def test_stage_evidence_schema_omission_is_rejected_before_any_replay() -> None:
+def test_stage_evidence_keys_are_frozen_exact_and_reject_schema_drift() -> None:
     candidate, sources = _candidate_fixture()
     evidence = _minimal_audit_envelope(candidate, sources)
-    evidence.pop("learner_replays")
-    with pytest.raises(SecFilingGemmaStageVerifierError, match="keys changed"):
-        audit_stage_evidence(evidence, {}, {})
+    assert type(STAGE_EVIDENCE_KEYS) is frozenset
+    assert frozenset(evidence) == STAGE_EVIDENCE_KEYS
+
+    missing = copy.deepcopy(evidence)
+    missing.pop("learner_replays")
+    extra = copy.deepcopy(evidence)
+    extra["unexpected_v3_field"] = None
+    for altered in (missing, extra):
+        with pytest.raises(SecFilingGemmaStageVerifierError, match="keys changed"):
+            audit_stage_evidence(altered, {}, {})
 
 
 def test_base64_encoded_length_is_rejected_before_decoder_call(monkeypatch) -> None:

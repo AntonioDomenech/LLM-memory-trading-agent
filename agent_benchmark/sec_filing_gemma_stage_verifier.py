@@ -96,6 +96,32 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 STAGE_EVIDENCE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-evidence-audit-v3"
 )
+STAGE_EVIDENCE_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "prerequisite_stage",
+        "parent_stage_evidence_sha256",
+        "parent_stage_lineage",
+        "contract_manifest",
+        "candidate_manifest",
+        "source_bytes_base64_by_role",
+        "calendar_evidence_manifest",
+        "calendar_source_bytes_base64_by_name",
+        "corpus_universe_manifest",
+        "catalog_replay",
+        "content_replays_by_stage",
+        "prerequisite_content_manifest",
+        "model_batches_by_stage",
+        "market_replays_by_stage",
+        "prediction_replay",
+        "learner_replays",
+        "score_replay",
+        "stage_runtime_receipt",
+        "reveal_registry",
+        "registry_external_pin",
+        "stage_evidence_sha256",
+    }
+)
 STAGE_AUDIT_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-evidence-audit-receipt-v6"
 )
@@ -121,8 +147,10 @@ PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-parent-consumption-binding-v2"
 )
 CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-consumed-stage-output-receipt-v1"
+    "aapl-sec-gemma-consumed-stage-output-receipt-v2"
 )
+STAGE_EVIDENCE_OUTPUT_COMPONENT_ID: Final[str] = "owned_stage_evidence_document"
+STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH: Final[str] = "stage_evidence.json"
 _EXPECTED_UNRESOLVED_SOURCE_ROLES: Final[tuple[str, ...]] = (
     "extractor_prompt",
     "extractor_schema",
@@ -247,6 +275,10 @@ _PARENT_BINDING_TIP_KEYS: Final[frozenset[str]] = frozenset(
         "current_tip_revision",
         "consumed_stage_output_receipts",
         "consumed_stage_output_receipts_sha256",
+        "stage_sec_execution_claims",
+        "stage_sec_execution_claims_sha256",
+        "stage_sec_reader_receipts",
+        "stage_sec_reader_receipts_sha256",
     }
 )
 _CONSUMED_STAGE_OUTPUT_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
@@ -267,17 +299,24 @@ _CONSUMED_STAGE_OUTPUT_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
         "output_namespace",
         "authorization_bundle_sha256",
         "authorization_grant_sha256",
+        "sec_execution_claim_sha256",
+        "sec_reader_receipt_sha256",
         "grant_store_state_sha256",
         "grant_consumption_ledger_sha256",
         "grant_consumption_ledger_tip_sha256",
         "output_kind",
         "output_stage_evidence_schema_version",
+        "output_stage_evidence_component_id",
+        "output_stage_evidence_relative_path",
         "output_stage_evidence_sha256",
         "output_stage_evidence_document_sha256",
+        "output_stage_evidence_complete_marker_sha256",
         "output_stage_evidence_canonical_byte_count",
         "output_stage_evidence_prerequisite_stage",
         "output_parent_stage_evidence_sha256",
         "output_candidate_sha256",
+        "output_stage_evidence_recomputed_by_store",
+        "fresh_stage_evidence_provenance_claimed",
         "cross_stage_output_permitted",
         "grant_reuse_for_different_output_permitted",
         "output_receipt_sha256",
@@ -393,7 +432,11 @@ def _sha256(value: Any, location: str) -> str:
     return value
 
 
-def _expect_keys(value: Mapping[str, Any], expected: set[str], location: str) -> None:
+def _expect_keys(
+    value: Mapping[str, Any],
+    expected: set[str] | frozenset[str],
+    location: str,
+) -> None:
     if set(value) != expected:
         missing = sorted(expected - set(value))
         extra = sorted(set(value) - expected)
@@ -2804,6 +2847,14 @@ def _validate_parent_consumed_stage_output_receipt(
         or value["receipt_kind"]
         != "first_output_for_exact_consumed_stage_grant"
         or value["output_kind"] != "next_stage_evidence"
+        or value["output_stage_evidence_schema_version"]
+        != STAGE_EVIDENCE_SCHEMA_VERSION
+        or value["output_stage_evidence_component_id"]
+        != STAGE_EVIDENCE_OUTPUT_COMPONENT_ID
+        or value["output_stage_evidence_relative_path"]
+        != STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH
+        or value["output_stage_evidence_recomputed_by_store"] is not True
+        or value["fresh_stage_evidence_provenance_claimed"] is not False
         or value["cross_stage_output_permitted"] is not False
         or value["grant_reuse_for_different_output_permitted"] is not False
         or not hmac.compare_digest(receipt_hash, canonical_sha256(receipt_body))
@@ -2824,6 +2875,50 @@ def _validate_parent_consumed_stage_output_receipt(
     ):
         raise SecFilingGemmaStageVerifierError(
             "Parent output receipt is not an exact member of the authenticated tip"
+        )
+    sec_claims = _mapping_snapshot(
+        authenticated_tip["stage_sec_execution_claims"],
+        "authenticated parent SEC execution claims",
+    )
+    sec_readers = _mapping_snapshot(
+        authenticated_tip["stage_sec_reader_receipts"],
+        "authenticated parent SEC reader receipts",
+    )
+    if (
+        canonical_sha256(sec_claims)
+        != authenticated_tip["stage_sec_execution_claims_sha256"]
+        or canonical_sha256(sec_readers)
+        != authenticated_tip["stage_sec_reader_receipts_sha256"]
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Authenticated parent SEC ancestry maps are inconsistent"
+        )
+    parent_request_hash = parent_consumption["request_sha256"]
+    sec_claim = _mapping_snapshot(
+        sec_claims.get(parent_request_hash),
+        "authenticated parent SEC execution claim",
+    )
+    sec_reader = _mapping_snapshot(
+        sec_readers.get(parent_request_hash),
+        "authenticated parent SEC reader receipt",
+    )
+    claim_hash = _sha256(
+        sec_claim.get("claim_sha256"),
+        "authenticated parent SEC execution claim hash",
+    )
+    reader_hash = _sha256(
+        sec_reader.get("receipt_sha256"),
+        "authenticated parent SEC reader receipt hash",
+    )
+    if (
+        sec_claim.get("request_sha256") != parent_request_hash
+        or sec_reader.get("request_sha256") != parent_request_hash
+        or sec_reader.get("claim_sha256") != claim_hash
+        or value["sec_execution_claim_sha256"] != claim_hash
+        or value["sec_reader_receipt_sha256"] != reader_hash
+    ):
+        raise SecFilingGemmaStageVerifierError(
+            "Parent output receipt crossed its SEC claim or reader ancestry"
         )
     evidence = _mapping_snapshot(
         current_stage_evidence,
@@ -2862,6 +2957,8 @@ def _validate_parent_consumed_stage_output_receipt(
         "authorization_grant_sha256": parent_consumption[
             "authorization_grant_sha256"
         ],
+        "sec_execution_claim_sha256": claim_hash,
+        "sec_reader_receipt_sha256": reader_hash,
         "grant_store_state_sha256": authenticated_tip["store_state_sha256"],
         "grant_consumption_ledger_sha256": authenticated_tip[
             "consumption_ledger_sha256"
@@ -2870,6 +2967,8 @@ def _validate_parent_consumed_stage_output_receipt(
             "consumption_ledger_tip_sha256"
         ],
         "output_stage_evidence_schema_version": evidence["schema_version"],
+        "output_stage_evidence_component_id": STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
+        "output_stage_evidence_relative_path": STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
         "output_stage_evidence_sha256": current_stage_evidence_sha256,
         "output_stage_evidence_document_sha256": hashlib.sha256(
             evidence_bytes
@@ -2906,11 +3005,14 @@ def _validate_parent_consumed_stage_output_receipt(
         "stage_access_manifest_sha256",
         "authorization_bundle_sha256",
         "authorization_grant_sha256",
+        "sec_execution_claim_sha256",
+        "sec_reader_receipt_sha256",
         "grant_store_state_sha256",
         "grant_consumption_ledger_sha256",
         "grant_consumption_ledger_tip_sha256",
         "output_stage_evidence_sha256",
         "output_stage_evidence_document_sha256",
+        "output_stage_evidence_complete_marker_sha256",
         "output_parent_stage_evidence_sha256",
         "output_candidate_sha256",
     ):
@@ -3380,30 +3482,7 @@ def audit_stage_evidence(
     )
     _expect_keys(
         value,
-        {
-            "schema_version",
-            "prerequisite_stage",
-            "parent_stage_evidence_sha256",
-            "parent_stage_lineage",
-            "contract_manifest",
-            "candidate_manifest",
-            "source_bytes_base64_by_role",
-            "calendar_evidence_manifest",
-            "calendar_source_bytes_base64_by_name",
-            "corpus_universe_manifest",
-            "catalog_replay",
-            "content_replays_by_stage",
-            "prerequisite_content_manifest",
-            "model_batches_by_stage",
-            "market_replays_by_stage",
-            "prediction_replay",
-            "learner_replays",
-            "score_replay",
-            "stage_runtime_receipt",
-            "reveal_registry",
-            "registry_external_pin",
-            "stage_evidence_sha256",
-        },
+        STAGE_EVIDENCE_KEYS,
         "stage evidence",
     )
     if value["schema_version"] != STAGE_EVIDENCE_SCHEMA_VERSION:
@@ -3925,6 +4004,7 @@ __all__ = [
     "OWNED_HARDENED_TRANSPORT_MODE",
     "PARENT_CONSUMPTION_BINDING_SCHEMA_VERSION",
     "STAGE_AUDIT_RECEIPT_SCHEMA_VERSION",
+    "STAGE_EVIDENCE_KEYS",
     "STAGE_EVIDENCE_SCHEMA_VERSION",
     "STAGE_RUNTIME_RECEIPT_SCHEMA_VERSION",
     "TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION",

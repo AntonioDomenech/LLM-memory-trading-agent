@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+import agent_benchmark.sec_filing_gemma_stage_verifier as verifier_module
+
 from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
@@ -20,6 +22,9 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+)
+from agent_benchmark.sec_filing_gemma_stage_verifier import (
+    STAGE_EVIDENCE_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
@@ -456,9 +461,12 @@ def _validate(
 
 def _output_binding(grant: dict, *, salt: str = "first output") -> dict:
     return {
-        "output_stage_evidence_schema_version": "stage-evidence-test-v1",
+        "output_stage_evidence_schema_version": STAGE_EVIDENCE_SCHEMA_VERSION,
         "output_stage_evidence_sha256": _h(f"{salt}:evidence"),
         "output_stage_evidence_document_sha256": _h(f"{salt}:document"),
+        "output_stage_evidence_complete_marker_sha256": _h(
+            f"{salt}:complete-marker"
+        ),
         "output_stage_evidence_canonical_byte_count": 4096,
         "output_stage_evidence_prerequisite_stage": grant["stage"],
         "output_parent_stage_evidence_sha256": grant[
@@ -493,6 +501,47 @@ def _next_tip(
     )
 
 
+def _completed_sec_output_ancestry(
+    state: dict,
+    entry: dict,
+    prior_tip: dict,
+) -> tuple[dict, dict, dict]:
+    request_hash = entry["request_sha256"]
+    bundle = prior_tip["authorization_bundles"][request_hash]
+    claim = build_stage_sec_execution_claim(
+        bundle,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=_execution_source_hashes(entry["sequence"]),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        stage_sec_execution_claims={request_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, claimed_tip)
+    reader = build_stage_sec_reader_receipt(
+        claim,
+        byte_index=[
+            {
+                "ordinal": 1,
+                "logical_id": "synthetic-sec-byte",
+                "relative_path": "synthetic-sec-byte.raw",
+                "byte_count": 1,
+                "sha256": _h("synthetic SEC byte"),
+            }
+        ],
+        complete_marker_sha256=_h("synthetic SEC complete marker"),
+    )
+    reader_tip = _next_tip(
+        state,
+        claimed_tip,
+        stage_sec_reader_receipts={request_hash: reader},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claimed_tip, reader_tip)
+    return claim, reader, reader_tip
+
+
 def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     state, pin, entry, grant, current_tip = _grant_context()
     assert pin["schema_version"] == CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION
@@ -510,18 +559,63 @@ def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     ]
 
 
+def test_output_receipt_schema_is_synchronized_with_parent_verifier() -> None:
+    assert CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION == (
+        "aapl-sec-gemma-consumed-stage-output-receipt-v2"
+    )
+    assert CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION == (
+        verifier_module.CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION
+    )
+
+
+def test_output_receipt_builder_rejects_cross_request_sec_reader() -> None:
+    state_one, _pin_one, entry_one, grant_one, tip_one = _grant_context(
+        entry_count=1,
+        include_sec_plan=True,
+    )
+    claim_one, _reader_one, _reader_tip_one = _completed_sec_output_ancestry(
+        state_one,
+        entry_one,
+        tip_one,
+    )
+    state_two, _pin_two, entry_two, _grant_two, tip_two = _grant_context(
+        entry_count=2,
+        include_sec_plan=True,
+    )
+    _claim_two, reader_two, _reader_tip_two = _completed_sec_output_ancestry(
+        state_two,
+        entry_two,
+        tip_two,
+    )
+    bundle_one = tip_one["authorization_bundles"][entry_one["request_sha256"]]
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        build_consumed_stage_output_receipt(
+            bundle_one,
+            stage_sec_execution_claim=claim_one,
+            stage_sec_reader_receipt=reader_two,
+            **_output_binding(grant_one, salt="cross-request reader"),
+        )
+
+
 def test_first_output_receipt_is_exact_current_tip_append_and_replays() -> None:
-    state, _pin, entry, grant, current_tip = _grant_context()
+    state, _pin, entry, grant, grant_tip = _grant_context(include_sec_plan=True)
     request_hash = entry["request_sha256"]
+    claim, reader, current_tip = _completed_sec_output_ancestry(
+        state,
+        entry,
+        grant_tip,
+    )
     bundle = current_tip["authorization_bundles"][request_hash]
     output_binding = _output_binding(grant)
-    receipt = build_consumed_stage_output_receipt(bundle, **output_binding)
-    next_tip = build_reveal_store_current_tip_anchor(
+    receipt = build_consumed_stage_output_receipt(
+        bundle,
+        stage_sec_execution_claim=claim,
+        stage_sec_reader_receipt=reader,
+        **output_binding,
+    )
+    next_tip = _next_tip(
         state,
-        revision=current_tip["revision"] + 1,
-        previous_tip_anchor_sha256=current_tip["tip_anchor_sha256"],
-        authorization_bundles=current_tip["authorization_bundles"],
-        trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
+        current_tip,
         consumed_stage_output_receipts={request_hash: receipt},
     )
     prior, validated_next = validate_reveal_store_current_tip_anchor_transition(
@@ -545,18 +639,61 @@ def test_first_output_receipt_is_exact_current_tip_append_and_replays() -> None:
     ) == receipt["output_receipt_sha256"]
 
 
-def test_output_receipt_rejects_substitution_and_non_dedicated_append() -> None:
-    state, _pin, entry, grant, current_tip = _grant_context()
+@pytest.mark.parametrize(
+    "ancestry_field",
+    ("sec_execution_claim_sha256", "sec_reader_receipt_sha256"),
+)
+def test_rehashed_output_receipt_cannot_substitute_sec_ancestry(
+    ancestry_field: str,
+) -> None:
+    state, _pin, entry, grant, grant_tip = _grant_context(
+        include_sec_plan=True
+    )
     request_hash = entry["request_sha256"]
+    claim, reader, reader_tip = _completed_sec_output_ancestry(
+        state,
+        entry,
+        grant_tip,
+    )
+    bundle = reader_tip["authorization_bundles"][request_hash]
+    receipt = build_consumed_stage_output_receipt(
+        bundle,
+        stage_sec_execution_claim=claim,
+        stage_sec_reader_receipt=reader,
+        **_output_binding(grant, salt=f"tamper {ancestry_field}"),
+    )
+    receipt[ancestry_field] = _h(f"substituted {ancestry_field}")
+    _rehash(receipt, "output_receipt_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="crossed its grant or output boundary",
+    ):
+        _next_tip(
+            state,
+            reader_tip,
+            consumed_stage_output_receipts={request_hash: receipt},
+        )
+
+
+def test_output_receipt_rejects_substitution_and_non_dedicated_append() -> None:
+    state, _pin, entry, grant, grant_tip = _grant_context(include_sec_plan=True)
+    request_hash = entry["request_sha256"]
+    claim, reader, current_tip = _completed_sec_output_ancestry(
+        state,
+        entry,
+        grant_tip,
+    )
     bundle = current_tip["authorization_bundles"][request_hash]
     output_binding = _output_binding(grant)
-    receipt = build_consumed_stage_output_receipt(bundle, **output_binding)
-    persisted_tip = build_reveal_store_current_tip_anchor(
+    receipt = build_consumed_stage_output_receipt(
+        bundle,
+        stage_sec_execution_claim=claim,
+        stage_sec_reader_receipt=reader,
+        **output_binding,
+    )
+    persisted_tip = _next_tip(
         state,
-        revision=current_tip["revision"] + 1,
-        previous_tip_anchor_sha256=current_tip["tip_anchor_sha256"],
-        authorization_bundles=current_tip["authorization_bundles"],
-        trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
+        current_tip,
         consumed_stage_output_receipts={request_hash: receipt},
     )
     changed_binding = dict(output_binding)
@@ -585,16 +722,27 @@ def test_output_receipt_rejects_substitution_and_non_dedicated_append() -> None:
             authorization_bundles=current_tip["authorization_bundles"],
             trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
             consumed_stage_output_receipts={request_hash: receipt},
+            stage_sec_execution_claims=current_tip[
+                "stage_sec_execution_claims"
+            ],
+            stage_sec_reader_receipts=current_tip["stage_sec_reader_receipts"],
         )
         validate_reveal_store_current_tip_anchor_transition(current_tip, mixed_tip)
 
 
 def test_output_receipt_cannot_append_after_its_grant_tip_is_stale() -> None:
-    state, _pin, entry, grant, current_tip = _grant_context()
+    state, _pin, entry, grant, grant_tip = _grant_context(include_sec_plan=True)
     request_hash = entry["request_sha256"]
+    claim, reader, current_tip = _completed_sec_output_ancestry(
+        state,
+        entry,
+        grant_tip,
+    )
     bundle = current_tip["authorization_bundles"][request_hash]
     receipt = build_consumed_stage_output_receipt(
         bundle,
+        stage_sec_execution_claim=claim,
+        stage_sec_reader_receipt=reader,
         **_output_binding(grant),
     )
 
@@ -606,6 +754,8 @@ def test_output_receipt_cannot_append_after_its_grant_tip_is_stale() -> None:
         authorization_bundles=current_tip["authorization_bundles"],
         trusted_stage_content_pins=current_tip["trusted_stage_content_pins"],
         consumed_stage_output_receipts={},
+        stage_sec_execution_claims=current_tip["stage_sec_execution_claims"],
+        stage_sec_reader_receipts=current_tip["stage_sec_reader_receipts"],
     )
     validate_reveal_store_current_tip_anchor_transition(current_tip, advanced_tip)
 
@@ -616,6 +766,8 @@ def test_output_receipt_cannot_append_after_its_grant_tip_is_stale() -> None:
         authorization_bundles=advanced_tip["authorization_bundles"],
         trusted_stage_content_pins=advanced_tip["trusted_stage_content_pins"],
         consumed_stage_output_receipts={request_hash: receipt},
+        stage_sec_execution_claims=advanced_tip["stage_sec_execution_claims"],
+        stage_sec_reader_receipts=advanced_tip["stage_sec_reader_receipts"],
     )
     with pytest.raises(
         SecFilingGemmaStageAuthorizationError,
@@ -1252,14 +1404,30 @@ def test_active_sec_claim_blocks_nonterminal_and_second_claim_transitions() -> N
             nonterminal_tip,
         )
 
+    reader = build_stage_sec_reader_receipt(
+        claim,
+        byte_index=[
+            {
+                "ordinal": 1,
+                "logical_id": "active-claim-byte",
+                "relative_path": "active-claim-byte.raw",
+                "byte_count": 1,
+                "sha256": _h("active claim byte"),
+            }
+        ],
+        complete_marker_sha256=_h("active claim complete marker"),
+    )
     output_receipt = build_consumed_stage_output_receipt(
         bundle,
+        stage_sec_execution_claim=claim,
+        stage_sec_reader_receipt=reader,
         **_output_binding(bundle["authorization_grant"], salt="active claim"),
     )
     output_tip = _next_tip(
         state,
         claimed_tip,
         consumed_stage_output_receipts={request_hash: output_receipt},
+        stage_sec_reader_receipts={request_hash: reader},
     )
     with pytest.raises(
         SecFilingGemmaStageAuthorizationError,

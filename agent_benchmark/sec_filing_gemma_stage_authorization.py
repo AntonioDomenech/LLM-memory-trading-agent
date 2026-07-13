@@ -35,6 +35,7 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
+    STAGE_EVIDENCE_SCHEMA_VERSION,
     detach_untrusted_stage_json,
 )
 from agent_benchmark.sec_filing_gemma_source_identity import (
@@ -62,7 +63,7 @@ CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-consumed-stage-authorization-bundle-v1"
 )
 CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-consumed-stage-output-receipt-v1"
+    "aapl-sec-gemma-consumed-stage-output-receipt-v2"
 )
 STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-sec-execution-claim-v2"
@@ -95,6 +96,8 @@ SEC_CORPUS_REPOSITORY_PATH: Final[str] = (
     "agent_benchmark/sec_filing_gemma_corpus.py"
 )
 SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID: Final[str] = "sec_stage_document_batch"
+STAGE_EVIDENCE_OUTPUT_COMPONENT_ID: Final[str] = "owned_stage_evidence_document"
+STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH: Final[str] = "stage_evidence.json"
 # A Latin-1 source byte can expand to at most two UTF-8 bytes.  Keeping the
 # complete raw batch at 64 MiB therefore guarantees that each normalized file
 # remains inside the reveal store's fixed 128 MiB per-file ceiling, while the
@@ -274,17 +277,24 @@ _STAGE_OUTPUT_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
         "output_namespace",
         "authorization_bundle_sha256",
         "authorization_grant_sha256",
+        "sec_execution_claim_sha256",
+        "sec_reader_receipt_sha256",
         "grant_store_state_sha256",
         "grant_consumption_ledger_sha256",
         "grant_consumption_ledger_tip_sha256",
         "output_kind",
         "output_stage_evidence_schema_version",
+        "output_stage_evidence_component_id",
+        "output_stage_evidence_relative_path",
         "output_stage_evidence_sha256",
         "output_stage_evidence_document_sha256",
+        "output_stage_evidence_complete_marker_sha256",
         "output_stage_evidence_canonical_byte_count",
         "output_stage_evidence_prerequisite_stage",
         "output_parent_stage_evidence_sha256",
         "output_candidate_sha256",
+        "output_stage_evidence_recomputed_by_store",
+        "fresh_stage_evidence_provenance_claimed",
         "cross_stage_output_permitted",
         "grant_reuse_for_different_output_permitted",
         "output_receipt_sha256",
@@ -1095,11 +1105,21 @@ def _validated_consumed_stage_output_receipts(
     raw: Any,
     *,
     authorization_bundles: Mapping[str, Any],
+    sec_execution_claims: Mapping[str, Any],
+    sec_reader_receipts: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
     receipts = _mapping(raw, "current-tip consumed-stage output receipts")
     bundles = _mapping(
         authorization_bundles,
         "current-tip authorization bundles for output receipts",
+    )
+    claims = _mapping(
+        sec_execution_claims,
+        "current-tip SEC claims for output receipts",
+    )
+    readers = _mapping(
+        sec_reader_receipts,
+        "current-tip SEC reader receipts for output receipts",
     )
     validated: dict[str, dict[str, Any]] = {}
     for request_sha256, raw_receipt in receipts.items():
@@ -1123,6 +1143,14 @@ def _validated_consumed_stage_output_receipts(
             or receipt["receipt_kind"]
             != "first_output_for_exact_consumed_stage_grant"
             or receipt["output_kind"] != "next_stage_evidence"
+            or receipt["output_stage_evidence_schema_version"]
+            != STAGE_EVIDENCE_SCHEMA_VERSION
+            or receipt["output_stage_evidence_component_id"]
+            != STAGE_EVIDENCE_OUTPUT_COMPONENT_ID
+            or receipt["output_stage_evidence_relative_path"]
+            != STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH
+            or receipt["output_stage_evidence_recomputed_by_store"] is not True
+            or receipt["fresh_stage_evidence_provenance_claimed"] is not False
             or receipt["cross_stage_output_permitted"] is not False
             or receipt["grant_reuse_for_different_output_permitted"] is not False
         ):
@@ -1143,11 +1171,14 @@ def _validated_consumed_stage_output_receipts(
             "stage_access_manifest_sha256",
             "authorization_bundle_sha256",
             "authorization_grant_sha256",
+            "sec_execution_claim_sha256",
+            "sec_reader_receipt_sha256",
             "grant_store_state_sha256",
             "grant_consumption_ledger_sha256",
             "grant_consumption_ledger_tip_sha256",
             "output_stage_evidence_sha256",
             "output_stage_evidence_document_sha256",
+            "output_stage_evidence_complete_marker_sha256",
             "output_parent_stage_evidence_sha256",
             "output_candidate_sha256",
         ):
@@ -1191,6 +1222,12 @@ def _validated_consumed_stage_output_receipts(
             bundle.get("authorization_grant"),
             "consumed-stage output receipt authorization grant",
         )
+        sec_claim = claims.get(request_hash)
+        sec_reader = readers.get(request_hash)
+        if type(sec_claim) is not dict or type(sec_reader) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Consumed-stage output receipt lacks its SEC execution ancestry"
+            )
         expected_bindings = {
             "consumption_entry_sha256": grant.get("consumption_entry_sha256"),
             "consumption_entry_sequence": grant.get("consumption_entry_sequence"),
@@ -1211,6 +1248,8 @@ def _validated_consumed_stage_output_receipts(
             "authorization_grant_sha256": grant.get(
                 "authorization_grant_sha256"
             ),
+            "sec_execution_claim_sha256": sec_claim.get("claim_sha256"),
+            "sec_reader_receipt_sha256": sec_reader.get("receipt_sha256"),
             "grant_store_state_sha256": grant.get("store_state_sha256"),
             "grant_consumption_ledger_sha256": grant.get(
                 "consumption_ledger_sha256"
@@ -1664,12 +1703,6 @@ def validate_reveal_store_current_tip_anchor_structure(
     anchor["authorization_bundles"] = _validated_authorization_bundles(
         anchor["authorization_bundles"]
     )
-    anchor["consumed_stage_output_receipts"] = (
-        _validated_consumed_stage_output_receipts(
-            anchor["consumed_stage_output_receipts"],
-            authorization_bundles=anchor["authorization_bundles"],
-        )
-    )
     anchor["stage_sec_execution_claims"] = _validated_stage_sec_execution_claims(
         anchor["stage_sec_execution_claims"],
         authorization_bundles=anchor["authorization_bundles"],
@@ -1681,6 +1714,14 @@ def validate_reveal_store_current_tip_anchor_structure(
     anchor["stage_sec_execution_aborts"] = _validated_stage_sec_execution_aborts(
         anchor["stage_sec_execution_aborts"],
         claims=anchor["stage_sec_execution_claims"],
+    )
+    anchor["consumed_stage_output_receipts"] = (
+        _validated_consumed_stage_output_receipts(
+            anchor["consumed_stage_output_receipts"],
+            authorization_bundles=anchor["authorization_bundles"],
+            sec_execution_claims=anchor["stage_sec_execution_claims"],
+            sec_reader_receipts=anchor["stage_sec_reader_receipts"],
+        )
     )
     if set(anchor["stage_sec_reader_receipts"]) & set(
         anchor["stage_sec_execution_aborts"]
@@ -1729,14 +1770,6 @@ def build_reveal_store_current_tip_anchor(
     pins = _validated_trusted_stage_content_pins(
         {} if trusted_stage_content_pins is None else trusted_stage_content_pins
     )
-    output_receipts = _validated_consumed_stage_output_receipts(
-        (
-            {}
-            if consumed_stage_output_receipts is None
-            else consumed_stage_output_receipts
-        ),
-        authorization_bundles=bundles,
-    )
     sec_claims = _validated_stage_sec_execution_claims(
         {} if stage_sec_execution_claims is None else stage_sec_execution_claims,
         authorization_bundles=bundles,
@@ -1757,6 +1790,16 @@ def build_reveal_store_current_tip_anchor(
         raise SecFilingGemmaStageAuthorizationError(
             "At most one SEC execution claim may be active"
         )
+    output_receipts = _validated_consumed_stage_output_receipts(
+        (
+            {}
+            if consumed_stage_output_receipts is None
+            else consumed_stage_output_receipts
+        ),
+        authorization_bundles=bundles,
+        sec_execution_claims=sec_claims,
+        sec_reader_receipts=sec_receipts,
+    )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -2776,9 +2819,12 @@ def build_stage_sec_execution_abort(
 def build_consumed_stage_output_receipt(
     authorization_bundle: Mapping[str, Any],
     *,
+    stage_sec_execution_claim: Mapping[str, Any],
+    stage_sec_reader_receipt: Mapping[str, Any],
     output_stage_evidence_schema_version: str,
     output_stage_evidence_sha256: str,
     output_stage_evidence_document_sha256: str,
+    output_stage_evidence_complete_marker_sha256: str,
     output_stage_evidence_canonical_byte_count: int,
     output_stage_evidence_prerequisite_stage: str,
     output_parent_stage_evidence_sha256: str,
@@ -2788,9 +2834,10 @@ def build_consumed_stage_output_receipt(
 
     This pure builder does not authorize I/O.  The effectful reveal store must
     first validate the bundle at its independently loaded current tip and then
-    persist the resulting receipt with an append-only CAS transition.  Until an
-    owned runner supplies the document, this records caller-supplied evidence;
-    it does not attest which code or reader produced those bytes.
+    persist the resulting receipt with an append-only CAS transition.  The
+    receipt binds store-recomputed durable evidence to the exact SEC claim and
+    reader receipt, but deliberately does not claim fresh end-to-end evidence
+    provenance until the remaining owned components exist.
     """
 
     raw_bundle = _mapping(authorization_bundle, "stage-output authorization bundle")
@@ -2806,10 +2853,22 @@ def build_consumed_stage_output_receipt(
         request_hash
     ]
     grant = bundle["authorization_grant"]
+    claim = _validated_stage_sec_execution_claims(
+        {request_hash: stage_sec_execution_claim},
+        authorization_bundles={request_hash: bundle},
+    )[request_hash]
+    reader = _validated_stage_sec_reader_receipts(
+        {request_hash: stage_sec_reader_receipt},
+        claims={request_hash: claim},
+    )[request_hash]
     schema_version = _safe_id(
         output_stage_evidence_schema_version,
         "output stage-evidence schema version",
     )
+    if schema_version != STAGE_EVIDENCE_SCHEMA_VERSION:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Output stage evidence is not the exact durable v3 schema"
+        )
     evidence_hash = _sha256(
         output_stage_evidence_sha256,
         "output stage-evidence hash",
@@ -2818,6 +2877,12 @@ def build_consumed_stage_output_receipt(
         output_stage_evidence_document_sha256,
         "output stage-evidence document hash",
     )
+    marker_hash = _sha256(
+        output_stage_evidence_complete_marker_sha256,
+        "output stage-evidence complete-marker hash",
+    )
+    sec_claim_hash = claim["claim_sha256"]
+    sec_reader_hash = reader["receipt_sha256"]
     byte_count = _strict_int(
         output_stage_evidence_canonical_byte_count,
         "output stage-evidence canonical byte count",
@@ -2862,6 +2927,8 @@ def build_consumed_stage_output_receipt(
         "output_namespace": grant["output_namespace"],
         "authorization_bundle_sha256": bundle["bundle_sha256"],
         "authorization_grant_sha256": grant["authorization_grant_sha256"],
+        "sec_execution_claim_sha256": sec_claim_hash,
+        "sec_reader_receipt_sha256": sec_reader_hash,
         "grant_store_state_sha256": grant["store_state_sha256"],
         "grant_consumption_ledger_sha256": grant[
             "consumption_ledger_sha256"
@@ -2871,12 +2938,17 @@ def build_consumed_stage_output_receipt(
         ],
         "output_kind": "next_stage_evidence",
         "output_stage_evidence_schema_version": schema_version,
+        "output_stage_evidence_component_id": STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
+        "output_stage_evidence_relative_path": STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
         "output_stage_evidence_sha256": evidence_hash,
         "output_stage_evidence_document_sha256": document_hash,
+        "output_stage_evidence_complete_marker_sha256": marker_hash,
         "output_stage_evidence_canonical_byte_count": byte_count,
         "output_stage_evidence_prerequisite_stage": output_prerequisite,
         "output_parent_stage_evidence_sha256": output_parent_hash,
         "output_candidate_sha256": output_candidate_hash,
+        "output_stage_evidence_recomputed_by_store": True,
+        "fresh_stage_evidence_provenance_claimed": False,
         "cross_stage_output_permitted": False,
         "grant_reuse_for_different_output_permitted": False,
     }
@@ -2892,6 +2964,7 @@ def validate_consumed_stage_output_receipt(
     output_stage_evidence_schema_version: str,
     output_stage_evidence_sha256: str,
     output_stage_evidence_document_sha256: str,
+    output_stage_evidence_complete_marker_sha256: str,
     output_stage_evidence_canonical_byte_count: int,
     output_stage_evidence_prerequisite_stage: str,
     output_parent_stage_evidence_sha256: str,
@@ -2912,6 +2985,16 @@ def validate_consumed_stage_output_receipt(
         grant.get("request_sha256"),
         "stage-output authorization request hash",
     )
+    sec_claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+    sec_reader = current_tip["stage_sec_reader_receipts"].get(request_hash)
+    if (
+        type(sec_claim) is not dict
+        or type(sec_reader) is not dict
+        or sec_reader.get("claim_sha256") != sec_claim.get("claim_sha256")
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage-output receipt lacks its exact SEC claim and reader ancestry"
+        )
     if current_tip["authorization_bundles"].get(request_hash) != bundle:
         raise SecFilingGemmaStageAuthorizationError(
             "Stage-output authorization bundle is not persisted at the current tip"
@@ -2935,10 +3018,15 @@ def validate_consumed_stage_output_receipt(
     )
     expected = build_consumed_stage_output_receipt(
         bundle,
+        stage_sec_execution_claim=sec_claim,
+        stage_sec_reader_receipt=sec_reader,
         output_stage_evidence_schema_version=output_stage_evidence_schema_version,
         output_stage_evidence_sha256=output_stage_evidence_sha256,
         output_stage_evidence_document_sha256=(
             output_stage_evidence_document_sha256
+        ),
+        output_stage_evidence_complete_marker_sha256=(
+            output_stage_evidence_complete_marker_sha256
         ),
         output_stage_evidence_canonical_byte_count=(
             output_stage_evidence_canonical_byte_count
@@ -2977,6 +3065,8 @@ __all__ = [
     "SEC_EXECUTION_RESOLVED_SOURCE_PATHS",
     "SEC_CORPUS_REPOSITORY_PATH",
     "SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID",
+    "STAGE_EVIDENCE_OUTPUT_COMPONENT_ID",
+    "STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH",
     "STAGE_RUNNER_REPOSITORY_PATH",
     "STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
     "STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",

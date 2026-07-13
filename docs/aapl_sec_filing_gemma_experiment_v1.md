@@ -648,12 +648,29 @@ At the current implementation checkpoint:
   `fresh_network_provenance_claimed=false`: this proves internal consistency and
   grant binding, not external attestation of a fresh SEC response.
   A failed verifier retains its non-authorizing content pin, and an exact retry
-  reuses it without another revision. After a grant is issued, the first exact
-  caller-supplied stage-evidence candidate can be bound to that request, grant,
-  authorization bundle, candidate, parent evidence, namespace, document hash,
-  and canonical byte count. Re-recording that identical candidate is
-  idempotent and creates no new revision; attempting to substitute a different
-  first-recorded candidate is rejected. A
+  reuses it without another revision. After a grant is issued and its SEC
+  claim has an exact terminal reader receipt, the store's private stage-output
+  finalizer accepts only the request hash. It replays the SEC batch again and
+  then reads exactly
+  `stage_outputs/<claim_sha256>/stage_evidence/stage_evidence.json` plus its
+  `complete.json` marker. The evidence must be the exact compact canonical v3
+  envelope with an explicit parent, self-hash, candidate and stage matching the
+  grant; the marker must be pretty-canonical and bind the request, claim, SEC
+  reader receipt, fixed component/path, byte count, document hash and semantic
+  evidence hash. Output-receipt v2 derives the SEC claim and reader hashes from
+  their validated mappings and records the physical marker-file hash. Exact
+  finalization re-reads both files after the marker and source-closure checks,
+  which detects mutations between the first and closure reads. This is still a
+  snapshot attestation: the reads are sequential, so the same-user mutable path
+  namespace cannot prove simultaneous immutability through the later receipt
+  commit. Any later retry or final-stage parent lookup replays the files again
+  and fails closed if they no longer match. Exact retries of unchanged bytes
+  create no new revision; missing,
+  extra, linked, noncanonical, mutated or coherently substituted files are
+  rejected. The receipt deliberately sets
+  `fresh_stage_evidence_provenance_claimed=false`: the store proves the durable
+  bytes and SEC ancestry, but no owned model/market assembler yet proves who
+  produced the stage-evidence file. A
   final-stage transition must find the exact persisted parent-output receipt
   before its own trusted-content pin is committed. The anchor is a second file
   in the same store directory: it detects state-only rollback, but it is not an
@@ -671,10 +688,13 @@ At the current implementation checkpoint:
   receipt, exact parent membership in the reveal-store-supplied receipt map,
   and current store tip. The verifier recomputes
   the parent evidence's canonical document hash and byte count and cross-binds
-  them to that exact receipt. It rejects altered-and-rehashed evidence, access,
-  context, audit, pin, entry, bundle, grant, parent output receipt, parent map
-  membership or declared map hash, tip, and child identities. It does not
-  independently authenticate unrelated entries in that supplied map;
+  them to that exact receipt. Final-stage lookup now replaces the caller's
+  parent mapping with the store-replayed durable parent document before the
+  verifier runs, and the compact parent-tip proof carries the exact SEC claim
+  and reader maps and their hashes. It rejects altered-and-rehashed evidence,
+  access, context, audit, pin, entry, bundle, grant, parent output receipt,
+  parent map membership or declared map hash, tip, and child identities. It
+  does not independently authenticate unrelated entries in that supplied map;
 - source-identity receipt version 4 now checks the current regular files at the canonical
   paths of modules that were already loaded; the audit refuses to import an
   absent module and accepts no caller-supplied root, path, or runtime bytes. Eleven
@@ -702,8 +722,10 @@ At the current implementation checkpoint:
   successful verifier cannot consume a request. The reveal store derives and
   persists the trusted stage-content pin itself, authenticates its current-tip
   membership, and requires the audit receipt to return the exact pin and store
-  context hashes. It also persists and recursively verifies the exact first
-  recorded evidence candidate associated with a consumed grant. The bounded
+  context hashes. It also persists the exact first-output receipt and
+  recursively replays the fixed durable evidence associated with a consumed
+  grant; the evidence document itself remains in the fixed component
+  directory rather than inside the current-tip anchor. The bounded
   owned runner now claims the exact current grant before the SEC document batch,
   derives the document plan and budgets only from the persisted access manifest,
   binds the validated private-contact hash into that pre-effect claim,
@@ -715,14 +737,17 @@ At the current implementation checkpoint:
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
   no SEC request was made. `stage_access_identity` remains `BLOCKED` because
-  market, model, carry-in, artifact, and final stage-evidence reads/writes are not
-  yet forced through the runner, and the separate final `stage_evidence.json`
-  first-recorded receipt still accepts caller-supplied stage evidence. The
-  final component directory creation rejects even a pre-existing empty
-  directory, but the same-user mutable Windows path namespace is still not an
-  external trust domain. The verifier also does not independently load the store files, attest its
-  executing Python code object, or turn the same mutable directory into an
-  external trust domain;
+  market, model, carry-in, artifact, and final stage-evidence generation are not
+  yet forced through owned components. The store no longer accepts a caller
+  mapping at the output-receipt boundary, but a same-user process can still
+  place coherently formed bytes in the fixed directory, so this milestone is
+  durable replay rather than fresh end-to-end provenance. The owned SEC batch
+  runner's final component-directory creation rejects even a pre-existing empty
+  directory; the stage-evidence finalizer instead requires its fixed directory
+  and exact two files to exist. The same-user mutable Windows path namespace is
+  still not an external trust domain. The verifier also does not independently
+  load the store files, attest its executing Python code object, or turn the
+  same mutable directory into an external trust domain;
 - stage-specific runtime receipts are structurally reconciled, but the final
   all-stage summary remains diagnostic until the remaining owned market/model
   transports, monotonic-time attestations, and five-development-filing latency
@@ -747,12 +772,12 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is to extend the now-owned SEC runner across
-presealed market and carry-in reads, every Ollama attempt, prediction sealing,
-and canonical stage-evidence assembly. The runner-owned finalizer must read the
-sealed `stage_evidence.json` bytes itself and make the first-recorded receipt
-bind the SEC claim and reader receipt rather than accepting a caller mapping.
-A distinct zero-cost market acquirer must also preserve upstream provider bytes
+The next implementation milestone is an owned carry-in reader that derives its
+scope from the parent request and replays the exact durable normalized SEC
+documents, followed by separately pinned extractor prompt/schema ownership and
+owned Ollama execution. The same owned chain must then cover presealed market
+reads, prediction sealing, and canonical stage-evidence assembly. A distinct
+zero-cost market acquirer must also preserve upstream provider bytes
 and a deterministic normalization receipt. This is required to turn the
 partially authenticated SEC execution into complete authorized stage execution.
 The remainder of the
