@@ -518,6 +518,7 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
     assert runner_module.__all__ == [
         "SecFilingGemmaStageRunnerError",
         "run_authorized_sec_stage",
+        "run_owned_development_market_batch",
         "run_owned_development_model_batch",
         "run_owned_development_sec_root",
         "run_owned_stage_model_batch",

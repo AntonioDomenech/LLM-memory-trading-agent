@@ -35,7 +35,6 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_UNRESOLVED_ROLES = (
     "ledger",
-    "market_acquirer",
 )
 EXPECTED_TRANSITIVE_SOURCE_PATHS = {
     "package_init": "agent_benchmark/__init__.py",
@@ -124,10 +123,13 @@ def _audit(evidence: dict[str, object], **overrides) -> dict[str, object]:
 
 def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> None:
     assert SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION == (
-        "aapl-sec-gemma-source-identity-audit-v4"
+        "aapl-sec-gemma-source-identity-audit-v5"
     )
     assert tuple(CANONICAL_SOURCE_ROLE_PATHS) == REQUIRED_SOURCE_HASHES
     assert UNRESOLVED_SOURCE_ROLES == EXPECTED_UNRESOLVED_ROLES
+    assert CANONICAL_SOURCE_ROLE_PATHS["market_acquirer"] == (
+        "agent_benchmark/sec_filing_gemma_market_acquirer.py"
+    )
     resolved = [
         path for path in CANONICAL_SOURCE_ROLE_PATHS.values() if path is not None
     ]
@@ -256,7 +258,7 @@ def test_static_local_import_omission_is_rejected_even_when_hashes_are_rebuilt(
 def test_complete_validator_names_real_unresolved_implementation_roles(evidence) -> None:
     with pytest.raises(
         SecFilingGemmaSourceIdentityIncompleteError,
-        match="ledger.*market_acquirer",
+        match="ledger",
     ):
         validate_complete_candidate_source_identity(
             candidate_manifest=evidence["candidate"],
@@ -469,12 +471,12 @@ def test_role_cannot_alias_another_roles_canonical_path(evidence) -> None:
 
 def test_unresolved_role_cannot_invent_a_path_or_supply_bytes(evidence) -> None:
     paths = dict(evidence["paths"])
-    paths["market_acquirer"] = "agent_benchmark/market_data.py"
+    paths["ledger"] = "agent_benchmark/market_data.py"
     with pytest.raises(SecFilingGemmaSourceIdentityError, match="invented path"):
         _audit(evidence, source_paths_by_role=paths)
 
     payloads = dict(evidence["payloads"])
-    payloads["market_acquirer"] = b"invented acquisition source"
+    payloads["ledger"] = b"invented ledger source"
     with pytest.raises(SecFilingGemmaSourceIdentityError, match="cannot claim detached"):
         _audit(evidence, source_bytes_by_role=payloads)
 

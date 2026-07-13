@@ -9,8 +9,9 @@ plus the independently loaded monotonic current-tip anchor.
 Pin derivation is not external authentication.  A downstream caller must load
 the current-tip anchor independently of the bundle; an old snapshot and its old
 bundled pin are deliberately rejected after any newer store transition.
-No function here performs filesystem, network, model, market, SEC, or outcome
-I/O, and the compact grant contains no market values, labels, scores, or returns.
+No function here performs network, model, market-provider, SEC, or outcome I/O.
+Market authority validation only rebuilds the reviewed local source-hash plan;
+the compact grant contains no market values, labels, scores, or returns.
 """
 
 from __future__ import annotations
@@ -37,6 +38,17 @@ from agent_benchmark.sec_filing_gemma_contract import (
 )
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
+)
+from agent_benchmark.sec_filing_gemma_market_acquirer import (
+    YAHOO_MAX_RESPONSE_BYTES,
+    YAHOO_REQUEST_COUNT,
+    YAHOO_REQUEST_TIMEOUT_SECONDS,
+    build_development_market_acquisition_plan,
+)
+from agent_benchmark.sec_filing_gemma_market_evidence import (
+    MARKET_FIELDS,
+    MARKET_SOURCE_FAMILY,
+    MARKET_SYMBOLS,
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
     DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
@@ -97,29 +109,38 @@ DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
 DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-sec-execution-abort-v1"
 )
+DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-market-execution-claim-v1"
+)
+DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-market-reader-receipt-v2"
+)
+DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-market-execution-abort-v1"
+)
 DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-root-carry-in-reader-receipt-v1"
 )
 STAGE_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-model-execution-claim-v2"
+    "aapl-sec-gemma-stage-model-execution-claim-v3"
 )
 STAGE_MODEL_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-stage-model-reader-receipt-v2"
+    "aapl-sec-gemma-stage-model-reader-receipt-v3"
 )
 STAGE_MODEL_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-model-execution-abort-v1"
 )
 DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-development-model-execution-claim-v2"
+    "aapl-sec-gemma-development-model-execution-claim-v3"
 )
 DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-development-model-reader-receipt-v2"
+    "aapl-sec-gemma-development-model-reader-receipt-v3"
 )
 DEVELOPMENT_MODEL_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-model-execution-abort-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v8"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -142,6 +163,9 @@ SEC_CORPUS_REPOSITORY_PATH: Final[str] = (
 )
 SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID: Final[str] = "sec_stage_document_batch"
 STAGE_MODEL_BATCH_COMPONENT_ID: Final[str] = "owned_stage_gemma_model_batch"
+DEVELOPMENT_MARKET_BATCH_COMPONENT_ID: Final[str] = (
+    "owned_development_market_evidence_batch"
+)
 STAGE_EVIDENCE_OUTPUT_COMPONENT_ID: Final[str] = "owned_stage_evidence_document"
 STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH: Final[str] = "stage_evidence.json"
 # A Latin-1 source byte can expand to at most two UTF-8 bytes.  Keeping the
@@ -159,10 +183,23 @@ SEC_EXECUTION_RESOLVED_SOURCE_PATHS: Final[tuple[tuple[str, str], ...]] = tuple(
 # local extractor.  Bind the complete currently resolved candidate source tree
 # instead of a hand-maintained subset so an omitted helper cannot change model
 # inputs while the execution claim still appears source-identical.  The two
-# deliberately unresolved conceptual roles remain excluded and fail closed at
-# their own later ownership gates.
+# deliberately unresolved ledger role remains excluded and fails closed at its
+# own later ownership gate.
 MODEL_EXECUTION_SOURCE_ROLES: Final[tuple[str, ...]] = tuple(
     role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+)
+MARKET_EXECUTION_SOURCE_ROLES: Final[tuple[str, ...]] = tuple(
+    role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+)
+_MARKET_ACQUISITION_SOURCE_PATH_ROLES: Final[tuple[tuple[str, str], ...]] = (
+    ("agent_benchmark/sec_filing_gemma_market_acquirer.py", "market_acquirer"),
+    ("agent_benchmark/sec_filing_gemma_market_evidence.py", "market_evidence"),
+    (
+        "agent_benchmark/sec_filing_gemma_market_source_bytes.py",
+        "market_source_bytes",
+    ),
+    ("agent_benchmark/sec_filing_gemma_contract.py", "contract"),
+    ("agent_benchmark/sec_session_calendar.py", "calendar"),
 )
 _STAGE_PREREQUISITES: Final[dict[str, str]] = {
     "intermediate": "development",
@@ -677,6 +714,15 @@ _STAGE_MODEL_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
         "development_root_scope_sha256",
         "development_sec_execution_claim_sha256",
         "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
         "corpus_universe_sha256",
         "carry_in_kind",
         "carry_in_reader_receipt_sha256",
@@ -725,6 +771,15 @@ _STAGE_MODEL_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
         "development_root_scope_sha256",
         "development_sec_execution_claim_sha256",
         "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
         "corpus_universe_sha256",
         "carry_in_kind",
         "carry_in_reader_receipt_sha256",
@@ -787,6 +842,15 @@ _DEVELOPMENT_MODEL_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
         "start_consumed_request_count",
         "development_sec_execution_claim_sha256",
         "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
         "sec_document_count",
         "sec_acquisition_accession_order",
         "sec_acquisition_accession_order_sha256",
@@ -833,6 +897,15 @@ _DEVELOPMENT_MODEL_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
         "output_namespace",
         "development_sec_execution_claim_sha256",
         "development_sec_reader_receipt_sha256",
+        "development_market_execution_claim_sha256",
+        "development_market_reader_receipt_sha256",
+        "development_market_acquisition_receipt_sha256",
+        "development_market_acquisition_bundle_sha256",
+        "development_market_acquisition_validation_sha256",
+        "development_market_source_manifest_sha256",
+        "development_market_stage_manifest_sha256",
+        "development_market_source_reconciliation_sha256",
+        "development_market_byte_index_sha256",
         "sec_document_count",
         "sec_acquisition_accession_order_sha256",
         "event_count",
@@ -872,6 +945,112 @@ _DEVELOPMENT_MODEL_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
         "abort_sha256",
     }
 )
+_DEVELOPMENT_MARKET_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "claim_kind",
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+        "registered_entry_count",
+        "corpus_universe_sha256",
+        "corpus_universe_semantic_sha256",
+        "authorized_stage",
+        "output_namespace",
+        "start_current_tip_anchor_sha256",
+        "start_state_sha256",
+        "start_consumption_ledger_sha256",
+        "start_consumption_ledger_tip_sha256",
+        "start_consumed_request_count",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "market_acquisition_plan",
+        "market_acquisition_plan_sha256",
+        "candidate_source_hashes_sha256",
+        "execution_source_hashes",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "market_component_id",
+        "source_family",
+        "market_symbols",
+        "market_fields",
+        "fixed_request_count",
+        "response_byte_ceiling_per_symbol",
+        "timeout_seconds_per_symbol",
+        "owned_market_execution_required",
+        "caller_supplied_path_permitted",
+        "caller_supplied_bytes_permitted",
+        "market_access_permitted",
+        "outcome_access_permitted",
+        "future_stage_access_permitted",
+        "paid_api_access_permitted",
+        "external_network_access_permitted",
+        "reveal_request_consumption_permitted",
+        "consumption_ledger_mutation_permitted",
+        "effect_may_be_repeated_after_indeterminate_crash",
+        "claim_sha256",
+    }
+)
+_DEVELOPMENT_MARKET_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "development_content_root_plan_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "development_sec_execution_claim_sha256",
+        "development_sec_reader_receipt_sha256",
+        "market_acquisition_plan_sha256",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "market_component_id",
+        "acquisition_receipt_sha256",
+        "acquisition_bundle_sha256",
+        "acquisition_validation_sha256",
+        "source_manifest_sha256",
+        "market_stage_manifest_sha256",
+        "source_reconciliation_sha256",
+        "raw_response_sha256s",
+        "artifact_sha256s",
+        "window_sha256s",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
+        "complete_marker_sha256",
+        "fresh_network_provenance_claimed",
+        "provider_response_normalization_replayed_by_store",
+        "owned_transport_attested_by_store",
+        "reader_output_recomputed_by_store",
+        "receipt_sha256",
+    }
+)
+_DEVELOPMENT_MARKET_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "abort_kind",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "development_content_root_plan_sha256",
+        "authorized_stage",
+        "candidate_sha256",
+        "output_namespace",
+        "market_component_id",
+        "reason",
+        "external_effect_retry_permitted",
+        "abort_sha256",
+    }
+)
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -896,6 +1075,9 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "development_sec_execution_claims",
         "development_sec_reader_receipts",
         "development_sec_execution_aborts",
+        "development_market_execution_claims",
+        "development_market_reader_receipts",
+        "development_market_execution_aborts",
         "development_root_carry_in_reader_receipts",
         "stage_model_execution_claims",
         "stage_model_reader_receipts",
@@ -3052,6 +3234,547 @@ def _validated_development_sec_execution_aborts(
     return validated
 
 
+def _validated_development_market_acquisition_plan(
+    raw: Any,
+    *,
+    execution_source_hashes: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    plan = _mapping(raw, "development market acquisition plan")
+    _expect_keys(
+        plan,
+        frozenset(
+            {
+                "schema_version",
+                "provider_family",
+                "artifact_stage",
+                "request_window",
+                "requests",
+                "transport_authority",
+                "normalization_authority",
+                "source_code_sha256s",
+                "acquisition_plan_sha256",
+            }
+        ),
+        "development market acquisition plan",
+    )
+    try:
+        expected = _mapping(
+            build_development_market_acquisition_plan(),
+            "owned development market acquisition plan",
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development market acquisition plan cannot be reconstructed"
+        ) from exc
+    if plan != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market acquisition plan changed its exact authority"
+        )
+    source_code_hashes = _mapping(
+        plan["source_code_sha256s"],
+        "development market acquisition source hashes",
+    )
+    expected_source_paths = {path for path, _role in _MARKET_ACQUISITION_SOURCE_PATH_ROLES}
+    if set(source_code_hashes) != expected_source_paths:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market acquisition source closure is incomplete"
+        )
+    normalized_source_hashes = {
+        path: _sha256(
+            source_code_hashes[path],
+            f"development market acquisition source {path}",
+        )
+        for path, _role in _MARKET_ACQUISITION_SOURCE_PATH_ROLES
+    }
+    if plan["source_code_sha256s"] != normalized_source_hashes:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market acquisition source hashes are not canonical"
+        )
+    if execution_source_hashes is not None:
+        execution_sources = _mapping(
+            execution_source_hashes,
+            "development market execution source hashes for acquisition plan",
+        )
+        if any(
+            execution_sources.get(role) != normalized_source_hashes[path]
+            for path, role in _MARKET_ACQUISITION_SOURCE_PATH_ROLES
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market acquisition plan differs from its execution source closure"
+            )
+    return plan
+
+
+def _validated_market_symbol_sha256s(raw: Any, location: str) -> dict[str, str]:
+    values = _mapping(raw, location)
+    if set(values) != set(MARKET_SYMBOLS):
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must contain exactly the frozen market symbols"
+        )
+    return {
+        symbol: _sha256(values[symbol], f"{location}.{symbol}")
+        for symbol in MARKET_SYMBOLS
+    }
+
+
+def _expected_development_market_byte_layout() -> tuple[tuple[str, str], ...]:
+    layout: list[tuple[str, str]] = []
+    for symbol in MARKET_SYMBOLS:
+        layout.append(
+            (f"raw-response-{symbol}", f"raw-response-{symbol}.json")
+        )
+    for symbol in MARKET_SYMBOLS:
+        layout.append((f"artifact-{symbol}", f"artifact-{symbol}.json"))
+    for symbol in MARKET_SYMBOLS:
+        layout.append((f"window-{symbol}", f"window-{symbol}.json"))
+    layout.extend(
+        (
+            ("source-manifest", "source-manifest.json"),
+            ("stage-manifest", "stage-manifest.json"),
+            ("reconciliation-receipt", "reconciliation-receipt.json"),
+            ("acquisition-receipt", "acquisition-receipt.json"),
+        )
+    )
+    if len(layout) != len(MARKET_SYMBOLS) * 3 + 4:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market byte layout count changed"
+        )
+    return tuple(layout)
+
+
+def _validated_development_market_byte_index(
+    raw: Any,
+    *,
+    raw_response_sha256s: Mapping[str, str],
+    artifact_sha256s: Mapping[str, str],
+    window_sha256s: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    index = _validated_sec_byte_index(raw)
+    expected_layout = _expected_development_market_byte_layout()
+    observed_layout = tuple(
+        (item["logical_id"], item["relative_path"]) for item in index
+    )
+    logical_ids = [item["logical_id"].casefold() for item in index]
+    paths = [item["relative_path"].casefold() for item in index]
+    if (
+        observed_layout != expected_layout
+        or len(logical_ids) != len(set(logical_ids))
+        or len(paths) != len(set(paths))
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market byte index changed its exact ordered layout"
+        )
+
+    expected_hashes: dict[str, str] = {}
+    for symbol in MARKET_SYMBOLS:
+        expected_hashes[f"raw-response-{symbol}.json"] = raw_response_sha256s[
+            symbol
+        ]
+        expected_hashes[f"artifact-{symbol}.json"] = artifact_sha256s[symbol]
+        expected_hashes[f"window-{symbol}.json"] = window_sha256s[symbol]
+    if any(
+        item["sha256"] != expected_hashes[item["relative_path"]]
+        for item in index
+        if item["relative_path"] in expected_hashes
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market byte index crossed its symbol payload hashes"
+        )
+    return index
+
+
+_DEVELOPMENT_MARKET_MODEL_BINDING_FIELDS: Final[tuple[tuple[str, str], ...]] = (
+    ("development_market_acquisition_receipt_sha256", "acquisition_receipt_sha256"),
+    ("development_market_acquisition_bundle_sha256", "acquisition_bundle_sha256"),
+    (
+        "development_market_acquisition_validation_sha256",
+        "acquisition_validation_sha256",
+    ),
+    ("development_market_source_manifest_sha256", "source_manifest_sha256"),
+    (
+        "development_market_stage_manifest_sha256",
+        "market_stage_manifest_sha256",
+    ),
+    (
+        "development_market_source_reconciliation_sha256",
+        "source_reconciliation_sha256",
+    ),
+    ("development_market_byte_index_sha256", "byte_index_sha256"),
+)
+
+
+def _development_market_model_bindings(
+    *,
+    development_root_scope_sha256: str,
+    development_market_execution_claims: Mapping[str, Any],
+    development_market_reader_receipts: Mapping[str, Any],
+    development_market_execution_aborts: Mapping[str, Any],
+    location: str,
+) -> dict[str, str]:
+    scope_hash = _sha256(
+        development_root_scope_sha256,
+        f"{location} development root scope hash",
+    )
+    market_claim = development_market_execution_claims.get(scope_hash)
+    market_reader = development_market_reader_receipts.get(scope_hash)
+    if (
+        type(market_claim) is not dict
+        or type(market_reader) is not dict
+        or scope_hash in development_market_execution_aborts
+        or market_reader.get("development_root_scope_sha256") != scope_hash
+        or market_reader.get("claim_sha256") != market_claim.get("claim_sha256")
+        or market_reader.get("owned_transport_attested_by_store") is not True
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} requires exactly one successful, non-aborted, "
+            "store-attested development market claim and reader for its root"
+        )
+    bindings = {
+        "development_market_execution_claim_sha256": _sha256(
+            market_claim.get("claim_sha256"),
+            f"{location} development market claim hash",
+        ),
+        "development_market_reader_receipt_sha256": _sha256(
+            market_reader.get("receipt_sha256"),
+            f"{location} development market reader receipt hash",
+        ),
+    }
+    for model_field, reader_field in _DEVELOPMENT_MARKET_MODEL_BINDING_FIELDS:
+        bindings[model_field] = _sha256(
+            market_reader.get(reader_field),
+            f"{location} {reader_field}",
+        )
+    return bindings
+
+
+def _validated_development_market_execution_claims(
+    raw: Any,
+    *,
+    development_sec_execution_claims: Mapping[str, Any],
+    development_sec_reader_receipts: Mapping[str, Any],
+    development_sec_execution_aborts: Mapping[str, Any],
+    authenticated_store_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    claims = _mapping(raw, "current-tip development market execution claims")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_claim in claims.items():
+        scope_hash = _sha256(raw_scope_sha256, "development market claim map key")
+        claim = _mapping(raw_claim, f"development market execution claim {scope_hash}")
+        _expect_keys(
+            claim,
+            _DEVELOPMENT_MARKET_EXECUTION_CLAIM_KEYS,
+            f"development market execution claim {scope_hash}",
+        )
+        if (
+            claim["schema_version"] != DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION
+            or claim["contract_version"] != CONTRACT_VERSION
+            or claim["claim_kind"] != "owned_development_market_evidence_batch"
+            or claim["authorized_stage"] != "development"
+            or claim["market_component_id"] != DEVELOPMENT_MARKET_BATCH_COMPONENT_ID
+            or claim["source_family"] != MARKET_SOURCE_FAMILY
+            or claim["market_symbols"] != list(MARKET_SYMBOLS)
+            or claim["market_fields"] != list(MARKET_FIELDS)
+            or claim["fixed_request_count"] != YAHOO_REQUEST_COUNT
+            or claim["response_byte_ceiling_per_symbol"] != YAHOO_MAX_RESPONSE_BYTES
+            or claim["timeout_seconds_per_symbol"] != YAHOO_REQUEST_TIMEOUT_SECONDS
+            or claim["owned_market_execution_required"] is not True
+            or claim["caller_supplied_path_permitted"] is not False
+            or claim["caller_supplied_bytes_permitted"] is not False
+            or claim["market_access_permitted"] is not True
+            or claim["outcome_access_permitted"] is not False
+            or claim["future_stage_access_permitted"] is not False
+            or claim["paid_api_access_permitted"] is not False
+            or claim["external_network_access_permitted"] is not True
+            or claim["reveal_request_consumption_permitted"] is not False
+            or claim["consumption_ledger_mutation_permitted"] is not False
+            or claim["effect_may_be_repeated_after_indeterminate_crash"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution claim semantics changed"
+            )
+        _self_hash(claim, "claim_sha256", "development market execution claim")
+        for field in (
+            "development_root_scope_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "corpus_universe_sha256",
+            "corpus_universe_semantic_sha256",
+            "start_current_tip_anchor_sha256",
+            "start_state_sha256",
+            "start_consumption_ledger_sha256",
+            "start_consumption_ledger_tip_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "market_acquisition_plan_sha256",
+            "candidate_source_hashes_sha256",
+            "execution_source_hashes_sha256",
+        ):
+            _sha256(claim[field], f"development market claim {field}")
+        _safe_id(claim["attempt_id"], "development market attempt id")
+        _strict_int(claim["registered_entry_count"], "development market registry count", minimum=1)
+        _strict_int(claim["start_consumed_request_count"], "development market consumed request count")
+        if claim["development_root_scope_sha256"] != scope_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market claim crossed its root scope"
+            )
+        sec_claim = development_sec_execution_claims.get(scope_hash)
+        sec_reader = development_sec_reader_receipts.get(scope_hash)
+        if (
+            type(sec_claim) is not dict
+            or type(sec_reader) is not dict
+            or scope_hash in development_sec_execution_aborts
+            or claim["development_sec_execution_claim_sha256"]
+            != sec_claim.get("claim_sha256")
+            or claim["development_sec_reader_receipt_sha256"]
+            != sec_reader.get("receipt_sha256")
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market claim lacks exact terminal development SEC ancestry"
+            )
+        expected_ancestry = {
+            "development_content_root_plan_sha256": sec_claim.get(
+                "development_content_root_plan_sha256"
+            ),
+            "attempt_id": sec_claim.get("attempt_id"),
+            "candidate_sha256": sec_claim.get("candidate_sha256"),
+            "candidate_design_sha256": sec_claim.get("candidate_design_sha256"),
+            "registry_entry_sha256": sec_claim.get("registry_entry_sha256"),
+            "registry_sha256": sec_claim.get("registry_sha256"),
+            "registry_tip_sha256": sec_claim.get("registry_tip_sha256"),
+            "registered_entry_count": sec_claim.get("registered_entry_count"),
+            "corpus_universe_sha256": sec_claim.get("corpus_universe_sha256"),
+            "corpus_universe_semantic_sha256": sec_claim.get(
+                "corpus_universe_semantic_sha256"
+            ),
+            "output_namespace": sec_claim.get("output_namespace"),
+        }
+        if any(claim[field] != value for field, value in expected_ancestry.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market claim crossed its development SEC root"
+            )
+        sources_raw = _mapping(
+            claim["execution_source_hashes"],
+            "development market execution source hashes",
+        )
+        if set(sources_raw) != set(MARKET_EXECUTION_SOURCE_ROLES):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution source closure is incomplete"
+            )
+        sources = {
+            role: _sha256(sources_raw[role], f"development market source {role}")
+            for role in MARKET_EXECUTION_SOURCE_ROLES
+        }
+        if (
+            claim["execution_source_hashes"] != sources
+            or claim["execution_source_hashes_sha256"] != canonical_sha256(sources)
+            or claim["execution_source_role_count"] != len(sources)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution source closure is inconsistent"
+            )
+        plan = _validated_development_market_acquisition_plan(
+            claim["market_acquisition_plan"],
+            execution_source_hashes=sources,
+        )
+        if claim["market_acquisition_plan_sha256"] != plan["acquisition_plan_sha256"]:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market claim changed its acquisition-plan identity"
+            )
+        if authenticated_store_snapshot is not None:
+            state, registry_entry, candidate = _development_registered_candidate(
+                authenticated_store_snapshot,
+                plan=sec_claim["development_content_root_plan"],
+                require_latest=False,
+            )
+            candidate_sources = _mapping(
+                candidate["bindings"]["source_hashes"],
+                "development market candidate source hashes",
+            )
+            if (
+                claim["registry_entry_sha256"] != registry_entry["entry_sha256"]
+                or claim["candidate_source_hashes_sha256"]
+                != canonical_sha256(candidate_sources)
+                or any(candidate_sources.get(role) != digest for role, digest in sources.items())
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Development market claim crossed its registered candidate"
+                )
+        validated[scope_hash] = claim
+    return validated
+
+
+def _validated_development_market_reader_receipts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip development market reader receipts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_receipt in receipts.items():
+        scope_hash = _sha256(raw_scope_sha256, "development market reader map key")
+        receipt = _mapping(raw_receipt, f"development market reader receipt {scope_hash}")
+        _expect_keys(
+            receipt,
+            _DEVELOPMENT_MARKET_READER_RECEIPT_KEYS,
+            f"development market reader receipt {scope_hash}",
+        )
+        if (
+            receipt["schema_version"] != DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "store_rehashed_owned_development_market_evidence_batch"
+            or receipt["authorized_stage"] != "development"
+            or receipt["market_component_id"] != DEVELOPMENT_MARKET_BATCH_COMPONENT_ID
+            or receipt["fresh_network_provenance_claimed"] is not False
+            or receipt["provider_response_normalization_replayed_by_store"]
+            is not True
+            or receipt["owned_transport_attested_by_store"] is not True
+            or receipt["reader_output_recomputed_by_store"] is not True
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market reader receipt semantics changed"
+            )
+        _self_hash(receipt, "receipt_sha256", "development market reader receipt")
+        raw_hashes = _validated_market_symbol_sha256s(
+            receipt["raw_response_sha256s"], "development market raw response hashes"
+        )
+        artifact_hashes = _validated_market_symbol_sha256s(
+            receipt["artifact_sha256s"], "development market artifact hashes"
+        )
+        window_hashes = _validated_market_symbol_sha256s(
+            receipt["window_sha256s"], "development market window hashes"
+        )
+        index = _validated_development_market_byte_index(
+            receipt["byte_index"],
+            raw_response_sha256s=raw_hashes,
+            artifact_sha256s=artifact_hashes,
+            window_sha256s=window_hashes,
+        )
+        if (
+            receipt["byte_index"] != index
+            or receipt["byte_index_sha256"] != canonical_sha256(index)
+            or receipt["byte_count_total"] != sum(item["byte_count"] for item in index)
+            or receipt["raw_response_sha256s"] != raw_hashes
+            or receipt["artifact_sha256s"] != artifact_hashes
+            or receipt["window_sha256s"] != window_hashes
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market reader receipt evidence is inconsistent"
+            )
+        for field in (
+            "development_root_scope_sha256",
+            "claim_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+            "development_sec_execution_claim_sha256",
+            "development_sec_reader_receipt_sha256",
+            "market_acquisition_plan_sha256",
+            "execution_source_hashes_sha256",
+            "acquisition_receipt_sha256",
+            "acquisition_bundle_sha256",
+            "acquisition_validation_sha256",
+            "source_manifest_sha256",
+            "market_stage_manifest_sha256",
+            "source_reconciliation_sha256",
+            "byte_index_sha256",
+            "complete_marker_sha256",
+        ):
+            _sha256(receipt[field], f"development market reader {field}")
+        claim = claims.get(scope_hash)
+        expected = {
+            "development_root_scope_sha256": scope_hash,
+            "claim_sha256": claim.get("claim_sha256") if type(claim) is dict else None,
+            "development_content_root_plan_sha256": claim.get(
+                "development_content_root_plan_sha256"
+            ) if type(claim) is dict else None,
+            "authorized_stage": "development",
+            "candidate_sha256": claim.get("candidate_sha256") if type(claim) is dict else None,
+            "output_namespace": claim.get("output_namespace") if type(claim) is dict else None,
+            "development_sec_execution_claim_sha256": claim.get(
+                "development_sec_execution_claim_sha256"
+            ) if type(claim) is dict else None,
+            "development_sec_reader_receipt_sha256": claim.get(
+                "development_sec_reader_receipt_sha256"
+            ) if type(claim) is dict else None,
+            "market_acquisition_plan_sha256": claim.get(
+                "market_acquisition_plan_sha256"
+            ) if type(claim) is dict else None,
+            "execution_source_hashes_sha256": claim.get(
+                "execution_source_hashes_sha256"
+            ) if type(claim) is dict else None,
+            "execution_source_role_count": claim.get(
+                "execution_source_role_count"
+            ) if type(claim) is dict else None,
+            "market_component_id": DEVELOPMENT_MARKET_BATCH_COMPONENT_ID,
+        }
+        if type(claim) is not dict or any(
+            receipt[field] != value for field, value in expected.items()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market reader receipt crossed its execution claim"
+            )
+        validated[scope_hash] = receipt
+    return validated
+
+
+def _validated_development_market_execution_aborts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    aborts = _mapping(raw, "current-tip development market execution aborts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_abort in aborts.items():
+        scope_hash = _sha256(raw_scope_sha256, "development market abort map key")
+        abort = _mapping(raw_abort, f"development market execution abort {scope_hash}")
+        _expect_keys(
+            abort,
+            _DEVELOPMENT_MARKET_EXECUTION_ABORT_KEYS,
+            f"development market execution abort {scope_hash}",
+        )
+        if (
+            abort["schema_version"] != DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION
+            or abort["contract_version"] != CONTRACT_VERSION
+            or abort["abort_kind"] != "indeterminate_owned_development_market_evidence_batch"
+            or abort["authorized_stage"] != "development"
+            or abort["market_component_id"] != DEVELOPMENT_MARKET_BATCH_COMPONENT_ID
+            or abort["reason"] not in {
+                "claim_recovered_without_terminal_receipt",
+                "external_effect_failed_or_completion_unknown",
+                "durable_output_verification_failed",
+            }
+            or abort["external_effect_retry_permitted"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution abort semantics changed"
+            )
+        _self_hash(abort, "abort_sha256", "development market execution abort")
+        claim = claims.get(scope_hash)
+        expected = {
+            "development_root_scope_sha256": scope_hash,
+            "claim_sha256": claim.get("claim_sha256") if type(claim) is dict else None,
+            "development_content_root_plan_sha256": claim.get(
+                "development_content_root_plan_sha256"
+            ) if type(claim) is dict else None,
+            "authorized_stage": "development",
+            "candidate_sha256": claim.get("candidate_sha256") if type(claim) is dict else None,
+            "output_namespace": claim.get("output_namespace") if type(claim) is dict else None,
+            "market_component_id": DEVELOPMENT_MARKET_BATCH_COMPONENT_ID,
+        }
+        if type(claim) is not dict or any(
+            abort[field] != value for field, value in expected.items()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution abort crossed its claim"
+            )
+        validated[scope_hash] = abort
+    return validated
+
+
 def _validated_development_root_carry_in_reader_receipts(
     raw: Any,
     *,
@@ -3493,6 +4216,9 @@ def _validated_stage_model_execution_claims(
     development_sec_execution_claims: Mapping[str, Any],
     development_sec_reader_receipts: Mapping[str, Any],
     development_sec_execution_aborts: Mapping[str, Any],
+    development_market_execution_claims: Mapping[str, Any],
+    development_market_reader_receipts: Mapping[str, Any],
+    development_market_execution_aborts: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
     claims = _mapping(raw, "current-tip stage model execution claims")
     validated: dict[str, dict[str, Any]] = {}
@@ -3553,6 +4279,15 @@ def _validated_stage_model_execution_claims(
             "development_root_scope_sha256",
             "development_sec_execution_claim_sha256",
             "development_sec_reader_receipt_sha256",
+            "development_market_execution_claim_sha256",
+            "development_market_reader_receipt_sha256",
+            "development_market_acquisition_receipt_sha256",
+            "development_market_acquisition_bundle_sha256",
+            "development_market_acquisition_validation_sha256",
+            "development_market_source_manifest_sha256",
+            "development_market_stage_manifest_sha256",
+            "development_market_source_reconciliation_sha256",
+            "development_market_byte_index_sha256",
             "corpus_universe_sha256",
             "carry_in_reader_receipt_sha256",
             "sec_acquisition_accession_order_sha256",
@@ -3661,6 +4396,21 @@ def _validated_stage_model_execution_claims(
             grant=grant,
             candidate=candidate,
         )
+        market_bindings = _development_market_model_bindings(
+            development_root_scope_sha256=root_claim[
+                "development_root_scope_sha256"
+            ],
+            development_market_execution_claims=(
+                development_market_execution_claims
+            ),
+            development_market_reader_receipts=(
+                development_market_reader_receipts
+            ),
+            development_market_execution_aborts=(
+                development_market_execution_aborts
+            ),
+            location="Stage model execution claim",
+        )
         event_plan = _validated_model_event_plan(
             claim["event_plan"],
             universe_manifest=universe,
@@ -3722,6 +4472,7 @@ def _validated_stage_model_execution_claims(
             "development_sec_reader_receipt_sha256": root_reader[
                 "receipt_sha256"
             ],
+            **market_bindings,
             "corpus_universe_sha256": universe["universe_sha256"],
             "carry_in_kind": carry_kind,
             "carry_in_reader_receipt_sha256": carry["receipt_sha256"],
@@ -3800,6 +4551,15 @@ def _validated_stage_model_reader_receipts(
             "development_root_scope_sha256",
             "development_sec_execution_claim_sha256",
             "development_sec_reader_receipt_sha256",
+            "development_market_execution_claim_sha256",
+            "development_market_reader_receipt_sha256",
+            "development_market_acquisition_receipt_sha256",
+            "development_market_acquisition_bundle_sha256",
+            "development_market_acquisition_validation_sha256",
+            "development_market_source_manifest_sha256",
+            "development_market_stage_manifest_sha256",
+            "development_market_source_reconciliation_sha256",
+            "development_market_byte_index_sha256",
             "corpus_universe_sha256",
             "carry_in_reader_receipt_sha256",
             "sec_acquisition_accession_order_sha256",
@@ -3828,6 +4588,15 @@ def _validated_stage_model_reader_receipts(
             "development_root_scope_sha256",
             "development_sec_execution_claim_sha256",
             "development_sec_reader_receipt_sha256",
+            "development_market_execution_claim_sha256",
+            "development_market_reader_receipt_sha256",
+            "development_market_acquisition_receipt_sha256",
+            "development_market_acquisition_bundle_sha256",
+            "development_market_acquisition_validation_sha256",
+            "development_market_source_manifest_sha256",
+            "development_market_stage_manifest_sha256",
+            "development_market_source_reconciliation_sha256",
+            "development_market_byte_index_sha256",
             "corpus_universe_sha256",
             "carry_in_kind",
             "carry_in_reader_receipt_sha256",
@@ -3914,6 +4683,9 @@ def _validated_development_model_execution_claims(
     development_sec_execution_claims: Mapping[str, Any],
     development_sec_reader_receipts: Mapping[str, Any],
     development_sec_execution_aborts: Mapping[str, Any],
+    development_market_execution_claims: Mapping[str, Any],
+    development_market_reader_receipts: Mapping[str, Any],
+    development_market_execution_aborts: Mapping[str, Any],
     authenticated_store_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     claims = _mapping(raw, "current-tip development model execution claims")
@@ -3974,6 +4746,15 @@ def _validated_development_model_execution_claims(
             "start_current_tip_anchor_sha256",
             "development_sec_execution_claim_sha256",
             "development_sec_reader_receipt_sha256",
+            "development_market_execution_claim_sha256",
+            "development_market_reader_receipt_sha256",
+            "development_market_acquisition_receipt_sha256",
+            "development_market_acquisition_bundle_sha256",
+            "development_market_acquisition_validation_sha256",
+            "development_market_source_manifest_sha256",
+            "development_market_stage_manifest_sha256",
+            "development_market_source_reconciliation_sha256",
+            "development_market_byte_index_sha256",
             "sec_acquisition_accession_order_sha256",
             "event_plan_sha256",
             "identity_lexicon_sha256",
@@ -4040,6 +4821,19 @@ def _validated_development_model_execution_claims(
             raise SecFilingGemmaStageAuthorizationError(
                 "Development model execution claim lacks terminal development SEC ancestry"
             )
+        market_bindings = _development_market_model_bindings(
+            development_root_scope_sha256=scope_hash,
+            development_market_execution_claims=(
+                development_market_execution_claims
+            ),
+            development_market_reader_receipts=(
+                development_market_reader_receipts
+            ),
+            development_market_execution_aborts=(
+                development_market_execution_aborts
+            ),
+            location="Development model execution claim",
+        )
         plan = _validated_development_content_root_plan(
             sec_claim["development_content_root_plan"]
         )
@@ -4091,6 +4885,7 @@ def _validated_development_model_execution_claims(
             "development_sec_reader_receipt_sha256": sec_reader[
                 "receipt_sha256"
             ],
+            **market_bindings,
             "start_consumed_request_count": sec_claim[
                 "start_consumed_request_count"
             ],
@@ -4215,6 +5010,15 @@ def _validated_development_model_reader_receipts(
             "candidate_sha256",
             "development_sec_execution_claim_sha256",
             "development_sec_reader_receipt_sha256",
+            "development_market_execution_claim_sha256",
+            "development_market_reader_receipt_sha256",
+            "development_market_acquisition_receipt_sha256",
+            "development_market_acquisition_bundle_sha256",
+            "development_market_acquisition_validation_sha256",
+            "development_market_source_manifest_sha256",
+            "development_market_stage_manifest_sha256",
+            "development_market_source_reconciliation_sha256",
+            "development_market_byte_index_sha256",
             "sec_acquisition_accession_order_sha256",
             "event_plan_sha256",
             "identity_lexicon_sha256",
@@ -4239,6 +5043,15 @@ def _validated_development_model_reader_receipts(
             "output_namespace",
             "development_sec_execution_claim_sha256",
             "development_sec_reader_receipt_sha256",
+            "development_market_execution_claim_sha256",
+            "development_market_reader_receipt_sha256",
+            "development_market_acquisition_receipt_sha256",
+            "development_market_acquisition_bundle_sha256",
+            "development_market_acquisition_validation_sha256",
+            "development_market_source_manifest_sha256",
+            "development_market_stage_manifest_sha256",
+            "development_market_source_reconciliation_sha256",
+            "development_market_byte_index_sha256",
             "sec_document_count",
             "sec_acquisition_accession_order_sha256",
             "event_count",
@@ -4407,6 +5220,32 @@ def validate_reveal_store_current_tip_anchor_structure(
             claims=anchor["development_sec_execution_claims"],
         )
     )
+    anchor["development_market_execution_claims"] = (
+        _validated_development_market_execution_claims(
+            anchor["development_market_execution_claims"],
+            development_sec_execution_claims=anchor[
+                "development_sec_execution_claims"
+            ],
+            development_sec_reader_receipts=anchor[
+                "development_sec_reader_receipts"
+            ],
+            development_sec_execution_aborts=anchor[
+                "development_sec_execution_aborts"
+            ],
+        )
+    )
+    anchor["development_market_reader_receipts"] = (
+        _validated_development_market_reader_receipts(
+            anchor["development_market_reader_receipts"],
+            claims=anchor["development_market_execution_claims"],
+        )
+    )
+    anchor["development_market_execution_aborts"] = (
+        _validated_development_market_execution_aborts(
+            anchor["development_market_execution_aborts"],
+            claims=anchor["development_market_execution_claims"],
+        )
+    )
     anchor["consumed_stage_output_receipts"] = (
         _validated_consumed_stage_output_receipts(
             anchor["consumed_stage_output_receipts"],
@@ -4465,6 +5304,15 @@ def validate_reveal_store_current_tip_anchor_structure(
             development_sec_execution_aborts=anchor[
                 "development_sec_execution_aborts"
             ],
+            development_market_execution_claims=anchor[
+                "development_market_execution_claims"
+            ],
+            development_market_reader_receipts=anchor[
+                "development_market_reader_receipts"
+            ],
+            development_market_execution_aborts=anchor[
+                "development_market_execution_aborts"
+            ],
         )
     )
     anchor["stage_model_reader_receipts"] = (
@@ -4490,6 +5338,15 @@ def validate_reveal_store_current_tip_anchor_structure(
             ],
             development_sec_execution_aborts=anchor[
                 "development_sec_execution_aborts"
+            ],
+            development_market_execution_claims=anchor[
+                "development_market_execution_claims"
+            ],
+            development_market_reader_receipts=anchor[
+                "development_market_reader_receipts"
+            ],
+            development_market_execution_aborts=anchor[
+                "development_market_execution_aborts"
             ],
         )
     )
@@ -4522,6 +5379,12 @@ def validate_reveal_store_current_tip_anchor_structure(
     ):
         raise SecFilingGemmaStageAuthorizationError(
             "Development SEC execution cannot be both completed and aborted"
+        )
+    if set(anchor["development_market_reader_receipts"]) & set(
+        anchor["development_market_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution cannot be both completed and aborted"
         )
     if set(anchor["stage_model_reader_receipts"]) & set(
         anchor["stage_model_execution_aborts"]
@@ -4571,6 +5434,24 @@ def validate_reveal_store_current_tip_anchor_structure(
         raise SecFilingGemmaStageAuthorizationError(
             "SEC and model effects cannot be globally active together"
         )
+    active_development_market_claims = set(
+        anchor["development_market_execution_claims"]
+    ) - set(anchor["development_market_reader_receipts"]) - set(
+        anchor["development_market_execution_aborts"]
+    )
+    if len(active_development_market_claims) > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one market execution claim may be globally active"
+        )
+    if active_development_market_claims and (
+        active_stage_claims
+        or active_development_claims
+        or active_stage_model_claims
+        or active_development_model_claims
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Market, SEC, and model effects cannot be globally active together"
+        )
     _self_hash(anchor, "tip_anchor_sha256", "independent current-tip anchor")
     return anchor
 
@@ -4590,6 +5471,9 @@ def build_reveal_store_current_tip_anchor(
     development_sec_execution_claims: Mapping[str, Any] | None = None,
     development_sec_reader_receipts: Mapping[str, Any] | None = None,
     development_sec_execution_aborts: Mapping[str, Any] | None = None,
+    development_market_execution_claims: Mapping[str, Any] | None = None,
+    development_market_reader_receipts: Mapping[str, Any] | None = None,
+    development_market_execution_aborts: Mapping[str, Any] | None = None,
     development_root_carry_in_reader_receipts: Mapping[str, Any] | None = None,
     stage_model_execution_claims: Mapping[str, Any] | None = None,
     stage_model_reader_receipts: Mapping[str, Any] | None = None,
@@ -4660,6 +5544,46 @@ def build_reveal_store_current_tip_anchor(
         raise SecFilingGemmaStageAuthorizationError(
             "Development SEC execution cannot be both completed and aborted"
         )
+    development_market_claims = _validated_development_market_execution_claims(
+        (
+            {}
+            if development_market_execution_claims is None
+            else development_market_execution_claims
+        ),
+        development_sec_execution_claims=development_claims,
+        development_sec_reader_receipts=development_receipts,
+        development_sec_execution_aborts=development_aborts,
+        authenticated_store_snapshot=state,
+    )
+    development_market_receipts = _validated_development_market_reader_receipts(
+        (
+            {}
+            if development_market_reader_receipts is None
+            else development_market_reader_receipts
+        ),
+        claims=development_market_claims,
+    )
+    development_market_aborts = _validated_development_market_execution_aborts(
+        (
+            {}
+            if development_market_execution_aborts is None
+            else development_market_execution_aborts
+        ),
+        claims=development_market_claims,
+    )
+    if set(development_market_receipts) & set(development_market_aborts):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution cannot be both completed and aborted"
+        )
+    active_market_count = len(
+        set(development_market_claims)
+        - set(development_market_receipts)
+        - set(development_market_aborts)
+    )
+    if active_market_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one market execution claim may be globally active"
+        )
     active_stage_claim_count = len(
         set(sec_claims) - set(sec_receipts) - set(sec_aborts)
     )
@@ -4725,6 +5649,9 @@ def build_reveal_store_current_tip_anchor(
         development_sec_execution_claims=development_claims,
         development_sec_reader_receipts=development_receipts,
         development_sec_execution_aborts=development_aborts,
+        development_market_execution_claims=development_market_claims,
+        development_market_reader_receipts=development_market_receipts,
+        development_market_execution_aborts=development_market_aborts,
     )
     model_receipts = _validated_stage_model_reader_receipts(
         {} if stage_model_reader_receipts is None else stage_model_reader_receipts,
@@ -4747,6 +5674,9 @@ def build_reveal_store_current_tip_anchor(
         development_sec_execution_claims=development_claims,
         development_sec_reader_receipts=development_receipts,
         development_sec_execution_aborts=development_aborts,
+        development_market_execution_claims=development_market_claims,
+        development_market_reader_receipts=development_market_receipts,
+        development_market_execution_aborts=development_market_aborts,
         authenticated_store_snapshot=state,
     )
     development_model_receipts = _validated_development_model_reader_receipts(
@@ -4786,6 +5716,12 @@ def build_reveal_store_current_tip_anchor(
         raise SecFilingGemmaStageAuthorizationError(
             "SEC and model effects cannot be globally active together"
         )
+    if active_market_count and (
+        active_model_count + active_stage_claim_count + active_development_claim_count
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Market, SEC, and model effects cannot be globally active together"
+        )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -4810,6 +5746,9 @@ def build_reveal_store_current_tip_anchor(
         "development_sec_execution_claims": development_claims,
         "development_sec_reader_receipts": development_receipts,
         "development_sec_execution_aborts": development_aborts,
+        "development_market_execution_claims": development_market_claims,
+        "development_market_reader_receipts": development_market_receipts,
+        "development_market_execution_aborts": development_market_aborts,
         "development_root_carry_in_reader_receipts": (
             development_root_carry_in_receipts
         ),
@@ -5137,6 +6076,231 @@ def validate_reveal_store_current_tip_anchor_transition(
     ):
         raise SecFilingGemmaStageAuthorizationError(
             "Non-carry-in transition changed development-root carry-in membership"
+        )
+
+    prior_market_claims = prior["development_market_execution_claims"]
+    next_market_claims = next_anchor["development_market_execution_claims"]
+    prior_market_receipts = prior["development_market_reader_receipts"]
+    next_market_receipts = next_anchor["development_market_reader_receipts"]
+    prior_market_aborts = prior["development_market_execution_aborts"]
+    next_market_aborts = next_anchor["development_market_execution_aborts"]
+    for prior_map, next_map, label in (
+        (
+            prior_market_claims,
+            next_market_claims,
+            "development market execution claim",
+        ),
+        (
+            prior_market_receipts,
+            next_market_receipts,
+            "development market reader receipt",
+        ),
+        (
+            prior_market_aborts,
+            next_market_aborts,
+            "development market execution abort",
+        ),
+    ):
+        if any(next_map.get(key) != value for key, value in prior_map.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                f"Current-tip transition removed or changed a persisted {label}"
+            )
+    market_claim_delta = len(next_market_claims) - len(prior_market_claims)
+    market_reader_delta = len(next_market_receipts) - len(prior_market_receipts)
+    market_abort_delta = len(next_market_aborts) - len(prior_market_aborts)
+    if any(
+        delta not in {0, 1}
+        for delta in (
+            market_claim_delta,
+            market_reader_delta,
+            market_abort_delta,
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one development market execution artifact"
+        )
+    market_delta_count = (
+        market_claim_delta + market_reader_delta + market_abort_delta
+    )
+    if market_delta_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market claim, reader receipt, and abort require separate transitions"
+        )
+    non_market_map_names = (
+        "trusted_stage_content_pins",
+        "authorization_bundles",
+        "consumed_stage_output_receipts",
+        "stage_carry_in_reader_receipts",
+        "stage_sec_execution_claims",
+        "stage_sec_reader_receipts",
+        "stage_sec_execution_aborts",
+        "development_sec_execution_claims",
+        "development_sec_reader_receipts",
+        "development_sec_execution_aborts",
+        "development_root_carry_in_reader_receipts",
+        "stage_model_execution_claims",
+        "stage_model_reader_receipts",
+        "stage_model_execution_aborts",
+        "development_model_execution_claims",
+        "development_model_reader_receipts",
+        "development_model_execution_aborts",
+    )
+    non_market_maps_unchanged = all(
+        next_anchor[name] == prior[name] for name in non_market_map_names
+    )
+    prior_active_market = set(prior_market_claims) - set(
+        prior_market_receipts
+    ) - set(prior_market_aborts)
+    if prior_active_market:
+        active_scope = next(iter(prior_active_market))
+        terminal_scope: str | None = None
+        if market_reader_delta:
+            terminal_scope = next(
+                iter(set(next_market_receipts) - set(prior_market_receipts))
+            )
+        elif market_abort_delta:
+            terminal_scope = next(
+                iter(set(next_market_aborts) - set(prior_market_aborts))
+            )
+        if (
+            market_claim_delta
+            or market_delta_count != 1
+            or terminal_scope != active_scope
+            or not non_market_maps_unchanged
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Active development market execution claim blocks every transition except its exact terminal receipt"
+            )
+    if market_delta_count:
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if not non_market_maps_unchanged:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market artifact append must be a dedicated tip-only transition"
+            )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market artifact append changed authenticated store state"
+            )
+    if market_claim_delta:
+        scope_hash = next(
+            iter(set(next_market_claims) - set(prior_market_claims))
+        )
+        claim = next_market_claims[scope_hash]
+        current_bindings = {
+            "development_root_scope_sha256": scope_hash,
+            "start_current_tip_anchor_sha256": prior["tip_anchor_sha256"],
+            "start_state_sha256": prior["state_sha256"],
+            "start_consumption_ledger_sha256": prior[
+                "consumption_ledger_sha256"
+            ],
+            "start_consumption_ledger_tip_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "start_consumed_request_count": prior["consumed_request_count"],
+        }
+        if (
+            scope_hash not in prior["development_sec_execution_claims"]
+            or scope_hash not in prior["development_sec_reader_receipts"]
+            or scope_hash in prior["development_sec_execution_aborts"]
+            or any(
+                claim[field] != expected
+                for field, expected in current_bindings.items()
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution claim does not bind terminal SEC root ancestry at the exact current tip"
+            )
+        if authenticated_store_snapshot is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market claim transition requires the authenticated prior store snapshot"
+            )
+        validate_reveal_store_current_tip_anchor(
+            authenticated_store_snapshot,
+            prior,
+        )
+        expected_claim = build_development_market_execution_claim(
+            authenticated_store_snapshot,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=prior,
+            market_acquisition_plan=claim["market_acquisition_plan"],
+            execution_source_hashes=claim["execution_source_hashes"],
+        )
+        if claim != expected_claim:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market execution claim differs from its exact candidate-bound owned plan"
+            )
+    if market_reader_delta:
+        scope_hash = next(
+            iter(set(next_market_receipts) - set(prior_market_receipts))
+        )
+        receipt = next_market_receipts[scope_hash]
+        claim = prior_market_claims.get(scope_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market reader receipt lacks its prior execution claim"
+            )
+        expected_receipt = build_development_market_reader_receipt(
+            claim,
+            acquisition_receipt_sha256=receipt["acquisition_receipt_sha256"],
+            acquisition_bundle_sha256=receipt["acquisition_bundle_sha256"],
+            acquisition_validation_sha256=receipt[
+                "acquisition_validation_sha256"
+            ],
+            source_manifest_sha256=receipt["source_manifest_sha256"],
+            market_stage_manifest_sha256=receipt[
+                "market_stage_manifest_sha256"
+            ],
+            source_reconciliation_sha256=receipt[
+                "source_reconciliation_sha256"
+            ],
+            raw_response_sha256s=receipt["raw_response_sha256s"],
+            artifact_sha256s=receipt["artifact_sha256s"],
+            window_sha256s=receipt["window_sha256s"],
+            byte_index=receipt["byte_index"],
+            complete_marker_sha256=receipt["complete_marker_sha256"],
+            owned_transport_attested_by_store=receipt[
+                "owned_transport_attested_by_store"
+            ],
+        )
+        if receipt != expected_receipt:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market reader receipt differs from its exact durable artifact closure"
+            )
+    if market_abort_delta:
+        scope_hash = next(iter(set(next_market_aborts) - set(prior_market_aborts)))
+        abort = next_market_aborts[scope_hash]
+        claim = prior_market_claims.get(scope_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market abort lacks its prior execution claim"
+            )
+        expected_abort = build_development_market_execution_abort(
+            claim,
+            reason=abort["reason"],
+        )
+        if abort != expected_abort:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development market abort differs from its exact no-retry terminal"
+            )
+    if not market_delta_count and any(
+        set(next_anchor[name]) != set(prior[name])
+        for name in (
+            "development_market_execution_claims",
+            "development_market_reader_receipts",
+            "development_market_execution_aborts",
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Non-market transition changed development market execution membership"
         )
 
     prior_model_claims = prior["stage_model_execution_claims"]
@@ -5714,6 +6878,15 @@ def validate_reveal_store_current_tip_anchor(
         ],
         development_sec_execution_aborts=observed[
             "development_sec_execution_aborts"
+        ],
+        development_market_execution_claims=observed[
+            "development_market_execution_claims"
+        ],
+        development_market_reader_receipts=observed[
+            "development_market_reader_receipts"
+        ],
+        development_market_execution_aborts=observed[
+            "development_market_execution_aborts"
         ],
         development_root_carry_in_reader_receipts=observed[
             "development_root_carry_in_reader_receipts"
@@ -6419,6 +7592,471 @@ def build_development_sec_execution_abort(
     return {**body, "abort_sha256": canonical_sha256(body)}
 
 
+def build_development_market_execution_claim(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    independent_current_tip_anchor: Mapping[str, Any],
+    market_acquisition_plan: Mapping[str, Any],
+    execution_source_hashes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Claim the six-call development market effect after its terminal SEC root."""
+
+    state, ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    current_tip = validate_reveal_store_current_tip_anchor(
+        state,
+        independent_current_tip_anchor,
+    )
+    scope_hash = _sha256(
+        development_root_scope_sha256,
+        "development market root scope hash",
+    )
+    sec_claim = current_tip["development_sec_execution_claims"].get(scope_hash)
+    sec_reader = current_tip["development_sec_reader_receipts"].get(scope_hash)
+    if (
+        type(sec_claim) is not dict
+        or type(sec_reader) is not dict
+        or scope_hash in current_tip["development_sec_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution requires one terminal development SEC reader"
+        )
+    if scope_hash in current_tip["development_market_execution_claims"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution is already claimed"
+        )
+    if current_tip["consumed_request_count"] != sec_claim[
+        "start_consumed_request_count"
+    ]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution must precede reveal-request consumption"
+        )
+
+    active_sec = set(current_tip["stage_sec_execution_claims"]) - set(
+        current_tip["stage_sec_reader_receipts"]
+    ) - set(current_tip["stage_sec_execution_aborts"])
+    active_development_sec = set(
+        current_tip["development_sec_execution_claims"]
+    ) - set(current_tip["development_sec_reader_receipts"]) - set(
+        current_tip["development_sec_execution_aborts"]
+    )
+    active_model = set(current_tip["stage_model_execution_claims"]) - set(
+        current_tip["stage_model_reader_receipts"]
+    ) - set(current_tip["stage_model_execution_aborts"])
+    active_development_model = set(
+        current_tip["development_model_execution_claims"]
+    ) - set(current_tip["development_model_reader_receipts"]) - set(
+        current_tip["development_model_execution_aborts"]
+    )
+    active_market = set(
+        current_tip["development_market_execution_claims"]
+    ) - set(current_tip["development_market_reader_receipts"]) - set(
+        current_tip["development_market_execution_aborts"]
+    )
+    if (
+        active_sec
+        or active_development_sec
+        or active_model
+        or active_development_model
+        or active_market
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Another owned external effect is already active"
+        )
+
+    plan = _validated_development_market_acquisition_plan(
+        market_acquisition_plan,
+        execution_source_hashes=execution_source_hashes,
+    )
+    content_root_plan = _validated_development_content_root_plan(
+        sec_claim["development_content_root_plan"]
+    )
+    _state, registry_entry, candidate = _development_registered_candidate(
+        state,
+        plan=content_root_plan,
+        require_latest=False,
+    )
+    raw_sources = _mapping(
+        execution_source_hashes,
+        "owned development market execution source hashes",
+    )
+    if set(raw_sources) != set(MARKET_EXECUTION_SOURCE_ROLES):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development market execution source closure is incomplete"
+        )
+    sources = {
+        role: _sha256(
+            raw_sources[role],
+            f"owned development market execution source hash {role}",
+        )
+        for role in MARKET_EXECUTION_SOURCE_ROLES
+    }
+    candidate_sources = _mapping(
+        candidate["bindings"]["source_hashes"],
+        "development market candidate source hashes",
+    )
+    if any(candidate_sources.get(role) != value for role, value in sources.items()):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development market execution bytes differ from the registered candidate"
+        )
+    if any(
+        sources[role] != plan["source_code_sha256s"][path]
+        for path, role in _MARKET_ACQUISITION_SOURCE_PATH_ROLES
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development market plan differs from its candidate-bound source closure"
+        )
+
+    body = {
+        "schema_version": DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "claim_kind": "owned_development_market_evidence_batch",
+        "development_root_scope_sha256": scope_hash,
+        "development_content_root_plan_sha256": sec_claim[
+            "development_content_root_plan_sha256"
+        ],
+        "attempt_id": sec_claim["attempt_id"],
+        "candidate_sha256": sec_claim["candidate_sha256"],
+        "candidate_design_sha256": sec_claim["candidate_design_sha256"],
+        "registry_entry_sha256": registry_entry["entry_sha256"],
+        "registry_sha256": sec_claim["registry_sha256"],
+        "registry_tip_sha256": sec_claim["registry_tip_sha256"],
+        "registered_entry_count": sec_claim["registered_entry_count"],
+        "corpus_universe_sha256": sec_claim["corpus_universe_sha256"],
+        "corpus_universe_semantic_sha256": sec_claim[
+            "corpus_universe_semantic_sha256"
+        ],
+        "authorized_stage": "development",
+        "output_namespace": sec_claim["output_namespace"],
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "start_state_sha256": state["state_sha256"],
+        "start_consumption_ledger_sha256": ledger["ledger_sha256"],
+        "start_consumption_ledger_tip_sha256": ledger["chain"]["tip_sha256"],
+        "start_consumed_request_count": ledger["chain"][
+            "consumed_request_count"
+        ],
+        "development_sec_execution_claim_sha256": sec_claim["claim_sha256"],
+        "development_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        "market_acquisition_plan": plan,
+        "market_acquisition_plan_sha256": plan["acquisition_plan_sha256"],
+        "candidate_source_hashes_sha256": canonical_sha256(candidate_sources),
+        "execution_source_hashes": sources,
+        "execution_source_hashes_sha256": canonical_sha256(sources),
+        "execution_source_role_count": len(sources),
+        "market_component_id": DEVELOPMENT_MARKET_BATCH_COMPONENT_ID,
+        "source_family": MARKET_SOURCE_FAMILY,
+        "market_symbols": list(MARKET_SYMBOLS),
+        "market_fields": list(MARKET_FIELDS),
+        "fixed_request_count": YAHOO_REQUEST_COUNT,
+        "response_byte_ceiling_per_symbol": YAHOO_MAX_RESPONSE_BYTES,
+        "timeout_seconds_per_symbol": YAHOO_REQUEST_TIMEOUT_SECONDS,
+        "owned_market_execution_required": True,
+        "caller_supplied_path_permitted": False,
+        "caller_supplied_bytes_permitted": False,
+        "market_access_permitted": True,
+        "outcome_access_permitted": False,
+        "future_stage_access_permitted": False,
+        "paid_api_access_permitted": False,
+        "external_network_access_permitted": True,
+        "reveal_request_consumption_permitted": False,
+        "consumption_ledger_mutation_permitted": False,
+        "effect_may_be_repeated_after_indeterminate_crash": False,
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def build_development_market_reader_receipt(
+    claim: Mapping[str, Any],
+    *,
+    acquisition_receipt_sha256: str,
+    acquisition_bundle_sha256: str,
+    acquisition_validation_sha256: str,
+    source_manifest_sha256: str,
+    market_stage_manifest_sha256: str,
+    source_reconciliation_sha256: str,
+    raw_response_sha256s: Mapping[str, Any],
+    artifact_sha256s: Mapping[str, Any],
+    window_sha256s: Mapping[str, Any],
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+    owned_transport_attested_by_store: bool,
+) -> dict[str, Any]:
+    """Bind store-rehashed market artifacts and provenance to one claim."""
+
+    claim_value = _mapping(claim, "development market reader receipt claim")
+    scope_hash = _sha256(
+        claim_value.get("development_root_scope_sha256"),
+        "development market reader receipt scope hash",
+    )
+    _expect_keys(
+        claim_value,
+        _DEVELOPMENT_MARKET_EXECUTION_CLAIM_KEYS,
+        "development market reader receipt claim",
+    )
+    _self_hash(
+        claim_value,
+        "claim_sha256",
+        "development market reader receipt claim",
+    )
+    if owned_transport_attested_by_store is not True:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market reader requires owned transport attestation"
+        )
+    raw_hashes = _validated_market_symbol_sha256s(
+        raw_response_sha256s,
+        "development market raw response hashes",
+    )
+    artifact_hashes = _validated_market_symbol_sha256s(
+        artifact_sha256s,
+        "development market artifact hashes",
+    )
+    window_hashes = _validated_market_symbol_sha256s(
+        window_sha256s,
+        "development market window hashes",
+    )
+    acquisition_receipt_hash = _sha256(
+        acquisition_receipt_sha256,
+        "development market acquisition receipt hash",
+    )
+    source_manifest_hash = _sha256(
+        source_manifest_sha256,
+        "development market source manifest hash",
+    )
+    market_stage_manifest_hash = _sha256(
+        market_stage_manifest_sha256,
+        "development market stage manifest hash",
+    )
+    source_reconciliation_hash = _sha256(
+        source_reconciliation_sha256,
+        "development market source reconciliation hash",
+    )
+    index = _validated_development_market_byte_index(
+        byte_index,
+        raw_response_sha256s=raw_hashes,
+        artifact_sha256s=artifact_hashes,
+        window_sha256s=window_hashes,
+    )
+    body = {
+        "schema_version": DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "store_rehashed_owned_development_market_evidence_batch",
+        "development_root_scope_sha256": scope_hash,
+        "claim_sha256": claim_value["claim_sha256"],
+        "development_content_root_plan_sha256": claim_value[
+            "development_content_root_plan_sha256"
+        ],
+        "authorized_stage": "development",
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "development_sec_execution_claim_sha256": claim_value[
+            "development_sec_execution_claim_sha256"
+        ],
+        "development_sec_reader_receipt_sha256": claim_value[
+            "development_sec_reader_receipt_sha256"
+        ],
+        "market_acquisition_plan_sha256": claim_value[
+            "market_acquisition_plan_sha256"
+        ],
+        "execution_source_hashes_sha256": claim_value[
+            "execution_source_hashes_sha256"
+        ],
+        "execution_source_role_count": claim_value[
+            "execution_source_role_count"
+        ],
+        "market_component_id": DEVELOPMENT_MARKET_BATCH_COMPONENT_ID,
+        "acquisition_receipt_sha256": acquisition_receipt_hash,
+        "acquisition_bundle_sha256": _sha256(
+            acquisition_bundle_sha256,
+            "development market acquisition bundle hash",
+        ),
+        "acquisition_validation_sha256": _sha256(
+            acquisition_validation_sha256,
+            "development market acquisition validation hash",
+        ),
+        "source_manifest_sha256": source_manifest_hash,
+        "market_stage_manifest_sha256": market_stage_manifest_hash,
+        "source_reconciliation_sha256": source_reconciliation_hash,
+        "raw_response_sha256s": raw_hashes,
+        "artifact_sha256s": artifact_hashes,
+        "window_sha256s": window_hashes,
+        "byte_index": index,
+        "byte_index_sha256": canonical_sha256(index),
+        "byte_count_total": sum(item["byte_count"] for item in index),
+        "complete_marker_sha256": _sha256(
+            complete_marker_sha256,
+            "development market complete marker hash",
+        ),
+        "fresh_network_provenance_claimed": False,
+        "provider_response_normalization_replayed_by_store": True,
+        "owned_transport_attested_by_store": True,
+        "reader_output_recomputed_by_store": True,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_development_market_execution_abort(
+    claim: Mapping[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Terminally refuse retry after an indeterminate market network effect."""
+
+    claim_value = _mapping(claim, "development market execution abort claim")
+    _expect_keys(
+        claim_value,
+        _DEVELOPMENT_MARKET_EXECUTION_CLAIM_KEYS,
+        "development market execution abort claim",
+    )
+    _self_hash(
+        claim_value,
+        "claim_sha256",
+        "development market execution abort claim",
+    )
+    if reason not in {
+        "claim_recovered_without_terminal_receipt",
+        "external_effect_failed_or_completion_unknown",
+        "durable_output_verification_failed",
+    }:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution abort reason is not canonical"
+        )
+    body = {
+        "schema_version": DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "abort_kind": "indeterminate_owned_development_market_evidence_batch",
+        "development_root_scope_sha256": claim_value[
+            "development_root_scope_sha256"
+        ],
+        "claim_sha256": claim_value["claim_sha256"],
+        "development_content_root_plan_sha256": claim_value[
+            "development_content_root_plan_sha256"
+        ],
+        "authorized_stage": "development",
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "market_component_id": DEVELOPMENT_MARKET_BATCH_COMPONENT_ID,
+        "reason": reason,
+        "external_effect_retry_permitted": False,
+    }
+    return {**body, "abort_sha256": canonical_sha256(body)}
+
+
+def validate_development_market_execution_claim(
+    claim: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> str:
+    """Require exact current-tip membership for one development market claim."""
+
+    observed = _mapping(claim, "development market execution claim")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development market claim root scope hash",
+    )
+    if (
+        current_tip["development_market_execution_claims"].get(scope_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution claim is not exact at the current tip"
+        )
+    return _self_hash(
+        observed,
+        "claim_sha256",
+        "development market execution claim",
+    )
+
+
+def validate_development_market_reader_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+    acquisition_receipt_sha256: str,
+    acquisition_bundle_sha256: str,
+    acquisition_validation_sha256: str,
+    source_manifest_sha256: str,
+    market_stage_manifest_sha256: str,
+    source_reconciliation_sha256: str,
+    raw_response_sha256s: Mapping[str, Any],
+    artifact_sha256s: Mapping[str, Any],
+    window_sha256s: Mapping[str, Any],
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+    owned_transport_attested_by_store: bool,
+) -> str:
+    """Require exact membership and rehashed development market artifacts."""
+
+    observed = _mapping(receipt, "development market reader receipt")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development market reader root scope hash",
+    )
+    claim = current_tip["development_market_execution_claims"].get(scope_hash)
+    if (
+        type(claim) is not dict
+        or current_tip["development_market_reader_receipts"].get(scope_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market reader receipt is not exact at the current tip"
+        )
+    expected = build_development_market_reader_receipt(
+        claim,
+        acquisition_receipt_sha256=acquisition_receipt_sha256,
+        acquisition_bundle_sha256=acquisition_bundle_sha256,
+        acquisition_validation_sha256=acquisition_validation_sha256,
+        source_manifest_sha256=source_manifest_sha256,
+        market_stage_manifest_sha256=market_stage_manifest_sha256,
+        source_reconciliation_sha256=source_reconciliation_sha256,
+        raw_response_sha256s=raw_response_sha256s,
+        artifact_sha256s=artifact_sha256s,
+        window_sha256s=window_sha256s,
+        byte_index=byte_index,
+        complete_marker_sha256=complete_marker_sha256,
+        owned_transport_attested_by_store=owned_transport_attested_by_store,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market reader receipt differs from rehashed durable bytes"
+        )
+    return observed["receipt_sha256"]
+
+
+def validate_development_market_execution_abort(
+    abort: Mapping[str, Any],
+    *,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> str:
+    """Require exact current-tip membership for one development market abort."""
+
+    observed = _mapping(abort, "development market execution abort")
+    current_tip = validate_reveal_store_current_tip_anchor_structure(
+        independent_current_tip_anchor
+    )
+    scope_hash = _sha256(
+        observed.get("development_root_scope_sha256"),
+        "development market abort root scope hash",
+    )
+    if (
+        current_tip["development_market_execution_aborts"].get(scope_hash)
+        != observed
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development market execution abort is not exact at the current tip"
+        )
+    return _self_hash(
+        observed,
+        "abort_sha256",
+        "development market execution abort",
+    )
+
+
 def build_stage_sec_execution_claim(
     authorization_bundle: Mapping[str, Any],
     *,
@@ -6726,6 +8364,21 @@ def build_stage_model_execution_claim(
         grant=grant,
         candidate=candidate,
     )
+    market_bindings = _development_market_model_bindings(
+        development_root_scope_sha256=root_claim[
+            "development_root_scope_sha256"
+        ],
+        development_market_execution_claims=current_tip[
+            "development_market_execution_claims"
+        ],
+        development_market_reader_receipts=current_tip[
+            "development_market_reader_receipts"
+        ],
+        development_market_execution_aborts=current_tip[
+            "development_market_execution_aborts"
+        ],
+        location="Stage model execution",
+    )
     event_plan = _model_event_plan(
         universe_manifest=universe,
         stage=stage,
@@ -6755,7 +8408,18 @@ def build_stage_model_execution_claim(
     ) - set(current_tip["development_model_reader_receipts"]) - set(
         current_tip["development_model_execution_aborts"]
     )
-    if active_sec or active_development_sec or active_model or active_development_model:
+    active_market = set(
+        current_tip["development_market_execution_claims"]
+    ) - set(current_tip["development_market_reader_receipts"]) - set(
+        current_tip["development_market_execution_aborts"]
+    )
+    if (
+        active_sec
+        or active_development_sec
+        or active_model
+        or active_development_model
+        or active_market
+    ):
         raise SecFilingGemmaStageAuthorizationError(
             "Another owned external effect is already active"
         )
@@ -6815,6 +8479,7 @@ def build_stage_model_execution_claim(
         ],
         "development_sec_execution_claim_sha256": root_claim["claim_sha256"],
         "development_sec_reader_receipt_sha256": root_reader["receipt_sha256"],
+        **market_bindings,
         "corpus_universe_sha256": universe["universe_sha256"],
         "carry_in_kind": carry_kind,
         "carry_in_reader_receipt_sha256": carry["receipt_sha256"],
@@ -6888,6 +8553,33 @@ def build_stage_model_reader_receipt(
         ],
         "development_sec_reader_receipt_sha256": claim_value[
             "development_sec_reader_receipt_sha256"
+        ],
+        "development_market_execution_claim_sha256": claim_value[
+            "development_market_execution_claim_sha256"
+        ],
+        "development_market_reader_receipt_sha256": claim_value[
+            "development_market_reader_receipt_sha256"
+        ],
+        "development_market_acquisition_receipt_sha256": claim_value[
+            "development_market_acquisition_receipt_sha256"
+        ],
+        "development_market_acquisition_bundle_sha256": claim_value[
+            "development_market_acquisition_bundle_sha256"
+        ],
+        "development_market_acquisition_validation_sha256": claim_value[
+            "development_market_acquisition_validation_sha256"
+        ],
+        "development_market_source_manifest_sha256": claim_value[
+            "development_market_source_manifest_sha256"
+        ],
+        "development_market_stage_manifest_sha256": claim_value[
+            "development_market_stage_manifest_sha256"
+        ],
+        "development_market_source_reconciliation_sha256": claim_value[
+            "development_market_source_reconciliation_sha256"
+        ],
+        "development_market_byte_index_sha256": claim_value[
+            "development_market_byte_index_sha256"
         ],
         "corpus_universe_sha256": claim_value["corpus_universe_sha256"],
         "carry_in_kind": claim_value["carry_in_kind"],
@@ -6996,6 +8688,19 @@ def build_development_model_execution_claim(
         raise SecFilingGemmaStageAuthorizationError(
             "Development model execution requires one terminal development SEC reader"
         )
+    market_bindings = _development_market_model_bindings(
+        development_root_scope_sha256=scope_hash,
+        development_market_execution_claims=current_tip[
+            "development_market_execution_claims"
+        ],
+        development_market_reader_receipts=current_tip[
+            "development_market_reader_receipts"
+        ],
+        development_market_execution_aborts=current_tip[
+            "development_market_execution_aborts"
+        ],
+        location="Development model execution",
+    )
     if scope_hash in current_tip["development_model_execution_claims"]:
         raise SecFilingGemmaStageAuthorizationError(
             "Development model execution is already claimed"
@@ -7022,7 +8727,18 @@ def build_development_model_execution_claim(
     ) - set(current_tip["development_model_reader_receipts"]) - set(
         current_tip["development_model_execution_aborts"]
     )
-    if active_sec or active_development_sec or active_model or active_development_model:
+    active_market = set(
+        current_tip["development_market_execution_claims"]
+    ) - set(current_tip["development_market_reader_receipts"]) - set(
+        current_tip["development_market_execution_aborts"]
+    )
+    if (
+        active_sec
+        or active_development_sec
+        or active_model
+        or active_development_model
+        or active_market
+    ):
         raise SecFilingGemmaStageAuthorizationError(
             "Another owned external effect is already active"
         )
@@ -7112,6 +8828,7 @@ def build_development_model_execution_claim(
         "start_consumed_request_count": current_tip["consumed_request_count"],
         "development_sec_execution_claim_sha256": sec_claim["claim_sha256"],
         "development_sec_reader_receipt_sha256": sec_reader["receipt_sha256"],
+        **market_bindings,
         "sec_document_count": len(accessions),
         "sec_acquisition_accession_order": accessions,
         "sec_acquisition_accession_order_sha256": canonical_sha256(accessions),
@@ -7185,6 +8902,33 @@ def build_development_model_reader_receipt(
         ],
         "development_sec_reader_receipt_sha256": claim_value[
             "development_sec_reader_receipt_sha256"
+        ],
+        "development_market_execution_claim_sha256": claim_value[
+            "development_market_execution_claim_sha256"
+        ],
+        "development_market_reader_receipt_sha256": claim_value[
+            "development_market_reader_receipt_sha256"
+        ],
+        "development_market_acquisition_receipt_sha256": claim_value[
+            "development_market_acquisition_receipt_sha256"
+        ],
+        "development_market_acquisition_bundle_sha256": claim_value[
+            "development_market_acquisition_bundle_sha256"
+        ],
+        "development_market_acquisition_validation_sha256": claim_value[
+            "development_market_acquisition_validation_sha256"
+        ],
+        "development_market_source_manifest_sha256": claim_value[
+            "development_market_source_manifest_sha256"
+        ],
+        "development_market_stage_manifest_sha256": claim_value[
+            "development_market_stage_manifest_sha256"
+        ],
+        "development_market_source_reconciliation_sha256": claim_value[
+            "development_market_source_reconciliation_sha256"
+        ],
+        "development_market_byte_index_sha256": claim_value[
+            "development_market_byte_index_sha256"
         ],
         "sec_document_count": claim_value["sec_document_count"],
         "sec_acquisition_accession_order_sha256": claim_value[
@@ -8653,6 +10397,10 @@ __all__ = [
     "CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION",
     "DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID",
     "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
+    "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
+    "DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION",
+    "DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",
     "DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION",
@@ -8660,6 +10408,7 @@ __all__ = [
     "DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION",
     "DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION",
     "DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION",
+    "MARKET_EXECUTION_SOURCE_ROLES",
     "MODEL_EXECUTION_SOURCE_ROLES",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
     "OWNED_SEC_RAW_BATCH_MAX_BYTES",
@@ -8683,6 +10432,9 @@ __all__ = [
     "authenticate_reveal_store_trusted_stage_content_pin",
     "build_consumed_stage_authorization_grant",
     "build_consumed_stage_output_receipt",
+    "build_development_market_execution_abort",
+    "build_development_market_execution_claim",
+    "build_development_market_reader_receipt",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
     "build_development_sec_reader_receipt",
@@ -8703,6 +10455,9 @@ __all__ = [
     "validate_consumed_stage_authorization_grant",
     "validate_consumed_stage_output_receipt",
     "validate_consumed_stage_store_state_pin",
+    "validate_development_market_execution_abort",
+    "validate_development_market_execution_claim",
+    "validate_development_market_reader_receipt",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",
     "validate_development_model_execution_claim",

@@ -337,7 +337,7 @@ def test_source_byte_omission_mutation_and_cross_candidate_pin_fail_closed() -> 
         )
 
 
-def test_source_role_audit_uses_frozen_mapping_and_keeps_two_roles_unresolved() -> None:
+def test_source_role_audit_uses_frozen_mapping_and_keeps_ledger_unresolved() -> None:
     candidate, sources = _candidate_fixture()
     receipt = validate_candidate_source_role_audit(
         candidate_manifest=candidate,
@@ -346,11 +346,8 @@ def test_source_role_audit_uses_frozen_mapping_and_keeps_two_roles_unresolved() 
     )
     assert receipt["complete"] is False
     assert receipt["authorizes"] is False
-    assert receipt["unresolved_role_count"] == 2
-    assert receipt["unresolved_roles"] == [
-        "ledger",
-        "market_acquirer",
-    ]
+    assert receipt["unresolved_role_count"] == 1
+    assert receipt["unresolved_roles"] == ["ledger"]
 
 
 def test_runtime_source_audit_accepts_no_caller_paths_or_bytes(monkeypatch) -> None:

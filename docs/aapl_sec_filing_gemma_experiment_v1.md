@@ -647,10 +647,10 @@ At the current implementation checkpoint:
   uses a write-ahead pending transaction for state-plus-grant changes, and can
   return the exact persisted grant bundle on an identical crash retry without
   rerunning the verifier or consuming a request twice. Interrupted genesis
-  creation is also recoverable. Current-tip schema v5 stores append-only
+  creation is also recoverable. Current-tip schema v10 stores append-only
   request-keyed trusted-content pins, consumed-stage first-recorded-evidence
-  receipts, bounded SEC execution claims/reader receipts/terminal aborts, and
-  final-stage prior-same-form carry-in reader receipts.
+  receipts, bounded SEC, market, and model execution claims/reader receipts/
+  terminal aborts, and final-stage prior-same-form carry-in reader receipts.
   An active SEC claim blocks every registry, consumption, output, or competing
   execution transition until the store independently re-reads the exact granted
   layout and semantically replays every raw document, deterministic normalized
@@ -724,16 +724,17 @@ At the current implementation checkpoint:
   Missing, extra, linked, case-colliding, reordered, changed, reverse-
   chronological, or post-receipt-deleted artifacts fail closed without network
   access. Both carry receipt families set
-  `fresh_carry_in_provenance_claimed=false`, are not yet bound into an owned
-  preprocessor/model attempt or stage-evidence assembler, and do not enable
-  promotion. Like the stage-evidence receipt, each attests a sequence of
+  `fresh_carry_in_provenance_claimed=false`, are bound into the owned
+  preprocessor and model attempt, but not yet into the downstream feature,
+  learner, ledger, or stage-evidence assembler, and do not enable promotion.
+  Like the stage-evidence receipt, each attests a sequence of
   store-observed snapshots rather than making the same-user Windows namespace
   immutable; a later exact retry detects post-closure mutation;
 - the request-free development-content root plan derives all and only the
   2000-2018 development filings from the complete candidate-bound corpus
   universe. It embeds that exact universe for recovery, fixes a 64 MiB raw-byte
   ceiling, and grants no reveal-request, outcome, market, model, future-stage,
-  or consumption-ledger authority. Current-tip anchor version 8 includes
+  or consumption-ledger authority. Current-tip anchor version 10 includes
   separate append-only development claim, reader, and abort maps keyed by the root-scope
   hash plus the dedicated development-root carry receipt map keyed by the
   intermediate request. It permits only one globally active SEC effect across
@@ -752,8 +753,9 @@ At the current implementation checkpoint:
   failure after a valid marker leaves that marker recoverable without
   refetching. Together with the separate carry finalizer, this proves a durable
   pre-reveal training-corpus root and its exact intermediate carry-in, but not
-  yet the downstream preprocessing, Gemma, market, or stage-evidence ancestry;
-- current-tip version 8 also defines two separate append-only model-effect
+  yet the downstream feature, label, prediction, learner, ledger, or
+  stage-evidence ancestry;
+- current-tip version 10 also defines two separate append-only model-effect
   lifecycles. Development model claims are keyed by the request-free root scope,
   bind its terminal SEC root reader, and require no carry. Intermediate/final
   model claims are keyed by consumed request, bind the terminal child SEC reader
@@ -770,9 +772,10 @@ At the current implementation checkpoint:
   caller path, filing text, market, outcome, future-stage, paid-API, or external-
   network authority, and share a single globally active model-effect exclusion.
   Dedicated reader or terminal abort transitions are the only allowed successors
-  to an active model claim. These are pure authorization contracts only at this
-  checkpoint: the reveal store does not yet expose the owned claim/finalizer APIs,
-  and no model call has occurred;
+  to an active model claim. The reveal store and bounded runner now expose those
+  owned claim/finalizer paths, including marker-last sealing, semantic replay,
+  and terminal orphan handling. Offline tests use synthetic runtime output; no
+  real model call has occurred;
 - the fixed verifier now produces a version-6 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
@@ -792,7 +795,7 @@ At the current implementation checkpoint:
   access, context, audit, pin, entry, bundle, grant, parent output receipt,
   parent map membership or declared map hash, tip, and child identities. It
   does not independently authenticate unrelated entries in that supplied map;
-- source-identity receipt version 4 now checks the current regular files at the canonical
+- source-identity receipt version 5 now checks the current regular files at the canonical
   paths of modules that were already loaded; the audit refuses to import an
   absent module and accepts no caller-supplied root, path, or runtime bytes. Eleven
   previously omitted local dependencies are now separately pinned, and an AST
@@ -809,8 +812,12 @@ At the current implementation checkpoint:
   its canonical hash and applies the bounded executive-context grammar above.
   This still cannot prove that current disk bytes created
   every already-running Python code object or exclude monkeypatching, so a fresh
-  owned startup/import attestation remains blocked. Two conceptual owners remain
-  unresolved: ledger and market acquirer;
+  owned startup/import attestation remains blocked. One conceptual owner remains
+  unresolved: ledger. The fixed-provider development market acquirer now has a
+  distinct candidate-pinned source owner and a local reveal-store-owned claim,
+  reader, abort, and replay lifecycle. This does not externally attest the
+  network effect or a fresh process, and no owned canonical-market feature
+  assembler exists yet;
 - the pure preprocessor now builds and independently replays a canonical owned
   preprocessing receipt. It binds the development-root or stage-request scope,
   candidate and model claim, exact SEC/carry reader ancestry, event identity,
@@ -863,10 +870,11 @@ At the current implementation checkpoint:
   private and test-only. A noncanonical or invalid private SEC contact is rejected
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
-  no SEC request was made. `stage_access_identity` remains `BLOCKED` because
-  market acquisition, prediction sealing, learner output, and final
-  stage-evidence generation are not yet forced through owned components. The
-  model and carry-in paths are now owned and bound. The store no longer accepts
+  no SEC request was made. `stage_access_identity` remains `BLOCKED` because the
+  canonical-market feature/label assembler, prediction sealing, learner output,
+  ledger, and final stage-evidence generation are not yet forced through owned
+  components. The SEC, local market acquisition/replay, model, and carry-in paths
+  are now owned and cross-bound. The store no longer accepts
   a caller mapping at the output-receipt boundary, but a same-user process can
   still place coherently formed bytes in the fixed directory, so this milestone is
   durable replay rather than fresh end-to-end provenance. The owned SEC batch
@@ -877,9 +885,10 @@ At the current implementation checkpoint:
   load the store files, attest its executing Python code object, or turn the
   same mutable directory into an external trust domain;
 - stage-specific runtime receipts are structurally reconciled, but the final
-  all-stage summary remains diagnostic until the remaining owned market
-  transport, prediction/learner evidence, monotonic-time attestations, and
-  five-development-filing latency preflight exist;
+  all-stage summary remains diagnostic until the canonical-market assembler,
+  prediction/learner/ledger evidence, externally anchored process and
+  monotonic-time attestations, and five-development-filing latency preflight
+  exist;
 - the future verifier must derive the eligible universe from the sealed SEC
   catalogue, bind exact AAPL/SPY/QQQ/IWM/VIX/TNX input hashes, and prove that
   every training row is one exact matured filing event tied to its extraction
@@ -894,25 +903,67 @@ At the current implementation checkpoint:
 - no 2019-2023 confirmation result has been opened; and
 - no 2024, 2025, or 2026 holdout run or performance calculation has occurred.
 
-Market reconciliation currently proves the complete presealed canonical
-snapshot-to-stage transformation. It does not by itself prove where the
-snapshot came from; the production acquisition runner must also seal and bind
-the upstream provider response and its normalization receipt before the stage
-verifier may accept it.
+Market reconciliation now has a fixed development-only Yahoo Chart-v8
+raw-response-to-canonical-snapshot implementation in addition to the existing
+snapshot-to-stage replay. It uses six fixed unauthenticated zero-cost requests,
+no fallback, retry, redirect, proxy, cookie, cache, credential, compression, or
+paid call, enforces per-request and batch deadlines during bounded body reads,
+rejects duplicate, conflicting, or unsupported HTTP body framing, and preserves
+exact raw bytes plus deterministic normalization evidence. The request-free
+development market claim/reader/abort lifecycle is
+now implemented. It persists an exact 23-file, create-new, marker-last component;
+the reveal store independently reparses every provider response, snapshot,
+manifest, and reconciliation receipt before appending the reader receipt.
+A first reader receipt also requires a non-persisted, process-local, one-use
+sequencing witness created by the exact owned Yahoo transport path and bound to
+the claim plus all seven acquisition identities. This blocks accidental public-
+runner injection and recovery promotion, but normal Python introspection means
+it is not a security boundary against hostile same-process code and cannot
+authorize production. A synthetic bundle or prewritten completion marker cannot
+be promoted by the supported recovery path; an indeterminate first execution is
+terminally aborted. An already committed receipt remains replayable without
+another network call. Public runner output contains only the claim and reader
+receipt, never the provider body.
 
-The next implementation milestone is to bind each sealed model-attempt receipt
-into owned market reads, prediction sealing, learner fitting, and canonical
-stage-evidence assembly. A distinct zero-cost market acquirer must preserve
-upstream provider bytes
-and a deterministic normalization receipt. This is required to turn the
-partially authenticated SEC execution into complete authorized stage execution.
-The remainder of the
-authoritative raw-evidence chain must then rebuild preprocessing, extraction,
-feature rows, matured labels, and training membership from the replayed SEC
-catalogue and normalized document bytes; parse official calendar semantics;
-bind market-provider responses to the canonical snapshots; chain every
-artifact from genesis; and bind the development winner/output state to the
-intermediate learner input. A production trust domain must retain the current
+Offline tests patch the exact owned transport's fetch method with reviewed
+synthetic responses; no real price request has run. Provider bodies stay behind
+the verifier/store API contract, but the same-user directory is not OS/ACL
+isolation or an external trust boundary. The Gemma event-input contract accepts
+only normalized SEC text and fixed ancestry hashes, has
+`market_access_permitted = false`, and rejects extra input fields, so provider
+metadata is not serialized to Gemma. A future feature/prediction worker must
+receive only canonical dated market rows from a store-owned accessor, never the
+raw-response directory. The acquirer deliberately stops at 2018 and does not
+claim that a later Yahoo download can extend the prefix byte-for-byte, because
+adjusted-close history can be revised. Before live extension, the development
+dataset must be globally versioned and sealed so different candidates cannot
+silently reacquire different adjusted histories.
+
+The current `urllib` timeout is an inactivity timeout for DNS, connection, TLS,
+and response-header phases; only response-body reads enforce the shrinking
+absolute deadline directly. Therefore `trusted_production_transport=true` means
+that the owned transport path was selected inside this process, not that an
+external network occurrence or hard wall-clock deadline was independently
+attested. Any authorizing live version requires a cancellable fresh worker or
+process/IPC boundary plus external receipt and tip anchoring.
+
+Development, intermediate, and final Gemma execution claims now require the
+same-root successful, non-aborted, store-attested market reader and bind its
+claim, receipt, acquisition, manifest, reconciliation, and byte-index hashes.
+This freezes the experiment ancestry without granting Gemma market access.
+Promotion remains false: the detached stage verifier can still accept
+caller-supplied market snapshots, and no store-owned feature/label/prediction/
+learner/ledger assembler yet consumes only the terminal SEC, Gemma, and market
+receipts. The ledger source role is the sole unresolved source role.
+
+The next implementation milestone is that request-free development assembler.
+It must load the canonical market rows only through the terminal reader,
+rebuild preprocessing, extraction, feature rows, matured labels, training
+membership, predictions, learner state, and the continuous no-leverage ledger,
+and remove caller-supplied market snapshots from every authorizing path. It must
+also parse official calendar semantics, chain every artifact from genesis, and
+bind the development winner/output state to the intermediate learner input. A
+production trust domain must retain the current
 store tip outside the mutable store directory, and a fresh owned process must
 attest the executing verifier rather than only the current source files. That
 machinery must be committed and pass the five-filing preflight before any

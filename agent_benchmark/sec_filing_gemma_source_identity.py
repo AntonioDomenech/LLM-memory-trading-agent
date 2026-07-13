@@ -11,10 +11,10 @@ not prove that the current source bytes created every already-loaded code
 object, so runtime completeness remains false pending an owned startup/import
 attestation.
 
-Two conceptual roles do not yet have one frozen source owner.  They remain
+The trading-ledger role does not yet have one frozen source owner.  It remains
 explicitly unresolved instead of being aliased to a convenient existing file.
 Consequently the current receipt is always non-authorizing and incomplete; the
-strict completeness validator raises until those source owners are implemented
+strict completeness validator raises until that source owner is implemented
 and frozen in this mapping.
 """
 
@@ -42,17 +42,18 @@ from agent_benchmark.sec_filing_gemma_contract import (
 
 
 SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-source-identity-audit-v4"
+    "aapl-sec-gemma-source-identity-audit-v5"
 )
 SOURCE_TREE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-source-tree-v1"
 MAX_RUNTIME_SOURCE_BYTES_PER_FILE: Final[int] = 8 * 1024 * 1024
 MAX_RUNTIME_SOURCE_BYTES_TOTAL: Final[int] = 64 * 1024 * 1024
 
 # A ``None`` value is an intentional fail-closed declaration that the
-# conceptual role has no single frozen repository source owner yet.  In
-# The prompt and extractor schema now have distinct frozen source owners.  The
-# trading ledger is still split across prediction/scoring/proof components, and
-# production market acquisition is not yet implemented as one frozen owner.
+# conceptual role has no single frozen repository source owner yet.  The
+# prompt and extractor schema now have distinct frozen source owners.  The
+# trading ledger is still split across prediction/scoring/proof components.
+# Fixed-provider development market acquisition now has one frozen source
+# owner; reveal-store ownership of its effects remains a separate requirement.
 # The bounded owned SEC stage runner has a distinct source owner, while its
 # market/model/artifact coverage remains intentionally incomplete and
 # non-authorizing.
@@ -79,7 +80,10 @@ _CANONICAL_SOURCE_ROLE_PATH_ITEMS: Final[tuple[tuple[str, str | None], ...]] = (
     ),
     ("learner", "agent_benchmark/sec_filing_gemma_learner.py"),
     ("ledger", None),
-    ("market_acquirer", None),
+    (
+        "market_acquirer",
+        "agent_benchmark/sec_filing_gemma_market_acquirer.py",
+    ),
     ("market_evidence", "agent_benchmark/sec_filing_gemma_market_evidence.py"),
     ("market_features", "agent_benchmark/sec_filing_gemma_features.py"),
     (

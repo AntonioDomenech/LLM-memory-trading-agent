@@ -7,10 +7,11 @@ registry appends with compare-and-swap semantics, and consumes stage reveal
 requests exactly once only after the fixed semantic prerequisite verifier
 returns a strongly bound result.
 
-No market data, model runtime, or network service is used by this module.  Its
-owned carry-in helper may re-read and copy only normalized filing bytes that a
-terminal SEC reader receipt already binds; it cannot fetch or accept filing
-text from a caller.  The anchor files contain governance receipts, while the
+No model runtime or network service is used by this module.  Its owned carry-in
+helper may re-read and copy only normalized filing bytes that a terminal SEC
+reader receipt already binds.  Its market finalizer may re-read quarantined
+provider bytes and canonical snapshots, but cannot fetch them or accept market
+rows from a caller.  The anchor files contain governance receipts, while the
 adjacent fixed ``stage_outputs`` namespace contains their replayed bytes.
 Registration and intermediate access never count as a final-period touch;
 successful final-request consumption increments the separate actual-final-
@@ -66,6 +67,16 @@ from agent_benchmark.sec_filing_gemma_corpus import (
     SecFilingGemmaCorpusError,
     _validate_persisted_authenticated_stage_access_batch,
 )
+from agent_benchmark.sec_filing_gemma_market_acquirer import (
+    MARKET_ACQUISITION_BUNDLE_SCHEMA_VERSION,
+    MARKET_ACQUISITION_SCHEMA_VERSION,
+    YAHOO_MAX_RESPONSE_BYTES,
+    YAHOO_MAX_TOTAL_RESPONSE_BYTES,
+    _consume_owned_market_transport_capability,
+    build_development_market_acquisition_plan,
+    validate_development_market_acquisition_bundle,
+)
+from agent_benchmark.sec_filing_gemma_market_evidence import MARKET_SYMBOLS
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     HISTORICAL_FINAL_REVEAL_COUNT_LOWER_BOUND,
     HISTORICAL_REGISTRY_CANONICAL_SHA256,
@@ -97,6 +108,7 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
     MODEL_EXECUTION_SOURCE_ROLES,
+    MARKET_EXECUTION_SOURCE_ROLES,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
@@ -106,6 +118,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_model_execution_abort,
     build_development_model_execution_claim,
     build_development_model_reader_receipt,
+    build_development_market_execution_abort,
+    build_development_market_execution_claim,
+    build_development_market_reader_receipt,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
@@ -160,6 +175,7 @@ DEVELOPMENT_SEC_EXECUTION_LOCKS_DIRECTORY_NAME: Final[str] = (
     ".development-sec-execution-locks"
 )
 MODEL_EXECUTION_LOCK_FILENAME: Final[str] = ".model-execution.lock"
+MARKET_EXECUTION_LOCK_FILENAME: Final[str] = ".market-execution.lock"
 STAGE_OUTPUTS_DIRECTORY_NAME: Final[str] = "stage_outputs"
 SEC_STAGE_COMPONENT_DIRECTORY_NAME: Final[str] = "sec"
 SEC_BATCH_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
@@ -216,6 +232,36 @@ STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-owned-development-model-batch-complete-v1"
+)
+MARKET_SOURCE_COMPONENT_DIRECTORY_NAME: Final[str] = "market_source"
+DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
+DEVELOPMENT_MARKET_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-market-batch-complete-v1"
+)
+DEVELOPMENT_MARKET_COMPONENT_ID: Final[str] = (
+    "owned_development_market_evidence_batch"
+)
+MAX_MARKET_BATCH_FILES: Final[int] = 23
+MAX_MARKET_BATCH_FILE_BYTES: Final[int] = 128 * 1024 * 1024
+MAX_MARKET_BATCH_TOTAL_BYTES: Final[int] = 768 * 1024 * 1024
+_DEVELOPMENT_MARKET_COMPLETE_MARKER_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "market_acquisition_plan_sha256",
+        "acquisition_receipt_sha256",
+        "acquisition_bundle_sha256",
+        "acquisition_validation_sha256",
+        "source_manifest_sha256",
+        "market_stage_manifest_sha256",
+        "source_reconciliation_sha256",
+        "market_component_id",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
+        "marker_sha256",
+    }
 )
 MODEL_CALL_INTENT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-owned-model-call-intent-v1"
@@ -814,6 +860,25 @@ def _model_execution_source_hashes(repository_root: Path) -> dict[str, str]:
     return observed
 
 
+def _market_execution_source_hashes(repository_root: Path) -> dict[str, str]:
+    """Return the exact candidate sources authorized for market acquisition."""
+
+    all_sources = _execution_source_hashes(repository_root)
+    try:
+        observed = {
+            role: all_sources[role] for role in MARKET_EXECUTION_SOURCE_ROLES
+        }
+    except KeyError as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "A required market execution source has no canonical repository path"
+        ) from exc
+    if set(observed) != set(MARKET_EXECUTION_SOURCE_ROLES):
+        raise SecFilingGemmaRevealStoreError(
+            "Market execution source roles changed"
+        )
+    return observed
+
+
 def _validated_development_root_plan_for_store(
     authenticated_store_snapshot: Mapping[str, Any],
     development_content_root_plan: Any,
@@ -917,6 +982,11 @@ def _read_owned_sec_indexed_payloads(
     raw_index: Any,
     *,
     location: str,
+    maximum_files: int = MAX_SEC_BATCH_FILES,
+    maximum_file_bytes: int = MAX_SEC_BATCH_FILE_BYTES,
+    maximum_total_bytes: int = MAX_SEC_BATCH_TOTAL_BYTES,
+    complete_marker_filename: str = SEC_BATCH_COMPLETE_MARKER_FILENAME,
+    maximum_file_bytes_by_name: Mapping[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
     """Rehash one flat create-new SEC payload directory exactly."""
 
@@ -925,15 +995,22 @@ def _read_owned_sec_indexed_payloads(
         create=False,
         location=location,
     )
-    if type(raw_index) is not list or not raw_index:
+    if (
+        type(raw_index) is not list
+        or not raw_index
+        or len(raw_index) + 1 > maximum_files
+    ):
         raise SecFilingGemmaRevealStoreError(
             f"{location} complete marker has no byte index"
         )
-    observed_names = [item.name for item in secured.iterdir()]
-    if len(observed_names) > MAX_SEC_BATCH_FILES:
-        raise SecFilingGemmaRevealStoreError(
-            f"{location} contains too many files"
-        )
+    observed_names: list[str] = []
+    with os.scandir(secured) as entries:
+        for item in entries:
+            observed_names.append(item.name)
+            if len(observed_names) > maximum_files:
+                raise SecFilingGemmaRevealStoreError(
+                    f"{location} contains too many files"
+                )
     if len({name.casefold() for name in observed_names}) != len(observed_names):
         raise SecFilingGemmaRevealStoreError(
             f"{location} contains a case-colliding file"
@@ -941,7 +1018,7 @@ def _read_owned_sec_indexed_payloads(
     byte_index: list[dict[str, Any]] = []
     payloads_by_name: dict[str, bytes] = {}
     total_bytes = 0
-    expected_names = {SEC_BATCH_COMPLETE_MARKER_FILENAME}
+    expected_names = {complete_marker_filename}
     for ordinal, raw_item in enumerate(raw_index, start=1):
         if type(raw_item) is not dict or set(raw_item) != {
             "ordinal",
@@ -954,16 +1031,32 @@ def _read_owned_sec_indexed_payloads(
                 f"{location} byte-index item is not exact"
             )
         relative = raw_item["relative_path"]
+        byte_count = raw_item["byte_count"]
+        file_cap = maximum_file_bytes
+        if maximum_file_bytes_by_name is not None:
+            file_cap = maximum_file_bytes_by_name.get(relative, file_cap)
         if (
-            type(relative) is not str
+            isinstance(raw_item["ordinal"], bool)
+            or type(raw_item["ordinal"]) is not int
+            or raw_item["ordinal"] != ordinal
+            or type(raw_item["logical_id"]) is not str
+            or not raw_item["logical_id"]
+            or type(relative) is not str
             or not relative
             or "/" in relative
             or "\\" in relative
-            or relative in {".", "..", SEC_BATCH_COMPLETE_MARKER_FILENAME}
+            or relative in {".", "..", complete_marker_filename}
+            or isinstance(byte_count, bool)
+            or type(byte_count) is not int
+            or byte_count < 1
+            or type(file_cap) is not int
+            or file_cap < 1
+            or byte_count > file_cap
         ):
             raise SecFilingGemmaRevealStoreError(
                 f"{location} byte-index path is unsafe"
             )
+        _sha256(raw_item["sha256"], f"{location} byte-index hash")
         if relative in payloads_by_name:
             raise SecFilingGemmaRevealStoreError(
                 f"{location} byte-index path is duplicated"
@@ -971,10 +1064,10 @@ def _read_owned_sec_indexed_payloads(
         payload = _read_regular_bytes(
             secured / relative,
             f"{location} byte {relative}",
-            max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+            max_bytes=byte_count,
         )
         total_bytes += len(payload)
-        if total_bytes > MAX_SEC_BATCH_TOTAL_BYTES:
+        if total_bytes > maximum_total_bytes:
             raise SecFilingGemmaRevealStoreError(
                 f"{location} exceeds its total byte limit"
             )
@@ -997,6 +1090,149 @@ def _read_owned_sec_indexed_payloads(
             f"{location} has missing or extra durable bytes"
         )
     return byte_index, payloads_by_name
+
+
+def _expected_market_byte_layout() -> list[tuple[str, str]]:
+    layout: list[tuple[str, str]] = []
+    for symbol in MARKET_SYMBOLS:
+        layout.append(
+            (f"raw-response-{symbol}", f"raw-response-{symbol}.json")
+        )
+    for symbol in MARKET_SYMBOLS:
+        layout.append((f"artifact-{symbol}", f"artifact-{symbol}.json"))
+    for symbol in MARKET_SYMBOLS:
+        layout.append((f"window-{symbol}", f"window-{symbol}.json"))
+    layout.extend(
+        (
+            ("source-manifest", "source-manifest.json"),
+            ("stage-manifest", "stage-manifest.json"),
+            ("reconciliation-receipt", "reconciliation-receipt.json"),
+            ("acquisition-receipt", "acquisition-receipt.json"),
+        )
+    )
+    if len(layout) + 1 != MAX_MARKET_BATCH_FILES:
+        raise SecFilingGemmaRevealStoreError(
+            "Owned development market layout count changed"
+        )
+    return layout
+
+
+def _prevalidate_owned_market_byte_index(
+    secured: Path,
+    marker: Mapping[str, Any],
+    *,
+    marker_byte_count: int,
+) -> list[dict[str, Any]]:
+    """Reject an oversized or non-exact market component before payload reads."""
+
+    raw_index = marker.get("byte_index")
+    expected_layout = _expected_market_byte_layout()
+    if type(raw_index) is not list or len(raw_index) != len(expected_layout):
+        raise SecFilingGemmaRevealStoreError(
+            "Owned development market byte index lacks its exact entry count"
+        )
+    byte_index: list[dict[str, Any]] = []
+    byte_count_total = 0
+    raw_response_total = 0
+    exact_keys = {
+        "ordinal",
+        "logical_id",
+        "relative_path",
+        "byte_count",
+        "sha256",
+    }
+    for ordinal, (raw_item, expected_item) in enumerate(
+        zip(raw_index, expected_layout, strict=True),
+        start=1,
+    ):
+        if type(raw_item) is not dict or set(raw_item) != exact_keys:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development market byte-index item is not exact"
+            )
+        logical_id, relative_path = expected_item
+        byte_count = raw_item.get("byte_count")
+        exact_file_cap = (
+            YAHOO_MAX_RESPONSE_BYTES
+            if ordinal <= len(MARKET_SYMBOLS)
+            else MAX_MARKET_BATCH_FILE_BYTES
+        )
+        if (
+            isinstance(raw_item.get("ordinal"), bool)
+            or type(raw_item.get("ordinal")) is not int
+            or raw_item.get("ordinal") != ordinal
+            or raw_item.get("logical_id") != logical_id
+            or raw_item.get("relative_path") != relative_path
+            or isinstance(byte_count, bool)
+            or type(byte_count) is not int
+            or byte_count < 1
+            or byte_count > exact_file_cap
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development market byte index differs from its exact layout"
+            )
+        _sha256(raw_item.get("sha256"), "owned development market byte hash")
+        byte_count_total += byte_count
+        if byte_count_total > MAX_MARKET_BATCH_TOTAL_BYTES:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development market byte index exceeds its total byte limit"
+            )
+        if ordinal <= len(MARKET_SYMBOLS):
+            raw_response_total += byte_count
+            if raw_response_total > YAHOO_MAX_TOTAL_RESPONSE_BYTES:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market raw-response index exceeds its aggregate "
+                    "byte ceiling"
+                )
+        try:
+            file_details = (secured / relative_path).lstat()
+        except FileNotFoundError as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development market byte-index file does not exist"
+            ) from exc
+        _validate_regular_details(
+            file_details,
+            f"owned development market byte {relative_path}",
+        )
+        if file_details.st_size != byte_count:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development market file size differs from its byte index"
+            )
+        byte_index.append(dict(raw_item))
+
+    if (
+        isinstance(marker.get("byte_count_total"), bool)
+        or type(marker.get("byte_count_total")) is not int
+        or marker.get("byte_index_sha256") != canonical_sha256(byte_index)
+        or marker.get("byte_count_total") != byte_count_total
+        or isinstance(marker_byte_count, bool)
+        or type(marker_byte_count) is not int
+        or marker_byte_count < 1
+        or marker_byte_count + byte_count_total > MAX_MARKET_BATCH_TOTAL_BYTES
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Owned development market byte index is inconsistent"
+        )
+    observed_names: list[str] = []
+    with os.scandir(secured) as entries:
+        for item in entries:
+            observed_names.append(item.name)
+            if len(observed_names) > MAX_MARKET_BATCH_FILES:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market component contains too many files"
+                )
+    expected_names = {
+        DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME,
+        *(relative_path for _logical_id, relative_path in expected_layout),
+    }
+    if (
+        len(observed_names) != MAX_MARKET_BATCH_FILES
+        or len({name.casefold() for name in observed_names}) != len(observed_names)
+        or set(observed_names) != expected_names
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            "Owned development market component lacks its exact flat layout"
+        )
+    return byte_index
 
 
 _MODEL_EVENT_FILE_ITEMS: Final[tuple[tuple[str, str], ...]] = (
@@ -3181,6 +3417,19 @@ class SecFilingGemmaRevealStore:
             timeout_seconds=self._lock_timeout_seconds,
         )
 
+    def _owned_market_execution_lock(self) -> _ExclusiveFileLock:
+        """Serialize the one development market effect outside the CAS lock."""
+
+        store_directory = _secure_directory(
+            self._store_directory,
+            create=True,
+            location="reveal-store directory",
+        )
+        return _ExclusiveFileLock(
+            store_directory / MARKET_EXECUTION_LOCK_FILENAME,
+            timeout_seconds=self._lock_timeout_seconds,
+        )
+
     def _recover_pending_restore_locked(
         self, tracked_anchor: Mapping[str, Any]
     ) -> None:
@@ -3368,6 +3617,9 @@ class SecFilingGemmaRevealStore:
         development_sec_execution_claim: Mapping[str, Any] | None = None,
         development_sec_reader_receipt: Mapping[str, Any] | None = None,
         development_sec_execution_abort: Mapping[str, Any] | None = None,
+        development_market_execution_claim: Mapping[str, Any] | None = None,
+        development_market_reader_receipt: Mapping[str, Any] | None = None,
+        development_market_execution_abort: Mapping[str, Any] | None = None,
         stage_model_execution_claim: Mapping[str, Any] | None = None,
         stage_model_reader_receipt: Mapping[str, Any] | None = None,
         stage_model_execution_abort: Mapping[str, Any] | None = None,
@@ -3404,6 +3656,15 @@ class SecFilingGemmaRevealStore:
         development_sec_aborts = copy.deepcopy(
             prior_tip_anchor["development_sec_execution_aborts"]
         )
+        development_market_claims = copy.deepcopy(
+            prior_tip_anchor["development_market_execution_claims"]
+        )
+        development_market_reader_receipts = copy.deepcopy(
+            prior_tip_anchor["development_market_reader_receipts"]
+        )
+        development_market_aborts = copy.deepcopy(
+            prior_tip_anchor["development_market_execution_aborts"]
+        )
         model_claims = copy.deepcopy(
             prior_tip_anchor["stage_model_execution_claims"]
         )
@@ -3436,6 +3697,9 @@ class SecFilingGemmaRevealStore:
                 development_sec_execution_claim,
                 development_sec_reader_receipt,
                 development_sec_execution_abort,
+                development_market_execution_claim,
+                development_market_reader_receipt,
+                development_market_execution_abort,
                 stage_model_execution_claim,
                 stage_model_reader_receipt,
                 stage_model_execution_abort,
@@ -3626,6 +3890,58 @@ class SecFilingGemmaRevealStore:
                     "A persisted development SEC execution abort cannot be replaced"
                 )
             development_sec_aborts[root_scope_hash] = development_abort
+        if development_market_execution_claim is not None:
+            market_claim = _exact_caller_dict(
+                development_market_execution_claim,
+                "development market execution claim",
+            )
+            root_scope_hash = _sha256(
+                market_claim.get("development_root_scope_sha256"),
+                "development market execution claim root scope hash",
+            )
+            if (
+                root_scope_hash in development_market_claims
+                and development_market_claims[root_scope_hash] != market_claim
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development market execution claim cannot be replaced"
+                )
+            development_market_claims[root_scope_hash] = market_claim
+        if development_market_reader_receipt is not None:
+            market_receipt = _exact_caller_dict(
+                development_market_reader_receipt,
+                "development market reader receipt",
+            )
+            root_scope_hash = _sha256(
+                market_receipt.get("development_root_scope_sha256"),
+                "development market reader receipt root scope hash",
+            )
+            if (
+                root_scope_hash in development_market_reader_receipts
+                and development_market_reader_receipts[root_scope_hash]
+                != market_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development market reader receipt cannot be replaced"
+                )
+            development_market_reader_receipts[root_scope_hash] = market_receipt
+        if development_market_execution_abort is not None:
+            market_abort = _exact_caller_dict(
+                development_market_execution_abort,
+                "development market execution abort",
+            )
+            root_scope_hash = _sha256(
+                market_abort.get("development_root_scope_sha256"),
+                "development market execution abort root scope hash",
+            )
+            if (
+                root_scope_hash in development_market_aborts
+                and development_market_aborts[root_scope_hash] != market_abort
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development market execution abort cannot be replaced"
+                )
+            development_market_aborts[root_scope_hash] = market_abort
         if stage_model_execution_claim is not None:
             model_claim = _exact_caller_dict(
                 stage_model_execution_claim,
@@ -3745,6 +4061,11 @@ class SecFilingGemmaRevealStore:
                 development_sec_execution_claims=development_sec_claims,
                 development_sec_reader_receipts=development_sec_reader_receipts,
                 development_sec_execution_aborts=development_sec_aborts,
+                development_market_execution_claims=development_market_claims,
+                development_market_reader_receipts=(
+                    development_market_reader_receipts
+                ),
+                development_market_execution_aborts=development_market_aborts,
                 stage_model_execution_claims=model_claims,
                 stage_model_reader_receipts=model_reader_receipts,
                 stage_model_execution_aborts=model_aborts,
@@ -3828,6 +4149,9 @@ class SecFilingGemmaRevealStore:
                     development_sec_execution_claims={},
                     development_sec_reader_receipts={},
                     development_sec_execution_aborts={},
+                    development_market_execution_claims={},
+                    development_market_reader_receipts={},
+                    development_market_execution_aborts={},
                     stage_model_execution_claims={},
                     stage_model_reader_receipts={},
                     stage_model_execution_aborts={},
@@ -4341,6 +4665,542 @@ class SecFilingGemmaRevealStore:
             if persisted != receipt:
                 raise SecFilingGemmaRevealStoreError(
                     "Committed development SEC receipt differs from rehashed bytes"
+                )
+            return copy.deepcopy(persisted)
+
+    def claim_owned_development_market_execution(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Atomically claim the fixed six-call development market acquisition."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development market execution root scope hash",
+            )
+            existing_claim = current_tip[
+                "development_market_execution_claims"
+            ].get(scope_hash)
+            if existing_claim is not None:
+                return {
+                    "claim": copy.deepcopy(existing_claim),
+                    "created": False,
+                    "reader_receipt": copy.deepcopy(
+                        current_tip["development_market_reader_receipts"].get(
+                            scope_hash
+                        )
+                    ),
+                    "abort": copy.deepcopy(
+                        current_tip["development_market_execution_aborts"].get(
+                            scope_hash
+                        )
+                    ),
+                }
+            try:
+                claim = build_development_market_execution_claim(
+                    current,
+                    development_root_scope_sha256=scope_hash,
+                    independent_current_tip_anchor=current_tip,
+                    market_acquisition_plan=(
+                        build_development_market_acquisition_plan()
+                    ),
+                    execution_source_hashes=_market_execution_source_hashes(
+                        self.repository_root
+                    ),
+                )
+            except Exception as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Could not claim the exact development market batch"
+                ) from exc
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_market_execution_claim=claim,
+            )
+            if committed_state != current:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development market claim changed reveal-store state"
+                )
+            persisted = committed_tip[
+                "development_market_execution_claims"
+            ].get(scope_hash)
+            if persisted != claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development market claim differs from its CAS target"
+                )
+            return {
+                "claim": copy.deepcopy(persisted),
+                "created": True,
+                "reader_receipt": None,
+                "abort": None,
+            }
+
+    def abort_owned_development_market_execution(
+        self,
+        *,
+        development_root_scope_sha256: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Terminally close an indeterminate market claim without retrying I/O."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development market abort root scope hash",
+            )
+            claim = current_tip["development_market_execution_claims"].get(
+                scope_hash
+            )
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development market execution cannot abort before its claim"
+                )
+            if scope_hash in current_tip["development_market_reader_receipts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Completed development market execution cannot be aborted"
+                )
+            existing = current_tip["development_market_execution_aborts"].get(
+                scope_hash
+            )
+            try:
+                abort = build_development_market_execution_abort(
+                    claim,
+                    reason=reason,
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development market execution abort is not canonical"
+                ) from exc
+            if existing is not None:
+                if existing != abort:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Development market execution already has another terminal abort"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_market_execution_abort=abort,
+            )
+            persisted = committed_tip[
+                "development_market_execution_aborts"
+            ].get(scope_hash)
+            if persisted != abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development market abort differs from its CAS target"
+                )
+            return copy.deepcopy(persisted)
+
+    def _revalidate_authorized_market_execution_sources(
+        self,
+        claim: Mapping[str, Any],
+    ) -> None:
+        """Reject source or acquisition-plan substitution after market claim."""
+
+        if type(claim) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Market execution source revalidation requires an exact claim"
+            )
+        if _market_execution_source_hashes(self.repository_root) != claim.get(
+            "execution_source_hashes"
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Market execution sources changed after the durable claim"
+            )
+        if build_development_market_acquisition_plan() != claim.get(
+            "market_acquisition_plan"
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Market acquisition plan changed after the durable claim"
+            )
+
+    def _record_owned_development_market_reader_output(
+        self,
+        *,
+        development_root_scope_sha256: str,
+        owned_transport_capability: object | None = None,
+    ) -> dict[str, Any]:
+        """Reparse the fixed raw market component and commit its exact receipt."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development market reader root scope hash",
+            )
+            claim = current_tip["development_market_execution_claims"].get(
+                scope_hash
+            )
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development market reader lacks its durable claim"
+                )
+            if scope_hash in current_tip["development_market_execution_aborts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Aborted development market execution has no readable output"
+                )
+            existing = current_tip["development_market_reader_receipts"].get(
+                scope_hash
+            )
+            if existing is not None and owned_transport_capability is not None:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development market receipts replay without capabilities"
+                )
+            self._revalidate_authorized_market_execution_sources(claim)
+            claim_hash = _sha256(
+                claim.get("claim_sha256"),
+                "development market reader claim hash",
+            )
+            component_directory = (
+                self.store_directory
+                / STAGE_OUTPUTS_DIRECTORY_NAME
+                / claim_hash
+                / MARKET_SOURCE_COMPONENT_DIRECTORY_NAME
+            )
+            secured = _secure_directory(
+                component_directory,
+                create=False,
+                location="owned development market component directory",
+            )
+            directory_before = _validate_real_directory(
+                secured,
+                "owned development market component directory",
+            )
+            marker_path = secured / DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME
+            marker_bytes = _read_regular_bytes(
+                marker_path,
+                "owned development market complete marker",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            marker = _strict_json_bytes(
+                marker_bytes,
+                "owned development market complete marker",
+            )
+            if type(marker) is not dict or set(marker) != set(
+                _DEVELOPMENT_MARKET_COMPLETE_MARKER_KEYS
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market marker keys changed"
+                )
+            marker_body = {
+                key: value for key, value in marker.items() if key != "marker_sha256"
+            }
+            if (
+                marker.get("schema_version")
+                != DEVELOPMENT_MARKET_COMPLETE_MARKER_SCHEMA_VERSION
+                or marker.get("development_root_scope_sha256") != scope_hash
+                or marker.get("claim_sha256") != claim_hash
+                or marker.get("market_acquisition_plan_sha256")
+                != claim.get("market_acquisition_plan_sha256")
+                or marker.get("market_component_id")
+                != DEVELOPMENT_MARKET_COMPONENT_ID
+                or marker.get("marker_sha256") != canonical_sha256(marker_body)
+                or marker_bytes != _encoded_state(marker)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market marker is not canonical or claim-bound"
+                )
+            prevalidated_byte_index = _prevalidate_owned_market_byte_index(
+                secured,
+                marker,
+                marker_byte_count=len(marker_bytes),
+            )
+            market_file_caps = {
+                f"raw-response-{symbol}.json": YAHOO_MAX_RESPONSE_BYTES
+                for symbol in MARKET_SYMBOLS
+            }
+            byte_index, payloads = _read_owned_sec_indexed_payloads(
+                secured,
+                prevalidated_byte_index,
+                location="owned development market component directory",
+                maximum_files=MAX_MARKET_BATCH_FILES,
+                maximum_file_bytes=MAX_MARKET_BATCH_FILE_BYTES,
+                maximum_total_bytes=MAX_MARKET_BATCH_TOTAL_BYTES,
+                complete_marker_filename=(
+                    DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME
+                ),
+                maximum_file_bytes_by_name=market_file_caps,
+            )
+            if (
+                len(byte_index) + 1 != MAX_MARKET_BATCH_FILES
+                or marker.get("byte_index_sha256") != canonical_sha256(byte_index)
+                or marker.get("byte_count_total")
+                != sum(item["byte_count"] for item in byte_index)
+                or marker["byte_count_total"] > MAX_MARKET_BATCH_TOTAL_BYTES
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market byte index is inconsistent"
+                )
+            expected_layout = _expected_market_byte_layout()
+            observed_layout = [
+                (item["logical_id"], item["relative_path"])
+                for item in byte_index
+            ]
+            if observed_layout != expected_layout:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market component lacks its exact layout"
+                )
+            if any(item["byte_count"] > MAX_MARKET_BATCH_FILE_BYTES for item in byte_index):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market file exceeds its component limit"
+                )
+
+            raw_bytes = {
+                symbol: payloads[f"raw-response-{symbol}.json"]
+                for symbol in MARKET_SYMBOLS
+            }
+            if sum(len(raw_bytes[symbol]) for symbol in MARKET_SYMBOLS) > (
+                YAHOO_MAX_TOTAL_RESPONSE_BYTES
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market raw responses exceed their aggregate "
+                    "byte ceiling"
+                )
+            artifact_bytes = {
+                symbol: payloads[f"artifact-{symbol}.json"]
+                for symbol in MARKET_SYMBOLS
+            }
+            window_bytes = {
+                symbol: payloads[f"window-{symbol}.json"]
+                for symbol in MARKET_SYMBOLS
+            }
+            canonical_documents: dict[str, dict[str, Any]] = {}
+            for filename in (
+                "source-manifest.json",
+                "stage-manifest.json",
+                "reconciliation-receipt.json",
+                "acquisition-receipt.json",
+            ):
+                parsed = _strict_json_bytes(
+                    payloads[filename],
+                    f"owned development market {filename}",
+                )
+                if type(parsed) is not dict or payloads[filename] != _encoded_state(
+                    parsed
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        f"Owned development market {filename} is not canonical"
+                    )
+                canonical_documents[filename] = parsed
+            source_manifest = canonical_documents["source-manifest.json"]
+            stage_manifest = canonical_documents["stage-manifest.json"]
+            reconciliation = canonical_documents["reconciliation-receipt.json"]
+            acquisition_receipt = canonical_documents["acquisition-receipt.json"]
+            policy = acquisition_receipt.get("transport_policy")
+            if (
+                type(policy) is not dict
+                or policy.get("trusted_production_transport") is not True
+                or policy.get("authorizes_production_use") is not False
+                or policy.get("fresh_network_provenance_claimed") is not False
+                or policy.get("network_occurrence_is_only_locally_observed")
+                is not True
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market transport claims are not honest"
+                )
+            raw_hashes = {
+                symbol: hashlib.sha256(raw_bytes[symbol]).hexdigest()
+                for symbol in MARKET_SYMBOLS
+            }
+            artifact_hashes = {
+                symbol: hashlib.sha256(artifact_bytes[symbol]).hexdigest()
+                for symbol in MARKET_SYMBOLS
+            }
+            window_hashes = {
+                symbol: hashlib.sha256(window_bytes[symbol]).hexdigest()
+                for symbol in MARKET_SYMBOLS
+            }
+            compact_body = {
+                "schema_version": MARKET_ACQUISITION_BUNDLE_SCHEMA_VERSION,
+                "artifact_stage": "development",
+                "acquisition_receipt_sha256": acquisition_receipt.get(
+                    "acquisition_receipt_sha256"
+                ),
+                "acquisition_plan_sha256": claim[
+                    "market_acquisition_plan_sha256"
+                ],
+                "source_manifest_sha256": source_manifest.get(
+                    "source_manifest_sha256"
+                ),
+                "market_stage_manifest_sha256": stage_manifest.get(
+                    "market_stage_manifest_sha256"
+                ),
+                "source_reconciliation_sha256": reconciliation.get(
+                    "reconciliation_sha256"
+                ),
+                "raw_response_sha256s": raw_hashes,
+                "artifact_sha256s": artifact_hashes,
+                "window_sha256s": window_hashes,
+            }
+            bundle_hash = canonical_sha256(compact_body)
+            bundle = {
+                **compact_body,
+                "bundle_sha256": bundle_hash,
+                "raw_response_bytes_by_symbol": raw_bytes,
+                "artifact_bytes_by_symbol": artifact_bytes,
+                "window_bytes_by_symbol": window_bytes,
+                "source_manifest": source_manifest,
+                "stage_manifest": stage_manifest,
+                "reconciliation_receipt": reconciliation,
+                "acquisition_receipt": acquisition_receipt,
+            }
+            try:
+                validation = validate_development_market_acquisition_bundle(
+                    bundle,
+                    expected_acquisition_plan_sha256=claim[
+                        "market_acquisition_plan_sha256"
+                    ],
+                    expected_acquisition_receipt_sha256=acquisition_receipt[
+                        "acquisition_receipt_sha256"
+                    ],
+                    expected_bundle_sha256=bundle_hash,
+                )
+            except Exception as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market bytes fail semantic replay"
+                ) from exc
+            validation_hash = validation.get("validation_sha256")
+            if (
+                marker.get("acquisition_receipt_sha256")
+                != acquisition_receipt.get("acquisition_receipt_sha256")
+                or marker.get("acquisition_bundle_sha256") != bundle_hash
+                or marker.get("acquisition_validation_sha256") != validation_hash
+                or marker.get("source_manifest_sha256")
+                != source_manifest.get("source_manifest_sha256")
+                or marker.get("market_stage_manifest_sha256")
+                != stage_manifest.get("market_stage_manifest_sha256")
+                or marker.get("source_reconciliation_sha256")
+                != reconciliation.get("reconciliation_sha256")
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market marker differs from semantic replay"
+                )
+
+            byte_index_after, payloads_after = _read_owned_sec_indexed_payloads(
+                secured,
+                prevalidated_byte_index,
+                location="owned development market component directory",
+                maximum_files=MAX_MARKET_BATCH_FILES,
+                maximum_file_bytes=MAX_MARKET_BATCH_FILE_BYTES,
+                maximum_total_bytes=MAX_MARKET_BATCH_TOTAL_BYTES,
+                complete_marker_filename=(
+                    DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME
+                ),
+                maximum_file_bytes_by_name=market_file_caps,
+            )
+            marker_after = _read_regular_bytes(
+                marker_path,
+                "owned development market complete marker",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            directory_after = _validate_real_directory(
+                secured,
+                "owned development market component directory",
+            )
+            if (
+                marker_after != marker_bytes
+                or byte_index_after != byte_index
+                or payloads_after != payloads
+                or (directory_before.st_dev, directory_before.st_ino)
+                != (directory_after.st_dev, directory_after.st_ino)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market component changed during replay"
+                )
+            self._revalidate_authorized_market_execution_sources(claim)
+            if existing is None:
+                try:
+                    _consume_owned_market_transport_capability(
+                        owned_transport_capability,
+                        development_root_scope_sha256=scope_hash,
+                        claim_sha256=claim_hash,
+                        acquisition_plan_sha256=claim[
+                            "market_acquisition_plan_sha256"
+                        ],
+                        acquisition_receipt_sha256=acquisition_receipt[
+                            "acquisition_receipt_sha256"
+                        ],
+                        bundle_sha256=bundle_hash,
+                        validation_sha256=validation_hash,
+                        source_manifest_sha256=source_manifest[
+                            "source_manifest_sha256"
+                        ],
+                        market_stage_manifest_sha256=stage_manifest[
+                            "market_stage_manifest_sha256"
+                        ],
+                        source_reconciliation_sha256=reconciliation[
+                            "reconciliation_sha256"
+                        ],
+                    )
+                except Exception as exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "A new development market receipt requires the matching "
+                        "same-execution owned Yahoo transport capability"
+                    ) from exc
+            try:
+                receipt = build_development_market_reader_receipt(
+                    claim,
+                    acquisition_receipt_sha256=acquisition_receipt[
+                        "acquisition_receipt_sha256"
+                    ],
+                    acquisition_bundle_sha256=bundle_hash,
+                    acquisition_validation_sha256=validation_hash,
+                    source_manifest_sha256=source_manifest[
+                        "source_manifest_sha256"
+                    ],
+                    market_stage_manifest_sha256=stage_manifest[
+                        "market_stage_manifest_sha256"
+                    ],
+                    source_reconciliation_sha256=reconciliation[
+                        "reconciliation_sha256"
+                    ],
+                    raw_response_sha256s=raw_hashes,
+                    artifact_sha256s=artifact_hashes,
+                    window_sha256s=window_hashes,
+                    byte_index=byte_index,
+                    complete_marker_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+                    owned_transport_attested_by_store=True,
+                )
+            except Exception as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development market reader receipt could not be finalized"
+                ) from exc
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted development market receipt differs from replayed bytes"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_market_reader_receipt=receipt,
+            )
+            persisted = committed_tip[
+                "development_market_reader_receipts"
+            ].get(scope_hash)
+            if persisted != receipt:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development market receipt differs from rehashed bytes"
                 )
             return copy.deepcopy(persisted)
 

@@ -1,4 +1,4 @@
-"""Owned one-shot SEC readers and local-model runners for exact claims.
+"""Owned one-shot SEC/market readers and local-model runners for exact claims.
 
 These are the only production entry points that may turn authenticated store
 state into SEC network effects.  A consumed-stage caller supplies no stage,
@@ -8,9 +8,9 @@ evidence for independent store validation; its effect capability is then
 derived from the atomically persisted claim.  A claim is never retried after
 an indeterminate process exit.
 
-The private SEC contact exists only in the public call stack and the private
-transport factory.  Durable output contains its validated hash, never its raw
-value.
+Private SEC contact and raw Yahoo metadata exist only inside their owned call
+stacks and fixed quarantine components.  Public results expose only the exact
+claim and store-recomputed reader receipt.
 """
 
 from __future__ import annotations
@@ -50,8 +50,15 @@ from .sec_filing_gemma_corpus import (
     _validate_persisted_authenticated_stage_access_batch,
 )
 from .sec_filing_gemma_reveal_store import (
+    DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME,
+    DEVELOPMENT_MARKET_COMPLETE_MARKER_SCHEMA_VERSION,
+    DEVELOPMENT_MARKET_COMPONENT_ID,
     DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION,
     DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION,
+    MARKET_SOURCE_COMPONENT_DIRECTORY_NAME,
+    MAX_MARKET_BATCH_FILE_BYTES,
+    MAX_MARKET_BATCH_FILES,
+    MAX_MARKET_BATCH_TOTAL_BYTES,
     MAX_SEC_BATCH_FILE_BYTES,
     MAX_SEC_BATCH_FILES,
     MAX_SEC_BATCH_TOTAL_BYTES,
@@ -67,6 +74,13 @@ from .sec_filing_gemma_reveal_store import (
     _fsync_directory,
     _secure_directory,
 )
+from .sec_filing_gemma_market_acquirer import (
+    _acquire_owned_development_market_evidence,
+    _bind_owned_market_transport_capability_to_claim,
+    _unwrap_owned_development_market_acquisition,
+    validate_development_market_acquisition_bundle,
+)
+from .sec_filing_gemma_market_evidence import MARKET_SYMBOLS
 from .sec_filing_gemma_ollama import (
     build_runtime_identity_guard,
     call_ollama_extractor_attempt,
@@ -2729,9 +2743,490 @@ def run_owned_stage_model_batch(
     )
 
 
+_MARKET_RAW_FILENAMES: Final[dict[str, str]] = {
+    symbol: f"raw-response-{symbol}.json" for symbol in MARKET_SYMBOLS
+}
+_MARKET_ARTIFACT_FILENAMES: Final[dict[str, str]] = {
+    symbol: f"artifact-{symbol}.json" for symbol in MARKET_SYMBOLS
+}
+_MARKET_WINDOW_FILENAMES: Final[dict[str, str]] = {
+    symbol: f"window-{symbol}.json" for symbol in MARKET_SYMBOLS
+}
+
+
+def _validated_market_claim(
+    claim: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    if type(claim) is not dict or not _is_bare_sha256(
+        development_root_scope_sha256
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market claim is not an exact development claim"
+        )
+    claim_sha256 = claim.get("claim_sha256")
+    plan = claim.get("market_acquisition_plan")
+    plan_sha256 = claim.get("market_acquisition_plan_sha256")
+    if (
+        not _is_bare_sha256(claim_sha256)
+        or canonical_sha256(
+            {key: value for key, value in claim.items() if key != "claim_sha256"}
+        )
+        != claim_sha256
+        or claim.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or claim.get("authorized_stage") != "development"
+        or claim.get("market_component_id") != DEVELOPMENT_MARKET_COMPONENT_ID
+        or type(plan) is not dict
+        or not _is_bare_sha256(plan_sha256)
+        or plan.get("acquisition_plan_sha256") != plan_sha256
+        or canonical_sha256(
+            {
+                key: value
+                for key, value in plan.items()
+                if key != "acquisition_plan_sha256"
+            }
+        )
+        != plan_sha256
+        or claim.get("market_symbols") != list(MARKET_SYMBOLS)
+        or claim.get("fixed_request_count") != len(MARKET_SYMBOLS)
+        or claim.get("owned_market_execution_required") is not True
+        or claim.get("market_access_permitted") is not True
+        or claim.get("external_network_access_permitted") is not True
+        or claim.get("caller_supplied_path_permitted") is not False
+        or claim.get("caller_supplied_bytes_permitted") is not False
+        or claim.get("paid_api_access_permitted") is not False
+        or claim.get("outcome_access_permitted") is not False
+        or claim.get("future_stage_access_permitted") is not False
+        or claim.get("effect_may_be_repeated_after_indeterminate_crash") is not False
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market claim crossed its fixed authority"
+        )
+    return claim
+
+
+def _validated_market_reader_receipt(
+    receipt: Any,
+    *,
+    claim: Mapping[str, Any],
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    if type(receipt) is not dict:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market reader receipt is not an exact object"
+        )
+    receipt_sha256 = receipt.get("receipt_sha256")
+    if (
+        not _is_bare_sha256(receipt_sha256)
+        or canonical_sha256(
+            {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        )
+        != receipt_sha256
+        or receipt.get("claim_sha256") != claim["claim_sha256"]
+        or receipt.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market reader receipt crossed its durable claim"
+        )
+    return receipt
+
+
+def _market_component_directory(
+    reveal_store: SecFilingGemmaRevealStore,
+    claim: Mapping[str, Any],
+) -> Path:
+    """Create the fixed claim-owned market quarantine exactly once."""
+
+    claim_sha256 = claim.get("claim_sha256")
+    if not _is_bare_sha256(claim_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market claim has no safe output identity"
+        )
+    claim_directory = (
+        reveal_store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim_sha256
+    )
+    if _secure_directory(
+        claim_directory,
+        create=True,
+        location="owned market claim directory",
+    ) != claim_directory:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market claim directory identity changed"
+        )
+    component_directory = claim_directory / MARKET_SOURCE_COMPONENT_DIRECTORY_NAME
+    try:
+        component_directory.mkdir(exist_ok=False)
+        _fsync_directory(claim_directory)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market component directory is not create-new"
+        ) from None
+    if _secure_directory(
+        component_directory,
+        create=False,
+        location="owned market component directory",
+    ) != component_directory:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market component directory identity changed"
+        )
+    return component_directory
+
+
+def _market_payloads(bundle: Mapping[str, Any]) -> list[tuple[str, str, bytes]]:
+    raw = bundle["raw_response_bytes_by_symbol"]
+    artifacts = bundle["artifact_bytes_by_symbol"]
+    windows = bundle["window_bytes_by_symbol"]
+    payloads: list[tuple[str, str, bytes]] = []
+    for symbol in MARKET_SYMBOLS:
+        payloads.append(
+            (
+                f"raw-response-{symbol}",
+                _MARKET_RAW_FILENAMES[symbol],
+                raw[symbol],
+            )
+        )
+    for symbol in MARKET_SYMBOLS:
+        payloads.append(
+            (
+                f"artifact-{symbol}",
+                _MARKET_ARTIFACT_FILENAMES[symbol],
+                artifacts[symbol],
+            )
+        )
+    for symbol in MARKET_SYMBOLS:
+        payloads.append(
+            (
+                f"window-{symbol}",
+                _MARKET_WINDOW_FILENAMES[symbol],
+                windows[symbol],
+            )
+        )
+    payloads.extend(
+        (
+            (
+                "source-manifest",
+                "source-manifest.json",
+                _canonical_marker_bytes(bundle["source_manifest"]),
+            ),
+            (
+                "stage-manifest",
+                "stage-manifest.json",
+                _canonical_marker_bytes(bundle["stage_manifest"]),
+            ),
+            (
+                "reconciliation-receipt",
+                "reconciliation-receipt.json",
+                _canonical_marker_bytes(bundle["reconciliation_receipt"]),
+            ),
+            (
+                "acquisition-receipt",
+                "acquisition-receipt.json",
+                _canonical_marker_bytes(bundle["acquisition_receipt"]),
+            ),
+        )
+    )
+    names = [name.casefold() for _logical_id, name, _payload in payloads]
+    total_bytes = sum(len(payload) for _logical_id, _name, payload in payloads)
+    if (
+        len(payloads) + 1 != MAX_MARKET_BATCH_FILES
+        or len(names) != len(set(names))
+        or any(
+            type(payload) is not bytes
+            or not payload
+            or len(payload) > MAX_MARKET_BATCH_FILE_BYTES
+            for _logical_id, _name, payload in payloads
+        )
+        or total_bytes > MAX_MARKET_BATCH_TOTAL_BYTES
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market evidence exceeds its fixed flat layout"
+        )
+    return payloads
+
+
+def _persist_market_batch(
+    component_directory: Path,
+    *,
+    claim: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    acquisition_validation_sha256: str,
+    marker_state: list[bool],
+) -> None:
+    if type(marker_state) is not list or marker_state != [False]:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market marker state must begin unsealed"
+        )
+    payloads = _market_payloads(bundle)
+    byte_index: list[dict[str, Any]] = []
+    for ordinal, (logical_id, name, payload) in enumerate(payloads, start=1):
+        if (
+            not name
+            or name in {".", "..", DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME}
+            or "/" in name
+            or "\\" in name
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned market artifact filename is unsafe"
+            )
+        _write_new_regular_file(component_directory / name, payload)
+        byte_index.append(
+            {
+                "ordinal": ordinal,
+                "logical_id": logical_id,
+                "relative_path": name,
+                "byte_count": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    marker_body = {
+        "schema_version": DEVELOPMENT_MARKET_COMPLETE_MARKER_SCHEMA_VERSION,
+        "development_root_scope_sha256": claim[
+            "development_root_scope_sha256"
+        ],
+        "claim_sha256": claim["claim_sha256"],
+        "market_acquisition_plan_sha256": claim[
+            "market_acquisition_plan_sha256"
+        ],
+        "acquisition_receipt_sha256": bundle[
+            "acquisition_receipt_sha256"
+        ],
+        "acquisition_bundle_sha256": bundle["bundle_sha256"],
+        "acquisition_validation_sha256": acquisition_validation_sha256,
+        "source_manifest_sha256": bundle["source_manifest_sha256"],
+        "market_stage_manifest_sha256": bundle[
+            "market_stage_manifest_sha256"
+        ],
+        "source_reconciliation_sha256": bundle[
+            "source_reconciliation_sha256"
+        ],
+        "market_component_id": DEVELOPMENT_MARKET_COMPONENT_ID,
+        "byte_index": byte_index,
+        "byte_index_sha256": canonical_sha256(byte_index),
+        "byte_count_total": sum(item["byte_count"] for item in byte_index),
+    }
+    marker = {**marker_body, "marker_sha256": canonical_sha256(marker_body)}
+    marker_payload = _canonical_marker_bytes(marker)
+    if (
+        len(marker_payload) > MAX_MARKET_BATCH_FILE_BYTES
+        or marker_body["byte_count_total"] + len(marker_payload)
+        > MAX_MARKET_BATCH_TOTAL_BYTES
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market completion marker exceeds its fixed byte limits"
+        )
+    _write_new_regular_file(
+        component_directory / DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME,
+        marker_payload,
+    )
+    _fsync_directory(component_directory)
+    marker_state[0] = True
+    observed = [entry.name for entry in component_directory.iterdir()]
+    expected = [name for _logical_id, name, _payload in payloads] + [
+        DEVELOPMENT_MARKET_COMPLETE_MARKER_FILENAME
+    ]
+    if (
+        set(observed) != set(expected)
+        or len(observed) != len(expected)
+        or len({name.casefold() for name in observed}) != len(observed)
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market evidence has missing, extra, or colliding files"
+        )
+
+
+def _attempt_market_abort(
+    reveal_store: SecFilingGemmaRevealStore,
+    *,
+    development_root_scope_sha256: str,
+    reason: str,
+) -> None:
+    try:
+        reveal_store.abort_owned_development_market_execution(
+            development_root_scope_sha256=development_root_scope_sha256,
+            reason=reason,
+        )
+    except Exception:
+        return
+
+
+def _run_owned_development_market_batch_locked(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    claim_result = reveal_store.claim_owned_development_market_execution(
+        development_root_scope_sha256=development_root_scope_sha256
+    )
+    if type(claim_result) is not dict or set(claim_result) != {
+        "claim",
+        "created",
+        "reader_receipt",
+        "abort",
+    }:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market claim result is not exact"
+        )
+    claim = _validated_market_claim(
+        claim_result["claim"],
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    record_kwargs = {
+        "development_root_scope_sha256": development_root_scope_sha256
+    }
+    if claim_result["created"] is False:
+        receipt = claim_result["reader_receipt"]
+        abort = claim_result["abort"]
+        if type(receipt) is dict and abort is None:
+            validated_receipt = _validated_market_reader_receipt(
+                receipt,
+                claim=claim,
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+            try:
+                replayed = (
+                    reveal_store._record_owned_development_market_reader_output(
+                        **record_kwargs
+                    )
+                )
+            except Exception:
+                raise SecFilingGemmaStageRunnerError(
+                    "Completed market receipt cannot replay durable output"
+                ) from None
+            replayed = _validated_market_reader_receipt(
+                replayed,
+                claim=claim,
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+            if replayed != validated_receipt:
+                raise SecFilingGemmaStageRunnerError(
+                    "Completed market receipt differs from durable replay"
+                )
+            return {"claim": claim, "reader_receipt": replayed}
+        if receipt is None and abort is None:
+            _attempt_market_abort(
+                reveal_store,
+                development_root_scope_sha256=development_root_scope_sha256,
+                reason="claim_recovered_without_terminal_receipt",
+            )
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market claim is terminal or indeterminate and cannot be retried"
+        )
+    if claim_result["created"] is not True or any(
+        claim_result[key] is not None for key in ("reader_receipt", "abort")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "New owned market claim has an impossible terminal state"
+        )
+
+    external_effect_started = False
+    try:
+        component_directory = _market_component_directory(reveal_store, claim)
+        reveal_store._revalidate_authorized_market_execution_sources(claim)
+        external_effect_started = True
+        owned_acquisition = _acquire_owned_development_market_evidence()
+        bundle, owned_transport_capability = (
+            _unwrap_owned_development_market_acquisition(owned_acquisition)
+        )
+        if (
+            type(bundle) is not dict
+            or bundle.get("acquisition_plan_sha256")
+            != claim["market_acquisition_plan_sha256"]
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned market bundle crossed its claimed plan"
+            )
+        _bind_owned_market_transport_capability_to_claim(
+            owned_transport_capability,
+            development_root_scope_sha256=development_root_scope_sha256,
+            claim_sha256=claim["claim_sha256"],
+        )
+        validation = validate_development_market_acquisition_bundle(
+            bundle,
+            expected_acquisition_plan_sha256=claim[
+                "market_acquisition_plan_sha256"
+            ],
+            expected_acquisition_receipt_sha256=bundle[
+                "acquisition_receipt_sha256"
+            ],
+            expected_bundle_sha256=bundle["bundle_sha256"],
+        )
+        validation_sha256 = validation.get("validation_sha256")
+        if not _is_bare_sha256(validation_sha256):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned market bundle validation is not exact"
+        )
+        reveal_store._revalidate_authorized_market_execution_sources(claim)
+        marker_state = [False]
+        _persist_market_batch(
+            component_directory,
+            claim=claim,
+            bundle=bundle,
+            acquisition_validation_sha256=validation_sha256,
+            marker_state=marker_state,
+        )
+        receipt = reveal_store._record_owned_development_market_reader_output(
+            owned_transport_capability=owned_transport_capability,
+            **record_kwargs
+        )
+        receipt = _validated_market_reader_receipt(
+            receipt,
+            claim=claim,
+            development_root_scope_sha256=development_root_scope_sha256,
+        )
+        return {"claim": claim, "reader_receipt": receipt}
+    except Exception:
+        _attempt_market_abort(
+            reveal_store,
+            development_root_scope_sha256=development_root_scope_sha256,
+            reason=(
+                "external_effect_failed_or_completion_unknown"
+                if external_effect_started
+                else "durable_output_verification_failed"
+            ),
+        )
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market execution failed and will not be retried"
+        ) from None
+
+
+def run_owned_development_market_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Run once, or replay only an already-committed market reader receipt."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development market scope must be a bare lowercase SHA-256"
+        )
+    try:
+        execution_lock = reveal_store._owned_market_execution_lock()
+        execution_lock.__enter__()
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned market execution is already globally owned or cannot be locked"
+        ) from None
+    try:
+        return _run_owned_development_market_batch_locked(
+            reveal_store=reveal_store,
+            development_root_scope_sha256=development_root_scope_sha256,
+        )
+    finally:
+        execution_lock.__exit__(None, None, None)
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
+    "run_owned_development_market_batch",
     "run_owned_development_model_batch",
     "run_owned_development_sec_root",
     "run_owned_stage_model_batch",

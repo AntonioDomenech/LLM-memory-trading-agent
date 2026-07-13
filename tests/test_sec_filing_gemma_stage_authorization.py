@@ -27,6 +27,10 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
     candidate_design_sha256,
 )
+from agent_benchmark.sec_filing_gemma_market_acquirer import (
+    build_development_market_acquisition_plan,
+)
+from agent_benchmark.sec_filing_gemma_market_evidence import MARKET_SYMBOLS
 from agent_benchmark.sec_filing_gemma_stage_access import (
     DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
@@ -42,6 +46,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION,
     CONSUMPTION_ENTRY_SCHEMA_VERSION,
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
+    DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
+    DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
+    DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION,
     DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION,
@@ -49,6 +56,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     DEVELOPMENT_MODEL_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_MODEL_READER_RECEIPT_SCHEMA_VERSION,
     DEVELOPMENT_ROOT_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
+    MARKET_EXECUTION_SOURCE_ROLES,
     MODEL_EXECUTION_SOURCE_ROLES,
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
@@ -67,6 +75,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
+    build_development_market_execution_abort,
+    build_development_market_execution_claim,
+    build_development_market_reader_receipt,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
@@ -86,6 +97,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_consumed_stage_authorization_grant,
     validate_consumed_stage_output_receipt,
     validate_consumed_stage_store_state_pin,
+    validate_development_market_execution_abort,
+    validate_development_market_execution_claim,
+    validate_development_market_reader_receipt,
     validate_development_root_carry_in_reader_receipt,
     validate_development_model_execution_abort,
     validate_development_model_execution_claim,
@@ -136,6 +150,24 @@ def _development_model_source_hashes(state: dict) -> dict[str, str]:
         "candidate_manifest"
     ]["bindings"]["source_hashes"]
     return {role: source_hashes[role] for role in MODEL_EXECUTION_SOURCE_ROLES}
+
+
+def _development_market_source_hashes(state: dict) -> dict[str, str]:
+    source_hashes = state["latest_registry"]["entries"][-1][
+        "candidate_manifest"
+    ]["bindings"]["source_hashes"]
+    return {role: source_hashes[role] for role in MARKET_EXECUTION_SOURCE_ROLES}
+
+
+_MARKET_PLAN_SOURCE_ROLES = {
+    "agent_benchmark/sec_filing_gemma_market_acquirer.py": "market_acquirer",
+    "agent_benchmark/sec_filing_gemma_market_evidence.py": "market_evidence",
+    "agent_benchmark/sec_filing_gemma_market_source_bytes.py": (
+        "market_source_bytes"
+    ),
+    "agent_benchmark/sec_filing_gemma_contract.py": "contract",
+    "agent_benchmark/sec_session_calendar.py": "calendar",
+}
 
 
 def _bundle_model_source_hashes(bundle: dict) -> dict[str, str]:
@@ -210,6 +242,9 @@ def _development_root_context() -> tuple[dict, dict, dict, dict]:
         role: _h(f"development source:{role}")
         for role in REQUIRED_SOURCE_HASHES
     }
+    market_plan = build_development_market_acquisition_plan()
+    for path, digest in market_plan["source_code_sha256s"].items():
+        source_hashes[_MARKET_PLAN_SOURCE_ROLES[path]] = digest
     attempt_id = f"{CONTRACT_VERSION}-attempt-001"
     candidate = build_candidate_manifest(
         model_digest=_h("development model"),
@@ -693,6 +728,9 @@ def _next_tip(
             "development_sec_execution_claims",
             "development_sec_reader_receipts",
             "development_sec_execution_aborts",
+            "development_market_execution_claims",
+            "development_market_reader_receipts",
+            "development_market_execution_aborts",
             "development_root_carry_in_reader_receipts",
             "stage_model_execution_claims",
             "stage_model_reader_receipts",
@@ -709,6 +747,158 @@ def _next_tip(
         previous_tip_anchor_sha256=prior_tip["tip_anchor_sha256"],
         **maps,
     )
+
+
+def _market_byte_index(
+    *,
+    raw_response_sha256s: dict[str, str],
+    artifact_sha256s: dict[str, str],
+    window_sha256s: dict[str, str],
+) -> list[dict]:
+    layout: list[tuple[str, str, str]] = []
+    for symbol in MARKET_SYMBOLS:
+        layout.append(
+            (
+                f"raw-response-{symbol}",
+                f"raw-response-{symbol}.json",
+                raw_response_sha256s[symbol],
+            )
+        )
+    for symbol in MARKET_SYMBOLS:
+        layout.append(
+            (
+                f"artifact-{symbol}",
+                f"artifact-{symbol}.json",
+                artifact_sha256s[symbol],
+            )
+        )
+    for symbol in MARKET_SYMBOLS:
+        layout.append(
+            (
+                f"window-{symbol}",
+                f"window-{symbol}.json",
+                window_sha256s[symbol],
+            )
+        )
+    layout.extend(
+        (
+            (
+                "source-manifest",
+                "source-manifest.json",
+                _h("development market source manifest file bytes"),
+            ),
+            (
+                "stage-manifest",
+                "stage-manifest.json",
+                _h("development market stage manifest file bytes"),
+            ),
+            (
+                "reconciliation-receipt",
+                "reconciliation-receipt.json",
+                _h("development market reconciliation receipt file bytes"),
+            ),
+            (
+                "acquisition-receipt",
+                "acquisition-receipt.json",
+                _h("development market acquisition receipt file bytes"),
+            ),
+        )
+    )
+    return [
+        {
+            "ordinal": ordinal,
+            "logical_id": logical_id,
+            "relative_path": relative_path,
+            "byte_count": 100 + ordinal,
+            "sha256": digest,
+        }
+        for ordinal, (logical_id, relative_path, digest) in enumerate(
+            layout,
+            start=1,
+        )
+    ]
+
+
+def _development_market_receipt_inputs() -> dict:
+    raw_response_sha256s = {
+        symbol: _h(f"development market raw response:{symbol}")
+        for symbol in MARKET_SYMBOLS
+    }
+    artifact_sha256s = {
+        symbol: _h(f"development market artifact:{symbol}")
+        for symbol in MARKET_SYMBOLS
+    }
+    window_sha256s = {
+        symbol: _h(f"development market window:{symbol}")
+        for symbol in MARKET_SYMBOLS
+    }
+    values = {
+        "acquisition_receipt_sha256": _h(
+            "development market acquisition receipt"
+        ),
+        "acquisition_bundle_sha256": _h("development market acquisition bundle"),
+        "acquisition_validation_sha256": _h(
+            "development market acquisition validation"
+        ),
+        "source_manifest_sha256": _h("development market source manifest"),
+        "market_stage_manifest_sha256": _h(
+            "development market stage manifest"
+        ),
+        "source_reconciliation_sha256": _h(
+            "development market source reconciliation"
+        ),
+        "raw_response_sha256s": raw_response_sha256s,
+        "artifact_sha256s": artifact_sha256s,
+        "window_sha256s": window_sha256s,
+        "complete_marker_sha256": _h("development market complete marker"),
+        "owned_transport_attested_by_store": True,
+    }
+    values["byte_index"] = _market_byte_index(
+        raw_response_sha256s=raw_response_sha256s,
+        artifact_sha256s=artifact_sha256s,
+        window_sha256s=window_sha256s,
+    )
+    return values
+
+
+def _completed_development_market_lifecycle(
+    state: dict,
+    root_reader_tip: dict,
+    *,
+    scope_hash: str,
+) -> tuple[dict, dict, dict, dict, dict]:
+    acquisition_plan = build_development_market_acquisition_plan()
+    claim = build_development_market_execution_claim(
+        state,
+        development_root_scope_sha256=scope_hash,
+        independent_current_tip_anchor=root_reader_tip,
+        market_acquisition_plan=acquisition_plan,
+        execution_source_hashes=_development_market_source_hashes(state),
+    )
+    claim_tip = _next_tip(
+        state,
+        root_reader_tip,
+        development_market_execution_claims={scope_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        root_reader_tip,
+        claim_tip,
+        authenticated_store_snapshot=state,
+    )
+    receipt_inputs = _development_market_receipt_inputs()
+    reader = build_development_market_reader_receipt(claim, **receipt_inputs)
+    reader_tip = _next_tip(
+        state,
+        claim_tip,
+        development_market_reader_receipts={scope_hash: reader},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, reader_tip)
+    return claim_tip, reader_tip, claim, reader, {
+        "scope_sha256": scope_hash,
+        "acquisition_plan": acquisition_plan,
+        "reader": reader,
+        "receipt_inputs": receipt_inputs,
+    }
 
 
 def _completed_sec_output_ancestry(
@@ -929,6 +1119,9 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
     root_claim = root_binding["root_claim"]
     root_reader = root_binding["root_reader"]
     root_scope_hash = root_binding["root_scope_sha256"]
+    root_market_claim = root_binding["root_market_claim"]
+    root_market_reader = root_binding["root_market_reader"]
+    root_market_reader_tip = root_binding["root_market_reader_tip"]
     root_execution_sources = root_binding["root_execution_sources"]
     candidate = root_state["latest_registry"]["entries"][0][
         "candidate_manifest"
@@ -1007,11 +1200,17 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
     parent_request_hash = parent_entry["request_sha256"]
     parent_tip = build_reveal_store_current_tip_anchor(
         parent_state,
-        revision=1,
-        previous_tip_anchor_sha256=_h("parent prior tip"),
+        revision=root_market_reader_tip["revision"] + 1,
+        previous_tip_anchor_sha256=root_market_reader_tip["tip_anchor_sha256"],
         authorization_bundles={parent_request_hash: parent_bundle},
         development_sec_execution_claims={root_scope_hash: root_claim},
         development_sec_reader_receipts={root_scope_hash: root_reader},
+        development_market_execution_claims={
+            root_scope_hash: root_market_claim
+        },
+        development_market_reader_receipts={
+            root_scope_hash: root_market_reader
+        },
     )
     parent_claim = build_stage_sec_execution_claim(
         parent_bundle,
@@ -1174,6 +1373,12 @@ def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         stage_sec_reader_receipts={parent_request_hash: parent_reader},
         development_sec_execution_claims={root_scope_hash: root_claim},
         development_sec_reader_receipts={root_scope_hash: root_reader},
+        development_market_execution_claims={
+            root_scope_hash: root_market_claim
+        },
+        development_market_reader_receipts={
+            root_scope_hash: root_market_reader
+        },
     )
     child_claim = build_stage_sec_execution_claim(
         child_bundle,
@@ -1361,6 +1566,17 @@ def _development_root_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         root_claim_tip,
         development_sec_reader_receipts={root_scope_hash: root_reader},
     )
+    (
+        root_market_claim_tip,
+        root_market_reader_tip,
+        root_market_claim,
+        root_market_reader,
+        root_market_binding,
+    ) = _completed_development_market_lifecycle(
+        root_state,
+        root_reader_tip,
+        scope_hash=root_scope_hash,
+    )
 
     candidate = root_state["latest_registry"]["entries"][0]["candidate_manifest"]
     root_registry_entry = root_state["latest_registry"]["entries"][0]
@@ -1537,11 +1753,17 @@ def _development_root_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
     child_request_hash = child_entry["request_sha256"]
     child_tip = build_reveal_store_current_tip_anchor(
         child_state,
-        revision=root_reader_tip["revision"] + 1,
-        previous_tip_anchor_sha256=root_reader_tip["tip_anchor_sha256"],
+        revision=root_market_reader_tip["revision"] + 1,
+        previous_tip_anchor_sha256=root_market_reader_tip["tip_anchor_sha256"],
         authorization_bundles={child_request_hash: child_bundle},
         development_sec_execution_claims={root_scope_hash: root_claim},
         development_sec_reader_receipts={root_scope_hash: root_reader},
+        development_market_execution_claims={
+            root_scope_hash: root_market_claim
+        },
+        development_market_reader_receipts={
+            root_scope_hash: root_market_reader
+        },
     )
     child_claim = build_stage_sec_execution_claim(
         child_bundle,
@@ -1615,6 +1837,11 @@ def _development_root_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
         "child_claim_tip": child_claim_tip,
         "root_state": root_state,
         "root_reader_tip": root_reader_tip,
+        "root_market_claim_tip": root_market_claim_tip,
+        "root_market_reader_tip": root_market_reader_tip,
+        "root_market_claim": root_market_claim,
+        "root_market_reader": root_market_reader,
+        "root_market_binding": root_market_binding,
         "root_plan": plan,
         "root_execution_sources": execution_sources,
     }
@@ -1630,6 +1857,52 @@ def _model_byte_index(salt: str) -> list[dict]:
             "sha256": _h(f"{salt}:model batch manifest"),
         }
     ]
+
+
+_MODEL_MARKET_SHA_FIELDS = (
+    "development_market_execution_claim_sha256",
+    "development_market_reader_receipt_sha256",
+    "development_market_acquisition_receipt_sha256",
+    "development_market_acquisition_bundle_sha256",
+    "development_market_acquisition_validation_sha256",
+    "development_market_source_manifest_sha256",
+    "development_market_stage_manifest_sha256",
+    "development_market_source_reconciliation_sha256",
+    "development_market_byte_index_sha256",
+)
+
+
+def _assert_model_market_bindings(value: dict, tip: dict, scope_hash: str) -> None:
+    market_claim = tip["development_market_execution_claims"][scope_hash]
+    market_reader = tip["development_market_reader_receipts"][scope_hash]
+    expected = {
+        "development_market_execution_claim_sha256": market_claim["claim_sha256"],
+        "development_market_reader_receipt_sha256": market_reader[
+            "receipt_sha256"
+        ],
+        "development_market_acquisition_receipt_sha256": market_reader[
+            "acquisition_receipt_sha256"
+        ],
+        "development_market_acquisition_bundle_sha256": market_reader[
+            "acquisition_bundle_sha256"
+        ],
+        "development_market_acquisition_validation_sha256": market_reader[
+            "acquisition_validation_sha256"
+        ],
+        "development_market_source_manifest_sha256": market_reader[
+            "source_manifest_sha256"
+        ],
+        "development_market_stage_manifest_sha256": market_reader[
+            "market_stage_manifest_sha256"
+        ],
+        "development_market_source_reconciliation_sha256": market_reader[
+            "source_reconciliation_sha256"
+        ],
+        "development_market_byte_index_sha256": market_reader[
+            "byte_index_sha256"
+        ],
+    }
+    assert {field: value[field] for field in _MODEL_MARKET_SHA_FIELDS} == expected
 
 
 def _stage_model_fixture(
@@ -1684,7 +1957,7 @@ def _stage_model_fixture(
 def _development_model_fixture() -> tuple[dict, dict, dict, dict, dict]:
     _state, _tip, _carry, binding = _development_root_carry_in_fixture()
     root_state = binding["root_state"]
-    root_reader_tip = binding["root_reader_tip"]
+    root_reader_tip = binding["root_market_reader_tip"]
     scope_hash = binding["root_scope_sha256"]
     claim = build_development_model_execution_claim(
         root_state,
@@ -1714,6 +1987,192 @@ def _development_model_fixture() -> tuple[dict, dict, dict, dict, dict]:
         "byte_index": byte_index,
         "complete_marker_sha256": _h("development:model complete marker"),
     }
+
+
+def _development_market_fixture() -> tuple[dict, dict, dict, dict, dict]:
+    _state, _tip, _carry, root_binding = _development_root_carry_in_fixture()
+    root_state = root_binding["root_state"]
+    root_reader_tip = root_binding["root_reader_tip"]
+    return (
+        root_state,
+        root_reader_tip,
+        root_binding["root_market_claim_tip"],
+        root_binding["root_market_claim"],
+        copy.deepcopy(root_binding["root_market_binding"]),
+    )
+
+
+def test_development_market_claim_and_reader_are_exact_dedicated_lifecycle() -> None:
+    state, prior_tip, claim_tip, claim, binding = _development_market_fixture()
+    scope_hash = binding["scope_sha256"]
+    assert claim["schema_version"] == DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION
+    assert claim["authorized_stage"] == "development"
+    assert claim["fixed_request_count"] == 6
+    assert claim["market_access_permitted"] is True
+    assert claim["external_network_access_permitted"] is True
+    assert claim["paid_api_access_permitted"] is False
+    assert claim["outcome_access_permitted"] is False
+    assert claim["future_stage_access_permitted"] is False
+    assert claim["reveal_request_consumption_permitted"] is False
+    assert claim["consumption_ledger_mutation_permitted"] is False
+    assert claim["effect_may_be_repeated_after_indeterminate_crash"] is False
+    assert claim["market_acquisition_plan"] == binding["acquisition_plan"]
+    assert claim_tip["state_sha256"] == prior_tip["state_sha256"]
+    assert claim_tip["consumed_request_count"] == prior_tip["consumed_request_count"]
+    assert (
+        validate_development_market_execution_claim(
+            claim,
+            independent_current_tip_anchor=claim_tip,
+        )
+        == claim["claim_sha256"]
+    )
+
+    reader = binding["reader"]
+    reader_tip = _next_tip(
+        state,
+        claim_tip,
+        development_market_reader_receipts={scope_hash: reader},
+    )
+    prior, validated = validate_reveal_store_current_tip_anchor_transition(
+        claim_tip,
+        reader_tip,
+    )
+    assert prior == claim_tip
+    assert validated == reader_tip
+    assert reader["schema_version"] == DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION
+    assert reader["fresh_network_provenance_claimed"] is False
+    assert reader["provider_response_normalization_replayed_by_store"] is True
+    assert reader["owned_transport_attested_by_store"] is True
+    assert len(reader["byte_index"]) == 22
+    index_by_path = {
+        item["relative_path"]: item for item in reader["byte_index"]
+    }
+    assert (
+        index_by_path["source-manifest.json"]["sha256"]
+        != reader["source_manifest_sha256"]
+    )
+    assert (
+        validate_development_market_reader_receipt(
+            reader,
+            independent_current_tip_anchor=reader_tip,
+            **binding["receipt_inputs"],
+        )
+        == reader["receipt_sha256"]
+    )
+
+
+def test_development_market_reader_rejects_previous_synthetic_one_file_index() -> None:
+    _state, _prior_tip, _claim_tip, claim, binding = (
+        _development_market_fixture()
+    )
+    receipt_inputs = copy.deepcopy(binding["receipt_inputs"])
+    receipt_inputs["byte_index"] = [
+        {
+            "ordinal": 1,
+            "logical_id": "market-acquisition-bundle",
+            "relative_path": "market-acquisition-bundle.json",
+            "byte_count": 379,
+            "sha256": _h("development market acquisition bundle bytes"),
+        }
+    ]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exact ordered layout",
+    ):
+        build_development_market_reader_receipt(claim, **receipt_inputs)
+
+    receipt_inputs = copy.deepcopy(binding["receipt_inputs"])
+    receipt_inputs["owned_transport_attested_by_store"] = False
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="owned transport attestation",
+    ):
+        build_development_market_reader_receipt(claim, **receipt_inputs)
+
+
+def test_development_market_active_claim_only_allows_exact_terminal_abort() -> None:
+    state, _prior_tip, claim_tip, claim, binding = _development_market_fixture()
+    scope_hash = binding["scope_sha256"]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="Active development market execution claim",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            claim_tip,
+            _next_tip(state, claim_tip),
+        )
+
+    abort = build_development_market_execution_abort(
+        claim,
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    abort_tip = _next_tip(
+        state,
+        claim_tip,
+        development_market_execution_aborts={scope_hash: abort},
+    )
+    validate_reveal_store_current_tip_anchor_transition(claim_tip, abort_tip)
+    assert abort["schema_version"] == DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION
+    assert abort["external_effect_retry_permitted"] is False
+    assert (
+        validate_development_market_execution_abort(
+            abort,
+            independent_current_tip_anchor=abort_tip,
+        )
+        == abort["abort_sha256"]
+    )
+
+
+def test_development_market_claim_rejects_unpinned_or_changed_authority() -> None:
+    state, prior_tip, claim_tip, claim, binding = _development_market_fixture()
+    scope_hash = binding["scope_sha256"]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="authenticated prior store snapshot",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(prior_tip, claim_tip)
+
+    changed_plan = copy.deepcopy(binding["acquisition_plan"])
+    changed_plan["transport_authority"]["estimated_cost_usd"] = "0.01"
+    _rehash(changed_plan, "acquisition_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="changed its exact authority",
+    ):
+        build_development_market_execution_claim(
+            state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=prior_tip,
+            market_acquisition_plan=changed_plan,
+            execution_source_hashes=_development_market_source_hashes(state),
+        )
+
+    changed_sources = _development_market_source_hashes(state)
+    changed_sources["market_acquirer"] = _h("unregistered market acquirer")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="acquisition plan differs from its execution source closure",
+    ):
+        build_development_market_execution_claim(
+            state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=prior_tip,
+            market_acquisition_plan=binding["acquisition_plan"],
+            execution_source_hashes=changed_sources,
+        )
+
+    changed_reader = copy.deepcopy(binding["reader"])
+    changed_reader["fresh_network_provenance_claimed"] = True
+    _rehash(changed_reader, "receipt_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="reader receipt semantics changed",
+    ):
+        _next_tip(
+            state,
+            claim_tip,
+            development_market_reader_receipts={scope_hash: changed_reader},
+        )
 
 
 def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
@@ -3524,6 +3983,11 @@ def test_intermediate_model_claim_binds_terminal_sec_carry_candidate_and_limits(
     assert claim["development_root_scope_sha256"] in carry_tip[
         "development_sec_execution_claims"
     ]
+    _assert_model_market_bindings(
+        claim,
+        carry_tip,
+        claim["development_root_scope_sha256"],
+    )
     for field in (
         "caller_supplied_path_permitted",
         "filing_text_included",
@@ -3556,6 +4020,40 @@ def test_intermediate_model_claim_binds_terminal_sec_carry_candidate_and_limits(
         )
 
 
+@pytest.mark.parametrize("stage", ["intermediate", "final"])
+@pytest.mark.parametrize("market_terminal", ["missing", "aborted"])
+def test_stage_model_requires_successful_same_root_market_terminal(
+    stage: str,
+    market_terminal: str,
+) -> None:
+    state, carry_tip, _claim_tip, claim, binding = _stage_model_fixture(stage)
+    request_hash = binding["request_sha256"]
+    scope_hash = claim["development_root_scope_sha256"]
+    market_claim = carry_tip["development_market_execution_claims"][scope_hash]
+    market_aborts: dict[str, dict] = {}
+    if market_terminal == "aborted":
+        market_aborts[scope_hash] = build_development_market_execution_abort(
+            market_claim,
+            reason="external_effect_failed_or_completion_unknown",
+        )
+    no_success_tip = _next_tip(
+        state,
+        carry_tip,
+        development_market_reader_receipts={},
+        development_market_execution_aborts=market_aborts,
+    )
+    bundle = no_success_tip["authorization_bundles"][request_hash]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exactly one successful, non-aborted",
+    ):
+        build_stage_model_execution_claim(
+            bundle,
+            independent_current_tip_anchor=no_success_tip,
+            execution_source_hashes=_bundle_model_source_hashes(bundle),
+        )
+
+
 def test_stage_model_reader_and_abort_are_exact_distinct_terminals() -> None:
     state, _carry_tip, claim_tip, claim, binding = _stage_model_fixture()
     request_hash = binding["request_sha256"]
@@ -3571,6 +4069,7 @@ def test_stage_model_reader_and_abort_are_exact_distinct_terminals() -> None:
         "event_count",
         "event_plan_sha256",
         "identity_lexicon_sha256",
+        *_MODEL_MARKET_SHA_FIELDS,
     ):
         assert reader[field] == claim[field]
     reader_tip = _next_tip(
@@ -3585,6 +4084,21 @@ def test_stage_model_reader_and_abort_are_exact_distinct_terminals() -> None:
         byte_index=binding["byte_index"],
         complete_marker_sha256=binding["complete_marker_sha256"],
     ) == reader["receipt_sha256"]
+
+    crossed_reader = copy.deepcopy(reader)
+    crossed_reader["development_market_byte_index_sha256"] = _h(
+        "crossed stage model market byte index"
+    )
+    _rehash(crossed_reader, "receipt_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="crossed its execution claim",
+    ):
+        _next_tip(
+            state,
+            claim_tip,
+            stage_model_reader_receipts={request_hash: crossed_reader},
+        )
 
     abort = build_stage_model_execution_abort(
         claim,
@@ -3686,6 +4200,14 @@ def test_stage_model_rejects_rehashed_event_identity_and_root_mutations() -> Non
                 "forged development SEC root reader"
             )
         ),
+        *[
+            (
+                lambda value, field=field: value.update(
+                    {field: _h(f"forged stage model {field}")}
+                )
+            )
+            for field in _MODEL_MARKET_SHA_FIELDS
+        ],
     ]
     for mutate in mutators:
         forged_claim = copy.deepcopy(claim)
@@ -3777,6 +4299,7 @@ def test_development_model_lifecycle_is_request_free_and_has_no_carry() -> None:
     assert claim["consumption_ledger_mutation_permitted"] is False
     assert claim["model_runtime_limits"]["model_call_cap"] == 80
     assert claim["identity_lexicon_sha256"] == CANONICAL_IDENTITY_LEXICON_SHA256
+    _assert_model_market_bindings(claim, root_tip, scope_hash)
     assert claim["event_count"] == len(claim["event_plan"])
     assert [
         (event["availability_session"], event["accession_number"])
@@ -3812,6 +4335,7 @@ def test_development_model_lifecycle_is_request_free_and_has_no_carry() -> None:
         "event_count",
         "event_plan_sha256",
         "identity_lexicon_sha256",
+        *_MODEL_MARKET_SHA_FIELDS,
     ):
         assert reader[field] == claim[field]
     reader_tip = _next_tip(
@@ -3826,6 +4350,55 @@ def test_development_model_lifecycle_is_request_free_and_has_no_carry() -> None:
         byte_index=binding["byte_index"],
         complete_marker_sha256=binding["complete_marker_sha256"],
     ) == reader["receipt_sha256"]
+
+    crossed_reader = copy.deepcopy(reader)
+    crossed_reader["development_market_acquisition_bundle_sha256"] = _h(
+        "crossed development model market bundle"
+    )
+    _rehash(crossed_reader, "receipt_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="crossed its execution claim",
+    ):
+        _next_tip(
+            state,
+            claim_tip,
+            development_model_reader_receipts={scope_hash: crossed_reader},
+        )
+
+
+@pytest.mark.parametrize("market_terminal", ["missing", "aborted"])
+def test_development_model_requires_successful_same_root_market_terminal(
+    market_terminal: str,
+) -> None:
+    _child_state, _child_tip, _carry, root_binding = (
+        _development_root_carry_in_fixture()
+    )
+    state = root_binding["root_state"]
+    scope_hash = root_binding["root_scope_sha256"]
+    if market_terminal == "missing":
+        no_success_tip = root_binding["root_reader_tip"]
+    else:
+        market_claim = root_binding["root_market_claim"]
+        market_abort = build_development_market_execution_abort(
+            market_claim,
+            reason="external_effect_failed_or_completion_unknown",
+        )
+        no_success_tip = _next_tip(
+            state,
+            root_binding["root_market_claim_tip"],
+            development_market_execution_aborts={scope_hash: market_abort},
+        )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exactly one successful, non-aborted",
+    ):
+        build_development_model_execution_claim(
+            state,
+            development_root_scope_sha256=scope_hash,
+            independent_current_tip_anchor=no_success_tip,
+            execution_source_hashes=_development_model_source_hashes(state),
+        )
 
 
 def test_development_model_claim_transition_rebuilds_every_candidate_model_source_binding() -> None:
@@ -3908,6 +4481,14 @@ def test_development_model_claim_transition_rebuilds_every_candidate_model_sourc
         lambda value: change_event_field(value, "sec_document_ordinal", 99),
         lambda value: value.update(
             identity_lexicon_sha256=_h("forged development identity lexicon")
+        ),
+        *(
+            (
+                lambda value, field=field: value.update(
+                    {field: _h(f"forged development model {field}")}
+                )
+            )
+            for field in _MODEL_MARKET_SHA_FIELDS
         ),
     )
     for mutate in mutators:

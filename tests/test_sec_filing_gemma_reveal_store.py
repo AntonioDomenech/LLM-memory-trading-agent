@@ -20,6 +20,7 @@ import pytest
 import agent_benchmark.sec_filing_gemma_reveal_store as reveal_store_module
 import agent_benchmark.sec_filing_gemma_ollama as ollama_module
 import agent_benchmark.sec_filing_gemma_stage_runner as stage_runner_module
+from tests import test_sec_filing_gemma_market_acquirer as market_scaffold
 
 from agent_benchmark.sec_audit_transport import ResponseAudit
 from agent_benchmark.sec_filing_gemma_contract import (
@@ -1168,6 +1169,10 @@ def _prepare_development_model_claim(
     sec_reader = store._record_owned_development_sec_root_reader_output(
         development_root_scope_sha256=plan["development_root_scope_sha256"],
     )
+    market_result = _complete_development_market_without_network(
+        store,
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
     model_claim_result = store.claim_owned_development_model_execution(
         development_root_scope_sha256=plan["development_root_scope_sha256"],
     )
@@ -1178,9 +1183,29 @@ def _prepare_development_model_claim(
         "plan": plan,
         "sec_claim": sec_claim,
         "sec_reader": sec_reader,
+        "market_result": market_result,
         "model_claim_result": model_claim_result,
         "model_claim": model_claim_result["claim"],
     }
+
+
+def _complete_development_market_without_network(
+    store: SecFilingGemmaRevealStore,
+    *,
+    development_root_scope_sha256: str,
+) -> dict:
+    """Complete the exact owned market lifecycle with offline provider bytes."""
+
+    owned_acquisition = market_scaffold._owned_acquisition_without_network()
+    with patch.object(
+        stage_runner_module,
+        "_acquire_owned_development_market_evidence",
+        return_value=owned_acquisition,
+    ):
+        return stage_runner_module.run_owned_development_market_batch(
+            reveal_store=store,
+            development_root_scope_sha256=development_root_scope_sha256,
+        )
 
 
 def _write_semantically_empty_model_component(
@@ -1482,7 +1507,10 @@ def _prepare_intermediate_development_root_carry_in_chain(
     salt: str,
     root_after_child: bool = False,
     complete_intermediate_documents: bool = False,
+    complete_development_market: bool = False,
 ) -> dict:
+    if root_after_child and complete_development_market:
+        raise AssertionError("Market completion requires the development root first")
     registered, candidate, universe, plan = _registered_development_root(
         store,
         salt=salt,
@@ -1499,6 +1527,16 @@ def _prepare_intermediate_development_root_carry_in_chain(
         )
         root_reader = store._record_owned_development_sec_root_reader_output(
             development_root_scope_sha256=plan["development_root_scope_sha256"],
+        )
+        market_result = (
+            _complete_development_market_without_network(
+                store,
+                development_root_scope_sha256=plan[
+                    "development_root_scope_sha256"
+                ],
+            )
+            if complete_development_market
+            else None
         )
     carry_records = _prior_same_form_carry_ins(
         universe,
@@ -1605,6 +1643,7 @@ def _prepare_intermediate_development_root_carry_in_chain(
         root_reader = store._record_owned_development_sec_root_reader_output(
             development_root_scope_sha256=plan["development_root_scope_sha256"],
         )
+        market_result = None
     child_claim, child_reader = _complete_fixed_sec_ancestry(
         store,
         intermediate_request["request_sha256"],
@@ -1641,6 +1680,7 @@ def _prepare_intermediate_development_root_carry_in_chain(
         "plan": plan,
         "root_claim": root_claim,
         "root_reader": root_reader,
+        "market_result": market_result,
         "root_directory": root_directory,
         "root_marker_path": root_marker_path,
         "content_manifest": content_manifest,
@@ -1661,7 +1701,10 @@ def _prepare_final_owned_carry_in_chain(
     tamper_carry_scope: bool = False,
     include_development_root: bool = False,
     complete_final_documents: bool = False,
+    complete_development_market: bool = False,
 ) -> dict:
+    if complete_development_market and not include_development_root:
+        raise AssertionError("Market completion requires a development root")
     if include_development_root:
         registered, candidate, universe, development_plan = (
             _registered_development_root(store, salt=salt)
@@ -1682,6 +1725,16 @@ def _prepare_final_owned_carry_in_chain(
                 ],
             )
         )
+        market_result = (
+            _complete_development_market_without_network(
+                store,
+                development_root_scope_sha256=development_plan[
+                    "development_root_scope_sha256"
+                ],
+            )
+            if complete_development_market
+            else None
+        )
     else:
         store.initialize()
         registered, candidate = _register(store, salt=salt)
@@ -1689,6 +1742,7 @@ def _prepare_final_owned_carry_in_chain(
         development_plan = None
         development_claim = None
         development_reader = None
+        market_result = None
     final_universe_records = sorted(
         (
             record
@@ -1944,6 +1998,7 @@ def _prepare_final_owned_carry_in_chain(
         "development_plan": development_plan,
         "development_claim": development_claim,
         "development_reader": development_reader,
+        "market_result": market_result,
         "parent_request": parent_request,
         "parent_bundle": parent_bundle,
         "parent_claim": parent_claim,
@@ -6441,6 +6496,7 @@ def test_development_model_claim_is_state_preserving_idempotent_and_loads_exact_
         "events",
     }
     assert loaded["claim"] == claim
+    assert claim["market_access_permitted"] is False
     assert loaded["candidate_manifest"] == prepared["candidate"]
     assert loaded["corpus_universe_manifest"] == prepared["universe"]
     assert set(loaded["content_manifests_by_stage"]) == {"development"}
@@ -6451,6 +6507,30 @@ def test_development_model_claim_is_state_preserving_idempotent_and_loads_exact_
     assert loaded["carry_in_reader_receipt_sha256"] is None
     assert len(loaded["events"]) == claim["event_count"]
     assert [event["event"] for event in loaded["events"]] == claim["event_plan"]
+    forbidden_market_fragments = (
+        b"regularMarketTime",
+        b"raw_response_bytes_by_symbol",
+        b"raw-response-",
+    )
+
+    def contains_forbidden_market_fragment(value: object) -> bool:
+        if type(value) is dict:
+            return any(
+                contains_forbidden_market_fragment(key)
+                or contains_forbidden_market_fragment(item)
+                for key, item in value.items()
+            )
+        if type(value) in {list, tuple}:
+            return any(contains_forbidden_market_fragment(item) for item in value)
+        if type(value) is str:
+            leaf = value.encode("utf-8")
+        elif type(value) is bytes:
+            leaf = value
+        else:
+            return False
+        return any(fragment in leaf for fragment in forbidden_market_fragments)
+
+    assert contains_forbidden_market_fragment(loaded) is False
     first_by_form: set[str] = set()
     for event in loaded["events"]:
         form = event["event"]["form"]
@@ -6486,6 +6566,10 @@ def test_development_model_claim_wal_crash_recovers_once_with_store_snapshot(
         development_root_scope_sha256=plan["development_root_scope_sha256"],
     )
     scope_hash = plan["development_root_scope_sha256"]
+    _complete_development_market_without_network(
+        store,
+        development_root_scope_sha256=scope_hash,
+    )
     state_bytes = store.state_path.read_bytes()
     tip_before = store.load_current_tip_anchor()
     real_atomic_replace = reveal_store_module._atomic_replace
@@ -6640,6 +6724,10 @@ def test_valid_model_component_finalizes_and_rejects_rehashed_mutations_and_toct
     store._record_owned_development_sec_root_reader_output(
         development_root_scope_sha256=plan["development_root_scope_sha256"],
     )
+    _complete_development_market_without_network(
+        store,
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
     _install_synthetic_owned_ollama(
         monkeypatch,
         version_bytes=version_bytes,
@@ -6749,6 +6837,7 @@ def test_intermediate_model_claim_uses_exact_sec_root_and_carry_inputs(
         store,
         salt="intermediate-model-inputs",
         complete_intermediate_documents=True,
+        complete_development_market=True,
     )
     request_hash = prepared["intermediate_request"]["request_sha256"]
     carry_receipt = store._record_owned_development_root_carry_in_reader_output(
@@ -6802,6 +6891,7 @@ def test_final_model_claim_uses_exact_root_parent_sec_and_stage_carry_ancestry(
         salt="final-model-inputs",
         include_development_root=True,
         complete_final_documents=True,
+        complete_development_market=True,
     )
     request_hash = prepared["final_request"]["request_sha256"]
     carry_receipt = store._record_owned_stage_carry_in_reader_output(

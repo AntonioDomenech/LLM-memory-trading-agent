@@ -153,7 +153,6 @@ STAGE_EVIDENCE_OUTPUT_COMPONENT_ID: Final[str] = "owned_stage_evidence_document"
 STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH: Final[str] = "stage_evidence.json"
 _EXPECTED_UNRESOLVED_SOURCE_ROLES: Final[tuple[str, ...]] = (
     "ledger",
-    "market_acquirer",
 )
 
 # These are parser/allocation ceilings, not acquisition budgets.  The SEC
@@ -342,8 +341,10 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "bytes through preprocessing, features, and matured-label evidence"
     ),
     "market_source_byte_reconciliation": (
-        "snapshot-to-stage values replay, but provider-response-to-snapshot "
-        "acquisition provenance has no authoritative receipt"
+        "the fixed provider responses now replay through a store-attested market "
+        "reader into canonical snapshots, but this detached stage verifier still "
+        "accepts caller-supplied market snapshots and no owned feature/label "
+        "assembler yet loads only the reader-bound canonical rows"
     ),
     "model_attempt_replay": (
         "exact attempt bytes replay, but the independently expected payload is "
@@ -365,15 +366,16 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "transport and monotonic runtime are not independently attested"
     ),
     "source_identity": (
-        "resolved source roles replay against frozen paths, but ledger and "
-        "market_acquirer remain unresolved; "
+        "resolved source roles replay against frozen paths, but ledger remains "
+        "unresolved; "
         "current files at loaded module paths do not yet attest the source bytes "
         "that created the executing code objects"
     ),
     "stage_access_identity": (
         "the owned runner now claims the exact current grant before the SEC batch and "
-        "the store rehashes its durable actual bytes, but market, model, carry-in, "
-        "artifact, and stage-evidence readers are not yet forced through that runner"
+        "the store rehashes its durable actual bytes; model, carry-in, and development "
+        "market reads are owned and cross-bound, but downstream artifact and "
+        "stage-evidence readers are not yet forced through the same authenticated lineage"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "
