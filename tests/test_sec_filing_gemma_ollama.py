@@ -781,7 +781,7 @@ def test_runtime_guard_binds_identical_pre_and_post_batch_identity() -> None:
     ) == guard["runtime_guard_sha256"]
 
 
-def test_runtime_guard_rejects_mid_batch_model_change_and_duplicate_receipts() -> None:
+def test_runtime_guard_rejects_mid_batch_model_change() -> None:
     before, _, digest, fingerprint = _runtime_context()
     after = copy.deepcopy(before)
     after["model_digest"] = _digest("changed-mid-batch")
@@ -794,15 +794,45 @@ def test_runtime_guard_rejects_mid_batch_model_change_and_duplicate_receipts() -
             stage="development",
             model_call_receipt_sha256s=[_digest("call")],
         )
-    with pytest.raises(SecFilingGemmaOllamaError, match="duplicate"):
-        build_runtime_identity_guard(
-            before_evidence=before,
-            after_evidence=copy.deepcopy(before),
-            expected_model_digest=digest,
-            expected_runtime_fingerprint_sha256=fingerprint,
-            stage="development",
-            model_call_receipt_sha256s=[_digest("call"), _digest("call")],
-        )
+
+
+def test_runtime_guard_preserves_duplicate_receipt_multiplicity_and_order() -> None:
+    evidence, _, digest, fingerprint = _runtime_context()
+    repeated = _digest("same-call-bytes")
+    other = _digest("other-call")
+    receipts = [repeated, repeated, other]
+    guard = build_runtime_identity_guard(
+        before_evidence=evidence,
+        after_evidence=copy.deepcopy(evidence),
+        expected_model_digest=digest,
+        expected_runtime_fingerprint_sha256=fingerprint,
+        stage="development",
+        model_call_receipt_sha256s=receipts,
+    )
+    assert guard["model_call_count"] == 3
+    assert guard["model_call_receipt_sha256s"] == receipts
+    assert guard["model_call_receipt_sequence_sha256"] == canonical_sha256(
+        receipts
+    )
+    assert validate_runtime_identity_guard(
+        guard,
+        before_evidence=evidence,
+        after_evidence=copy.deepcopy(evidence),
+        expected_model_digest=digest,
+        expected_runtime_fingerprint_sha256=fingerprint,
+        stage="development",
+        model_call_receipt_sha256s=receipts,
+    ) == guard["runtime_guard_sha256"]
+
+    reordered = build_runtime_identity_guard(
+        before_evidence=evidence,
+        after_evidence=copy.deepcopy(evidence),
+        expected_model_digest=digest,
+        expected_runtime_fingerprint_sha256=fingerprint,
+        stage="development",
+        model_call_receipt_sha256s=[repeated, other, repeated],
+    )
+    assert reordered["runtime_guard_sha256"] != guard["runtime_guard_sha256"]
 
 
 @pytest.mark.parametrize(

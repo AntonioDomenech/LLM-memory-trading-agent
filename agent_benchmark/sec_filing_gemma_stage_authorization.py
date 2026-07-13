@@ -154,16 +154,15 @@ SEC_EXECUTION_RESOLVED_SOURCE_PATHS: Final[tuple[tuple[str, str], ...]] = tuple(
     for role, path in CANONICAL_SOURCE_ROLE_PATHS.items()
     if path is not None
 )
-MODEL_EXECUTION_SOURCE_ROLES: Final[tuple[str, ...]] = (
-    "contract",
-    "extractor",
-    "extractor_prompt",
-    "extractor_schema",
-    "preprocessor",
-    "reveal_store",
-    "runner",
-    "source_identity",
-    "stage_authorization",
+# The owned model path executes through store/registry validation, SEC/carry
+# replay, the authoritative calendar, stage access/verifier ancestry, and the
+# local extractor.  Bind the complete currently resolved candidate source tree
+# instead of a hand-maintained subset so an omitted helper cannot change model
+# inputs while the execution claim still appears source-identical.  The two
+# deliberately unresolved conceptual roles remain excluded and fail closed at
+# their own later ownership gates.
+MODEL_EXECUTION_SOURCE_ROLES: Final[tuple[str, ...]] = tuple(
+    role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
 )
 _STAGE_PREREQUISITES: Final[dict[str, str]] = {
     "intermediate": "development",

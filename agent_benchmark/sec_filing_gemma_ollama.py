@@ -676,10 +676,11 @@ def build_runtime_identity_guard(
         _sha256(value, f"model_call_receipt_sha256s[{index}]")
         for index, value in enumerate(model_call_receipt_sha256s)
     ]
-    if len(receipt_hashes) != len(set(receipt_hashes)):
-        raise SecFilingGemmaOllamaError(
-            "Runtime guard call-receipt sequence contains a duplicate"
-        )
+    # Distinct chronological events can legitimately produce byte-identical
+    # attempts when their anonymized payload, response, and diagnostic elapsed
+    # time are identical.  The caller supplies the complete ordered sequence,
+    # while the store independently validates each receipt against its event;
+    # therefore multiplicity and position—not set uniqueness—are authoritative.
     body = {
         "schema_version": RUNTIME_GUARD_SCHEMA_VERSION,
         "stage": stage,

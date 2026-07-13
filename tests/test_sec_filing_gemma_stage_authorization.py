@@ -145,6 +145,15 @@ def _bundle_model_source_hashes(bundle: dict) -> dict[str, str]:
     return {role: source_hashes[role] for role in MODEL_EXECUTION_SOURCE_ROLES}
 
 
+def test_model_execution_source_roles_cover_every_resolved_candidate_source() -> None:
+    assert MODEL_EXECUTION_SOURCE_ROLES == tuple(
+        role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    )
+    assert set(MODEL_EXECUTION_SOURCE_ROLES) == {
+        role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    }
+
+
 def _development_source_record(
     year: int,
     serial: int,

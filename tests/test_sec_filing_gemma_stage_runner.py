@@ -33,7 +33,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
 from agent_benchmark.sec_filing_gemma_stage_runner import (
     SecFilingGemmaStageRunnerError,
     run_authorized_sec_stage,
+    run_owned_development_model_batch,
     run_owned_development_sec_root,
+    run_owned_stage_model_batch,
 )
 from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
 
@@ -61,6 +63,105 @@ def _claim() -> dict[str, Any]:
         "sec_user_agent_sha256": USER_AGENT_SHA256,
         "execution_source_hashes": {},
     }
+
+
+def _stage_model_claim(
+    *, request_sha256: str = "a" * 64
+) -> dict[str, Any]:
+    event_plan = [
+        {
+            "event_ordinal": 1,
+            "accession_number": "0000320193-20-000001",
+            "form": "10-K",
+            "availability_session": "2020-01-02",
+            "sec_document_ordinal": 1,
+        }
+    ]
+    limits = {
+        "model_call_count": 1,
+        "maximum_model_seconds": 3_600,
+        "redirects": 0,
+        "retries": 0,
+        "pull_attempts": 0,
+        "repair_attempts": 0,
+        "streaming": False,
+        "thinking": False,
+    }
+    sources = {"preprocessor": "e" * 64}
+    body = {
+        "request_sha256": request_sha256,
+        "candidate_sha256": "b" * 64,
+        "authorized_stage": "intermediate",
+        "output_namespace": "model-stage-test",
+        "corpus_universe_sha256": "f" * 64,
+        "stage_sec_reader_receipt_sha256": "c" * 64,
+        "carry_in_reader_receipt_sha256": "d" * 64,
+        "event_count": 1,
+        "event_plan": event_plan,
+        "event_plan_sha256": canonical_sha256(event_plan),
+        "identity_lexicon_sha256": canonical_sha256(
+            list(runner_module.CANONICAL_IDENTITY_LEXICON)
+        ),
+        "execution_source_hashes": sources,
+        "execution_source_hashes_sha256": canonical_sha256(sources),
+        "model_name": "gemma4:12b",
+        "model_digest": "1" * 64,
+        "runtime_fingerprint_sha256": "2" * 64,
+        "model_transport_sha256": "3" * 64,
+        "model_runtime_limits": limits,
+        "model_runtime_limits_sha256": canonical_sha256(limits),
+        "model_component_id": "owned_stage_gemma_model_batch",
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def _development_model_claim(
+    *, scope_sha256: str = "9" * 64
+) -> dict[str, Any]:
+    event_plan = [
+        {
+            "event_ordinal": 1,
+            "accession_number": "0000320193-00-000001",
+            "form": "10-K",
+            "availability_session": "2000-01-03",
+            "sec_document_ordinal": 1,
+        }
+    ]
+    limits = {
+        "model_call_count": 1,
+        "maximum_model_seconds": 3_600,
+        "redirects": 0,
+        "retries": 0,
+        "pull_attempts": 0,
+        "repair_attempts": 0,
+        "streaming": False,
+        "thinking": False,
+    }
+    sources = {"preprocessor": "e" * 64}
+    body = {
+        "development_root_scope_sha256": scope_sha256,
+        "candidate_sha256": "b" * 64,
+        "authorized_stage": "development",
+        "output_namespace": "model-development-test",
+        "corpus_universe_sha256": "f" * 64,
+        "development_sec_reader_receipt_sha256": "c" * 64,
+        "event_count": 1,
+        "event_plan": event_plan,
+        "event_plan_sha256": canonical_sha256(event_plan),
+        "identity_lexicon_sha256": canonical_sha256(
+            list(runner_module.CANONICAL_IDENTITY_LEXICON)
+        ),
+        "execution_source_hashes": sources,
+        "execution_source_hashes_sha256": canonical_sha256(sources),
+        "model_name": "gemma4:12b",
+        "model_digest": "1" * 64,
+        "runtime_fingerprint_sha256": "2" * 64,
+        "model_transport_sha256": "3" * 64,
+        "model_runtime_limits": limits,
+        "model_runtime_limits_sha256": canonical_sha256(limits),
+        "model_component_id": "owned_stage_gemma_model_batch",
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
 
 
 def _component_plan() -> dict[str, Any]:
@@ -417,7 +518,9 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
     assert runner_module.__all__ == [
         "SecFilingGemmaStageRunnerError",
         "run_authorized_sec_stage",
+        "run_owned_development_model_batch",
         "run_owned_development_sec_root",
+        "run_owned_stage_model_batch",
     ]
 
 
@@ -443,6 +546,33 @@ def test_public_development_root_runner_signature_has_no_direct_effect_authority
         "transport",
         "budget",
     }.isdisjoint(signature.parameters)
+
+
+def test_public_model_runner_signatures_are_hash_only_and_keyword_only() -> None:
+    development = inspect.signature(run_owned_development_model_batch)
+    stage = inspect.signature(run_owned_stage_model_batch)
+    assert tuple(development.parameters) == (
+        "reveal_store",
+        "development_root_scope_sha256",
+    )
+    assert tuple(stage.parameters) == ("reveal_store", "request_sha256")
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for signature in (development, stage)
+        for parameter in signature.parameters.values()
+    )
+    forbidden = {
+        "candidate",
+        "stage",
+        "path",
+        "text",
+        "payload",
+        "model",
+        "transport",
+        "session",
+    }
+    assert forbidden.isdisjoint(development.parameters)
+    assert forbidden.isdisjoint(stage.parameters)
 
 
 def test_runner_persists_exact_raw_normalized_and_canonical_batch_bytes(
@@ -1411,3 +1541,515 @@ def test_actual_document_bytes_reject_self_consistent_forged_receipts_and_manife
     assert aborts == ["durable_output_verification_failed"]
     assert component_directory.is_dir()
     assert list(component_directory.iterdir()) == []
+
+
+def test_fresh_stage_model_batch_uses_event_plan_and_fsyncs_intent_before_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    request_hash = "a" * 64
+    candidate_hash = "b" * 64
+    sec_receipt_hash = "c" * 64
+    carry_receipt_hash = "d" * 64
+    preprocessor_hash = "e" * 64
+    current_accessions = (
+        "0000320193-20-000002",
+        "0000320193-20-000003",
+    )
+    prior_accessions = (
+        "0000320193-19-000001",
+        "0000320193-19-000002",
+    )
+    event_plan = [
+        {
+            "event_ordinal": 1,
+            "accession_number": current_accessions[0],
+            "form": "10-K",
+            "availability_session": "2020-01-02",
+            "sec_document_ordinal": 2,
+        },
+        {
+            "event_ordinal": 2,
+            "accession_number": current_accessions[1],
+            "form": "10-Q",
+            "availability_session": "2020-01-03",
+            "sec_document_ordinal": 1,
+        },
+    ]
+    limits = {
+        "model_call_count": 2,
+        "maximum_model_seconds": 3_600,
+        "redirects": 0,
+        "retries": 0,
+        "pull_attempts": 0,
+        "repair_attempts": 0,
+        "streaming": False,
+        "thinking": False,
+    }
+    source_hashes = {"preprocessor": preprocessor_hash}
+    claim_body = {
+        "request_sha256": request_hash,
+        "candidate_sha256": candidate_hash,
+        "authorized_stage": "intermediate",
+        "output_namespace": "model-stage-test",
+        "corpus_universe_sha256": "f" * 64,
+        "stage_sec_reader_receipt_sha256": sec_receipt_hash,
+        "carry_in_reader_receipt_sha256": carry_receipt_hash,
+        "event_count": 2,
+        "event_plan": event_plan,
+        "event_plan_sha256": canonical_sha256(event_plan),
+        "identity_lexicon_sha256": canonical_sha256(
+            list(runner_module.CANONICAL_IDENTITY_LEXICON)
+        ),
+        "execution_source_hashes": source_hashes,
+        "execution_source_hashes_sha256": canonical_sha256(source_hashes),
+        "model_name": "gemma4:12b",
+        "model_digest": "1" * 64,
+        "runtime_fingerprint_sha256": "2" * 64,
+        "model_transport_sha256": "3" * 64,
+        "model_runtime_limits": limits,
+        "model_runtime_limits_sha256": canonical_sha256(limits),
+        "model_component_id": "owned_stage_gemma_model_batch",
+    }
+    claim = {**claim_body, "claim_sha256": canonical_sha256(claim_body)}
+
+    current_payloads = (b"Current annual filing text.", b"Current quarter filing text.")
+    prior_payloads = (b"Prior annual filing text.", b"Prior quarter filing text.")
+    events: list[dict[str, Any]] = []
+    universe_records: list[dict[str, Any]] = []
+    development_documents: list[dict[str, Any]] = []
+    intermediate_documents: list[dict[str, Any]] = []
+    for index, event in enumerate(event_plan):
+        current_payload = current_payloads[index]
+        prior_payload = prior_payloads[index]
+        current_hash = hashlib.sha256(current_payload).hexdigest()
+        prior_hash = hashlib.sha256(prior_payload).hexdigest()
+        prior_availability = f"2019-01-0{index + 2}"
+        universe_records.extend(
+            (
+                {
+                    "accession_number": prior_accessions[index],
+                    "form": event["form"],
+                    "availability_session": prior_availability,
+                    "artifact_stage": "development",
+                },
+                {
+                    "accession_number": event["accession_number"],
+                    "form": event["form"],
+                    "availability_session": event["availability_session"],
+                    "artifact_stage": "intermediate",
+                },
+            )
+        )
+        development_documents.append(
+            {
+                "accession_number": prior_accessions[index],
+                "normalized_text_sha256": prior_hash,
+            }
+        )
+        intermediate_documents.append(
+            {
+                "accession_number": event["accession_number"],
+                "normalized_text_sha256": current_hash,
+            }
+        )
+        events.append(
+            {
+                "event": event,
+                "current_normalized_text": current_payload,
+                "current_normalized_source": {
+                    "relative_path": (
+                        f"document-{event['sec_document_ordinal']:04d}.normalized.txt"
+                    ),
+                    "byte_count": len(current_payload),
+                    "sha256": current_hash,
+                },
+                "prior_same_form_normalized_text": prior_payload,
+                "prior_same_form_normalized_source": {
+                    "relative_path": f"carry-in-{index + 1:04d}.normalized.txt",
+                    "byte_count": len(prior_payload),
+                    "sha256": prior_hash,
+                },
+                "prior_accession_number": prior_accessions[index],
+                "prior_availability_session": prior_availability,
+                "prior_provenance_kind": "development_root_carry_in",
+                "sec_reader_receipt_sha256": sec_receipt_hash,
+                "carry_in_reader_receipt_sha256": carry_receipt_hash,
+            }
+        )
+    loaded = {
+        "claim": claim,
+        "scope_kind": "stage_request",
+        "scope_sha256": request_hash,
+        "candidate_manifest": {"candidate_sha256": candidate_hash},
+        "corpus_universe_manifest": {
+            "universe_sha256": claim["corpus_universe_sha256"],
+            "records": universe_records,
+        },
+        "content_manifests_by_stage": {
+            "development": {
+                "content_manifest_sha256": "4" * 64,
+                "documents": development_documents,
+            },
+            "intermediate": {
+                "content_manifest_sha256": "5" * 64,
+                "documents": intermediate_documents,
+            },
+        },
+        "session_dates": ["2019-01-02", "2019-01-03", "2020-01-02", "2020-01-03"],
+        "sec_reader_receipt_sha256": sec_receipt_hash,
+        "carry_in_reader_receipt_sha256": carry_receipt_hash,
+        "events": events,
+    }
+
+    class ModelLock:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    store._owned_model_execution_lock = lambda: ModelLock()
+    store.claim_authorized_model_stage_execution = lambda **_kwargs: {
+        "claim": claim,
+        "created": True,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    store._load_authorized_model_stage_event_inputs = lambda **_kwargs: loaded
+    source_revalidations: list[str] = []
+    store._revalidate_authorized_model_execution_sources = (
+        lambda observed: source_revalidations.append(observed["claim_sha256"])
+    )
+    aborts: list[str] = []
+    store.abort_authorized_model_stage_execution = (
+        lambda *, request_sha256, reason: aborts.append(reason)
+    )
+
+    probe_counter = 0
+
+    class FakeIdentity:
+        evidence_sha256 = "6" * 64
+
+    class FakeProbe:
+        def __init__(self, ordinal: int) -> None:
+            self.ordinal = ordinal
+
+        def to_manifest(self) -> dict[str, Any]:
+            body = {"probe_ordinal": self.ordinal}
+            return {**body, "receipt_sha256": canonical_sha256(body)}
+
+        def pinned_runtime_identity(self) -> FakeIdentity:
+            return FakeIdentity()
+
+        def runtime_evidence(self) -> dict[str, Any]:
+            return {"runtime": "same"}
+
+    def fake_probe(**_kwargs: Any) -> FakeProbe:
+        nonlocal probe_counter
+        probe_counter += 1
+        return FakeProbe(probe_counter)
+
+    monkeypatch.setattr(runner_module, "probe_owned_ollama_runtime", fake_probe)
+    monkeypatch.setattr(
+        runner_module,
+        "validate_ollama_runtime_probe_receipt",
+        lambda manifest, **_kwargs: FakeProbe(manifest["probe_ordinal"]),
+    )
+
+    preprocessing_counter = 0
+
+    def fake_preprocess(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal preprocessing_counter
+        preprocessing_counter += 1
+        sentences = [{"id": "C0001", "text": f"Safe filing {preprocessing_counter}"}]
+        payload_hash = hashlib.sha256(
+            f"payload-{preprocessing_counter}".encode()
+        ).hexdigest()
+        return {
+            "sentences": sentences,
+            "model_payload": {"safe": preprocessing_counter},
+            "model_payload_sha256": payload_hash,
+            "preprocessed_event_sha256": hashlib.sha256(
+                f"event-{preprocessing_counter}".encode()
+            ).hexdigest(),
+            "redaction_report": {"safe": True},
+        }
+
+    monkeypatch.setattr(runner_module, "preprocess_filing_event", fake_preprocess)
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_preprocessing_receipt",
+        lambda **kwargs: {
+            "receipt_sha256": hashlib.sha256(
+                f"pre-{kwargs['event_ordinal']}".encode()
+            ).hexdigest()
+        },
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_redacted_input_manifest",
+        lambda **kwargs: {
+            "redacted_input_manifest_sha256": hashlib.sha256(
+                f"redacted-{kwargs['accession_number']}".encode()
+            ).hexdigest()
+        },
+    )
+    validated_accessions: list[str] = []
+
+    def fake_validate(request: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        validated_accessions.append(request["current_accession_number"])
+        assert set(kwargs["content_manifests_by_stage"]) == {
+            "development",
+            "intermediate",
+        }
+        assert kwargs["expected_preprocessed_event_sha256"]
+        assert kwargs["expected_owned_preprocessing_receipt_sha256"]
+        assert kwargs["expected_sec_reader_receipt_sha256"] == sec_receipt_hash
+        assert kwargs["expected_carry_in_reader_receipt_sha256"] == carry_receipt_hash
+        return {
+            "candidate_sha256": candidate_hash,
+            "sentence_ids": ("C0001",),
+            "model_payload": request["model_payload"],
+            "model_payload_sha256": request["model_payload_sha256"],
+        }
+
+    monkeypatch.setattr(runner_module, "validate_extractor_request", fake_validate)
+
+    call_counter = 0
+
+    class FakeAttempt:
+        def __init__(self, ordinal: int) -> None:
+            self.ordinal = ordinal
+            self.elapsed_nanoseconds = 1
+
+        def to_manifest(self) -> dict[str, Any]:
+            body = {"attempt_ordinal": self.ordinal, "elapsed_nanoseconds": 1}
+            return {**body, "receipt_sha256": canonical_sha256(body)}
+
+    def fake_call(_validated: dict[str, Any], **kwargs: Any) -> FakeAttempt:
+        nonlocal call_counter
+        call_counter += 1
+        intent = (
+            store.store_directory
+            / "stage_outputs"
+            / claim["claim_sha256"]
+            / "model_extraction"
+            / "events"
+            / f"{call_counter:06d}"
+            / "call_intent.json"
+        )
+        assert intent.is_file()
+        assert json.loads(intent.read_text(encoding="utf-8"))[
+            "external_effect_started"
+        ] is False
+        assert "transport" not in kwargs
+        return FakeAttempt(call_counter)
+
+    monkeypatch.setattr(runner_module, "call_ollama_extractor_attempt", fake_call)
+    monkeypatch.setattr(
+        runner_module,
+        "validate_ollama_model_attempt_receipt",
+        lambda manifest, **_kwargs: FakeAttempt(manifest["attempt_ordinal"]),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_runtime_identity_guard",
+        lambda **_kwargs: {"runtime_guard_sha256": "7" * 64},
+    )
+
+    receipt = {"claim_sha256": claim["claim_sha256"], "receipt_sha256": "8" * 64}
+
+    def record(*, request_sha256: str) -> dict[str, Any]:
+        assert request_sha256 == request_hash
+        marker = (
+            store.store_directory
+            / "stage_outputs"
+            / claim["claim_sha256"]
+            / "model_extraction"
+            / "complete.json"
+        )
+        assert marker.is_file()
+        return receipt
+
+    store._record_authorized_model_stage_reader_output = record
+    result = run_owned_stage_model_batch(
+        reveal_store=store,
+        request_sha256=request_hash,
+    )
+
+    assert result == {"claim": claim, "reader_receipt": receipt}
+    assert validated_accessions == list(current_accessions)
+    assert call_counter == 2
+    assert probe_counter == 2
+    assert len(source_revalidations) >= 6
+    assert aborts == []
+
+
+def test_completed_model_retry_replays_with_zero_probe_or_model_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    claim = _stage_model_claim()
+    receipt = {"claim_sha256": claim["claim_sha256"], "receipt_sha256": "8" * 64}
+
+    @contextmanager
+    def model_lock() -> Iterator[None]:
+        yield
+
+    store._owned_model_execution_lock = model_lock
+    store.claim_authorized_model_stage_execution = lambda **_kwargs: {
+        "claim": claim,
+        "created": False,
+        "reader_receipt": receipt,
+        "abort": None,
+    }
+    replayed: list[str] = []
+    store._record_authorized_model_stage_reader_output = (
+        lambda *, request_sha256: replayed.append(request_sha256) or receipt
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "probe_owned_ollama_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed retry must not probe")
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "call_ollama_extractor_attempt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed retry must not call the model")
+        ),
+    )
+
+    assert run_owned_stage_model_batch(
+        reveal_store=store,
+        request_sha256=claim["request_sha256"],
+    ) == {"claim": claim, "reader_receipt": receipt}
+    assert replayed == [claim["request_sha256"]]
+
+
+def test_completed_development_model_retry_uses_root_lifecycle_with_zero_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    claim = _development_model_claim()
+    receipt = {"claim_sha256": claim["claim_sha256"], "receipt_sha256": "8" * 64}
+
+    @contextmanager
+    def model_lock() -> Iterator[None]:
+        yield
+
+    store._owned_model_execution_lock = model_lock
+    store.claim_owned_development_model_execution = lambda **_kwargs: {
+        "claim": claim,
+        "created": False,
+        "reader_receipt": receipt,
+        "abort": None,
+    }
+    replayed: list[str] = []
+    store._record_owned_development_model_reader_output = (
+        lambda *, development_root_scope_sha256: replayed.append(
+            development_root_scope_sha256
+        )
+        or receipt
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "probe_owned_ollama_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed development retry must not probe")
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "call_ollama_extractor_attempt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed development retry must not call the model")
+        ),
+    )
+
+    assert run_owned_development_model_batch(
+        reveal_store=store,
+        development_root_scope_sha256=claim[
+            "development_root_scope_sha256"
+        ],
+    ) == {"claim": claim, "reader_receipt": receipt}
+    assert replayed == [claim["development_root_scope_sha256"]]
+
+
+def test_recovered_incomplete_model_claim_aborts_with_zero_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    claim = _stage_model_claim()
+
+    @contextmanager
+    def model_lock() -> Iterator[None]:
+        yield
+
+    store._owned_model_execution_lock = model_lock
+    store.claim_authorized_model_stage_execution = lambda **_kwargs: {
+        "claim": claim,
+        "created": False,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    store._record_authorized_model_stage_reader_output = (
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("no complete marker"))
+    )
+    aborts: list[str] = []
+    store.abort_authorized_model_stage_execution = (
+        lambda *, request_sha256, reason: aborts.append(reason)
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "probe_owned_ollama_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovered incomplete claim must not probe")
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "call_ollama_extractor_attempt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovered incomplete claim must not call the model")
+        ),
+    )
+
+    with pytest.raises(SecFilingGemmaStageRunnerError, match="cannot be retried"):
+        run_owned_stage_model_batch(
+            reveal_store=store,
+            request_sha256=claim["request_sha256"],
+        )
+    assert aborts == ["claim_recovered_without_terminal_receipt"]
+
+
+def test_global_model_lock_contention_precedes_claim(
+    tmp_path: Path,
+) -> None:
+    store = _new_store(tmp_path)
+    claim_calls: list[str] = []
+
+    class UnavailableModelLock:
+        def __enter__(self) -> None:
+            raise TimeoutError("simulated owner")
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    store._owned_model_execution_lock = lambda: UnavailableModelLock()
+    store.claim_authorized_model_stage_execution = (
+        lambda **_kwargs: claim_calls.append("claim")
+    )
+    with pytest.raises(SecFilingGemmaStageRunnerError, match="globally owned"):
+        run_owned_stage_model_batch(
+            reveal_store=store,
+            request_sha256="a" * 64,
+        )
+    assert claim_calls == []

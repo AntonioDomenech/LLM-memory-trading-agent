@@ -818,15 +818,24 @@ At the current implementation checkpoint:
   frozen lexicon, bounded-context implementation source, preprocessed event,
   and model payload.
   Filing chronology remains independent of SEC acquisition-file ordinal. This
-  receipt performs no I/O and does not yet prove that the reveal store supplied
-  the bytes;
+  receipt performs no I/O by itself. The owned model runner now loads the exact
+  current/prior/carry bytes only through the reveal store, and the store
+  independently rebuilds this receipt while finalizing the complete model
+  component;
 - the Ollama client now has a strict two-request local runtime probe for the
   fixed `/api/version` and `/api/show` endpoints. It seals and replays bounded
   raw responses, derives the exact active model blob digest from the generated
   Modelfile, and fingerprints canonical version/show semantics. Its hardened
   transport inherits no proxy, redirect, retry, or pull behavior. All tests use
   injected fake loopback responses; no real runtime probe or model call has run.
-  The probe is not yet connected to an owned model-batch claim/finalizer;
+  The probe is now connected to reveal-store-owned development and stage model
+  claims. A global model lock, pre-call durable intent, exactly one attempt per
+  filing, marker-last completion, semantic store replay, and terminal orphan
+  handling prevent retries or caller-selected text, model, path, or transport.
+  Intermediate and final loaders bind the exact development root, parent-stage
+  evidence, current SEC reader, and first-same-form carry ancestry. Pending-tip
+  and state-replace crash tests also replay development model claims from the
+  authenticated store snapshot;
 - supplied learner matrices and targets must match the fold-bound feature,
   target, membership, count, and maturity identities before any deterministic
   refit. Intermediate stage identity remains explicitly blocked: recursive
@@ -855,10 +864,11 @@ At the current implementation checkpoint:
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
   no SEC request was made. `stage_access_identity` remains `BLOCKED` because
-  market, model, artifact, final stage-evidence generation, and carry-in-to-model binding are not yet forced through owned
-  components. The store no longer accepts a caller
-  mapping at the output-receipt boundary, but a same-user process can still
-  place coherently formed bytes in the fixed directory, so this milestone is
+  market acquisition, prediction sealing, learner output, and final
+  stage-evidence generation are not yet forced through owned components. The
+  model and carry-in paths are now owned and bound. The store no longer accepts
+  a caller mapping at the output-receipt boundary, but a same-user process can
+  still place coherently formed bytes in the fixed directory, so this milestone is
   durable replay rather than fresh end-to-end provenance. The owned SEC batch
   runner's final component-directory creation rejects even a pre-existing empty
   directory; the stage-evidence finalizer instead requires its fixed directory
@@ -867,9 +877,9 @@ At the current implementation checkpoint:
   load the store files, attest its executing Python code object, or turn the
   same mutable directory into an external trust domain;
 - stage-specific runtime receipts are structurally reconciled, but the final
-  all-stage summary remains diagnostic until the remaining owned market/model
-  transports, monotonic-time attestations, and five-development-filing latency
-  preflight exist;
+  all-stage summary remains diagnostic until the remaining owned market
+  transport, prediction/learner evidence, monotonic-time attestations, and
+  five-development-filing latency preflight exist;
 - the future verifier must derive the eligible universe from the sealed SEC
   catalogue, bind exact AAPL/SPY/QQQ/IWM/VIX/TNX input hashes, and prove that
   every training row is one exact matured filing event tied to its extraction
@@ -890,19 +900,10 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is the reveal-store-owned preprocessing and
-Ollama model-batch runner/finalizer for both the request-free development root
-and consumed intermediate/final requests. It must bind the exact current-tip
-model claim and carry receipt into every relevant attempt. The request/scope-only
-runner must derive all text and authority from the reveal store,
-make exactly one bounded loopback call per filing, seal valid and invalid
-outputs without repair, and recover an already complete batch without another
-call. It must choose filing order by availability chronology, use carry bytes
-only for the first same-form filing in a later stage, use earlier same-stage
-bytes thereafter, and terminally abort rather than retry an orphaned call
-intent. The same owned chain must then cover presealed market
-reads, prediction sealing, and canonical stage-evidence assembly. A distinct
-zero-cost market acquirer must also preserve upstream provider bytes
+The next implementation milestone is to bind each sealed model-attempt receipt
+into owned market reads, prediction sealing, learner fitting, and canonical
+stage-evidence assembly. A distinct zero-cost market acquirer must preserve
+upstream provider bytes
 and a deterministic normalization receipt. This is required to turn the
 partially authenticated SEC execution into complete authorized stage execution.
 The remainder of the

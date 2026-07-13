@@ -39,12 +39,28 @@ from typing import Any, Final
 import uuid
 
 from agent_benchmark.sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON,
     CONTRACT_VERSION,
+    EXTRACTOR_REQUEST_VERSION,
+    PREPROCESSOR_VERSION,
     REQUIRED_STAGE_VERIFIER_CHECKS,
     SecFilingGemmaContractError,
     build_stage_content_manifest,
     canonical_sha256,
+    validate_redacted_input_manifest,
+    validate_extractor_request,
     validate_stage_content_manifest,
+)
+from agent_benchmark.sec_filing_gemma_ollama import (
+    SecFilingGemmaOllamaError,
+    validate_ollama_model_attempt_receipt,
+    validate_ollama_runtime_probe_receipt,
+    validate_runtime_identity_guard,
+)
+from agent_benchmark.sec_filing_gemma_preprocessor import (
+    SecFilingGemmaPreprocessorError,
+    validate_owned_preprocessing_receipt,
+    validate_preprocessed_event,
 )
 from agent_benchmark.sec_filing_gemma_corpus import (
     SecFilingGemmaCorpusError,
@@ -77,19 +93,27 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
     validate_development_content_root_plan,
     validate_prior_same_form_carry_in_scope,
 )
+from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+    MODEL_EXECUTION_SOURCE_ROLES,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     STAGE_EVIDENCE_OUTPUT_COMPONENT_ID,
     STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
+    build_development_model_execution_abort,
+    build_development_model_execution_claim,
+    build_development_model_reader_receipt,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
     build_development_root_carry_in_reader_receipt,
     build_stage_carry_in_reader_receipt,
+    build_stage_model_execution_abort,
+    build_stage_model_execution_claim,
+    build_stage_model_reader_receipt,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
@@ -135,6 +159,7 @@ LOCK_FILENAME: Final[str] = ".sec_gemma_reveal_store.lock"
 DEVELOPMENT_SEC_EXECUTION_LOCKS_DIRECTORY_NAME: Final[str] = (
     ".development-sec-execution-locks"
 )
+MODEL_EXECUTION_LOCK_FILENAME: Final[str] = ".model-execution.lock"
 STAGE_OUTPUTS_DIRECTORY_NAME: Final[str] = "stage_outputs"
 SEC_STAGE_COMPONENT_DIRECTORY_NAME: Final[str] = "sec"
 SEC_BATCH_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
@@ -183,6 +208,23 @@ DEVELOPMENT_ROOT_CARRY_IN_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_ID: Final[str] = (
     "owned_development_root_prior_same_form_normalized_text_carry_in"
+)
+MODEL_EXTRACTION_COMPONENT_DIRECTORY_NAME: Final[str] = "model_extraction"
+MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
+STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-stage-model-batch-complete-v1"
+)
+DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-model-batch-complete-v1"
+)
+MODEL_CALL_INTENT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-model-call-intent-v1"
+)
+OWNED_MODEL_ATTEMPT_TRANSPORT_MODE: Final[str] = (
+    "owned_hardened_loopback_session_requires_stage_attestation"
+)
+OWNED_RUNTIME_PROBE_TRANSPORT_MODE: Final[str] = (
+    "owned_hardened_loopback_runtime_probe_unattested"
 )
 MAX_PRIOR_SAME_FORM_CARRY_IN_RECORDS: Final[int] = 16
 MAX_PRIOR_SAME_FORM_CARRY_IN_TOTAL_BYTES: Final[int] = 256 * 1024 * 1024
@@ -755,6 +797,23 @@ def _execution_source_hashes(repository_root: Path) -> dict[str, str]:
     return observed
 
 
+def _model_execution_source_hashes(repository_root: Path) -> dict[str, str]:
+    """Return only the exact candidate sources that may execute Gemma."""
+
+    all_sources = _execution_source_hashes(repository_root)
+    try:
+        observed = {role: all_sources[role] for role in MODEL_EXECUTION_SOURCE_ROLES}
+    except KeyError as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "A required model execution source has no canonical repository path"
+        ) from exc
+    if set(observed) != set(MODEL_EXECUTION_SOURCE_ROLES):
+        raise SecFilingGemmaRevealStoreError(
+            "Model execution source roles changed"
+        )
+    return observed
+
+
 def _validated_development_root_plan_for_store(
     authenticated_store_snapshot: Mapping[str, Any],
     development_content_root_plan: Any,
@@ -937,6 +996,285 @@ def _read_owned_sec_indexed_payloads(
         raise SecFilingGemmaRevealStoreError(
             f"{location} has missing or extra durable bytes"
         )
+    return byte_index, payloads_by_name
+
+
+_MODEL_EVENT_FILE_ITEMS: Final[tuple[tuple[str, str], ...]] = (
+    ("preprocessed-event", "preprocessed_event.json"),
+    ("preprocessing-receipt", "preprocessing_receipt.json"),
+    ("redacted-input-manifest", "redacted_input_manifest.json"),
+    ("call-intent", "call_intent.json"),
+    ("model-attempt-receipt", "model_attempt_receipt.json"),
+)
+
+
+def _expected_model_byte_layout(event_count: int) -> list[tuple[str, str]]:
+    if isinstance(event_count, bool) or type(event_count) is not int or event_count < 1:
+        raise SecFilingGemmaRevealStoreError(
+            "Owned model claim has no positive exact event count"
+        )
+    layout: list[tuple[str, str]] = [
+        ("pre-runtime-probe", "pre_runtime_probe.json")
+    ]
+    for event_ordinal in range(1, event_count + 1):
+        event_name = f"event-{event_ordinal:06d}"
+        event_directory = f"events/{event_ordinal:06d}"
+        layout.extend(
+            (
+                (f"{event_name}-{logical_suffix}", f"{event_directory}/{filename}")
+                for logical_suffix, filename in _MODEL_EVENT_FILE_ITEMS
+            )
+        )
+    layout.extend(
+        (
+            ("post-runtime-probe", "post_runtime_probe.json"),
+            ("runtime-guard", "runtime_guard.json"),
+        )
+    )
+    if len(layout) > MAX_SEC_BATCH_FILES:
+        raise SecFilingGemmaRevealStoreError(
+            "Owned model event layout exceeds its fixed file limit"
+        )
+    return layout
+
+
+def _build_owned_model_call_intent(
+    *,
+    claim: Mapping[str, Any],
+    event: Mapping[str, Any],
+    preprocessed_event_sha256: str,
+    owned_preprocessing_receipt_sha256: str,
+    redacted_input_manifest_sha256: str,
+    model_payload_sha256: str,
+    runtime_probe_receipt_sha256: str,
+    runtime_evidence_sha256: str,
+) -> dict[str, Any]:
+    """Build the create-new intent that must precede one irreversible model call."""
+
+    claim_value = _exact_caller_dict(dict(claim), "owned model call-intent claim")
+    event_value = _exact_caller_dict(dict(event), "owned model call-intent event")
+    if set(event_value) != {
+        "event_ordinal",
+        "accession_number",
+        "form",
+        "availability_session",
+        "sec_document_ordinal",
+    }:
+        raise SecFilingGemmaRevealStoreError(
+            "Owned model call-intent event keys changed"
+        )
+    event_ordinal = _strict_int(
+        event_value["event_ordinal"],
+        "owned model call-intent event ordinal",
+        minimum=1,
+    )
+    if event_ordinal > claim_value.get("event_count", 0):
+        raise SecFilingGemmaRevealStoreError(
+            "Owned model call-intent event exceeds the claim"
+        )
+    stage = claim_value.get("authorized_stage")
+    if stage == "development":
+        scope_kind = "development_root"
+        scope_hash = _sha256(
+            claim_value.get("development_root_scope_sha256"),
+            "owned model call-intent development scope",
+        )
+    elif stage in {"intermediate", "final"}:
+        scope_kind = "stage_request"
+        scope_hash = _sha256(
+            claim_value.get("request_sha256"),
+            "owned model call-intent stage scope",
+        )
+    else:
+        raise SecFilingGemmaRevealStoreError(
+            "Owned model call-intent claim stage changed"
+        )
+    body = {
+        "schema_version": MODEL_CALL_INTENT_SCHEMA_VERSION,
+        "scope_kind": scope_kind,
+        "scope_sha256": scope_hash,
+        "claim_sha256": _sha256(
+            claim_value.get("claim_sha256"),
+            "owned model call-intent claim hash",
+        ),
+        "candidate_sha256": _sha256(
+            claim_value.get("candidate_sha256"),
+            "owned model call-intent candidate hash",
+        ),
+        "stage": stage,
+        "event_ordinal": event_ordinal,
+        "call_sequence": event_ordinal,
+        "accession_number": event_value["accession_number"],
+        "form": event_value["form"],
+        "availability_session": event_value["availability_session"],
+        "sec_document_ordinal": event_value["sec_document_ordinal"],
+        "preprocessed_event_sha256": _sha256(
+            preprocessed_event_sha256,
+            "owned model call-intent preprocessed event hash",
+        ),
+        "owned_preprocessing_receipt_sha256": _sha256(
+            owned_preprocessing_receipt_sha256,
+            "owned model call-intent preprocessing receipt hash",
+        ),
+        "redacted_input_manifest_sha256": _sha256(
+            redacted_input_manifest_sha256,
+            "owned model call-intent redacted manifest hash",
+        ),
+        "model_payload_sha256": _sha256(
+            model_payload_sha256,
+            "owned model call-intent model payload hash",
+        ),
+        "runtime_probe_receipt_sha256": _sha256(
+            runtime_probe_receipt_sha256,
+            "owned model call-intent runtime probe receipt hash",
+        ),
+        "runtime_evidence_sha256": _sha256(
+            runtime_evidence_sha256,
+            "owned model call-intent runtime evidence hash",
+        ),
+        "model_name": claim_value.get("model_name"),
+        "model_digest": _sha256(
+            claim_value.get("model_digest"),
+            "owned model call-intent model digest",
+        ),
+        "runtime_fingerprint_sha256": _sha256(
+            claim_value.get("runtime_fingerprint_sha256"),
+            "owned model call-intent runtime fingerprint",
+        ),
+        "model_transport_sha256": _sha256(
+            claim_value.get("model_transport_sha256"),
+            "owned model call-intent transport hash",
+        ),
+        "transport_mode": OWNED_MODEL_ATTEMPT_TRANSPORT_MODE,
+        "external_effect_started": False,
+        "effect_retry_permitted_after_intent": False,
+    }
+    return {**body, "call_intent_sha256": canonical_sha256(body)}
+
+
+def _read_owned_model_indexed_payloads(
+    component_directory: Path,
+    raw_index: Any,
+    *,
+    event_count: int,
+    location: str,
+) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+    """Rehash the exact hierarchical model artifact layout without traversal."""
+
+    secured = _secure_directory(
+        component_directory,
+        create=False,
+        location=location,
+    )
+    expected_layout = _expected_model_byte_layout(event_count)
+    if type(raw_index) is not list or len(raw_index) != len(expected_layout):
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} byte index differs from its fixed event layout"
+        )
+    top_level_names = [item.name for item in secured.iterdir()]
+    expected_top_level = {
+        "pre_runtime_probe.json",
+        "post_runtime_probe.json",
+        "runtime_guard.json",
+        MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME,
+        "events",
+    }
+    if (
+        set(top_level_names) != expected_top_level
+        or len(top_level_names) != len(expected_top_level)
+        or len({name.casefold() for name in top_level_names})
+        != len(top_level_names)
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} has missing, extra, or case-colliding paths"
+        )
+    events_directory = _secure_directory(
+        secured / "events",
+        create=False,
+        location=f"{location} events directory",
+    )
+    expected_event_directories = {
+        f"{ordinal:06d}" for ordinal in range(1, event_count + 1)
+    }
+    observed_event_directories = [item.name for item in events_directory.iterdir()]
+    if (
+        set(observed_event_directories) != expected_event_directories
+        or len(observed_event_directories) != len(expected_event_directories)
+        or len({name.casefold() for name in observed_event_directories})
+        != len(observed_event_directories)
+    ):
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} event directories differ from the claim"
+        )
+    expected_event_files = {filename for _suffix, filename in _MODEL_EVENT_FILE_ITEMS}
+    event_directories: dict[str, Path] = {}
+    for event_name in sorted(expected_event_directories):
+        event_directory = _secure_directory(
+            events_directory / event_name,
+            create=False,
+            location=f"{location} event {event_name}",
+        )
+        observed_names = [item.name for item in event_directory.iterdir()]
+        if (
+            set(observed_names) != expected_event_files
+            or len(observed_names) != len(expected_event_files)
+            or len({name.casefold() for name in observed_names})
+            != len(observed_names)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} event {event_name} differs from its fixed artifacts"
+            )
+        event_directories[event_name] = event_directory
+    byte_index: list[dict[str, Any]] = []
+    payloads_by_name: dict[str, bytes] = {}
+    total_bytes = 0
+    for ordinal, ((logical_id, relative_path), raw_item) in enumerate(
+        zip(expected_layout, raw_index),
+        start=1,
+    ):
+        if type(raw_item) is not dict or set(raw_item) != {
+            "ordinal",
+            "logical_id",
+            "relative_path",
+            "byte_count",
+            "sha256",
+        }:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} byte-index item is not exact"
+            )
+        if "/" in relative_path:
+            _events, event_name, filename = relative_path.split("/")
+            path = event_directories[event_name] / filename
+        else:
+            path = secured / relative_path
+        payload = _read_regular_bytes(
+            path,
+            f"{location} byte {relative_path}",
+            max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+        )
+        total_bytes += len(payload)
+        if total_bytes > MAX_SEC_BATCH_TOTAL_BYTES:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} exceeds its total byte limit"
+            )
+        parsed = _strict_json_bytes(payload, f"{location} byte {relative_path}")
+        if type(parsed) is not dict or payload != _encoded_state(parsed):
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} byte {relative_path} is not canonical JSON"
+            )
+        observed = {
+            "ordinal": ordinal,
+            "logical_id": logical_id,
+            "relative_path": relative_path,
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        if observed != raw_item:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} bytes differ from their complete marker"
+            )
+        byte_index.append(observed)
+        payloads_by_name[relative_path] = payload
     return byte_index, payloads_by_name
 
 
@@ -1296,6 +1634,7 @@ def _pending_current_tip_document(
     *,
     prior_tip_anchor: Mapping[str, Any] | None,
     next_tip_anchor: Mapping[str, Any],
+    authenticated_store_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     prior = (
         None
@@ -1319,7 +1658,9 @@ def _pending_current_tip_document(
     else:
         try:
             prior, validated_next = validate_reveal_store_current_tip_anchor_transition(
-                prior, next_anchor
+                prior,
+                next_anchor,
+                authenticated_store_snapshot=authenticated_store_snapshot,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -1334,7 +1675,11 @@ def _pending_current_tip_document(
     return {**body, "pending_sha256": canonical_sha256(body)}
 
 
-def _validated_pending_current_tip_document(raw: Any) -> dict[str, Any]:
+def _validated_pending_current_tip_document(
+    raw: Any,
+    *,
+    authenticated_store_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
         detached = detach_untrusted_stage_json(
             raw, "pending current-tip transaction"
@@ -1386,6 +1731,7 @@ def _validated_pending_current_tip_document(raw: Any) -> dict[str, Any]:
             prior, next_anchor = validate_reveal_store_current_tip_anchor_transition(
                 prior_raw,
                 value["next_tip_anchor"],
+                authenticated_store_snapshot=authenticated_store_snapshot,
             )
     except SecFilingGemmaStageAuthorizationError as exc:
         raise SecFilingGemmaRevealStoreError(
@@ -2822,6 +3168,19 @@ class SecFilingGemmaRevealStore:
             timeout_seconds=self._lock_timeout_seconds,
         )
 
+    def _owned_model_execution_lock(self) -> _ExclusiveFileLock:
+        """Serialize the one globally active model effect across all lifecycles."""
+
+        store_directory = _secure_directory(
+            self._store_directory,
+            create=True,
+            location="reveal-store directory",
+        )
+        return _ExclusiveFileLock(
+            store_directory / MODEL_EXECUTION_LOCK_FILENAME,
+            timeout_seconds=self._lock_timeout_seconds,
+        )
+
     def _recover_pending_restore_locked(
         self, tracked_anchor: Mapping[str, Any]
     ) -> None:
@@ -2937,7 +3296,10 @@ class SecFilingGemmaRevealStore:
             tip_parsed, "independent reveal-store current-tip anchor"
         )
         if tip_mapping.get("schema_version") == CURRENT_TIP_PENDING_SCHEMA_VERSION:
-            pending = _validated_pending_current_tip_document(tip_mapping)
+            pending = _validated_pending_current_tip_document(
+                tip_mapping,
+                authenticated_store_snapshot=state,
+            )
             prior = pending["prior_tip_anchor"]
             next_anchor = pending["next_tip_anchor"]
             if _state_bytes_match_tip_anchor(state_payload, state, next_anchor):
@@ -3006,6 +3368,12 @@ class SecFilingGemmaRevealStore:
         development_sec_execution_claim: Mapping[str, Any] | None = None,
         development_sec_reader_receipt: Mapping[str, Any] | None = None,
         development_sec_execution_abort: Mapping[str, Any] | None = None,
+        stage_model_execution_claim: Mapping[str, Any] | None = None,
+        stage_model_reader_receipt: Mapping[str, Any] | None = None,
+        stage_model_execution_abort: Mapping[str, Any] | None = None,
+        development_model_execution_claim: Mapping[str, Any] | None = None,
+        development_model_reader_receipt: Mapping[str, Any] | None = None,
+        development_model_execution_abort: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated_state = _validate_state(
             _expect_mapping(next_state, "next reveal-store state"),
@@ -3036,6 +3404,24 @@ class SecFilingGemmaRevealStore:
         development_sec_aborts = copy.deepcopy(
             prior_tip_anchor["development_sec_execution_aborts"]
         )
+        model_claims = copy.deepcopy(
+            prior_tip_anchor["stage_model_execution_claims"]
+        )
+        model_reader_receipts = copy.deepcopy(
+            prior_tip_anchor["stage_model_reader_receipts"]
+        )
+        model_aborts = copy.deepcopy(
+            prior_tip_anchor["stage_model_execution_aborts"]
+        )
+        development_model_claims = copy.deepcopy(
+            prior_tip_anchor["development_model_execution_claims"]
+        )
+        development_model_reader_receipts = copy.deepcopy(
+            prior_tip_anchor["development_model_reader_receipts"]
+        )
+        development_model_aborts = copy.deepcopy(
+            prior_tip_anchor["development_model_execution_aborts"]
+        )
         transition_payload_count = sum(
             value is not None
             for value in (
@@ -3050,6 +3436,12 @@ class SecFilingGemmaRevealStore:
                 development_sec_execution_claim,
                 development_sec_reader_receipt,
                 development_sec_execution_abort,
+                stage_model_execution_claim,
+                stage_model_reader_receipt,
+                stage_model_execution_abort,
+                development_model_execution_claim,
+                development_model_reader_receipt,
+                development_model_execution_abort,
             )
         )
         if transition_payload_count > 1:
@@ -3234,6 +3626,107 @@ class SecFilingGemmaRevealStore:
                     "A persisted development SEC execution abort cannot be replaced"
                 )
             development_sec_aborts[root_scope_hash] = development_abort
+        if stage_model_execution_claim is not None:
+            model_claim = _exact_caller_dict(
+                stage_model_execution_claim,
+                "stage model execution claim",
+            )
+            request_hash = _sha256(
+                model_claim.get("request_sha256"),
+                "stage model execution claim request hash",
+            )
+            if request_hash in model_claims and model_claims[request_hash] != model_claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage model execution claim cannot be replaced"
+                )
+            model_claims[request_hash] = model_claim
+        if stage_model_reader_receipt is not None:
+            model_receipt = _exact_caller_dict(
+                stage_model_reader_receipt,
+                "stage model reader receipt",
+            )
+            request_hash = _sha256(
+                model_receipt.get("request_sha256"),
+                "stage model reader receipt request hash",
+            )
+            if (
+                request_hash in model_reader_receipts
+                and model_reader_receipts[request_hash] != model_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage model reader receipt cannot be replaced"
+                )
+            model_reader_receipts[request_hash] = model_receipt
+        if stage_model_execution_abort is not None:
+            model_abort = _exact_caller_dict(
+                stage_model_execution_abort,
+                "stage model execution abort",
+            )
+            request_hash = _sha256(
+                model_abort.get("request_sha256"),
+                "stage model execution abort request hash",
+            )
+            if request_hash in model_aborts and model_aborts[request_hash] != model_abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage model execution abort cannot be replaced"
+                )
+            model_aborts[request_hash] = model_abort
+        if development_model_execution_claim is not None:
+            development_model_claim = _exact_caller_dict(
+                development_model_execution_claim,
+                "development model execution claim",
+            )
+            root_scope_hash = _sha256(
+                development_model_claim.get("development_root_scope_sha256"),
+                "development model execution claim root scope hash",
+            )
+            if (
+                root_scope_hash in development_model_claims
+                and development_model_claims[root_scope_hash]
+                != development_model_claim
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development model execution claim cannot be replaced"
+                )
+            development_model_claims[root_scope_hash] = development_model_claim
+        if development_model_reader_receipt is not None:
+            development_model_receipt = _exact_caller_dict(
+                development_model_reader_receipt,
+                "development model reader receipt",
+            )
+            root_scope_hash = _sha256(
+                development_model_receipt.get("development_root_scope_sha256"),
+                "development model reader receipt root scope hash",
+            )
+            if (
+                root_scope_hash in development_model_reader_receipts
+                and development_model_reader_receipts[root_scope_hash]
+                != development_model_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development model reader receipt cannot be replaced"
+                )
+            development_model_reader_receipts[root_scope_hash] = (
+                development_model_receipt
+            )
+        if development_model_execution_abort is not None:
+            development_model_abort = _exact_caller_dict(
+                development_model_execution_abort,
+                "development model execution abort",
+            )
+            root_scope_hash = _sha256(
+                development_model_abort.get("development_root_scope_sha256"),
+                "development model execution abort root scope hash",
+            )
+            if (
+                root_scope_hash in development_model_aborts
+                and development_model_aborts[root_scope_hash]
+                != development_model_abort
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development model execution abort cannot be replaced"
+                )
+            development_model_aborts[root_scope_hash] = development_model_abort
         try:
             next_tip = build_reveal_store_current_tip_anchor(
                 validated_state,
@@ -3252,6 +3745,14 @@ class SecFilingGemmaRevealStore:
                 development_sec_execution_claims=development_sec_claims,
                 development_sec_reader_receipts=development_sec_reader_receipts,
                 development_sec_execution_aborts=development_sec_aborts,
+                stage_model_execution_claims=model_claims,
+                stage_model_reader_receipts=model_reader_receipts,
+                stage_model_execution_aborts=model_aborts,
+                development_model_execution_claims=development_model_claims,
+                development_model_reader_receipts=(
+                    development_model_reader_receipts
+                ),
+                development_model_execution_aborts=development_model_aborts,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -3260,6 +3761,7 @@ class SecFilingGemmaRevealStore:
         pending = _pending_current_tip_document(
             prior_tip_anchor=prior_tip_anchor,
             next_tip_anchor=next_tip,
+            authenticated_store_snapshot=validated_state,
         )
         state_bytes = _encoded_state(validated_state)
         pending_bytes = _encoded_state(pending)
@@ -3326,6 +3828,12 @@ class SecFilingGemmaRevealStore:
                     development_sec_execution_claims={},
                     development_sec_reader_receipts={},
                     development_sec_execution_aborts={},
+                    stage_model_execution_claims={},
+                    stage_model_reader_receipts={},
+                    stage_model_execution_aborts={},
+                    development_model_execution_claims={},
+                    development_model_reader_receipts={},
+                    development_model_execution_aborts={},
                 )
             except SecFilingGemmaStageAuthorizationError as exc:
                 raise SecFilingGemmaRevealStoreError(
@@ -3836,6 +4344,1443 @@ class SecFilingGemmaRevealStore:
                 )
             return copy.deepcopy(persisted)
 
+    def claim_owned_development_model_execution(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Atomically claim the exact request-free development Gemma batch."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development model execution root scope hash",
+            )
+            existing_claim = current_tip[
+                "development_model_execution_claims"
+            ].get(scope_hash)
+            if existing_claim is not None:
+                return {
+                    "claim": copy.deepcopy(existing_claim),
+                    "created": False,
+                    "reader_receipt": copy.deepcopy(
+                        current_tip["development_model_reader_receipts"].get(
+                            scope_hash
+                        )
+                    ),
+                    "abort": copy.deepcopy(
+                        current_tip["development_model_execution_aborts"].get(
+                            scope_hash
+                        )
+                    ),
+                }
+            try:
+                claim = build_development_model_execution_claim(
+                    current,
+                    development_root_scope_sha256=scope_hash,
+                    independent_current_tip_anchor=current_tip,
+                    execution_source_hashes=_model_execution_source_hashes(
+                        self.repository_root
+                    ),
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Could not claim the exact development model batch"
+                ) from exc
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_model_execution_claim=claim,
+            )
+            if committed_state != current:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model claim changed reveal-store state"
+                )
+            persisted = committed_tip["development_model_execution_claims"].get(
+                scope_hash
+            )
+            if persisted != claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development model claim differs from its CAS target"
+                )
+            return {
+                "claim": copy.deepcopy(persisted),
+                "created": True,
+                "reader_receipt": None,
+                "abort": None,
+            }
+
+    def abort_owned_development_model_execution(
+        self,
+        *,
+        development_root_scope_sha256: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Terminally close an indeterminate development model effect."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development model abort root scope hash",
+            )
+            claim = current_tip["development_model_execution_claims"].get(
+                scope_hash
+            )
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model execution cannot abort before its durable claim"
+                )
+            if scope_hash in current_tip["development_model_reader_receipts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Completed development model execution cannot be aborted"
+                )
+            existing = current_tip["development_model_execution_aborts"].get(
+                scope_hash
+            )
+            try:
+                abort = build_development_model_execution_abort(
+                    claim,
+                    reason=reason,
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model execution abort is not canonical"
+                ) from exc
+            if existing is not None:
+                if existing != abort:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Development model execution already has another terminal abort"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_model_execution_abort=abort,
+            )
+            persisted = committed_tip["development_model_execution_aborts"].get(
+                scope_hash
+            )
+            if persisted != abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development model abort differs from its CAS target"
+                )
+            return copy.deepcopy(persisted)
+
+    def claim_authorized_model_stage_execution(
+        self,
+        *,
+        request_sha256: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one exact intermediate/final Gemma batch."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(
+                request_sha256,
+                "authorized model execution request hash",
+            )
+            existing_claim = current_tip["stage_model_execution_claims"].get(
+                request_hash
+            )
+            if existing_claim is not None:
+                return {
+                    "claim": copy.deepcopy(existing_claim),
+                    "created": False,
+                    "reader_receipt": copy.deepcopy(
+                        current_tip["stage_model_reader_receipts"].get(
+                            request_hash
+                        )
+                    ),
+                    "abort": copy.deepcopy(
+                        current_tip["stage_model_execution_aborts"].get(
+                            request_hash
+                        )
+                    ),
+                }
+            bundle = current_tip["authorization_bundles"].get(request_hash)
+            if type(bundle) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Authorized model execution lacks its current grant bundle"
+                )
+            try:
+                claim = build_stage_model_execution_claim(
+                    bundle,
+                    independent_current_tip_anchor=current_tip,
+                    execution_source_hashes=_model_execution_source_hashes(
+                        self.repository_root
+                    ),
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Could not claim the exact current model stage grant"
+                ) from exc
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_model_execution_claim=claim,
+            )
+            if committed_state != current:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model execution claim changed reveal-store state"
+                )
+            persisted = committed_tip["stage_model_execution_claims"].get(
+                request_hash
+            )
+            if persisted != claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed stage model claim differs from its CAS target"
+                )
+            return {
+                "claim": copy.deepcopy(persisted),
+                "created": True,
+                "reader_receipt": None,
+                "abort": None,
+            }
+
+    def abort_authorized_model_stage_execution(
+        self,
+        *,
+        request_sha256: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Terminally close an indeterminate stage model effect."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(request_sha256, "stage model abort request hash")
+            claim = current_tip["stage_model_execution_claims"].get(request_hash)
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model execution cannot abort before its durable claim"
+                )
+            if request_hash in current_tip["stage_model_reader_receipts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Completed stage model execution cannot be aborted"
+                )
+            existing = current_tip["stage_model_execution_aborts"].get(
+                request_hash
+            )
+            try:
+                abort = build_stage_model_execution_abort(claim, reason=reason)
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model execution abort is not canonical"
+                ) from exc
+            if existing is not None:
+                if existing != abort:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Stage model execution already has another terminal abort"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_model_execution_abort=abort,
+            )
+            persisted = committed_tip["stage_model_execution_aborts"].get(
+                request_hash
+            )
+            if persisted != abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed stage model abort differs from its CAS target"
+                )
+            return copy.deepcopy(persisted)
+
+    def _revalidate_authorized_model_execution_sources(
+        self,
+        claim: Mapping[str, Any],
+    ) -> None:
+        """Reject repository-source substitution after a model claim was minted."""
+
+        if type(claim) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Model execution source revalidation requires an exact claim"
+            )
+        if _model_execution_source_hashes(self.repository_root) != claim.get(
+            "execution_source_hashes"
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Model execution sources changed after the durable claim"
+            )
+
+    def _read_owned_model_component_locked(
+        self,
+        *,
+        claim: Mapping[str, Any],
+        lifecycle_kind: str,
+        lifecycle_sha256: str,
+        marker_schema_version: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, bytes], bytes]:
+        """Rehash one fixed model component and its marker under the store lock."""
+
+        if type(claim) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model output lacks its exact execution claim"
+            )
+        lifecycle_hash = _sha256(
+            lifecycle_sha256,
+            "owned model component lifecycle hash",
+        )
+        if lifecycle_kind not in {"development_root_scope", "stage_request"}:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model component lifecycle kind changed"
+            )
+        self._revalidate_authorized_model_execution_sources(claim)
+        component_directory = (
+            self.store_directory
+            / STAGE_OUTPUTS_DIRECTORY_NAME
+            / claim["claim_sha256"]
+            / MODEL_EXTRACTION_COMPONENT_DIRECTORY_NAME
+        )
+        secured = _secure_directory(
+            component_directory,
+            create=False,
+            location="owned model extraction component directory",
+        )
+        directory_before = _validate_real_directory(
+            secured,
+            "owned model extraction component directory",
+        )
+        marker_path = secured / MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME
+        marker_bytes = _read_regular_bytes(
+            marker_path,
+            "owned model extraction complete marker",
+            max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+        )
+        marker = _strict_json_bytes(
+            marker_bytes,
+            "owned model extraction complete marker",
+        )
+        expected_marker_keys = {
+            "schema_version",
+            "lifecycle_kind",
+            "lifecycle_sha256",
+            "claim_sha256",
+            "candidate_sha256",
+            "authorized_stage",
+            "output_namespace",
+            "model_component_id",
+            "event_count",
+            "event_plan_sha256",
+            "identity_lexicon_sha256",
+            "execution_source_hashes_sha256",
+            "model_name",
+            "model_digest",
+            "runtime_fingerprint_sha256",
+            "model_transport_sha256",
+            "model_runtime_limits_sha256",
+            "byte_index",
+            "byte_index_sha256",
+            "byte_count_total",
+            "marker_sha256",
+        }
+        marker_body = (
+            {key: marker[key] for key in marker if key != "marker_sha256"}
+            if type(marker) is dict
+            else {}
+        )
+        claim_bindings = {
+            "claim_sha256": claim.get("claim_sha256"),
+            "candidate_sha256": claim.get("candidate_sha256"),
+            "authorized_stage": claim.get("authorized_stage"),
+            "output_namespace": claim.get("output_namespace"),
+            "model_component_id": claim.get("model_component_id"),
+            "event_count": claim.get("event_count"),
+            "event_plan_sha256": claim.get("event_plan_sha256"),
+            "identity_lexicon_sha256": claim.get("identity_lexicon_sha256"),
+            "execution_source_hashes_sha256": claim.get(
+                "execution_source_hashes_sha256"
+            ),
+            "model_name": claim.get("model_name"),
+            "model_digest": claim.get("model_digest"),
+            "runtime_fingerprint_sha256": claim.get(
+                "runtime_fingerprint_sha256"
+            ),
+            "model_transport_sha256": claim.get("model_transport_sha256"),
+            "model_runtime_limits_sha256": claim.get(
+                "model_runtime_limits_sha256"
+            ),
+        }
+        if (
+            type(marker) is not dict
+            or set(marker) != expected_marker_keys
+            or marker["schema_version"] != marker_schema_version
+            or marker["lifecycle_kind"] != lifecycle_kind
+            or marker["lifecycle_sha256"] != lifecycle_hash
+            or any(marker.get(key) != value for key, value in claim_bindings.items())
+            or marker["marker_sha256"] != canonical_sha256(marker_body)
+            or marker_bytes != _encoded_state(marker)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model complete marker is not canonical or claim-bound"
+            )
+        byte_index, payloads = _read_owned_model_indexed_payloads(
+            secured,
+            marker["byte_index"],
+            event_count=claim["event_count"],
+            location="owned model extraction component directory",
+        )
+        if (
+            marker["byte_index_sha256"] != canonical_sha256(byte_index)
+            or marker["byte_count_total"]
+            != sum(item["byte_count"] for item in byte_index)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model byte index is not exact"
+            )
+        marker_after = _read_regular_bytes(
+            marker_path,
+            "owned model extraction closure marker",
+            max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+        )
+        directory_after = _validate_real_directory(
+            secured,
+            "owned model extraction component directory",
+        )
+        if (
+            marker_after != marker_bytes
+            or (directory_before.st_dev, directory_before.st_ino)
+            != (directory_after.st_dev, directory_after.st_ino)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model component changed during exact replay"
+            )
+        self._revalidate_authorized_model_execution_sources(claim)
+        return byte_index, payloads, marker_bytes
+
+    def _load_owned_model_event_inputs_locked(
+        self,
+        *,
+        authenticated_store_snapshot: Mapping[str, Any],
+        independent_current_tip_anchor: Mapping[str, Any],
+        claim: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Derive current/prior text only from terminal store-owned ancestry."""
+
+        current = _expect_mapping(
+            authenticated_store_snapshot,
+            "owned model input store snapshot",
+        )
+        current_tip = _expect_mapping(
+            independent_current_tip_anchor,
+            "owned model input current tip",
+        )
+        claim_value = _expect_mapping(claim, "owned model input claim")
+        stage = claim_value.get("authorized_stage")
+        if stage == "development":
+            scope_hash = _sha256(
+                claim_value.get("development_root_scope_sha256"),
+                "owned development model input scope",
+            )
+            if (
+                current_tip["development_model_execution_claims"].get(scope_hash)
+                != claim_value
+                or scope_hash in current_tip["development_model_execution_aborts"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model input claim is not active exact ancestry"
+                )
+            sec_claim = current_tip["development_sec_execution_claims"].get(
+                scope_hash
+            )
+            sec_reader = current_tip["development_sec_reader_receipts"].get(
+                scope_hash
+            )
+            if (
+                type(sec_claim) is not dict
+                or type(sec_reader) is not dict
+                or sec_claim.get("claim_sha256")
+                != claim_value.get("development_sec_execution_claim_sha256")
+                or sec_reader.get("receipt_sha256")
+                != claim_value.get("development_sec_reader_receipt_sha256")
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model input lost its terminal SEC root"
+                )
+            root_source = self._read_owned_development_root_carry_source_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                development_sec_execution_claim=sec_claim,
+                development_sec_reader_receipt=sec_reader,
+            )
+            universe = root_source["universe"]
+            content_manifest = root_source["content_manifest"]
+            content_manifests_by_stage = {
+                "development": copy.deepcopy(content_manifest)
+            }
+            payloads_by_name = root_source["payloads_by_name"]
+            byte_rows = {
+                row["relative_path"]: row for row in root_source["byte_index"]
+            }
+            sec_reader_hash = sec_reader["receipt_sha256"]
+            carry_reader_hash = None
+            initial_prior_by_form: dict[str, dict[str, Any]] = {}
+            lifecycle_kind = "development_root"
+            lifecycle_hash = scope_hash
+        elif stage in {"intermediate", "final"}:
+            request_hash = _sha256(
+                claim_value.get("request_sha256"),
+                "owned stage model input request",
+            )
+            if (
+                current_tip["stage_model_execution_claims"].get(request_hash)
+                != claim_value
+                or request_hash in current_tip["stage_model_execution_aborts"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model input claim is not active exact ancestry"
+                )
+            bundle = current_tip["authorization_bundles"].get(request_hash)
+            sec_claim = current_tip["stage_sec_execution_claims"].get(request_hash)
+            sec_reader = current_tip["stage_sec_reader_receipts"].get(request_hash)
+            root_scope_hash = claim_value.get("development_root_scope_sha256")
+            root_claim = current_tip["development_sec_execution_claims"].get(
+                root_scope_hash
+            )
+            root_reader = current_tip["development_sec_reader_receipts"].get(
+                root_scope_hash
+            )
+            if any(
+                type(value) is not dict
+                for value in (bundle, sec_claim, sec_reader, root_claim, root_reader)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model input lost terminal SEC or development ancestry"
+                )
+            if (
+                sec_claim["claim_sha256"]
+                != claim_value.get("stage_sec_execution_claim_sha256")
+                or sec_reader["receipt_sha256"]
+                != claim_value.get("stage_sec_reader_receipt_sha256")
+                or root_claim["claim_sha256"]
+                != claim_value.get("development_sec_execution_claim_sha256")
+                or root_reader["receipt_sha256"]
+                != claim_value.get("development_sec_reader_receipt_sha256")
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model input crossed its claim-bound SEC ancestry"
+                )
+            root_source = self._read_owned_development_root_carry_source_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                development_sec_execution_claim=root_claim,
+                development_sec_reader_receipt=root_reader,
+            )
+            universe = root_source["universe"]
+            root_content_manifest = root_source["content_manifest"]
+            sec_replay = self._replay_owned_sec_reader_bytes_locked(
+                claim=sec_claim,
+                reader_receipt=sec_reader,
+            )
+            payloads_by_name = sec_replay["payloads_by_name"]
+            byte_rows = {
+                row["relative_path"]: row for row in sec_replay["byte_index"]
+            }
+            try:
+                _exact_bundle, _grant, component_plan = (
+                    _sec_component_plan_from_bundle(bundle)
+                )
+                content_documents = []
+                for document_ordinal, document in enumerate(
+                    component_plan["sec_access_plan"]["documents"],
+                    start=1,
+                ):
+                    raw_payload = payloads_by_name[
+                        f"document-{document_ordinal:04d}.raw"
+                    ]
+                    normalized_payload = payloads_by_name[
+                        f"document-{document_ordinal:04d}.normalized.txt"
+                    ]
+                    content_documents.append(
+                        {
+                            "accession_number": document["accession_number"],
+                            "primary_document_sha256": hashlib.sha256(
+                                raw_payload
+                            ).hexdigest(),
+                            "normalized_text_sha256": hashlib.sha256(
+                                normalized_payload
+                            ).hexdigest(),
+                            "primary_document_bytes": len(raw_payload),
+                            "normalized_text_bytes": len(normalized_payload),
+                        }
+                    )
+                content_manifest = build_stage_content_manifest(
+                    artifact_stage=stage,
+                    corpus_universe_sha256=universe["universe_sha256"],
+                    documents=content_documents,
+                    universe_manifest=universe,
+                )
+            except (
+                KeyError,
+                SecFilingGemmaContractError,
+                SecFilingGemmaStageAuthorizationError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model content manifest cannot be rebuilt from SEC bytes"
+                ) from exc
+            content_manifests_by_stage = {
+                "development": copy.deepcopy(root_content_manifest)
+            }
+            if stage == "intermediate":
+                content_manifests_by_stage["intermediate"] = copy.deepcopy(
+                    content_manifest
+                )
+            if stage == "intermediate":
+                carry_receipt = current_tip[
+                    "development_root_carry_in_reader_receipts"
+                ].get(request_hash)
+                carry_directory_name = (
+                    DEVELOPMENT_ROOT_CARRY_IN_COMPONENT_DIRECTORY_NAME
+                )
+                carry_provenance = "development_root_carry_in"
+            else:
+                carry_receipt = current_tip["stage_carry_in_reader_receipts"].get(
+                    request_hash
+                )
+                carry_directory_name = PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+                carry_provenance = "stage_carry_in"
+            if (
+                type(carry_receipt) is not dict
+                or carry_receipt.get("receipt_sha256")
+                != claim_value.get("carry_in_reader_receipt_sha256")
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model input lost its exact carry-in receipt"
+                )
+            carry_directory = (
+                self.store_directory
+                / STAGE_OUTPUTS_DIRECTORY_NAME
+                / sec_claim["claim_sha256"]
+                / carry_directory_name
+            )
+            carry_marker_path = (
+                carry_directory / MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME
+            )
+            carry_marker_bytes = _read_regular_bytes(
+                carry_marker_path,
+                "owned model carry-in complete marker",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            carry_marker = _strict_json_bytes(
+                carry_marker_bytes,
+                "owned model carry-in complete marker",
+            )
+            carry_index = carry_receipt.get("carry_in_byte_index")
+            if (
+                type(carry_marker) is not dict
+                or carry_marker_bytes != _encoded_state(carry_marker)
+                or carry_marker.get("byte_index") != carry_index
+                or hashlib.sha256(carry_marker_bytes).hexdigest()
+                != carry_receipt.get("carry_in_complete_marker_sha256")
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model carry-in marker differs from its receipt"
+                )
+            replayed_carry_index, carry_payloads = _read_owned_sec_indexed_payloads(
+                carry_directory,
+                carry_index,
+                location="owned model carry-in component directory",
+            )
+            if replayed_carry_index != carry_index:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model carry-in byte index changed"
+                )
+            try:
+                if stage == "intermediate":
+                    validate_development_root_carry_in_reader_receipt(
+                        carry_receipt,
+                        authenticated_store_snapshot=current,
+                        independent_current_tip_anchor=current_tip,
+                        carry_in_byte_index=replayed_carry_index,
+                        carry_in_complete_marker_sha256=hashlib.sha256(
+                            carry_marker_bytes
+                        ).hexdigest(),
+                        reader_source_sha256=carry_receipt["reader_source_sha256"],
+                    )
+                else:
+                    validate_stage_carry_in_reader_receipt(
+                        carry_receipt,
+                        authenticated_store_snapshot=current,
+                        independent_current_tip_anchor=current_tip,
+                        carry_in_byte_index=replayed_carry_index,
+                        carry_in_complete_marker_sha256=hashlib.sha256(
+                            carry_marker_bytes
+                        ).hexdigest(),
+                        reader_source_sha256=carry_receipt["reader_source_sha256"],
+                    )
+            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model carry-in receipt failed exact replay"
+                ) from exc
+            if stage == "final":
+                parent_request_hash = carry_receipt.get("parent_request_sha256")
+                parent_bundle = current_tip["authorization_bundles"].get(
+                    parent_request_hash
+                )
+                if type(parent_bundle) is not dict:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Final model input lost its parent authorization bundle"
+                    )
+                parent_evidence, _parent_binding = (
+                    self._read_owned_stage_evidence_output_locked(
+                        authenticated_store_snapshot=current,
+                        independent_current_tip_anchor=current_tip,
+                        authorization_bundle=parent_bundle,
+                        request_sha256=parent_request_hash,
+                        require_current_store_state=False,
+                    )
+                )
+                parent_content = parent_evidence.get(
+                    "prerequisite_content_manifest"
+                )
+                if (
+                    type(parent_content) is not dict
+                    or parent_content.get("artifact_stage") != "intermediate"
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Final model input parent content manifest changed"
+                    )
+                content_manifests_by_stage["intermediate"] = copy.deepcopy(
+                    parent_content
+                )
+                content_manifests_by_stage["final"] = copy.deepcopy(
+                    content_manifest
+                )
+            initial_prior_by_form = {}
+            records = carry_receipt.get("carry_in_records")
+            if type(records) is not list or len(records) != len(replayed_carry_index):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model carry-in records differ from their bytes"
+                )
+            for record, row in zip(records, replayed_carry_index):
+                if type(record) is not dict or record.get("form") not in {"10-K", "10-Q"}:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Stage model carry-in record identity changed"
+                    )
+                payload = carry_payloads[row["relative_path"]]
+                initial_prior_by_form[record["form"]] = {
+                    "text": payload,
+                    "source": {
+                        "relative_path": row["relative_path"],
+                        "byte_count": len(payload),
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    },
+                    "provenance": carry_provenance,
+                    "accession_number": record["accession_number"],
+                    "availability_session": record["availability_session"],
+                }
+            if set(initial_prior_by_form) != {"10-K", "10-Q"}:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model carry-in lacks one exact prior per filing form"
+                )
+            sec_reader_hash = sec_reader["receipt_sha256"]
+            carry_reader_hash = carry_receipt["receipt_sha256"]
+            lifecycle_kind = "stage_request"
+            lifecycle_hash = request_hash
+        else:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model input claim stage changed"
+            )
+
+        events: list[dict[str, Any]] = []
+        prior_by_form = dict(initial_prior_by_form)
+        for event in claim_value.get("event_plan", []):
+            if type(event) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned model event plan item is not exact"
+                )
+            document_ordinal = event.get("sec_document_ordinal")
+            relative_path = f"document-{document_ordinal:04d}.normalized.txt"
+            row = byte_rows.get(relative_path)
+            payload = payloads_by_name.get(relative_path)
+            if (
+                type(row) is not dict
+                or type(payload) is not bytes
+                or row.get("sha256") != hashlib.sha256(payload).hexdigest()
+                or row.get("byte_count") != len(payload)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned model current filing bytes differ from the event plan"
+                )
+            prior = prior_by_form.get(event["form"])
+            events.append(
+                {
+                    "event": copy.deepcopy(event),
+                    "current_normalized_text": payload,
+                    "current_normalized_source": {
+                        "relative_path": relative_path,
+                        "byte_count": len(payload),
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    },
+                    "prior_same_form_normalized_text": (
+                        None if prior is None else prior["text"]
+                    ),
+                    "prior_same_form_normalized_source": (
+                        None if prior is None else copy.deepcopy(prior["source"])
+                    ),
+                    "prior_accession_number": (
+                        None if prior is None else prior["accession_number"]
+                    ),
+                    "prior_availability_session": (
+                        None if prior is None else prior["availability_session"]
+                    ),
+                    "prior_provenance_kind": (
+                        None if prior is None else prior["provenance"]
+                    ),
+                    "sec_reader_receipt_sha256": sec_reader_hash,
+                    "carry_in_reader_receipt_sha256": carry_reader_hash,
+                }
+            )
+            prior_by_form[event["form"]] = {
+                "text": payload,
+                "source": {
+                    "relative_path": relative_path,
+                    "byte_count": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                },
+                "provenance": "same_scope_document",
+                "accession_number": event["accession_number"],
+                "availability_session": event["availability_session"],
+            }
+        if (
+            len(events) != claim_value.get("event_count")
+            or [item["event"] for item in events] != claim_value.get("event_plan")
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model inputs differ from the chronological event plan"
+            )
+        candidates = [
+            entry.get("candidate_manifest")
+            for entry in current["latest_registry"]["entries"]
+            if entry.get("candidate_sha256") == claim_value["candidate_sha256"]
+        ]
+        if (
+            len(candidates) != 1
+            or type(candidates[0]) is not dict
+            or candidates[0].get("candidate_sha256")
+            != claim_value["candidate_sha256"]
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model inputs lack one exact registered candidate"
+            )
+        return {
+            "claim": copy.deepcopy(claim_value),
+            "scope_kind": lifecycle_kind,
+            "scope_sha256": lifecycle_hash,
+            "candidate_manifest": copy.deepcopy(candidates[0]),
+            "corpus_universe_manifest": copy.deepcopy(universe),
+            "content_manifests_by_stage": content_manifests_by_stage,
+            "session_dates": list(EXPECTED_SESSIONS),
+            "sec_reader_receipt_sha256": sec_reader_hash,
+            "carry_in_reader_receipt_sha256": carry_reader_hash,
+            "events": events,
+        }
+
+    def _load_owned_development_model_event_inputs(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Load exact development model inputs by their sole lifecycle hash."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development model input root scope hash",
+            )
+            claim = current_tip["development_model_execution_claims"].get(
+                scope_hash
+            )
+            return self._load_owned_model_event_inputs_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                claim=claim,
+            )
+
+    def _load_authorized_model_stage_event_inputs(
+        self,
+        *,
+        request_sha256: str,
+    ) -> dict[str, Any]:
+        """Load exact stage model inputs by their sole lifecycle hash."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(
+                request_sha256,
+                "stage model input request hash",
+            )
+            claim = current_tip["stage_model_execution_claims"].get(request_hash)
+            return self._load_owned_model_event_inputs_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                claim=claim,
+            )
+
+    def _validate_owned_model_component_semantics_locked(
+        self,
+        *,
+        authenticated_store_snapshot: Mapping[str, Any],
+        independent_current_tip_anchor: Mapping[str, Any],
+        claim: Mapping[str, Any],
+        payloads_by_name: Mapping[str, bytes],
+    ) -> None:
+        """Independently replay every persisted model artifact before terminal CAS."""
+
+        claim_value = _expect_mapping(claim, "owned model semantic claim")
+        loaded = self._load_owned_model_event_inputs_locked(
+            authenticated_store_snapshot=authenticated_store_snapshot,
+            independent_current_tip_anchor=independent_current_tip_anchor,
+            claim=claim_value,
+        )
+        if set(loaded) != {
+            "claim",
+            "scope_kind",
+            "scope_sha256",
+            "candidate_manifest",
+            "corpus_universe_manifest",
+            "content_manifests_by_stage",
+            "session_dates",
+            "sec_reader_receipt_sha256",
+            "carry_in_reader_receipt_sha256",
+            "events",
+        } or loaded["claim"] != claim_value:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model semantic input bundle is not exact"
+            )
+        candidate = loaded["candidate_manifest"]
+        universe = loaded["corpus_universe_manifest"]
+        content_by_stage = loaded["content_manifests_by_stage"]
+        session_dates = loaded["session_dates"]
+        events = loaded["events"]
+        stage = claim_value["authorized_stage"]
+        before_manifest = _strict_json_bytes(
+            payloads_by_name["pre_runtime_probe.json"],
+            "owned model pre-runtime probe",
+        )
+        try:
+            before_probe = validate_ollama_runtime_probe_receipt(
+                before_manifest,
+                expected_model_digest=claim_value["model_digest"],
+                expected_runtime_fingerprint_sha256=claim_value[
+                    "runtime_fingerprint_sha256"
+                ],
+                expected_transport_mode=OWNED_RUNTIME_PROBE_TRANSPORT_MODE,
+                expected_probe_receipt_sha256=before_manifest.get(
+                    "receipt_sha256"
+                ),
+            )
+        except (AttributeError, KeyError, SecFilingGemmaOllamaError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model pre-runtime probe failed exact replay"
+            ) from exc
+        before_identity = before_probe.pinned_runtime_identity()
+        attempt_hashes: list[str] = []
+        elapsed_nanoseconds = 0
+        for event_item in events:
+            if type(event_item) is not dict or set(event_item) != {
+                "event",
+                "current_normalized_text",
+                "current_normalized_source",
+                "prior_same_form_normalized_text",
+                "prior_same_form_normalized_source",
+                "prior_accession_number",
+                "prior_availability_session",
+                "prior_provenance_kind",
+                "sec_reader_receipt_sha256",
+                "carry_in_reader_receipt_sha256",
+            }:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned model semantic event input is not exact"
+                )
+            event = event_item["event"]
+            ordinal = event["event_ordinal"]
+            prefix = f"events/{ordinal:06d}"
+            try:
+                current_bytes = event_item["current_normalized_text"]
+                prior_bytes = event_item["prior_same_form_normalized_text"]
+                current_text = current_bytes.decode("utf-8")
+                prior_text = (
+                    None if prior_bytes is None else prior_bytes.decode("utf-8")
+                )
+            except (AttributeError, UnicodeDecodeError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned model normalized inputs are not exact UTF-8"
+                ) from exc
+            if current_text.encode("utf-8") != current_bytes or (
+                prior_text is not None and prior_text.encode("utf-8") != prior_bytes
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned model normalized inputs are not canonical UTF-8"
+                )
+            preprocessed = _strict_json_bytes(
+                payloads_by_name[f"{prefix}/preprocessed_event.json"],
+                f"owned model preprocessed event {ordinal}",
+            )
+            preprocessing_receipt = _strict_json_bytes(
+                payloads_by_name[f"{prefix}/preprocessing_receipt.json"],
+                f"owned model preprocessing receipt {ordinal}",
+            )
+            redacted_manifest = _strict_json_bytes(
+                payloads_by_name[f"{prefix}/redacted_input_manifest.json"],
+                f"owned model redacted manifest {ordinal}",
+            )
+            call_intent = _strict_json_bytes(
+                payloads_by_name[f"{prefix}/call_intent.json"],
+                f"owned model call intent {ordinal}",
+            )
+            attempt_manifest = _strict_json_bytes(
+                payloads_by_name[f"{prefix}/model_attempt_receipt.json"],
+                f"owned model attempt receipt {ordinal}",
+            )
+            try:
+                validate_preprocessed_event(
+                    preprocessed,
+                    current_normalized_text=current_text,
+                    prior_same_form_normalized_text=prior_text,
+                    identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+                )
+                validate_owned_preprocessing_receipt(
+                    preprocessing_receipt,
+                    scope_kind=loaded["scope_kind"],
+                    scope_sha256=loaded["scope_sha256"],
+                    candidate_sha256=claim_value["candidate_sha256"],
+                    model_execution_claim_sha256=claim_value["claim_sha256"],
+                    sec_reader_receipt_sha256=loaded[
+                        "sec_reader_receipt_sha256"
+                    ],
+                    carry_in_reader_receipt_sha256=loaded[
+                        "carry_in_reader_receipt_sha256"
+                    ],
+                    stage=stage,
+                    event_ordinal=ordinal,
+                    accession_number=event["accession_number"],
+                    form=event["form"],
+                    current_normalized_source=event_item[
+                        "current_normalized_source"
+                    ],
+                    prior_same_form_normalized_source=event_item[
+                        "prior_same_form_normalized_source"
+                    ],
+                    prior_provenance_kind=event_item["prior_provenance_kind"],
+                    preprocessor_source_sha256=claim_value[
+                        "execution_source_hashes"
+                    ]["preprocessor"],
+                    preprocessed_event=preprocessed,
+                    current_normalized_text=current_text,
+                    prior_same_form_normalized_text=prior_text,
+                )
+                validate_redacted_input_manifest(
+                    redacted_manifest,
+                    universe_manifest=universe,
+                    stage_content_manifest=content_by_stage[stage],
+                    expected_manifest_sha256=redacted_manifest[
+                        "redacted_input_manifest_sha256"
+                    ],
+                    expected_preprocessed_event_sha256=preprocessed[
+                        "preprocessed_event_sha256"
+                    ],
+                    expected_owned_preprocessing_receipt_sha256=(
+                        preprocessing_receipt["receipt_sha256"]
+                    ),
+                    expected_sec_reader_receipt_sha256=loaded[
+                        "sec_reader_receipt_sha256"
+                    ],
+                    expected_carry_in_reader_receipt_sha256=loaded[
+                        "carry_in_reader_receipt_sha256"
+                    ],
+                )
+                extractor_request = {
+                    "request_version": EXTRACTOR_REQUEST_VERSION,
+                    "preprocessor_version": PREPROCESSOR_VERSION,
+                    "corpus_universe_sha256": claim_value[
+                        "corpus_universe_sha256"
+                    ],
+                    "identity_lexicon_sha256": claim_value[
+                        "identity_lexicon_sha256"
+                    ],
+                    "redacted_input_manifest_sha256": redacted_manifest[
+                        "redacted_input_manifest_sha256"
+                    ],
+                    "stage": stage,
+                    "current_accession_number": event["accession_number"],
+                    "current_form": event["form"],
+                    "current_availability_session": event[
+                        "availability_session"
+                    ],
+                    "current_filing_sha256": event_item[
+                        "current_normalized_source"
+                    ]["sha256"],
+                    "prior_accession_number": event_item[
+                        "prior_accession_number"
+                    ],
+                    "prior_availability_session": event_item[
+                        "prior_availability_session"
+                    ],
+                    "prior_same_form_filing_sha256": (
+                        None
+                        if event_item["prior_same_form_normalized_source"] is None
+                        else event_item["prior_same_form_normalized_source"][
+                            "sha256"
+                        ]
+                    ),
+                    "model_payload": preprocessed["model_payload"],
+                    "model_payload_sha256": preprocessed[
+                        "model_payload_sha256"
+                    ],
+                    "redaction_report": preprocessed["redaction_report"],
+                }
+                validated_request = validate_extractor_request(
+                    extractor_request,
+                    candidate_manifest=candidate,
+                    expected_candidate_sha256=claim_value["candidate_sha256"],
+                    universe_manifest=universe,
+                    content_manifests_by_stage=content_by_stage,
+                    expected_content_manifest_sha256s={
+                        item_stage: manifest["content_manifest_sha256"]
+                        for item_stage, manifest in content_by_stage.items()
+                    },
+                    session_dates=session_dates,
+                    forbidden_identity_terms=CANONICAL_IDENTITY_LEXICON,
+                    redacted_input_manifest=redacted_manifest,
+                    expected_redacted_input_manifest_sha256=(
+                        redacted_manifest["redacted_input_manifest_sha256"]
+                    ),
+                    expected_preprocessed_event_sha256=preprocessed[
+                        "preprocessed_event_sha256"
+                    ],
+                    expected_owned_preprocessing_receipt_sha256=(
+                        preprocessing_receipt["receipt_sha256"]
+                    ),
+                    expected_sec_reader_receipt_sha256=loaded[
+                        "sec_reader_receipt_sha256"
+                    ],
+                    expected_carry_in_reader_receipt_sha256=loaded[
+                        "carry_in_reader_receipt_sha256"
+                    ],
+                )
+                expected_intent = _build_owned_model_call_intent(
+                    claim=claim_value,
+                    event=event,
+                    preprocessed_event_sha256=preprocessed[
+                        "preprocessed_event_sha256"
+                    ],
+                    owned_preprocessing_receipt_sha256=(
+                        preprocessing_receipt["receipt_sha256"]
+                    ),
+                    redacted_input_manifest_sha256=redacted_manifest[
+                        "redacted_input_manifest_sha256"
+                    ],
+                    model_payload_sha256=preprocessed["model_payload_sha256"],
+                    runtime_probe_receipt_sha256=before_manifest[
+                        "receipt_sha256"
+                    ],
+                    runtime_evidence_sha256=before_identity.evidence_sha256,
+                )
+                if call_intent != expected_intent:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned model call intent is not the exact pre-call plan"
+                    )
+                attempt = validate_ollama_model_attempt_receipt(
+                    attempt_manifest,
+                    expected_candidate_sha256=claim_value["candidate_sha256"],
+                    expected_model_payload_sha256=preprocessed[
+                        "model_payload_sha256"
+                    ],
+                    expected_sentence_ids=validated_request["sentence_ids"],
+                    expected_runtime_evidence_sha256=(
+                        before_identity.evidence_sha256
+                    ),
+                    expected_model_digest=claim_value["model_digest"],
+                    expected_runtime_fingerprint_sha256=claim_value[
+                        "runtime_fingerprint_sha256"
+                    ],
+                    expected_transport_mode=OWNED_MODEL_ATTEMPT_TRANSPORT_MODE,
+                )
+            except (
+                KeyError,
+                SecFilingGemmaContractError,
+                SecFilingGemmaOllamaError,
+                SecFilingGemmaPreprocessorError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    f"Owned model event {ordinal} failed complete semantic replay"
+                ) from exc
+            attempt_hashes.append(attempt.receipt_sha256)
+            elapsed_nanoseconds += attempt.elapsed_nanoseconds
+        maximum_seconds = claim_value["model_runtime_limits"].get(
+            "maximum_model_seconds"
+        )
+        if (
+            type(maximum_seconds) not in {int, float}
+            or isinstance(maximum_seconds, bool)
+            or maximum_seconds <= 0
+            or elapsed_nanoseconds > int(float(maximum_seconds) * 1_000_000_000)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model attempts exceeded their claim-bound time ceiling"
+            )
+        after_manifest = _strict_json_bytes(
+            payloads_by_name["post_runtime_probe.json"],
+            "owned model post-runtime probe",
+        )
+        runtime_guard = _strict_json_bytes(
+            payloads_by_name["runtime_guard.json"],
+            "owned model runtime guard",
+        )
+        try:
+            after_probe = validate_ollama_runtime_probe_receipt(
+                after_manifest,
+                expected_model_digest=claim_value["model_digest"],
+                expected_runtime_fingerprint_sha256=claim_value[
+                    "runtime_fingerprint_sha256"
+                ],
+                expected_transport_mode=OWNED_RUNTIME_PROBE_TRANSPORT_MODE,
+                expected_probe_receipt_sha256=after_manifest.get(
+                    "receipt_sha256"
+                ),
+            )
+            validate_runtime_identity_guard(
+                runtime_guard,
+                before_evidence=before_probe.runtime_evidence(),
+                after_evidence=after_probe.runtime_evidence(),
+                expected_model_digest=claim_value["model_digest"],
+                expected_runtime_fingerprint_sha256=claim_value[
+                    "runtime_fingerprint_sha256"
+                ],
+                stage=stage,
+                model_call_receipt_sha256s=attempt_hashes,
+                expected_runtime_guard_sha256=runtime_guard.get(
+                    "runtime_guard_sha256"
+                ),
+            )
+        except (AttributeError, KeyError, SecFilingGemmaOllamaError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned model post-runtime guard failed exact replay"
+            ) from exc
+        self._revalidate_authorized_model_execution_sources(claim_value)
+
+    def _record_owned_development_model_reader_output(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Rehash and terminally bind one development model component."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development model reader root scope hash",
+            )
+            claim = current_tip["development_model_execution_claims"].get(
+                scope_hash
+            )
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model output lacks its durable execution claim"
+                )
+            if scope_hash in current_tip["development_model_execution_aborts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Aborted development model execution cannot publish bytes"
+                )
+            byte_index, payloads_by_name, marker_bytes = (
+                self._read_owned_model_component_locked(
+                claim=claim,
+                lifecycle_kind="development_root_scope",
+                lifecycle_sha256=scope_hash,
+                marker_schema_version=(
+                    DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+                ),
+                )
+            )
+            self._validate_owned_model_component_semantics_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                claim=claim,
+                payloads_by_name=payloads_by_name,
+            )
+            closure_index, closure_payloads, closure_marker = (
+                self._read_owned_model_component_locked(
+                    claim=claim,
+                    lifecycle_kind="development_root_scope",
+                    lifecycle_sha256=scope_hash,
+                    marker_schema_version=(
+                        DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+                    ),
+                )
+            )
+            if (
+                closure_index != byte_index
+                or closure_payloads != payloads_by_name
+                or closure_marker != marker_bytes
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model component changed during semantic replay"
+                )
+            try:
+                receipt = build_development_model_reader_receipt(
+                    claim,
+                    byte_index=byte_index,
+                    complete_marker_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development model reader receipt could not be finalized"
+                ) from exc
+            existing = current_tip["development_model_reader_receipts"].get(
+                scope_hash
+            )
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted development model receipt differs from replayed bytes"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_model_reader_receipt=receipt,
+            )
+            persisted = committed_tip["development_model_reader_receipts"].get(
+                scope_hash
+            )
+            if persisted != receipt:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development model receipt differs from rehashed bytes"
+                )
+            return copy.deepcopy(persisted)
+
+    def _record_authorized_model_stage_reader_output(
+        self,
+        *,
+        request_sha256: str,
+    ) -> dict[str, Any]:
+        """Rehash and terminally bind one authorized stage model component."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            request_hash = _sha256(
+                request_sha256,
+                "stage model reader request hash",
+            )
+            claim = current_tip["stage_model_execution_claims"].get(request_hash)
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model output lacks its durable execution claim"
+                )
+            if request_hash in current_tip["stage_model_execution_aborts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Aborted stage model execution cannot publish bytes"
+                )
+            byte_index, payloads_by_name, marker_bytes = (
+                self._read_owned_model_component_locked(
+                claim=claim,
+                lifecycle_kind="stage_request",
+                lifecycle_sha256=request_hash,
+                marker_schema_version=(
+                    STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+                ),
+                )
+            )
+            self._validate_owned_model_component_semantics_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                claim=claim,
+                payloads_by_name=payloads_by_name,
+            )
+            closure_index, closure_payloads, closure_marker = (
+                self._read_owned_model_component_locked(
+                    claim=claim,
+                    lifecycle_kind="stage_request",
+                    lifecycle_sha256=request_hash,
+                    marker_schema_version=(
+                        STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+                    ),
+                )
+            )
+            if (
+                closure_index != byte_index
+                or closure_payloads != payloads_by_name
+                or closure_marker != marker_bytes
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model component changed during semantic replay"
+                )
+            try:
+                receipt = build_stage_model_reader_receipt(
+                    claim,
+                    byte_index=byte_index,
+                    complete_marker_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Stage model reader receipt could not be finalized"
+                ) from exc
+            existing = current_tip["stage_model_reader_receipts"].get(
+                request_hash
+            )
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted stage model receipt differs from replayed bytes"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_model_reader_receipt=receipt,
+            )
+            persisted = committed_tip["stage_model_reader_receipts"].get(
+                request_hash
+            )
+            if persisted != receipt:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed stage model receipt differs from rehashed bytes"
+                )
+            return copy.deepcopy(persisted)
+
     def claim_authorized_sec_stage_execution(
         self,
         *,
@@ -4259,7 +6204,7 @@ class SecFilingGemmaRevealStore:
         *,
         claim: Mapping[str, Any],
         reader_receipt: Mapping[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
         """Rehash one terminal SEC batch under the caller's existing lock."""
 
         claim_value = _expect_mapping(claim, "owned SEC closure claim")
@@ -4435,6 +6380,11 @@ class SecFilingGemmaRevealStore:
             raise SecFilingGemmaRevealStoreError(
                 "Owned SEC closure directory changed during replay"
             )
+        return {
+            "byte_index": copy.deepcopy(byte_index),
+            "payloads_by_name": copy.deepcopy(payloads),
+            "complete_marker_sha256": hashlib.sha256(marker_bytes).hexdigest(),
+        }
 
     def _locate_owned_intermediate_development_root_carry_in_ancestry_locked(
         self,

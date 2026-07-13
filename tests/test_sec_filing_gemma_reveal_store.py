@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date
 import hashlib
 import inspect
@@ -17,6 +18,7 @@ from unittest.mock import patch
 import pytest
 
 import agent_benchmark.sec_filing_gemma_reveal_store as reveal_store_module
+import agent_benchmark.sec_filing_gemma_ollama as ollama_module
 import agent_benchmark.sec_filing_gemma_stage_runner as stage_runner_module
 
 from agent_benchmark.sec_audit_transport import ResponseAudit
@@ -937,6 +939,8 @@ def _registered_development_root(
     store: SecFilingGemmaRevealStore,
     *,
     salt: str,
+    model_digest: str | None = None,
+    runtime_fingerprint_sha256: str | None = None,
 ) -> tuple[dict, dict, dict, dict]:
     """Register one source-current candidate and build its complete root plan."""
 
@@ -947,8 +951,14 @@ def _registered_development_root(
     universe = _complete_test_carry_in_universe(salt=salt)
     sequence = len(prior_registry["entries"]) + 1
     candidate = build_candidate_manifest(
-        model_digest=_digest(f"{salt}:model"),
-        ollama_runtime_fingerprint_sha256=_digest(f"{salt}:runtime"),
+        model_digest=(
+            _digest(f"{salt}:model") if model_digest is None else model_digest
+        ),
+        ollama_runtime_fingerprint_sha256=(
+            _digest(f"{salt}:runtime")
+            if runtime_fingerprint_sha256 is None
+            else runtime_fingerprint_sha256
+        ),
         sec_audit_checksums_json_sha256=_digest(f"{salt}:audit"),
         sec_catalog_artifact_sha256=universe["catalog_artifact_sha256"],
         sec_audit_source_commit=_commit(f"{salt}:audit-commit"),
@@ -1141,11 +1151,337 @@ def _write_fixed_development_sec_root(
     return component_directory, marker_path, byte_index, content_manifest
 
 
+def _prepare_development_model_claim(
+    store: SecFilingGemmaRevealStore,
+    *,
+    salt: str,
+) -> dict:
+    registered, candidate, universe, plan = _registered_development_root(
+        store,
+        salt=salt,
+    )
+    sec_claim = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )["claim"]
+    _write_fixed_development_sec_root(store, sec_claim, plan)
+    sec_reader = store._record_owned_development_sec_root_reader_output(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    model_claim_result = store.claim_owned_development_model_execution(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    return {
+        "registered": registered,
+        "candidate": candidate,
+        "universe": universe,
+        "plan": plan,
+        "sec_claim": sec_claim,
+        "sec_reader": sec_reader,
+        "model_claim_result": model_claim_result,
+        "model_claim": model_claim_result["claim"],
+    }
+
+
+def _write_semantically_empty_model_component(
+    store: SecFilingGemmaRevealStore,
+    claim: dict,
+    *,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+) -> Path:
+    component = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim["claim_sha256"]
+        / reveal_store_module.MODEL_EXTRACTION_COMPONENT_DIRECTORY_NAME
+    )
+    component.mkdir(parents=True)
+    byte_index: list[dict] = []
+    for ordinal, (logical_id, relative_path) in enumerate(
+        reveal_store_module._expected_model_byte_layout(claim["event_count"]),
+        start=1,
+    ):
+        payload = reveal_store_module._encoded_state({})
+        path = component.joinpath(*relative_path.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        byte_index.append(
+            {
+                "ordinal": ordinal,
+                "logical_id": logical_id,
+                "relative_path": relative_path,
+                "byte_count": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    marker_body = {
+        "schema_version": (
+            reveal_store_module.DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+            if lifecycle_kind == "development_root_scope"
+            else reveal_store_module.STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+        ),
+        "lifecycle_kind": lifecycle_kind,
+        "lifecycle_sha256": lifecycle_sha256,
+        "claim_sha256": claim["claim_sha256"],
+        "candidate_sha256": claim["candidate_sha256"],
+        "authorized_stage": claim["authorized_stage"],
+        "output_namespace": claim["output_namespace"],
+        "model_component_id": claim["model_component_id"],
+        "event_count": claim["event_count"],
+        "event_plan_sha256": claim["event_plan_sha256"],
+        "identity_lexicon_sha256": claim["identity_lexicon_sha256"],
+        "execution_source_hashes_sha256": claim[
+            "execution_source_hashes_sha256"
+        ],
+        "model_name": claim["model_name"],
+        "model_digest": claim["model_digest"],
+        "runtime_fingerprint_sha256": claim["runtime_fingerprint_sha256"],
+        "model_transport_sha256": claim["model_transport_sha256"],
+        "model_runtime_limits_sha256": claim[
+            "model_runtime_limits_sha256"
+        ],
+        "byte_index": byte_index,
+        "byte_index_sha256": canonical_sha256(byte_index),
+        "byte_count_total": sum(row["byte_count"] for row in byte_index),
+    }
+    marker = {**marker_body, "marker_sha256": canonical_sha256(marker_body)}
+    marker_path = (
+        component / reveal_store_module.MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME
+    )
+    marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    return marker_path
+
+
+class _SyntheticOllamaResponse:
+    def __init__(self, body: bytes, *, url: str) -> None:
+        self._body = body
+        self.status_code = 200
+        self.url = url
+        self.history: list = []
+        self.headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Content-Length": str(len(body)),
+        }
+
+    @property
+    def content(self) -> bytes:
+        return self._body
+
+    def iter_content(self, chunk_size: int):
+        for start in range(0, len(self._body), chunk_size):
+            yield self._body[start : start + chunk_size]
+
+    def close(self) -> None:
+        return None
+
+
+class _SyntheticOllamaTransport:
+    def __init__(self, responses: list[_SyntheticOllamaResponse]) -> None:
+        self.responses = list(responses)
+
+    def request(self, _method: str, _url: str, **_kwargs):
+        if not self.responses:
+            raise AssertionError("unexpected synthetic Ollama request")
+        return self.responses.pop(0)
+
+    def close(self) -> None:
+        return None
+
+
+def _synthetic_runtime_probe_context() -> tuple[str, str, bytes, bytes]:
+    digest = _digest("synthetic-installed-model-blob")
+    version = {"version": "0.12.3"}
+    show = {
+        "license": "Gemma terms",
+        "modelfile": (
+            '# Modelfile generated by "ollama show"\n'
+            "# To build a new Modelfile based on this one, replace the FROM line with:\n"
+            f"# FROM {ollama_module.OLLAMA_MODEL}\n\n"
+            f"FROM C:/synthetic/blobs/sha256:{digest}\n"
+        ),
+        "parameters": "temperature 0.7\nnum_ctx 8192",
+        "template": "{{ .System }}{{ .Prompt }}",
+        "modified_at": "2026-07-13T10:11:12.123456789+02:00",
+        "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": "gemma4",
+            "families": ["gemma4"],
+            "parameter_size": "12B",
+            "quantization_level": "Q4_K_M",
+        },
+        "model_info": {
+            "general.architecture": "gemma4",
+            "general.parameter_count": 12_000_000_000,
+        },
+        "capabilities": ["completion"],
+    }
+    version_bytes = json.dumps(
+        version,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    show_bytes = json.dumps(
+        show,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fingerprint = canonical_sha256(
+        {
+            "schema_version": ollama_module.RUNTIME_FINGERPRINT_SCHEMA_VERSION,
+            "chat_endpoint": ollama_module.OLLAMA_ENDPOINT,
+            "version_endpoint": ollama_module.OLLAMA_VERSION_ENDPOINT,
+            "show_endpoint": ollama_module.OLLAMA_SHOW_ENDPOINT,
+            "model_name": ollama_module.OLLAMA_MODEL,
+            "model_digest": digest,
+            "version_response": version,
+            "show_response": show,
+        }
+    )
+    return digest, fingerprint, version_bytes, show_bytes
+
+
+def _synthetic_attempt_response_bytes() -> bytes:
+    payload = {
+        "model": ollama_module.OLLAMA_MODEL,
+        "created_at": "2026-07-13T10:11:12.123456789Z",
+        "message": {"role": "assistant", "content": "{}"},
+        "done": True,
+        "done_reason": "stop",
+        "total_duration": 100,
+        "load_duration": 10,
+        "prompt_eval_count": 20,
+        "prompt_eval_duration": 30,
+        "eval_count": 40,
+        "eval_duration": 50,
+    }
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _install_synthetic_owned_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    version_bytes: bytes,
+    show_bytes: bytes,
+) -> None:
+    real_probe = ollama_module.probe_owned_ollama_runtime
+    real_attempt = ollama_module.call_ollama_extractor_attempt
+    attempt_number = 0
+
+    def fake_probe(**kwargs):
+        receipt = real_probe(
+            **kwargs,
+            transport=_SyntheticOllamaTransport(
+                [
+                    _SyntheticOllamaResponse(
+                        version_bytes,
+                        url=ollama_module.OLLAMA_VERSION_ENDPOINT,
+                    ),
+                    _SyntheticOllamaResponse(
+                        show_bytes,
+                        url=ollama_module.OLLAMA_SHOW_ENDPOINT,
+                    ),
+                ]
+            ),
+        )
+        return replace(
+            receipt,
+            transport_mode=reveal_store_module.OWNED_RUNTIME_PROBE_TRANSPORT_MODE,
+        )
+
+    def fake_attempt(validated_request, **kwargs):
+        nonlocal attempt_number
+        attempt_number += 1
+        clock_values = iter((100, 175 + attempt_number))
+        receipt = real_attempt(
+            validated_request,
+            **kwargs,
+            transport=_SyntheticOllamaTransport(
+                [
+                    _SyntheticOllamaResponse(
+                        _synthetic_attempt_response_bytes(),
+                        url=ollama_module.OLLAMA_ENDPOINT,
+                    )
+                ]
+            ),
+            monotonic_ns=lambda: next(clock_values),
+        )
+        return replace(
+            receipt,
+            transport_mode=reveal_store_module.OWNED_MODEL_ATTEMPT_TRANSPORT_MODE,
+        )
+
+    monkeypatch.setattr(
+        stage_runner_module,
+        "probe_owned_ollama_runtime",
+        fake_probe,
+    )
+    monkeypatch.setattr(
+        stage_runner_module,
+        "call_ollama_extractor_attempt",
+        fake_attempt,
+    )
+
+
+def _coherently_mutate_model_artifact(
+    component: Path,
+    relative_path: str,
+) -> tuple[bytes, bytes]:
+    artifact_path = component.joinpath(*relative_path.split("/"))
+    marker_path = (
+        component / reveal_store_module.MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME
+    )
+    original_artifact = artifact_path.read_bytes()
+    original_marker = marker_path.read_bytes()
+    artifact = json.loads(original_artifact)
+    artifact["forged"] = True
+    for self_hash_field in (
+        "receipt_sha256",
+        "redacted_input_manifest_sha256",
+        "call_intent_sha256",
+        "runtime_guard_sha256",
+    ):
+        if self_hash_field in artifact:
+            artifact[self_hash_field] = canonical_sha256(
+                {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != self_hash_field
+                }
+            )
+            break
+    artifact_bytes = reveal_store_module._encoded_state(artifact)
+    artifact_path.write_bytes(artifact_bytes)
+    marker = json.loads(original_marker)
+    row = next(
+        item
+        for item in marker["byte_index"]
+        if item["relative_path"] == relative_path
+    )
+    row["byte_count"] = len(artifact_bytes)
+    row["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+    marker["byte_index_sha256"] = canonical_sha256(marker["byte_index"])
+    marker["byte_count_total"] = sum(
+        item["byte_count"] for item in marker["byte_index"]
+    )
+    marker["marker_sha256"] = canonical_sha256(
+        {key: value for key, value in marker.items() if key != "marker_sha256"}
+    )
+    marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    return original_artifact, original_marker
+
+
 def _prepare_intermediate_development_root_carry_in_chain(
     store: SecFilingGemmaRevealStore,
     *,
     salt: str,
     root_after_child: bool = False,
+    complete_intermediate_documents: bool = False,
 ) -> dict:
     registered, candidate, universe, plan = _registered_development_root(
         store,
@@ -1196,14 +1532,19 @@ def _prepare_intermediate_development_root_carry_in_chain(
     carry_scope["bound_by_prerequisite_stage_evidence_sha256"] = (
         _stage_evidence_hash(development_evidence)
     )
-    intermediate_records = sorted(
+    all_intermediate_records = sorted(
         (
             record
             for record in universe["records"]
             if record["artifact_stage"] == "intermediate"
         ),
         key=lambda record: record["accession_number"],
-    )[:2]
+    )
+    intermediate_records = (
+        all_intermediate_records
+        if complete_intermediate_documents
+        else all_intermediate_records[:2]
+    )
     intermediate_documents = [
         _sec_plan_document(
             record["accession_number"],
@@ -1267,9 +1608,12 @@ def _prepare_intermediate_development_root_carry_in_chain(
     child_claim, child_reader = _complete_fixed_sec_ancestry(
         store,
         intermediate_request["request_sha256"],
-        payloads=(
-            b"<html><body><p>Owned intermediate filing one.</p></body></html>",
-            b"<html><body><p>Owned intermediate filing two.</p></body></html>",
+        payloads=tuple(
+            (
+                "<html><body><p>Owned intermediate filing "
+                f"{ordinal:04d}.</p></body></html>"
+            ).encode("ascii")
+            for ordinal in range(1, len(intermediate_records) + 1)
         ),
     )
     root_document_ordinal_by_accession = {
@@ -1315,10 +1659,36 @@ def _prepare_final_owned_carry_in_chain(
     *,
     salt: str,
     tamper_carry_scope: bool = False,
+    include_development_root: bool = False,
+    complete_final_documents: bool = False,
 ) -> dict:
-    store.initialize()
-    registered, candidate = _register(store, salt=salt)
-    universe = _complete_test_carry_in_universe(salt=salt)
+    if include_development_root:
+        registered, candidate, universe, development_plan = (
+            _registered_development_root(store, salt=salt)
+        )
+        development_claim = store.claim_owned_development_sec_root_execution(
+            development_content_root_plan=development_plan,
+            sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+        )["claim"]
+        _write_fixed_development_sec_root(
+            store,
+            development_claim,
+            development_plan,
+        )
+        development_reader = (
+            store._record_owned_development_sec_root_reader_output(
+                development_root_scope_sha256=development_plan[
+                    "development_root_scope_sha256"
+                ],
+            )
+        )
+    else:
+        store.initialize()
+        registered, candidate = _register(store, salt=salt)
+        universe = _complete_test_carry_in_universe(salt=salt)
+        development_plan = None
+        development_claim = None
+        development_reader = None
     final_universe_records = sorted(
         (
             record
@@ -1365,10 +1735,20 @@ def _prepare_final_owned_carry_in_chain(
         )
         for record in selected_parent_records
     ]
-    final_documents = [
-        _sec_plan_document("0000320193-25-000201", "aapl-20250927.htm"),
-        _sec_plan_document("0000320193-26-000202", "aapl-20251227.htm"),
-    ]
+    final_documents = (
+        [
+            _sec_plan_document(
+                record["accession_number"],
+                record["primary_document"],
+            )
+            for record in final_universe_records
+        ]
+        if complete_final_documents
+        else [
+            _sec_plan_document("0000320193-25-000201", "aapl-20250927.htm"),
+            _sec_plan_document("0000320193-26-000202", "aapl-20251227.htm"),
+        ]
+    )
     parent_payloads = (
         b"<html><body><p>Owned intermediate annual carry in.</p></body></html>",
         b"<html><body><p>Owned intermediate quarterly carry in.</p></body></html>",
@@ -1550,13 +1930,20 @@ def _prepare_final_owned_carry_in_chain(
     child_claim, child_reader = _complete_fixed_sec_ancestry(
         store,
         final_request["request_sha256"],
-        payloads=(
-            b"<html><body><p>Owned final annual filing.</p></body></html>",
-            b"<html><body><p>Owned final quarterly filing.</p></body></html>",
+        payloads=tuple(
+            (
+                "<html><body><p>Owned final filing "
+                f"{ordinal:04d}.</p></body></html>"
+            ).encode("ascii")
+            for ordinal in range(1, len(final_documents) + 1)
         ),
     )
     return {
         "candidate": candidate,
+        "universe": universe,
+        "development_plan": development_plan,
+        "development_claim": development_claim,
+        "development_reader": development_reader,
         "parent_request": parent_request,
         "parent_bundle": parent_bundle,
         "parent_claim": parent_claim,
@@ -6001,6 +6388,482 @@ def test_interrupted_atomic_temp_file_is_never_authoritative(tmp_path: Path) -> 
     assert not interrupted.exists()
     assert state == store.load()
     assert state["latest_registry_pin"]["registered_entry_count"] == 0
+
+
+def test_development_model_claim_is_state_preserving_idempotent_and_loads_exact_inputs(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_development_model_claim(
+        store,
+        salt="development-model-claim",
+    )
+    first = prepared["model_claim_result"]
+    claim = prepared["model_claim"]
+    state_bytes = store.state_path.read_bytes()
+    tip_after_first = store.load_current_tip_anchor()
+
+    assert first["created"] is True
+    assert first["reader_receipt"] is None
+    assert first["abort"] is None
+    assert tip_after_first["development_model_execution_claims"][
+        prepared["plan"]["development_root_scope_sha256"]
+    ] == claim
+    repeated = store.claim_owned_development_model_execution(
+        development_root_scope_sha256=prepared["plan"][
+            "development_root_scope_sha256"
+        ],
+    )
+    assert repeated == {
+        "claim": claim,
+        "created": False,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.load_current_tip_anchor() == tip_after_first
+
+    loaded = store._load_owned_development_model_event_inputs(
+        development_root_scope_sha256=prepared["plan"][
+            "development_root_scope_sha256"
+        ],
+    )
+    assert set(loaded) == {
+        "claim",
+        "scope_kind",
+        "scope_sha256",
+        "candidate_manifest",
+        "corpus_universe_manifest",
+        "content_manifests_by_stage",
+        "session_dates",
+        "sec_reader_receipt_sha256",
+        "carry_in_reader_receipt_sha256",
+        "events",
+    }
+    assert loaded["claim"] == claim
+    assert loaded["candidate_manifest"] == prepared["candidate"]
+    assert loaded["corpus_universe_manifest"] == prepared["universe"]
+    assert set(loaded["content_manifests_by_stage"]) == {"development"}
+    assert loaded["session_dates"] == list(EXPECTED_SESSIONS)
+    assert loaded["sec_reader_receipt_sha256"] == prepared["sec_reader"][
+        "receipt_sha256"
+    ]
+    assert loaded["carry_in_reader_receipt_sha256"] is None
+    assert len(loaded["events"]) == claim["event_count"]
+    assert [event["event"] for event in loaded["events"]] == claim["event_plan"]
+    first_by_form: set[str] = set()
+    for event in loaded["events"]:
+        form = event["event"]["form"]
+        if form not in first_by_form:
+            assert event["prior_same_form_normalized_text"] is None
+            assert event["prior_same_form_normalized_source"] is None
+            assert event["prior_accession_number"] is None
+            assert event["prior_availability_session"] is None
+            assert event["prior_provenance_kind"] is None
+            first_by_form.add(form)
+        else:
+            assert event["prior_provenance_kind"] == "same_scope_document"
+
+
+@pytest.mark.parametrize("crash_point", ("pending_tip", "state_replace"))
+def test_development_model_claim_wal_crash_recovers_once_with_store_snapshot(
+    tmp_path: Path,
+    crash_point: str,
+) -> None:
+    store = _store(tmp_path)
+    _registered, _candidate_value, _universe, plan = (
+        _registered_development_root(
+            store,
+            salt=f"development-model-claim-crash-{crash_point}",
+        )
+    )
+    sec_claim = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )["claim"]
+    _write_fixed_development_sec_root(store, sec_claim, plan)
+    store._record_owned_development_sec_root_reader_output(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+    real_atomic_replace = reveal_store_module._atomic_replace
+    crashed = False
+
+    def crash_during_development_model_claim_cas(
+        path: Path,
+        payload: bytes,
+    ) -> None:
+        nonlocal crashed
+        real_atomic_replace(path, payload)
+        parsed = json.loads(payload)
+        is_target = (
+            crash_point == "pending_tip"
+            and path == store.current_tip_anchor_path
+            and parsed.get("schema_version") == CURRENT_TIP_PENDING_SCHEMA_VERSION
+        ) or (
+            crash_point == "state_replace"
+            and path == store.state_path
+        )
+        if is_target and not crashed:
+            crashed = True
+            raise RuntimeError(
+                f"simulated development model claim crash at {crash_point}"
+            )
+
+    def operation() -> dict:
+        return store.claim_owned_development_model_execution(
+            development_root_scope_sha256=scope_hash,
+        )
+
+    with patch(
+        "agent_benchmark.sec_filing_gemma_reveal_store._atomic_replace",
+        crash_during_development_model_claim_cas,
+    ), pytest.raises(RuntimeError, match="development model claim crash"):
+        operation()
+
+    pending = json.loads(store.current_tip_anchor_path.read_bytes())
+    assert pending["schema_version"] == CURRENT_TIP_PENDING_SCHEMA_VERSION
+    expected_claim = pending["next_tip_anchor"][
+        "development_model_execution_claims"
+    ][scope_hash]
+
+    recovered = operation()
+
+    assert recovered == {
+        "claim": expected_claim,
+        "created": False,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    assert store.state_path.read_bytes() == state_bytes
+    recovered_tip = store.load_current_tip_anchor()
+    assert recovered_tip["schema_version"] != CURRENT_TIP_PENDING_SCHEMA_VERSION
+    assert recovered_tip["revision"] == tip_before["revision"] + 1
+    assert recovered_tip["development_model_execution_claims"] == {
+        scope_hash: expected_claim
+    }
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    assert operation() == recovered
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+def test_development_model_abort_is_terminal_idempotent_and_forbids_output(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_development_model_claim(
+        store,
+        salt="development-model-abort",
+    )
+    scope_hash = prepared["plan"]["development_root_scope_sha256"]
+    abort = store.abort_owned_development_model_execution(
+        development_root_scope_sha256=scope_hash,
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    stable_tip = store.load_current_tip_anchor()
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    assert abort["claim_sha256"] == prepared["model_claim"]["claim_sha256"]
+    assert store.abort_owned_development_model_execution(
+        development_root_scope_sha256=scope_hash,
+        reason="external_effect_failed_or_completion_unknown",
+    ) == abort
+    recovered = store.claim_owned_development_model_execution(
+        development_root_scope_sha256=scope_hash,
+    )
+    assert recovered["created"] is False
+    assert recovered["abort"] == abort
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Aborted development model execution",
+    ):
+        store._record_owned_development_model_reader_output(
+            development_root_scope_sha256=scope_hash,
+        )
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+    assert store.load_current_tip_anchor() == stable_tip
+
+
+def test_model_reader_rejects_claim_bound_but_semantically_empty_json(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_development_model_claim(
+        store,
+        salt="development-model-semantic-replay",
+    )
+    scope_hash = prepared["plan"]["development_root_scope_sha256"]
+    _write_semantically_empty_model_component(
+        store,
+        prepared["model_claim"],
+        lifecycle_kind="development_root_scope",
+        lifecycle_sha256=scope_hash,
+    )
+    stable_tip = store.load_current_tip_anchor()
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="pre-runtime probe failed exact replay",
+    ):
+        store._record_owned_development_model_reader_output(
+            development_root_scope_sha256=scope_hash,
+        )
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+    assert store.load_current_tip_anchor() == stable_tip
+    assert stable_tip["development_model_reader_receipts"] == {}
+
+
+def test_valid_model_component_finalizes_and_rejects_rehashed_mutations_and_toctou(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    digest, fingerprint, version_bytes, show_bytes = (
+        _synthetic_runtime_probe_context()
+    )
+    _registered, _candidate_value, _universe, plan = (
+        _registered_development_root(
+            store,
+            salt="valid-development-model-component",
+            model_digest=digest,
+            runtime_fingerprint_sha256=fingerprint,
+        )
+    )
+    sec_claim = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )["claim"]
+    _write_fixed_development_sec_root(store, sec_claim, plan)
+    store._record_owned_development_sec_root_reader_output(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    _install_synthetic_owned_ollama(
+        monkeypatch,
+        version_bytes=version_bytes,
+        show_bytes=show_bytes,
+    )
+
+    claim_result = store.claim_owned_development_model_execution(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    loaded_inputs = store._load_owned_development_model_event_inputs(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    stage_runner_module._execute_owned_model_batch(
+        store,
+        lifecycle_kind="development_root",
+        lifecycle_sha256=plan["development_root_scope_sha256"],
+        claim=claim_result["claim"],
+        loaded_inputs=loaded_inputs,
+    )
+    receipt = store._record_owned_development_model_reader_output(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    )
+    tip = store.load_current_tip_anchor()
+    claim = tip["development_model_execution_claims"][
+        plan["development_root_scope_sha256"]
+    ]
+    assert receipt == tip["development_model_reader_receipts"][
+        plan["development_root_scope_sha256"]
+    ]
+    assert store._record_owned_development_model_reader_output(
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+    ) == receipt
+
+    component = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim["claim_sha256"]
+        / reveal_store_module.MODEL_EXTRACTION_COMPONENT_DIRECTORY_NAME
+    )
+    representative_paths = (
+        "pre_runtime_probe.json",
+        "events/000001/preprocessing_receipt.json",
+        "events/000001/redacted_input_manifest.json",
+        "events/000001/call_intent.json",
+        "events/000001/model_attempt_receipt.json",
+        "runtime_guard.json",
+    )
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+    marker_path = (
+        component / reveal_store_module.MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME
+    )
+    for relative_path in representative_paths:
+        artifact_path = component.joinpath(*relative_path.split("/"))
+        original_artifact, original_marker = _coherently_mutate_model_artifact(
+            component,
+            relative_path,
+        )
+        with pytest.raises(SecFilingGemmaRevealStoreError):
+            store._record_owned_development_model_reader_output(
+                development_root_scope_sha256=plan[
+                    "development_root_scope_sha256"
+                ],
+            )
+        artifact_path.write_bytes(original_artifact)
+        marker_path.write_bytes(original_marker)
+        assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    original_semantic_replay = (
+        store._validate_owned_model_component_semantics_locked
+    )
+    mutated: dict[str, bytes] = {}
+
+    def mutate_after_semantic_replay(**kwargs) -> None:
+        original_semantic_replay(**kwargs)
+        original_artifact, original_marker = _coherently_mutate_model_artifact(
+            component,
+            "events/000001/call_intent.json",
+        )
+        mutated["artifact"] = original_artifact
+        mutated["marker"] = original_marker
+
+    with patch.object(
+        store,
+        "_validate_owned_model_component_semantics_locked",
+        side_effect=mutate_after_semantic_replay,
+    ), pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="changed during semantic replay",
+    ):
+        store._record_owned_development_model_reader_output(
+            development_root_scope_sha256=plan[
+                "development_root_scope_sha256"
+            ],
+        )
+    (component / "events/000001/call_intent.json").write_bytes(
+        mutated["artifact"]
+    )
+    marker_path.write_bytes(mutated["marker"])
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+def test_intermediate_model_claim_uses_exact_sec_root_and_carry_inputs(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_intermediate_development_root_carry_in_chain(
+        store,
+        salt="intermediate-model-inputs",
+        complete_intermediate_documents=True,
+    )
+    request_hash = prepared["intermediate_request"]["request_sha256"]
+    carry_receipt = store._record_owned_development_root_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+    claim_result = store.claim_authorized_model_stage_execution(
+        request_sha256=request_hash,
+    )
+    claim = claim_result["claim"]
+
+    assert claim_result["created"] is True
+    assert claim["carry_in_kind"] == "development_root_carry_in"
+    assert claim["carry_in_reader_receipt_sha256"] == carry_receipt[
+        "receipt_sha256"
+    ]
+    loaded = store._load_authorized_model_stage_event_inputs(
+        request_sha256=request_hash,
+    )
+    assert loaded["claim"] == claim
+    assert loaded["scope_kind"] == "stage_request"
+    assert loaded["scope_sha256"] == request_hash
+    assert set(loaded["content_manifests_by_stage"]) == {
+        "development",
+        "intermediate",
+    }
+    assert loaded["sec_reader_receipt_sha256"] == prepared["child_reader"][
+        "receipt_sha256"
+    ]
+    assert loaded["carry_in_reader_receipt_sha256"] == carry_receipt[
+        "receipt_sha256"
+    ]
+    assert [event["event"] for event in loaded["events"]] == claim["event_plan"]
+    first_by_form: set[str] = set()
+    for event in loaded["events"]:
+        form = event["event"]["form"]
+        if form not in first_by_form:
+            assert event["prior_same_form_normalized_text"] is not None
+            assert event["prior_same_form_normalized_source"] is not None
+            assert event["prior_provenance_kind"] == "development_root_carry_in"
+            first_by_form.add(form)
+        else:
+            assert event["prior_provenance_kind"] == "same_scope_document"
+
+
+def test_final_model_claim_uses_exact_root_parent_sec_and_stage_carry_ancestry(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="final-model-inputs",
+        include_development_root=True,
+        complete_final_documents=True,
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    carry_receipt = store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+    claim_result = store.claim_authorized_model_stage_execution(
+        request_sha256=request_hash,
+    )
+    claim = claim_result["claim"]
+
+    assert claim_result["created"] is True
+    assert claim["authorized_stage"] == "final"
+    assert claim["carry_in_kind"] == "stage_carry_in"
+    assert claim["development_root_scope_sha256"] == prepared[
+        "development_plan"
+    ]["development_root_scope_sha256"]
+    assert claim["development_sec_reader_receipt_sha256"] == prepared[
+        "development_reader"
+    ]["receipt_sha256"]
+    assert claim["stage_sec_reader_receipt_sha256"] == prepared[
+        "child_reader"
+    ]["receipt_sha256"]
+    assert claim["carry_in_reader_receipt_sha256"] == carry_receipt[
+        "receipt_sha256"
+    ]
+
+    loaded = store._load_authorized_model_stage_event_inputs(
+        request_sha256=request_hash,
+    )
+    assert loaded["claim"] == claim
+    assert loaded["scope_kind"] == "stage_request"
+    assert loaded["scope_sha256"] == request_hash
+    assert set(loaded["content_manifests_by_stage"]) == {
+        "development",
+        "intermediate",
+        "final",
+    }
+    assert loaded["content_manifests_by_stage"]["intermediate"] == prepared[
+        "parent_evidence"
+    ]["prerequisite_content_manifest"]
+    assert loaded["content_manifests_by_stage"]["final"][
+        "artifact_stage"
+    ] == "final"
+    assert loaded["sec_reader_receipt_sha256"] == prepared["child_reader"][
+        "receipt_sha256"
+    ]
+    assert loaded["carry_in_reader_receipt_sha256"] == carry_receipt[
+        "receipt_sha256"
+    ]
+    assert [event["event"] for event in loaded["events"]] == claim[
+        "event_plan"
+    ]
+    first_by_form: set[str] = set()
+    for event in loaded["events"]:
+        form = event["event"]["form"]
+        if form not in first_by_form:
+            assert event["prior_same_form_normalized_text"] is not None
+            assert event["prior_same_form_normalized_source"] is not None
+            assert event["prior_provenance_kind"] == "stage_carry_in"
+            first_by_form.add(form)
+        else:
+            assert event["prior_provenance_kind"] == "same_scope_document"
 
 
 def _run_git(repository: Path, *arguments: str) -> None:

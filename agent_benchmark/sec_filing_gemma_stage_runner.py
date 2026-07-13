@@ -1,4 +1,4 @@
-"""Owned, one-shot SEC readers for exact stage and development-root claims.
+"""Owned one-shot SEC readers and local-model runners for exact claims.
 
 These are the only production entry points that may turn authenticated store
 state into SEC network effects.  A consumed-stage caller supplies no stage,
@@ -29,8 +29,13 @@ from typing import Any, Final
 
 from .sec_audit_transport import SecAuditTransport
 from .sec_filing_gemma_contract import (
+    CANONICAL_IDENTITY_LEXICON,
+    EXTRACTOR_REQUEST_VERSION,
+    PREPROCESSOR_VERSION,
     build_stage_content_manifest,
+    build_redacted_input_manifest,
     canonical_sha256,
+    validate_extractor_request,
 )
 from .sec_filing_gemma_corpus import (
     SecCorpusBudget,
@@ -45,17 +50,33 @@ from .sec_filing_gemma_corpus import (
     _validate_persisted_authenticated_stage_access_batch,
 )
 from .sec_filing_gemma_reveal_store import (
+    DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION,
     DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION,
     MAX_SEC_BATCH_FILE_BYTES,
     MAX_SEC_BATCH_FILES,
     MAX_SEC_BATCH_TOTAL_BYTES,
+    MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME,
+    MODEL_EXTRACTION_COMPONENT_DIRECTORY_NAME,
     SEC_BATCH_COMPLETE_MARKER_FILENAME,
     SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION,
     SEC_STAGE_COMPONENT_DIRECTORY_NAME,
+    STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION,
     STAGE_OUTPUTS_DIRECTORY_NAME,
     SecFilingGemmaRevealStore,
+    _build_owned_model_call_intent,
     _fsync_directory,
     _secure_directory,
+)
+from .sec_filing_gemma_ollama import (
+    build_runtime_identity_guard,
+    call_ollama_extractor_attempt,
+    probe_owned_ollama_runtime,
+    validate_ollama_model_attempt_receipt,
+    validate_ollama_runtime_probe_receipt,
+)
+from .sec_filing_gemma_preprocessor import (
+    build_owned_preprocessing_receipt,
+    preprocess_filing_event,
 )
 from .sec_filing_gemma_stage_access import (
     DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
@@ -78,6 +99,12 @@ _OUTPUT_FILE_MODE: Final[int] = 0o600
 _BINARY: Final[int] = getattr(os, "O_BINARY", 0)
 _NOFOLLOW: Final[int] = getattr(os, "O_NOFOLLOW", 0)
 _MAX_COMPONENT_PLAN_SECONDS: Final[float] = 720.0
+_OWNED_MODEL_ATTEMPT_TRANSPORT_MODE: Final[str] = (
+    "owned_hardened_loopback_session_requires_stage_attestation"
+)
+_OWNED_RUNTIME_PROBE_TRANSPORT_MODE: Final[str] = (
+    "owned_hardened_loopback_runtime_probe_unattested"
+)
 
 
 def _is_bare_sha256(value: Any) -> bool:
@@ -1500,8 +1527,1212 @@ def _run_owned_development_sec_root_locked(
         ) from None
 
 
+def _model_component_directory(
+    reveal_store: SecFilingGemmaRevealStore,
+    claim: Mapping[str, Any],
+) -> Path:
+    """Create the fixed model component hierarchy exactly once."""
+
+    claim_sha256 = claim.get("claim_sha256")
+    event_count = claim.get("event_count")
+    if (
+        not _is_bare_sha256(claim_sha256)
+        or type(event_count) is not int
+        or not 1 <= event_count <= 9999
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim has no safe fixed output identity"
+        )
+    claim_directory = (
+        reveal_store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim_sha256
+    )
+    secured_claim_directory = _secure_directory(
+        claim_directory,
+        create=True,
+        location="owned model claim directory",
+    )
+    if secured_claim_directory != claim_directory:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim directory identity changed"
+        )
+    component_directory = claim_directory / MODEL_EXTRACTION_COMPONENT_DIRECTORY_NAME
+    try:
+        component_directory.mkdir(exist_ok=False)
+        _fsync_directory(claim_directory)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model component directory is not create-new"
+        ) from None
+    secured_component = _secure_directory(
+        component_directory,
+        create=False,
+        location="owned model component directory",
+    )
+    events_directory = component_directory / "events"
+    try:
+        events_directory.mkdir(exist_ok=False)
+        _fsync_directory(component_directory)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model events directory is not create-new"
+        ) from None
+    secured_events = _secure_directory(
+        events_directory,
+        create=False,
+        location="owned model events directory",
+    )
+    for event_ordinal in range(1, event_count + 1):
+        event_directory = events_directory / f"{event_ordinal:06d}"
+        try:
+            event_directory.mkdir(exist_ok=False)
+            _fsync_directory(events_directory)
+        except Exception:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event directory is not create-new"
+            ) from None
+        if _secure_directory(
+            event_directory,
+            create=False,
+            location=f"owned model event directory {event_ordinal}",
+        ) != event_directory:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event directory identity changed"
+            )
+    if secured_component != component_directory or secured_events != events_directory:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model component hierarchy identity changed"
+        )
+    return component_directory
+
+
+def _model_json_payload(value: Mapping[str, Any]) -> bytes:
+    if type(value) is not dict:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model durable artifact must be an exact JSON object"
+        )
+    return _canonical_marker_bytes(value)
+
+
+def _persist_model_json(
+    component_directory: Path,
+    *,
+    relative_path: str,
+    logical_id: str,
+    value: Mapping[str, Any],
+    byte_index: list[dict[str, Any]],
+) -> bytes:
+    """Create and fsync one fixed model artifact, then extend its byte index."""
+
+    parts = relative_path.split("/")
+    if (
+        not parts
+        or len(parts) > 3
+        or any(
+            not part
+            or part in {".", ".."}
+            or "\\" in part
+            for part in parts
+        )
+        or relative_path == MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME
+        or type(logical_id) is not str
+        or not logical_id
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model artifact path is unsafe"
+        )
+    parent = component_directory.joinpath(*parts[:-1])
+    secured_parent = _secure_directory(
+        parent,
+        create=False,
+        location=f"owned model artifact parent {logical_id}",
+    )
+    path = parent / parts[-1]
+    payload = _model_json_payload(value)
+    _write_new_regular_file(path, payload)
+    _fsync_directory(secured_parent)
+    byte_index.append(
+        {
+            "ordinal": len(byte_index) + 1,
+            "logical_id": logical_id,
+            "relative_path": relative_path,
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    )
+    return payload
+
+
+def _validated_model_claim(
+    claim: Any,
+    *,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+) -> dict[str, Any]:
+    """Detach and validate the execution-critical model claim subset."""
+
+    if type(claim) is not dict:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim is not an exact object"
+        )
+    if not _is_bare_sha256(lifecycle_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model lifecycle hash is not canonical"
+        )
+    lifecycle_field = (
+        "development_root_scope_sha256"
+        if lifecycle_kind == "development_root"
+        else "request_sha256"
+    )
+    expected_stage = "development" if lifecycle_kind == "development_root" else None
+    stage = claim.get("authorized_stage")
+    event_plan = claim.get("event_plan")
+    event_count = claim.get("event_count")
+    execution_sources = claim.get("execution_source_hashes")
+    limits = claim.get("model_runtime_limits")
+    if (
+        claim.get(lifecycle_field) != lifecycle_sha256
+        or (expected_stage is not None and stage != expected_stage)
+        or (
+            lifecycle_kind == "stage_request"
+            and stage not in {"intermediate", "final"}
+        )
+        or not _is_bare_sha256(claim.get("claim_sha256"))
+        or canonical_sha256(
+            {key: value for key, value in claim.items() if key != "claim_sha256"}
+        )
+        != claim.get("claim_sha256")
+        or not _is_bare_sha256(claim.get("candidate_sha256"))
+        or not _is_bare_sha256(claim.get("model_digest"))
+        or not _is_bare_sha256(claim.get("runtime_fingerprint_sha256"))
+        or not _is_bare_sha256(claim.get("execution_source_hashes_sha256"))
+        or type(execution_sources) is not dict
+        or canonical_sha256(execution_sources)
+        != claim.get("execution_source_hashes_sha256")
+        or not _is_bare_sha256(execution_sources.get("preprocessor"))
+        or type(event_plan) is not list
+        or type(event_count) is not int
+        or not 1 <= event_count <= 9999
+        or len(event_plan) != event_count
+        or claim.get("event_plan_sha256") != canonical_sha256(event_plan)
+        or type(limits) is not dict
+        or limits.get("model_call_count") != event_count
+        or any(
+            limits.get(field) != 0
+            for field in ("redirects", "retries", "pull_attempts", "repair_attempts")
+        )
+        or limits.get("streaming") is not False
+        or limits.get("thinking") is not False
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim is not canonically bound and bounded"
+        )
+    expected_lexicon_hash = canonical_sha256(list(CANONICAL_IDENTITY_LEXICON))
+    if claim.get("identity_lexicon_sha256") != expected_lexicon_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim changed the canonical identity lexicon"
+        )
+    exact_plan: list[dict[str, Any]] = []
+    expected_keys = {
+        "event_ordinal",
+        "accession_number",
+        "form",
+        "availability_session",
+        "sec_document_ordinal",
+    }
+    for ordinal, raw_event in enumerate(event_plan, start=1):
+        if type(raw_event) is not dict or set(raw_event) != expected_keys:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event plan is not exact"
+            )
+        event = dict(raw_event)
+        if (
+            event["event_ordinal"] != ordinal
+            or type(event["sec_document_ordinal"]) is not int
+            or not 1 <= event["sec_document_ordinal"] <= event_count
+            or type(event["accession_number"]) is not str
+            or type(event["availability_session"]) is not str
+            or event["form"] not in {"10-K", "10-Q"}
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event plan identity is invalid"
+            )
+        exact_plan.append(event)
+    if (
+        exact_plan
+        != sorted(
+            exact_plan,
+            key=lambda event: (
+                event["availability_session"],
+                event["accession_number"],
+            ),
+        )
+        or {event["sec_document_ordinal"] for event in exact_plan}
+        != set(range(1, event_count + 1))
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model events are not in authoritative chronological order"
+        )
+    detached = json.loads(
+        json.dumps(
+            claim,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    )
+    if type(detached) is not dict:
+        raise SecFilingGemmaStageRunnerError("Owned model claim could not detach")
+    return detached
+
+
+def _normalized_text_from_owned_bytes(
+    payload: Any,
+    descriptor: Any,
+    *,
+    location: str,
+) -> str:
+    if type(payload) is not bytes or not payload or type(descriptor) is not dict:
+        raise SecFilingGemmaStageRunnerError(
+            f"Owned model {location} normalized source is unavailable"
+        )
+    if set(descriptor) != {"relative_path", "byte_count", "sha256"}:
+        raise SecFilingGemmaStageRunnerError(
+            f"Owned model {location} source descriptor is not exact"
+        )
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SecFilingGemmaStageRunnerError(
+            f"Owned model {location} normalized bytes are not UTF-8"
+        ) from None
+    if (
+        text.encode("utf-8") != payload
+        or descriptor["byte_count"] != len(payload)
+        or descriptor["sha256"] != hashlib.sha256(payload).hexdigest()
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            f"Owned model {location} normalized bytes crossed their descriptor"
+        )
+    return text
+
+
+def _validated_model_event_inputs(
+    loaded: Any,
+    *,
+    claim: Mapping[str, Any],
+    lifecycle_kind: str,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    list[str],
+]:
+    """Require store-selected current/prior bytes in exact claim chronology."""
+
+    if type(loaded) is not dict or set(loaded) != {
+        "claim",
+        "scope_kind",
+        "scope_sha256",
+        "candidate_manifest",
+        "corpus_universe_manifest",
+        "content_manifests_by_stage",
+        "session_dates",
+        "sec_reader_receipt_sha256",
+        "carry_in_reader_receipt_sha256",
+        "events",
+    }:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model event-input bundle is not exact"
+        )
+    if loaded["claim"] != claim:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model event inputs crossed the durable claim"
+        )
+    candidate = loaded["candidate_manifest"]
+    universe = loaded["corpus_universe_manifest"]
+    content_by_stage = loaded["content_manifests_by_stage"]
+    session_dates = loaded["session_dates"]
+    events = loaded["events"]
+    if (
+        type(candidate) is not dict
+        or candidate.get("candidate_sha256") != claim["candidate_sha256"]
+        or type(universe) is not dict
+        or universe.get("universe_sha256") != claim["corpus_universe_sha256"]
+        or type(content_by_stage) is not dict
+        or not all(type(value) is dict for value in content_by_stage.values())
+        or type(session_dates) is not list
+        or not session_dates
+        or not all(type(value) is str for value in session_dates)
+        or type(events) is not list
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model event-input evidence is unavailable"
+        )
+    if len(events) != claim["event_count"]:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model event-input count differs from the claim"
+        )
+    expected_sec_receipt = claim[
+        "development_sec_reader_receipt_sha256"
+        if lifecycle_kind == "development_root"
+        else "stage_sec_reader_receipt_sha256"
+    ]
+    expected_carry_receipt = (
+        None
+        if lifecycle_kind == "development_root"
+        else claim["carry_in_reader_receipt_sha256"]
+    )
+    lifecycle_sha256 = claim[
+        "development_root_scope_sha256"
+        if lifecycle_kind == "development_root"
+        else "request_sha256"
+    ]
+    if (
+        loaded["scope_kind"]
+        != (
+            "development_root"
+            if lifecycle_kind == "development_root"
+            else "stage_request"
+        )
+        or loaded["scope_sha256"] != lifecycle_sha256
+        or loaded["sec_reader_receipt_sha256"] != expected_sec_receipt
+        or loaded["carry_in_reader_receipt_sha256"] != expected_carry_receipt
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model event-input bundle crossed its lifecycle ancestry"
+        )
+    allowed_stages = {
+        "development": {"development"},
+        "intermediate": {"development", "intermediate"},
+        "final": {"development", "intermediate", "final"},
+    }[claim["authorized_stage"]]
+    if set(content_by_stage) != allowed_stages:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model content manifests do not cover exactly the allowed stages"
+        )
+    universe_records = universe.get("records")
+    if type(universe_records) is not list:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model universe has no exact event records"
+        )
+    content_hash_by_accession: dict[str, str] = {}
+    for manifest in content_by_stage.values():
+        documents = manifest.get("documents")
+        if type(documents) is not list:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model content manifest has no exact documents"
+            )
+        for document in documents:
+            if (
+                type(document) is not dict
+                or type(document.get("accession_number")) is not str
+                or not _is_bare_sha256(document.get("normalized_text_sha256"))
+            ):
+                raise SecFilingGemmaStageRunnerError(
+                    "Owned model content identity is invalid"
+                )
+            content_hash_by_accession[document["accession_number"]] = document[
+                "normalized_text_sha256"
+            ]
+    event_keys = {
+        "event",
+        "current_normalized_text",
+        "current_normalized_source",
+        "prior_same_form_normalized_text",
+        "prior_same_form_normalized_source",
+        "prior_accession_number",
+        "prior_availability_session",
+        "prior_provenance_kind",
+        "sec_reader_receipt_sha256",
+        "carry_in_reader_receipt_sha256",
+    }
+    last_same_form: dict[str, dict[str, Any]] = {}
+    validated: list[dict[str, Any]] = []
+    for event_plan, raw_event in zip(claim["event_plan"], events):
+        if type(raw_event) is not dict or set(raw_event) != event_keys:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event input is not an exact store result"
+            )
+        if raw_event["event"] != event_plan:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event input crossed the chronological event plan"
+            )
+        if (
+            raw_event["sec_reader_receipt_sha256"] != expected_sec_receipt
+            or raw_event["carry_in_reader_receipt_sha256"]
+            != expected_carry_receipt
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model event input crossed its SEC or carry reader ancestry"
+            )
+        current_text = _normalized_text_from_owned_bytes(
+            raw_event["current_normalized_text"],
+            raw_event["current_normalized_source"],
+            location="current",
+        )
+        expected_current_name = (
+            f"document-{event_plan['sec_document_ordinal']:04d}.normalized.txt"
+        )
+        if raw_event["current_normalized_source"]["relative_path"] != expected_current_name:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model current source differs from its SEC document ordinal"
+            )
+        if (
+            raw_event["current_normalized_source"]["sha256"]
+            != content_hash_by_accession.get(event_plan["accession_number"])
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model current bytes differ from stage content evidence"
+            )
+        prior_payload = raw_event["prior_same_form_normalized_text"]
+        prior_source = raw_event["prior_same_form_normalized_source"]
+        prior_kind = raw_event["prior_provenance_kind"]
+        if prior_payload is None:
+            if prior_source is not None or prior_kind is not None:
+                raise SecFilingGemmaStageRunnerError(
+                    "Owned model absent prior has inconsistent provenance"
+                )
+            prior_text = None
+        else:
+            prior_text = _normalized_text_from_owned_bytes(
+                prior_payload,
+                prior_source,
+                location="prior",
+            )
+        preceding_records = [
+            record
+            for record in universe_records
+            if type(record) is dict
+            and record.get("form") == event_plan["form"]
+            and (
+                record.get("availability_session"),
+                record.get("accession_number"),
+            )
+            < (
+                event_plan["availability_session"],
+                event_plan["accession_number"],
+            )
+        ]
+        preceding_records.sort(
+            key=lambda record: (
+                record["availability_session"],
+                record["accession_number"],
+            )
+        )
+        expected_prior_record = preceding_records[-1] if preceding_records else None
+        expected_prior_accession = (
+            None
+            if expected_prior_record is None
+            else expected_prior_record["accession_number"]
+        )
+        expected_prior_availability = (
+            None
+            if expected_prior_record is None
+            else expected_prior_record["availability_session"]
+        )
+        if (
+            raw_event["prior_accession_number"] != expected_prior_accession
+            or raw_event["prior_availability_session"]
+            != expected_prior_availability
+            or (
+                prior_source is not None
+                and prior_source["sha256"]
+                != content_hash_by_accession.get(expected_prior_accession)
+            )
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model prior is not the universe's immediate same-form filing"
+            )
+        previous = last_same_form.get(event_plan["form"])
+        if previous is not None:
+            if (
+                prior_kind != "same_scope_document"
+                or prior_payload != previous["current_normalized_text"]
+                or prior_source != previous["current_normalized_source"]
+                or raw_event["prior_accession_number"]
+                != previous["event"]["accession_number"]
+                or raw_event["prior_availability_session"]
+                != previous["event"]["availability_session"]
+            ):
+                raise SecFilingGemmaStageRunnerError(
+                    "Owned model prior is not the immediate same-scope same-form filing"
+                )
+        elif lifecycle_kind == "development_root":
+            if prior_payload is not None or expected_prior_record is not None:
+                raise SecFilingGemmaStageRunnerError(
+                    "Development model first same-form event cannot have a prior"
+                )
+        else:
+            expected_kind = (
+                "development_root_carry_in"
+                if claim["authorized_stage"] == "intermediate"
+                else "stage_carry_in"
+            )
+            if prior_payload is None or prior_kind != expected_kind:
+                raise SecFilingGemmaStageRunnerError(
+                    "Owned model first same-form prior is not stage-correct carry-in"
+                )
+        detached_event = dict(event_plan)
+        detached_event["current_normalized_text"] = current_text
+        detached_event["current_normalized_source"] = dict(
+            raw_event["current_normalized_source"]
+        )
+        detached_event["prior_normalized_text"] = prior_text
+        detached_event["prior_normalized_source"] = (
+            None if prior_source is None else dict(prior_source)
+        )
+        detached_event["prior_accession_number"] = raw_event[
+            "prior_accession_number"
+        ]
+        detached_event["prior_availability_session"] = raw_event[
+            "prior_availability_session"
+        ]
+        detached_event["prior_provenance_kind"] = prior_kind
+        detached_event["sec_reader_receipt_sha256"] = raw_event[
+            "sec_reader_receipt_sha256"
+        ]
+        detached_event["carry_in_reader_receipt_sha256"] = raw_event[
+            "carry_in_reader_receipt_sha256"
+        ]
+        validated.append(detached_event)
+        last_same_form[event_plan["form"]] = raw_event
+    return validated, candidate, universe, content_by_stage, list(session_dates)
+
+
+def _model_call_intent(
+    *,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+    claim: Mapping[str, Any],
+    event: Mapping[str, Any],
+    preprocessed_event: Mapping[str, Any],
+    preprocessing_receipt: Mapping[str, Any],
+    redacted_manifest: Mapping[str, Any],
+    before_probe_receipt_sha256: str,
+    before_runtime_evidence_sha256: str,
+) -> dict[str, Any]:
+    del lifecycle_kind, lifecycle_sha256
+    event_identity = {
+        key: event[key]
+        for key in (
+            "event_ordinal",
+            "accession_number",
+            "form",
+            "availability_session",
+            "sec_document_ordinal",
+        )
+    }
+    return _build_owned_model_call_intent(
+        claim=claim,
+        event=event_identity,
+        preprocessed_event_sha256=preprocessed_event[
+            "preprocessed_event_sha256"
+        ],
+        owned_preprocessing_receipt_sha256=preprocessing_receipt[
+            "receipt_sha256"
+        ],
+        redacted_input_manifest_sha256=redacted_manifest[
+            "redacted_input_manifest_sha256"
+        ],
+        model_payload_sha256=preprocessed_event["model_payload_sha256"],
+        runtime_probe_receipt_sha256=before_probe_receipt_sha256,
+        runtime_evidence_sha256=before_runtime_evidence_sha256,
+    )
+
+
+def _validated_owned_runtime_probe(claim: Mapping[str, Any]) -> Any:
+    receipt = probe_owned_ollama_runtime(
+        expected_model_digest=claim["model_digest"],
+        expected_runtime_fingerprint_sha256=claim[
+            "runtime_fingerprint_sha256"
+        ],
+    )
+    manifest = receipt.to_manifest()
+    replayed = validate_ollama_runtime_probe_receipt(
+        manifest,
+        expected_model_digest=claim["model_digest"],
+        expected_runtime_fingerprint_sha256=claim[
+            "runtime_fingerprint_sha256"
+        ],
+        expected_transport_mode=_OWNED_RUNTIME_PROBE_TRANSPORT_MODE,
+        expected_probe_receipt_sha256=manifest["receipt_sha256"],
+    )
+    if replayed.to_manifest() != manifest:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned runtime probe changed during immediate replay"
+        )
+    return replayed
+
+
+def _validated_extractor_request_from_owned_inputs(
+    *,
+    claim: Mapping[str, Any],
+    event: Mapping[str, Any],
+    preprocessed_event: Mapping[str, Any],
+    preprocessing_receipt: Mapping[str, Any],
+    redacted_manifest: Mapping[str, Any],
+    candidate_manifest: Mapping[str, Any],
+    universe_manifest: Mapping[str, Any],
+    content_manifests_by_stage: Mapping[str, Mapping[str, Any]],
+    session_dates: list[str],
+) -> dict[str, Any]:
+    """Build the full metadata envelope, then cross the contract boundary."""
+
+    request = {
+        "request_version": EXTRACTOR_REQUEST_VERSION,
+        "preprocessor_version": PREPROCESSOR_VERSION,
+        "corpus_universe_sha256": claim["corpus_universe_sha256"],
+        "identity_lexicon_sha256": claim["identity_lexicon_sha256"],
+        "redacted_input_manifest_sha256": redacted_manifest[
+            "redacted_input_manifest_sha256"
+        ],
+        "stage": claim["authorized_stage"],
+        "current_accession_number": event["accession_number"],
+        "current_form": event["form"],
+        "current_availability_session": event["availability_session"],
+        "current_filing_sha256": event["current_normalized_source"]["sha256"],
+        "prior_accession_number": event["prior_accession_number"],
+        "prior_availability_session": event["prior_availability_session"],
+        "prior_same_form_filing_sha256": (
+            None
+            if event["prior_normalized_source"] is None
+            else event["prior_normalized_source"]["sha256"]
+        ),
+        "model_payload": preprocessed_event["model_payload"],
+        "model_payload_sha256": preprocessed_event["model_payload_sha256"],
+        "redaction_report": preprocessed_event["redaction_report"],
+    }
+    expected_content_hashes = {
+        stage: manifest["content_manifest_sha256"]
+        for stage, manifest in content_manifests_by_stage.items()
+    }
+    validated = validate_extractor_request(
+        request,
+        candidate_manifest=candidate_manifest,
+        expected_candidate_sha256=claim["candidate_sha256"],
+        universe_manifest=universe_manifest,
+        content_manifests_by_stage=content_manifests_by_stage,
+        expected_content_manifest_sha256s=expected_content_hashes,
+        session_dates=session_dates,
+        forbidden_identity_terms=CANONICAL_IDENTITY_LEXICON,
+        redacted_input_manifest=redacted_manifest,
+        expected_redacted_input_manifest_sha256=redacted_manifest[
+            "redacted_input_manifest_sha256"
+        ],
+        expected_preprocessed_event_sha256=preprocessed_event[
+            "preprocessed_event_sha256"
+        ],
+        expected_owned_preprocessing_receipt_sha256=preprocessing_receipt[
+            "receipt_sha256"
+        ],
+        expected_sec_reader_receipt_sha256=event[
+            "sec_reader_receipt_sha256"
+        ],
+        expected_carry_in_reader_receipt_sha256=event[
+            "carry_in_reader_receipt_sha256"
+        ],
+    )
+    if type(validated) is not dict:
+        raise SecFilingGemmaStageRunnerError(
+            "Contract validator did not return an exact safe model request"
+        )
+    return validated
+
+
+def _persist_model_complete_marker(
+    component_directory: Path,
+    *,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+    claim: Mapping[str, Any],
+    byte_index: list[dict[str, Any]],
+) -> None:
+    schema_version = (
+        DEVELOPMENT_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+        if lifecycle_kind == "development_root"
+        else STAGE_MODEL_EXTRACTION_COMPLETE_MARKER_SCHEMA_VERSION
+    )
+    marker_body = {
+        "schema_version": schema_version,
+        "lifecycle_kind": (
+            "development_root_scope"
+            if lifecycle_kind == "development_root"
+            else "stage_request"
+        ),
+        "lifecycle_sha256": lifecycle_sha256,
+        "claim_sha256": claim["claim_sha256"],
+        "candidate_sha256": claim["candidate_sha256"],
+        "authorized_stage": claim["authorized_stage"],
+        "output_namespace": claim["output_namespace"],
+        "model_component_id": claim["model_component_id"],
+        "model_name": claim["model_name"],
+        "model_digest": claim["model_digest"],
+        "runtime_fingerprint_sha256": claim["runtime_fingerprint_sha256"],
+        "event_count": claim["event_count"],
+        "event_plan_sha256": claim["event_plan_sha256"],
+        "identity_lexicon_sha256": claim["identity_lexicon_sha256"],
+        "execution_source_hashes_sha256": claim[
+            "execution_source_hashes_sha256"
+        ],
+        "model_transport_sha256": claim["model_transport_sha256"],
+        "model_runtime_limits_sha256": claim[
+            "model_runtime_limits_sha256"
+        ],
+        "byte_index": byte_index,
+        "byte_index_sha256": canonical_sha256(byte_index),
+        "byte_count_total": sum(item["byte_count"] for item in byte_index),
+    }
+    marker = {**marker_body, "marker_sha256": canonical_sha256(marker_body)}
+    _write_new_regular_file(
+        component_directory / MODEL_EXTRACTION_COMPLETE_MARKER_FILENAME,
+        _model_json_payload(marker),
+    )
+    _fsync_directory(component_directory)
+
+
+def _execute_owned_model_batch(
+    reveal_store: SecFilingGemmaRevealStore,
+    *,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+    claim: Mapping[str, Any],
+    loaded_inputs: Mapping[str, Any],
+) -> None:
+    (
+        events,
+        candidate,
+        universe,
+        content_by_stage,
+        session_dates,
+    ) = _validated_model_event_inputs(
+        loaded_inputs,
+        claim=claim,
+        lifecycle_kind=lifecycle_kind,
+    )
+    component_directory = _model_component_directory(reveal_store, claim)
+    byte_index: list[dict[str, Any]] = []
+
+    reveal_store._revalidate_authorized_model_execution_sources(claim)
+    before_probe = _validated_owned_runtime_probe(claim)
+    before_manifest = before_probe.to_manifest()
+    _persist_model_json(
+        component_directory,
+        relative_path="pre_runtime_probe.json",
+        logical_id="pre-runtime-probe",
+        value=before_manifest,
+        byte_index=byte_index,
+    )
+    runtime_identity = before_probe.pinned_runtime_identity()
+    attempt_receipt_sha256s: list[str] = []
+    elapsed_nanoseconds = 0
+    for event in events:
+        ordinal = event["event_ordinal"]
+        prefix = f"events/{ordinal:06d}"
+        logical_prefix = f"event-{ordinal:06d}"
+        preprocessed = preprocess_filing_event(
+            current_normalized_text=event["current_normalized_text"],
+            prior_same_form_normalized_text=event["prior_normalized_text"],
+            identity_lexicon=CANONICAL_IDENTITY_LEXICON,
+        )
+        scope_kind = (
+            "development_root"
+            if lifecycle_kind == "development_root"
+            else "stage_request"
+        )
+        preprocessing_receipt = build_owned_preprocessing_receipt(
+            scope_kind=scope_kind,
+            scope_sha256=lifecycle_sha256,
+            candidate_sha256=claim["candidate_sha256"],
+            model_execution_claim_sha256=claim["claim_sha256"],
+            sec_reader_receipt_sha256=event["sec_reader_receipt_sha256"],
+            carry_in_reader_receipt_sha256=event[
+                "carry_in_reader_receipt_sha256"
+            ],
+            stage=claim["authorized_stage"],
+            event_ordinal=ordinal,
+            accession_number=event["accession_number"],
+            form=event["form"],
+            current_normalized_source=event["current_normalized_source"],
+            prior_same_form_normalized_source=event["prior_normalized_source"],
+            prior_provenance_kind=event["prior_provenance_kind"],
+            preprocessor_source_sha256=claim["execution_source_hashes"][
+                "preprocessor"
+            ],
+            preprocessed_event=preprocessed,
+            current_normalized_text=event["current_normalized_text"],
+            prior_same_form_normalized_text=event["prior_normalized_text"],
+        )
+        redacted_manifest = build_redacted_input_manifest(
+            artifact_stage=claim["authorized_stage"],
+            accession_number=event["accession_number"],
+            corpus_universe_sha256=claim["corpus_universe_sha256"],
+            model_payload_sha256=preprocessed["model_payload_sha256"],
+            preprocessed_event_sha256=preprocessed["preprocessed_event_sha256"],
+            owned_preprocessing_receipt_sha256=preprocessing_receipt[
+                "receipt_sha256"
+            ],
+            sec_reader_receipt_sha256=event["sec_reader_receipt_sha256"],
+            carry_in_reader_receipt_sha256=event[
+                "carry_in_reader_receipt_sha256"
+            ],
+            universe_manifest=universe,
+            stage_content_manifest=content_by_stage[claim["authorized_stage"]],
+        )
+        for logical_suffix, filename, artifact in (
+            ("preprocessed-event", "preprocessed_event.json", preprocessed),
+            (
+                "preprocessing-receipt",
+                "preprocessing_receipt.json",
+                preprocessing_receipt,
+            ),
+            (
+                "redacted-input-manifest",
+                "redacted_input_manifest.json",
+                redacted_manifest,
+            ),
+        ):
+            _persist_model_json(
+                component_directory,
+                relative_path=f"{prefix}/{filename}",
+                logical_id=f"{logical_prefix}-{logical_suffix}",
+                value=artifact,
+                byte_index=byte_index,
+            )
+        intent = _model_call_intent(
+            lifecycle_kind=lifecycle_kind,
+            lifecycle_sha256=lifecycle_sha256,
+            claim=claim,
+            event=event,
+            preprocessed_event=preprocessed,
+            preprocessing_receipt=preprocessing_receipt,
+            redacted_manifest=redacted_manifest,
+            before_probe_receipt_sha256=before_manifest["receipt_sha256"],
+            before_runtime_evidence_sha256=runtime_identity.evidence_sha256,
+        )
+        _persist_model_json(
+            component_directory,
+            relative_path=f"{prefix}/call_intent.json",
+            logical_id=f"{logical_prefix}-call-intent",
+            value=intent,
+            byte_index=byte_index,
+        )
+        reveal_store._revalidate_authorized_model_execution_sources(claim)
+        validated_request = _validated_extractor_request_from_owned_inputs(
+            claim=claim,
+            event=event,
+            preprocessed_event=preprocessed,
+            preprocessing_receipt=preprocessing_receipt,
+            redacted_manifest=redacted_manifest,
+            candidate_manifest=candidate,
+            universe_manifest=universe,
+            content_manifests_by_stage=content_by_stage,
+            session_dates=session_dates,
+        )
+        attempt = call_ollama_extractor_attempt(
+            validated_request,
+            expected_candidate_sha256=claim["candidate_sha256"],
+            expected_model_payload_sha256=preprocessed[
+                "model_payload_sha256"
+            ],
+            expected_runtime_evidence_sha256=runtime_identity.evidence_sha256,
+            expected_model_digest=claim["model_digest"],
+            expected_runtime_fingerprint_sha256=claim[
+                "runtime_fingerprint_sha256"
+            ],
+            runtime_identity=runtime_identity,
+        )
+        attempt_manifest = attempt.to_manifest()
+        replayed_attempt = validate_ollama_model_attempt_receipt(
+            attempt_manifest,
+            expected_candidate_sha256=claim["candidate_sha256"],
+            expected_model_payload_sha256=preprocessed[
+                "model_payload_sha256"
+            ],
+            expected_sentence_ids=validated_request["sentence_ids"],
+            expected_runtime_evidence_sha256=runtime_identity.evidence_sha256,
+            expected_model_digest=claim["model_digest"],
+            expected_runtime_fingerprint_sha256=claim[
+                "runtime_fingerprint_sha256"
+            ],
+            expected_transport_mode=_OWNED_MODEL_ATTEMPT_TRANSPORT_MODE,
+        )
+        if replayed_attempt.to_manifest() != attempt_manifest:
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model attempt changed during immediate replay"
+            )
+        elapsed_nanoseconds += replayed_attempt.elapsed_nanoseconds
+        maximum_seconds = claim["model_runtime_limits"].get(
+            "maximum_model_seconds"
+        )
+        if (
+            type(maximum_seconds) not in {int, float}
+            or isinstance(maximum_seconds, bool)
+            or maximum_seconds <= 0
+            or elapsed_nanoseconds > int(float(maximum_seconds) * 1_000_000_000)
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model batch exceeded its fixed diagnostic time ceiling"
+            )
+        _persist_model_json(
+            component_directory,
+            relative_path=f"{prefix}/model_attempt_receipt.json",
+            logical_id=f"{logical_prefix}-model-attempt-receipt",
+            value=attempt_manifest,
+            byte_index=byte_index,
+        )
+        attempt_receipt_sha256s.append(attempt_manifest["receipt_sha256"])
+
+    reveal_store._revalidate_authorized_model_execution_sources(claim)
+    after_probe = _validated_owned_runtime_probe(claim)
+    after_manifest = after_probe.to_manifest()
+    _persist_model_json(
+        component_directory,
+        relative_path="post_runtime_probe.json",
+        logical_id="post-runtime-probe",
+        value=after_manifest,
+        byte_index=byte_index,
+    )
+    runtime_guard = build_runtime_identity_guard(
+        before_evidence=before_probe.runtime_evidence(),
+        after_evidence=after_probe.runtime_evidence(),
+        expected_model_digest=claim["model_digest"],
+        expected_runtime_fingerprint_sha256=claim[
+            "runtime_fingerprint_sha256"
+        ],
+        stage=claim["authorized_stage"],
+        model_call_receipt_sha256s=attempt_receipt_sha256s,
+    )
+    _persist_model_json(
+        component_directory,
+        relative_path="runtime_guard.json",
+        logical_id="runtime-guard",
+        value=runtime_guard,
+        byte_index=byte_index,
+    )
+    reveal_store._revalidate_authorized_model_execution_sources(claim)
+    _persist_model_complete_marker(
+        component_directory,
+        lifecycle_kind=lifecycle_kind,
+        lifecycle_sha256=lifecycle_sha256,
+        claim=claim,
+        byte_index=byte_index,
+    )
+
+
+def _attempt_model_abort(
+    reveal_store: SecFilingGemmaRevealStore,
+    *,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+    reason: str,
+) -> None:
+    try:
+        if lifecycle_kind == "development_root":
+            reveal_store.abort_owned_development_model_execution(
+                development_root_scope_sha256=lifecycle_sha256,
+                reason=reason,
+            )
+        else:
+            reveal_store.abort_authorized_model_stage_execution(
+                request_sha256=lifecycle_sha256,
+                reason=reason,
+            )
+    except Exception:
+        return
+
+
+def _run_owned_model_batch_locked(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+) -> dict[str, Any]:
+    if lifecycle_kind == "development_root":
+        claim_result = reveal_store.claim_owned_development_model_execution(
+            development_root_scope_sha256=lifecycle_sha256
+        )
+        record = reveal_store._record_owned_development_model_reader_output
+        loader = reveal_store._load_owned_development_model_event_inputs
+        record_kwargs = {"development_root_scope_sha256": lifecycle_sha256}
+    else:
+        claim_result = reveal_store.claim_authorized_model_stage_execution(
+            request_sha256=lifecycle_sha256
+        )
+        record = reveal_store._record_authorized_model_stage_reader_output
+        loader = reveal_store._load_authorized_model_stage_event_inputs
+        record_kwargs = {"request_sha256": lifecycle_sha256}
+    if type(claim_result) is not dict or set(claim_result) != {
+        "claim",
+        "created",
+        "reader_receipt",
+        "abort",
+    }:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim result is not exact"
+        )
+    claim = _validated_model_claim(
+        claim_result["claim"],
+        lifecycle_kind=lifecycle_kind,
+        lifecycle_sha256=lifecycle_sha256,
+    )
+    if claim_result["created"] is False:
+        receipt = claim_result["reader_receipt"]
+        abort = claim_result["abort"]
+        if type(receipt) is dict and abort is None:
+            if receipt.get("claim_sha256") != claim["claim_sha256"]:
+                raise SecFilingGemmaStageRunnerError(
+                    "Completed model receipt crossed its durable claim"
+                )
+            try:
+                replayed = record(**record_kwargs)
+            except Exception:
+                raise SecFilingGemmaStageRunnerError(
+                    "Completed model receipt cannot replay its durable output"
+                ) from None
+            if replayed != receipt:
+                raise SecFilingGemmaStageRunnerError(
+                    "Completed model receipt differs from durable replay"
+                )
+            return {"claim": claim, "reader_receipt": replayed}
+        if receipt is None and abort is None:
+            try:
+                recovered = record(**record_kwargs)
+                if (
+                    type(recovered) is not dict
+                    or recovered.get("claim_sha256") != claim["claim_sha256"]
+                ):
+                    raise SecFilingGemmaStageRunnerError(
+                        "Recovered model receipt crossed its durable claim"
+                    )
+            except Exception:
+                _attempt_model_abort(
+                    reveal_store,
+                    lifecycle_kind=lifecycle_kind,
+                    lifecycle_sha256=lifecycle_sha256,
+                    reason="claim_recovered_without_terminal_receipt",
+                )
+            else:
+                return {"claim": claim, "reader_receipt": recovered}
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model claim is terminal or indeterminate and cannot be retried"
+        )
+    if claim_result["created"] is not True or any(
+        claim_result[key] is not None for key in ("reader_receipt", "abort")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "New owned model claim has an impossible terminal state"
+        )
+
+    marker_sealed = False
+    external_effect_started = False
+    try:
+        reveal_store._revalidate_authorized_model_execution_sources(claim)
+        loaded_inputs = loader(**record_kwargs)
+        external_effect_started = True
+        _execute_owned_model_batch(
+            reveal_store,
+            lifecycle_kind=lifecycle_kind,
+            lifecycle_sha256=lifecycle_sha256,
+            claim=claim,
+            loaded_inputs=loaded_inputs,
+        )
+        marker_sealed = True
+        receipt = record(**record_kwargs)
+        if (
+            type(receipt) is not dict
+            or receipt.get("claim_sha256") != claim["claim_sha256"]
+        ):
+            raise SecFilingGemmaStageRunnerError(
+                "Owned model store receipt does not bind the execution claim"
+            )
+        return {"claim": claim, "reader_receipt": receipt}
+    except Exception:
+        if not marker_sealed:
+            _attempt_model_abort(
+                reveal_store,
+                lifecycle_kind=lifecycle_kind,
+                lifecycle_sha256=lifecycle_sha256,
+                reason=(
+                    "external_effect_failed_or_completion_unknown"
+                    if external_effect_started
+                    else "durable_output_verification_failed"
+                ),
+            )
+        raise SecFilingGemmaStageRunnerError(
+            (
+                "Owned model receipt finalization failed; the sealed marker "
+                "remains recoverable with zero model calls"
+                if marker_sealed
+                else "Owned model execution failed and will not be retried"
+            )
+        ) from None
+
+
+def _run_owned_model_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    lifecycle_kind: str,
+    lifecycle_sha256: str,
+) -> dict[str, Any]:
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(lifecycle_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model lifecycle hash must be a bare lowercase SHA-256"
+        )
+    try:
+        execution_lock = reveal_store._owned_model_execution_lock()
+        execution_lock.__enter__()
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned model execution is already globally owned or cannot be locked"
+        ) from None
+    try:
+        return _run_owned_model_batch_locked(
+            reveal_store=reveal_store,
+            lifecycle_kind=lifecycle_kind,
+            lifecycle_sha256=lifecycle_sha256,
+        )
+    finally:
+        execution_lock.__exit__(None, None, None)
+
+
+def run_owned_development_model_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Run or zero-call recover the one development-root Gemma batch."""
+
+    return _run_owned_model_batch(
+        reveal_store=reveal_store,
+        lifecycle_kind="development_root",
+        lifecycle_sha256=development_root_scope_sha256,
+    )
+
+
+def run_owned_stage_model_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    request_sha256: str,
+) -> dict[str, Any]:
+    """Run or zero-call recover one authorized intermediate/final Gemma batch."""
+
+    return _run_owned_model_batch(
+        reveal_store=reveal_store,
+        lifecycle_kind="stage_request",
+        lifecycle_sha256=request_sha256,
+    )
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
+    "run_owned_development_model_batch",
     "run_owned_development_sec_root",
+    "run_owned_stage_model_batch",
 ]
