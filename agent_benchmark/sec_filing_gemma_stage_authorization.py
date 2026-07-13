@@ -71,11 +71,14 @@ STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
 STAGE_SEC_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-sec-reader-receipt-v2"
 )
+STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-stage-carry-in-reader-receipt-v1"
+)
 STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-sec-execution-abort-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v4"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v5"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -364,6 +367,57 @@ _STAGE_SEC_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
         "receipt_sha256",
     }
 )
+_STAGE_CARRY_IN_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "request_sha256",
+        "consumption_entry_sha256",
+        "consumption_entry_sequence",
+        "attempt_id",
+        "candidate_sha256",
+        "registry_entry_sha256",
+        "input_prerequisite_stage",
+        "authorized_stage",
+        "input_stage_evidence_sha256",
+        "stage_access_manifest_sha256",
+        "output_namespace",
+        "authorization_bundle_sha256",
+        "authorization_grant_sha256",
+        "grant_store_state_sha256",
+        "grant_consumption_ledger_sha256",
+        "grant_consumption_ledger_tip_sha256",
+        "child_sec_execution_claim_sha256",
+        "child_sec_reader_receipt_sha256",
+        "parent_request_sha256",
+        "parent_sec_execution_claim_sha256",
+        "parent_sec_reader_receipt_sha256",
+        "parent_consumed_stage_output_receipt_sha256",
+        "parent_content_manifest_sha256",
+        "parent_stage_artifact_sha256",
+        "parent_external_seal_receipt_sha256",
+        "parent_stage_evidence_sha256",
+        "parent_stage_evidence_document_sha256",
+        "parent_stage_evidence_complete_marker_sha256",
+        "selection_policy",
+        "artifact_scope",
+        "carry_in_record_count",
+        "carry_in_records_sha256",
+        "carry_in_records",
+        "carry_in_byte_index",
+        "carry_in_byte_index_sha256",
+        "carry_in_byte_count_total",
+        "carry_in_complete_marker_sha256",
+        "reader_source_sha256",
+        "reader_output_recomputed_by_store",
+        "network_refetch_permitted",
+        "write_permitted",
+        "general_cross_stage_access_permitted",
+        "fresh_carry_in_provenance_claimed",
+        "receipt_sha256",
+    }
+)
 _STAGE_SEC_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -398,6 +452,7 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "consumed_stage_output_receipts",
         "stage_sec_execution_claims",
         "stage_sec_reader_receipts",
+        "stage_carry_in_reader_receipts",
         "stage_sec_execution_aborts",
         "tip_anchor_sha256",
     }
@@ -1327,6 +1382,109 @@ def _validated_sec_byte_index(raw: Any) -> list[dict[str, Any]]:
     return validated
 
 
+def _validated_carry_in_records(
+    raw: Any,
+    *,
+    expected_stage: str,
+    expected_content_manifest_sha256: str,
+) -> list[dict[str, Any]]:
+    if type(raw) is not list or len(raw) != 2:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in must contain exactly one 10-K and one 10-Q"
+        )
+    if expected_stage != "intermediate":
+        raise SecFilingGemmaStageAuthorizationError(
+            "Only intermediate-to-final carry-in is supported"
+        )
+    content_hash = _sha256(
+        expected_content_manifest_sha256,
+        "final carry-in parent content-manifest hash",
+    )
+    expected_keys = {
+        "accession_number",
+        "form",
+        "availability_session",
+        "artifact_stage",
+        "source_record_sha256",
+        "normalized_text_sha256",
+        "normalized_text_bytes",
+        "content_record_sha256",
+        "content_manifest_sha256",
+    }
+    validated: list[dict[str, Any]] = []
+    for index, raw_record in enumerate(raw):
+        record = _mapping(raw_record, f"final carry-in record {index}")
+        _expect_keys(record, expected_keys, f"final carry-in record {index}")
+        accession = _safe_id(
+            record["accession_number"],
+            f"final carry-in accession {index}",
+        )
+        if _AAPL_ACCESSION_RE.fullmatch(accession) is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in contains a non-Apple accession"
+            )
+        form = record["form"]
+        if form not in {"10-K", "10-Q"}:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in form is outside the frozen periodic-report scope"
+            )
+        availability = _safe_id(
+            record["availability_session"],
+            f"final carry-in availability session {index}",
+        )
+        artifact_stage = _safe_id(
+            record["artifact_stage"],
+            f"final carry-in artifact stage {index}",
+        )
+        if artifact_stage != expected_stage:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in crossed its intermediate parent stage"
+            )
+        record_content_hash = _sha256(
+            record["content_manifest_sha256"],
+            f"final carry-in content-manifest hash {index}",
+        )
+        if record_content_hash != content_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in record crossed its parent content manifest"
+            )
+        validated.append(
+            {
+                "accession_number": accession,
+                "form": form,
+                "availability_session": availability,
+                "artifact_stage": artifact_stage,
+                "source_record_sha256": _sha256(
+                    record["source_record_sha256"],
+                    f"final carry-in source-record hash {index}",
+                ),
+                "normalized_text_sha256": _sha256(
+                    record["normalized_text_sha256"],
+                    f"final carry-in normalized-text hash {index}",
+                ),
+                "normalized_text_bytes": _strict_int(
+                    record["normalized_text_bytes"],
+                    f"final carry-in normalized-text byte count {index}",
+                    minimum=1,
+                ),
+                "content_record_sha256": _sha256(
+                    record["content_record_sha256"],
+                    f"final carry-in content-record hash {index}",
+                ),
+                "content_manifest_sha256": record_content_hash,
+            }
+        )
+    if [record["form"] for record in validated] != ["10-K", "10-Q"]:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in records are not in the exact frozen form order"
+        )
+    if len({record["accession_number"] for record in validated}) != 2:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in accessions are duplicated"
+        )
+    return validated
+
+
 def _validated_stage_sec_execution_claims(
     raw: Any,
     *,
@@ -1592,6 +1750,92 @@ def _validated_stage_sec_reader_receipts(
     return validated
 
 
+def _validated_stage_carry_in_reader_receipts(
+    raw: Any,
+    *,
+    authorization_bundles: Mapping[str, Any],
+    sec_execution_claims: Mapping[str, Any],
+    sec_reader_receipts: Mapping[str, Any],
+    consumed_stage_output_receipts: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip stage carry-in reader receipts")
+    validated: dict[str, dict[str, Any]] = {}
+    for request_sha256, raw_receipt in receipts.items():
+        request_hash = _sha256(request_sha256, "stage carry-in receipt map key")
+        receipt = _mapping(
+            raw_receipt,
+            f"stage carry-in reader receipt {request_hash}",
+        )
+        _expect_keys(
+            receipt,
+            _STAGE_CARRY_IN_READER_RECEIPT_KEYS,
+            f"stage carry-in reader receipt {request_hash}",
+        )
+        if (
+            receipt["schema_version"]
+            != STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "store_rehashed_final_child_prior_same_form_carry_in"
+            or receipt["reader_output_recomputed_by_store"] is not True
+            or receipt["network_refetch_permitted"] is not False
+            or receipt["write_permitted"] is not False
+            or receipt["general_cross_stage_access_permitted"] is not False
+            or receipt["fresh_carry_in_provenance_claimed"] is not False
+            or receipt["request_sha256"] != request_hash
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage carry-in reader receipt semantics changed"
+            )
+        _self_hash(receipt, "receipt_sha256", "stage carry-in reader receipt")
+        parent_request_hash = _sha256(
+            receipt["parent_request_sha256"],
+            "stage carry-in parent request hash",
+        )
+        child_bundle = authorization_bundles.get(request_hash)
+        parent_bundle = authorization_bundles.get(parent_request_hash)
+        child_claim = sec_execution_claims.get(request_hash)
+        parent_claim = sec_execution_claims.get(parent_request_hash)
+        child_reader = sec_reader_receipts.get(request_hash)
+        parent_reader = sec_reader_receipts.get(parent_request_hash)
+        parent_output = consumed_stage_output_receipts.get(parent_request_hash)
+        if any(
+            type(value) is not dict
+            for value in (
+                child_bundle,
+                parent_bundle,
+                child_claim,
+                parent_claim,
+                child_reader,
+                parent_reader,
+                parent_output,
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage carry-in receipt lacks exact child or parent ancestry"
+            )
+        expected = build_stage_carry_in_reader_receipt(
+            child_bundle,
+            stage_sec_execution_claim=child_claim,
+            stage_sec_reader_receipt=child_reader,
+            parent_authorization_bundle=parent_bundle,
+            parent_stage_sec_execution_claim=parent_claim,
+            parent_stage_sec_reader_receipt=parent_reader,
+            parent_consumed_stage_output_receipt=parent_output,
+            carry_in_byte_index=receipt["carry_in_byte_index"],
+            carry_in_complete_marker_sha256=receipt[
+                "carry_in_complete_marker_sha256"
+            ],
+            reader_source_sha256=receipt["reader_source_sha256"],
+        )
+        if receipt != expected:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage carry-in reader receipt differs from its exact ancestry"
+            )
+        validated[request_hash] = receipt
+    return validated
+
+
 def _validated_stage_sec_execution_aborts(
     raw: Any,
     *,
@@ -1723,6 +1967,17 @@ def validate_reveal_store_current_tip_anchor_structure(
             sec_reader_receipts=anchor["stage_sec_reader_receipts"],
         )
     )
+    anchor["stage_carry_in_reader_receipts"] = (
+        _validated_stage_carry_in_reader_receipts(
+            anchor["stage_carry_in_reader_receipts"],
+            authorization_bundles=anchor["authorization_bundles"],
+            sec_execution_claims=anchor["stage_sec_execution_claims"],
+            sec_reader_receipts=anchor["stage_sec_reader_receipts"],
+            consumed_stage_output_receipts=anchor[
+                "consumed_stage_output_receipts"
+            ],
+        )
+    )
     if set(anchor["stage_sec_reader_receipts"]) & set(
         anchor["stage_sec_execution_aborts"]
     ):
@@ -1748,6 +2003,7 @@ def build_reveal_store_current_tip_anchor(
     authorization_bundles: Mapping[str, Any],
     trusted_stage_content_pins: Mapping[str, Any] | None = None,
     consumed_stage_output_receipts: Mapping[str, Any] | None = None,
+    stage_carry_in_reader_receipts: Mapping[str, Any] | None = None,
     stage_sec_execution_claims: Mapping[str, Any] | None = None,
     stage_sec_reader_receipts: Mapping[str, Any] | None = None,
     stage_sec_execution_aborts: Mapping[str, Any] | None = None,
@@ -1800,6 +2056,17 @@ def build_reveal_store_current_tip_anchor(
         sec_execution_claims=sec_claims,
         sec_reader_receipts=sec_receipts,
     )
+    carry_in_receipts = _validated_stage_carry_in_reader_receipts(
+        (
+            {}
+            if stage_carry_in_reader_receipts is None
+            else stage_carry_in_reader_receipts
+        ),
+        authorization_bundles=bundles,
+        sec_execution_claims=sec_claims,
+        sec_reader_receipts=sec_receipts,
+        consumed_stage_output_receipts=output_receipts,
+    )
     state_bytes = _encoded_store_snapshot(state)
     body = {
         "schema_version": REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION,
@@ -1817,6 +2084,7 @@ def build_reveal_store_current_tip_anchor(
         "trusted_stage_content_pins": pins,
         "authorization_bundles": bundles,
         "consumed_stage_output_receipts": output_receipts,
+        "stage_carry_in_reader_receipts": carry_in_receipts,
         "stage_sec_execution_claims": sec_claims,
         "stage_sec_reader_receipts": sec_receipts,
         "stage_sec_execution_aborts": sec_aborts,
@@ -1960,6 +2228,80 @@ def validate_reveal_store_current_tip_anchor_transition(
             "Non-output transition changed consumed-stage output receipt membership"
         )
 
+    prior_carry_ins = prior["stage_carry_in_reader_receipts"]
+    next_carry_ins = next_anchor["stage_carry_in_reader_receipts"]
+    if any(
+        next_carry_ins.get(key) != value
+        for key, value in prior_carry_ins.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition removed or changed a stage carry-in reader receipt"
+        )
+    carry_in_delta = len(next_carry_ins) - len(prior_carry_ins)
+    if carry_in_delta not in {0, 1}:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one stage carry-in reader receipt"
+        )
+    if carry_in_delta:
+        sec_maps_unchanged = all(
+            next_anchor[name] == prior[name]
+            for name in (
+                "stage_sec_execution_claims",
+                "stage_sec_reader_receipts",
+                "stage_sec_execution_aborts",
+            )
+        )
+        if (
+            consumption_delta != 0
+            or bundle_delta != 0
+            or pin_delta != 0
+            or output_delta != 0
+            or not sec_maps_unchanged
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage carry-in receipt append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage carry-in receipt append changed the authenticated store state"
+            )
+        new_request_hash = next(iter(set(next_carry_ins) - set(prior_carry_ins)))
+        receipt = next_carry_ins[new_request_hash]
+        current_bindings = {
+            "grant_store_state_sha256": prior["state_sha256"],
+            "grant_consumption_ledger_sha256": prior[
+                "consumption_ledger_sha256"
+            ],
+            "grant_consumption_ledger_tip_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "consumption_entry_sequence": prior["consumed_request_count"],
+        }
+        if new_request_hash not in prior_bundles or any(
+            receipt[field] != expected
+            for field, expected in current_bindings.items()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Stage carry-in receipt does not bind the exact current final grant tip"
+            )
+    elif set(next_carry_ins) != set(prior_carry_ins):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Non-carry-in transition changed stage carry-in receipt membership"
+        )
+
     prior_sec_claims = prior["stage_sec_execution_claims"]
     next_sec_claims = next_anchor["stage_sec_execution_claims"]
     prior_sec_receipts = prior["stage_sec_reader_receipts"]
@@ -2094,6 +2436,9 @@ def validate_reveal_store_current_tip_anchor(
         trusted_stage_content_pins=observed["trusted_stage_content_pins"],
         consumed_stage_output_receipts=observed[
             "consumed_stage_output_receipts"
+        ],
+        stage_carry_in_reader_receipts=observed[
+            "stage_carry_in_reader_receipts"
         ],
         stage_sec_execution_claims=observed["stage_sec_execution_claims"],
         stage_sec_reader_receipts=observed["stage_sec_reader_receipts"],
@@ -2816,6 +3161,425 @@ def build_stage_sec_execution_abort(
     return {**body, "abort_sha256": canonical_sha256(body)}
 
 
+def build_stage_carry_in_reader_receipt(
+    authorization_bundle: Mapping[str, Any],
+    *,
+    stage_sec_execution_claim: Mapping[str, Any],
+    stage_sec_reader_receipt: Mapping[str, Any],
+    parent_authorization_bundle: Mapping[str, Any],
+    parent_stage_sec_execution_claim: Mapping[str, Any],
+    parent_stage_sec_reader_receipt: Mapping[str, Any],
+    parent_consumed_stage_output_receipt: Mapping[str, Any],
+    carry_in_byte_index: list[dict[str, Any]],
+    carry_in_complete_marker_sha256: str,
+    reader_source_sha256: str,
+) -> dict[str, Any]:
+    """Bind one exact final-child copy of the two parent carry-in texts."""
+
+    raw_child_bundle = _mapping(
+        authorization_bundle,
+        "final carry-in child authorization bundle",
+    )
+    raw_child_grant = _mapping(
+        raw_child_bundle.get("authorization_grant"),
+        "final carry-in child authorization grant",
+    )
+    child_request_hash = _sha256(
+        raw_child_grant.get("request_sha256"),
+        "final carry-in child request hash",
+    )
+    raw_parent_bundle = _mapping(
+        parent_authorization_bundle,
+        "final carry-in parent authorization bundle",
+    )
+    raw_parent_grant = _mapping(
+        raw_parent_bundle.get("authorization_grant"),
+        "final carry-in parent authorization grant",
+    )
+    parent_request_hash = _sha256(
+        raw_parent_grant.get("request_sha256"),
+        "final carry-in parent request hash",
+    )
+    if child_request_hash == parent_request_hash:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in child cannot reuse its parent request"
+        )
+    bundles = _validated_authorization_bundles(
+        {
+            child_request_hash: raw_child_bundle,
+            parent_request_hash: raw_parent_bundle,
+        }
+    )
+    child_bundle = bundles[child_request_hash]
+    parent_bundle = bundles[parent_request_hash]
+    child_grant = child_bundle["authorization_grant"]
+    parent_grant = parent_bundle["authorization_grant"]
+    claims = _validated_stage_sec_execution_claims(
+        {
+            child_request_hash: stage_sec_execution_claim,
+            parent_request_hash: parent_stage_sec_execution_claim,
+        },
+        authorization_bundles=bundles,
+    )
+    readers = _validated_stage_sec_reader_receipts(
+        {
+            child_request_hash: stage_sec_reader_receipt,
+            parent_request_hash: parent_stage_sec_reader_receipt,
+        },
+        claims=claims,
+    )
+    outputs = _validated_consumed_stage_output_receipts(
+        {parent_request_hash: parent_consumed_stage_output_receipt},
+        authorization_bundles=bundles,
+        sec_execution_claims=claims,
+        sec_reader_receipts=readers,
+    )
+    child_claim = claims[child_request_hash]
+    child_reader = readers[child_request_hash]
+    parent_claim = claims[parent_request_hash]
+    parent_reader = readers[parent_request_hash]
+    parent_output = outputs[parent_request_hash]
+    child_entry, child_request, child_access = _validated_latest_consumption(
+        child_bundle["authenticated_store_snapshot"],
+        expected_entry_sha256=child_grant["consumption_entry_sha256"],
+    )
+    parent_entry, parent_request, _parent_access = _validated_latest_consumption(
+        parent_bundle["authenticated_store_snapshot"],
+        expected_entry_sha256=parent_grant["consumption_entry_sha256"],
+    )
+    child_entries = child_bundle["authenticated_store_snapshot"][
+        "consumption_ledger"
+    ]["entries"]
+    if (
+        len(child_entries) < 2
+        or child_entries[-2] != parent_entry
+        or child_entry["sequence"] != parent_entry["sequence"] + 1
+        or child_entry["prior_tip_sha256"] != parent_entry["entry_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in parent is not the exact immediate consumed predecessor"
+        )
+    if (
+        child_grant["stage"] != "final"
+        or child_grant["prerequisite_stage"] != "intermediate"
+        or parent_grant["stage"] != "intermediate"
+        or parent_grant["prerequisite_stage"] != "development"
+        or child_request["stage"] != "final"
+        or parent_request["stage"] != "intermediate"
+        or child_entry["stage"] != "final"
+        or parent_entry["stage"] != "intermediate"
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Carry-in receipt is restricted to one intermediate-to-final transition"
+        )
+    for field in (
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+    ):
+        if child_request[field] != parent_request[field]:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in parent and child changed candidate identity"
+            )
+    if (
+        child_grant["prerequisite_stage_evidence_sha256"]
+        != parent_output["output_stage_evidence_sha256"]
+        or parent_output["output_stage"] != "intermediate"
+        or parent_output["output_candidate_sha256"]
+        != child_grant["candidate_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in child does not consume the exact parent stage evidence"
+        )
+
+    evidence_pin = _mapping(
+        child_access.get("prerequisite_evidence_pin"),
+        "final carry-in parent evidence pin",
+    )
+    _expect_keys(
+        evidence_pin,
+        {
+            "stage",
+            "content_manifest_sha256",
+            "stage_artifact_sha256",
+            "external_seal_receipt_sha256",
+        },
+        "final carry-in parent evidence pin",
+    )
+    carry_plan = _mapping(
+        child_access.get("prior_same_form_carry_in"),
+        "final carry-in access plan",
+    )
+    _expect_keys(
+        carry_plan,
+        {
+            "selection_policy",
+            "artifact_scope",
+            "network_refetch_permitted",
+            "write_permitted",
+            "bound_by_prerequisite_stage_evidence_sha256",
+            "prerequisite_content_manifest_sha256",
+            "record_count",
+            "records_sha256",
+            "records",
+        },
+        "final carry-in access plan",
+    )
+    scope = _mapping(child_access.get("scope"), "final carry-in access scope")
+    if (
+        evidence_pin["stage"] != "intermediate"
+        or carry_plan["selection_policy"]
+        != "latest_prerequisite_stage_filing_of_each_requested_stage_form"
+        or carry_plan["artifact_scope"] != "sealed_normalized_text_only"
+        or carry_plan["network_refetch_permitted"] is not False
+        or carry_plan["write_permitted"] is not False
+        or carry_plan["bound_by_prerequisite_stage_evidence_sha256"]
+        != child_grant["prerequisite_stage_evidence_sha256"]
+        or carry_plan["prerequisite_content_manifest_sha256"]
+        != evidence_pin["content_manifest_sha256"]
+        or scope.get("general_cross_stage_access_permitted") is not False
+        or scope.get("exact_prior_same_form_carry_in_read_permitted") is not True
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in access plan changed its exact read-only scope"
+        )
+    records = _validated_carry_in_records(
+        carry_plan["records"],
+        expected_stage="intermediate",
+        expected_content_manifest_sha256=evidence_pin["content_manifest_sha256"],
+    )
+    if (
+        carry_plan["records"] != records
+        or carry_plan["record_count"] != len(records)
+        or carry_plan["records_sha256"] != canonical_sha256(records)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in record set differs from its stage-access plan"
+        )
+
+    _exact_parent_bundle, _exact_parent_grant, parent_component_plan = (
+        _sec_component_plan_from_bundle(parent_bundle)
+    )
+    parent_documents = parent_component_plan["sec_access_plan"]["documents"]
+    document_ordinal_by_accession = {
+        document["accession_number"]: ordinal
+        for ordinal, document in enumerate(parent_documents, start=1)
+    }
+    parent_bytes_by_logical_id = {
+        item["logical_id"]: item for item in parent_reader["byte_index"]
+    }
+    expected_copy_index: list[dict[str, Any]] = []
+    for copy_ordinal, record in enumerate(records, start=1):
+        source_ordinal = document_ordinal_by_accession.get(record["accession_number"])
+        if source_ordinal is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in accession is absent from the parent SEC plan"
+            )
+        source_item = parent_bytes_by_logical_id.get(
+            f"document-{source_ordinal:04d}-normalized"
+        )
+        if (
+            type(source_item) is not dict
+            or source_item.get("relative_path")
+            != f"document-{source_ordinal:04d}.normalized.txt"
+            or source_item.get("sha256") != record["normalized_text_sha256"]
+            or source_item.get("byte_count") != record["normalized_text_bytes"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Final carry-in bytes differ from the parent SEC reader receipt"
+            )
+        expected_copy_index.append(
+            {
+                "ordinal": copy_ordinal,
+                "logical_id": f"carry-in-{copy_ordinal:04d}-normalized",
+                "relative_path": f"carry-in-{copy_ordinal:04d}.normalized.txt",
+                "byte_count": source_item["byte_count"],
+                "sha256": source_item["sha256"],
+            }
+        )
+    copied_index = _validated_sec_byte_index(carry_in_byte_index)
+    if copied_index != expected_copy_index:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in copied-byte index differs from its parent bytes"
+        )
+    marker_hash = _sha256(
+        carry_in_complete_marker_sha256,
+        "final carry-in complete-marker hash",
+    )
+    source_hash = _sha256(reader_source_sha256, "final carry-in reader source hash")
+    if source_hash != child_claim["execution_source_hashes"].get("reveal_store"):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Final carry-in reader source differs from the child execution closure"
+        )
+    body = {
+        "schema_version": STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "store_rehashed_final_child_prior_same_form_carry_in",
+        "request_sha256": child_request_hash,
+        "consumption_entry_sha256": child_grant["consumption_entry_sha256"],
+        "consumption_entry_sequence": child_grant["consumption_entry_sequence"],
+        "attempt_id": child_grant["attempt_id"],
+        "candidate_sha256": child_grant["candidate_sha256"],
+        "registry_entry_sha256": child_grant["registry_entry_sha256"],
+        "input_prerequisite_stage": child_grant["prerequisite_stage"],
+        "authorized_stage": child_grant["stage"],
+        "input_stage_evidence_sha256": child_grant[
+            "prerequisite_stage_evidence_sha256"
+        ],
+        "stage_access_manifest_sha256": child_grant[
+            "stage_access_manifest_sha256"
+        ],
+        "output_namespace": child_grant["output_namespace"],
+        "authorization_bundle_sha256": child_bundle["bundle_sha256"],
+        "authorization_grant_sha256": child_grant[
+            "authorization_grant_sha256"
+        ],
+        "grant_store_state_sha256": child_grant["store_state_sha256"],
+        "grant_consumption_ledger_sha256": child_grant[
+            "consumption_ledger_sha256"
+        ],
+        "grant_consumption_ledger_tip_sha256": child_grant[
+            "consumption_ledger_tip_sha256"
+        ],
+        "child_sec_execution_claim_sha256": child_claim["claim_sha256"],
+        "child_sec_reader_receipt_sha256": child_reader["receipt_sha256"],
+        "parent_request_sha256": parent_request_hash,
+        "parent_sec_execution_claim_sha256": parent_claim["claim_sha256"],
+        "parent_sec_reader_receipt_sha256": parent_reader["receipt_sha256"],
+        "parent_consumed_stage_output_receipt_sha256": parent_output[
+            "output_receipt_sha256"
+        ],
+        "parent_content_manifest_sha256": evidence_pin[
+            "content_manifest_sha256"
+        ],
+        "parent_stage_artifact_sha256": evidence_pin["stage_artifact_sha256"],
+        "parent_external_seal_receipt_sha256": evidence_pin[
+            "external_seal_receipt_sha256"
+        ],
+        "parent_stage_evidence_sha256": parent_output[
+            "output_stage_evidence_sha256"
+        ],
+        "parent_stage_evidence_document_sha256": parent_output[
+            "output_stage_evidence_document_sha256"
+        ],
+        "parent_stage_evidence_complete_marker_sha256": parent_output[
+            "output_stage_evidence_complete_marker_sha256"
+        ],
+        "selection_policy": carry_plan["selection_policy"],
+        "artifact_scope": carry_plan["artifact_scope"],
+        "carry_in_record_count": len(records),
+        "carry_in_records_sha256": canonical_sha256(records),
+        "carry_in_records": records,
+        "carry_in_byte_index": copied_index,
+        "carry_in_byte_index_sha256": canonical_sha256(copied_index),
+        "carry_in_byte_count_total": sum(
+            item["byte_count"] for item in copied_index
+        ),
+        "carry_in_complete_marker_sha256": marker_hash,
+        "reader_source_sha256": source_hash,
+        "reader_output_recomputed_by_store": True,
+        "network_refetch_permitted": False,
+        "write_permitted": False,
+        "general_cross_stage_access_permitted": False,
+        "fresh_carry_in_provenance_claimed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def validate_stage_carry_in_reader_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    authenticated_store_snapshot: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    carry_in_byte_index: list[dict[str, Any]],
+    carry_in_complete_marker_sha256: str,
+    reader_source_sha256: str,
+) -> str:
+    """Require exact current-tip membership and revalidated copied-byte inputs."""
+
+    observed = _mapping(receipt, "stage carry-in reader receipt")
+    _expect_keys(
+        observed,
+        _STAGE_CARRY_IN_READER_RECEIPT_KEYS,
+        "stage carry-in reader receipt",
+    )
+    observed_hash = _self_hash(
+        observed,
+        "receipt_sha256",
+        "stage carry-in reader receipt",
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        authenticated_store_snapshot,
+        independent_current_tip_anchor,
+    )
+    child_request_hash = _sha256(
+        observed.get("request_sha256"),
+        "stage carry-in child request hash",
+    )
+    parent_request_hash = _sha256(
+        observed.get("parent_request_sha256"),
+        "stage carry-in parent request hash",
+    )
+    if current_tip["stage_carry_in_reader_receipts"].get(
+        child_request_hash
+    ) != observed:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage carry-in reader receipt is not persisted at the current tip"
+        )
+    child_bundle = current_tip["authorization_bundles"].get(child_request_hash)
+    parent_bundle = current_tip["authorization_bundles"].get(parent_request_hash)
+    child_claim = current_tip["stage_sec_execution_claims"].get(
+        child_request_hash
+    )
+    parent_claim = current_tip["stage_sec_execution_claims"].get(
+        parent_request_hash
+    )
+    child_reader = current_tip["stage_sec_reader_receipts"].get(
+        child_request_hash
+    )
+    parent_reader = current_tip["stage_sec_reader_receipts"].get(
+        parent_request_hash
+    )
+    parent_output = current_tip["consumed_stage_output_receipts"].get(
+        parent_request_hash
+    )
+    if any(
+        type(value) is not dict
+        for value in (
+            child_bundle,
+            parent_bundle,
+            child_claim,
+            parent_claim,
+            child_reader,
+            parent_reader,
+            parent_output,
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage carry-in reader receipt lost its persisted ancestry"
+        )
+    expected = build_stage_carry_in_reader_receipt(
+        child_bundle,
+        stage_sec_execution_claim=child_claim,
+        stage_sec_reader_receipt=child_reader,
+        parent_authorization_bundle=parent_bundle,
+        parent_stage_sec_execution_claim=parent_claim,
+        parent_stage_sec_reader_receipt=parent_reader,
+        parent_consumed_stage_output_receipt=parent_output,
+        carry_in_byte_index=carry_in_byte_index,
+        carry_in_complete_marker_sha256=carry_in_complete_marker_sha256,
+        reader_source_sha256=reader_source_sha256,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Stage carry-in reader receipt differs from revalidated durable inputs"
+        )
+    return observed_hash
+
+
 def build_consumed_stage_output_receipt(
     authorization_bundle: Mapping[str, Any],
     *,
@@ -3068,6 +3832,7 @@ __all__ = [
     "STAGE_EVIDENCE_OUTPUT_COMPONENT_ID",
     "STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH",
     "STAGE_RUNNER_REPOSITORY_PATH",
+    "STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION",
     "STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
     "STAGE_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",
     "STAGE_SEC_READER_RECEIPT_SCHEMA_VERSION",
@@ -3077,6 +3842,7 @@ __all__ = [
     "authenticate_reveal_store_trusted_stage_content_pin",
     "build_consumed_stage_authorization_grant",
     "build_consumed_stage_output_receipt",
+    "build_stage_carry_in_reader_receipt",
     "build_stage_sec_execution_abort",
     "build_stage_sec_execution_claim",
     "build_stage_sec_reader_receipt",
@@ -3089,5 +3855,6 @@ __all__ = [
     "validate_reveal_store_current_tip_anchor",
     "validate_reveal_store_current_tip_anchor_structure",
     "validate_reveal_store_current_tip_anchor_transition",
+    "validate_stage_carry_in_reader_receipt",
     "validate_trusted_stage_content_authentication_receipt",
 ]

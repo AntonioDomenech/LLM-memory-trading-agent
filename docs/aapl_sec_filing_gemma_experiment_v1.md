@@ -633,9 +633,10 @@ At the current implementation checkpoint:
   uses a write-ahead pending transaction for state-plus-grant changes, and can
   return the exact persisted grant bundle on an identical crash retry without
   rerunning the verifier or consuming a request twice. Interrupted genesis
-  creation is also recoverable. Current-tip schema v4 stores append-only
+  creation is also recoverable. Current-tip schema v5 stores append-only
   request-keyed trusted-content pins, consumed-stage first-recorded-evidence
-  receipts, and bounded SEC execution claims/reader receipts/terminal aborts.
+  receipts, bounded SEC execution claims/reader receipts/terminal aborts, and
+  final-stage prior-same-form carry-in reader receipts.
   An active SEC claim blocks every registry, consumption, output, or competing
   execution transition until the store independently re-reads the exact granted
   layout and semantically replays every raw document, deterministic normalized
@@ -676,6 +677,33 @@ At the current implementation checkpoint:
   in the same store directory: it detects state-only rollback, but it is not an
   external trust domain and cannot by itself defeat coordinated replacement of
   both files;
+- the private owned carry-in finalizer accepts only a consumed final-stage
+  request hash. It requires that request to be the current ledger tip and its
+  intermediate request to be the immediately preceding entry with the same
+  attempt, candidate, design, registry entry, registry and registry tip. It
+  replays both terminal SEC batches and the exact durable intermediate stage-
+  evidence document, rederives the carry-in scope from that document's complete
+  corpus universe and content manifest, and permits exactly the latest
+  intermediate 10-K and 10-Q required by the first final-stage filings. It maps
+  those accessions through the parent grant's SEC plan, reads only their
+  normalized UTF-8 bytes, and copies them create-new to
+  `stage_outputs/<final_claim_sha256>/prior_same_form_carry_in/`. The canonical
+  marker binds the child claim and reader, parent request/claim/reader/output
+  receipt, parent stage-evidence document and marker, content manifest, exact
+  records, copied byte index and total bytes. Current-tip receipt v1 binds the
+  same ancestry and can only be appended in a dedicated state-preserving CAS
+  transition. A retry replays both source and copied bytes; missing, extra,
+  linked, case-colliding, reordered or changed files fail closed. A partial
+  local file or incomplete marker may be repaired only before any valid marker
+  or persisted receipt exists; after either commitment, mismatches are never
+  repaired. The method is deliberately final-only: the development corpus has
+  no equivalent owned SEC claim/reader root yet, so an intermediate-stage
+  request is rejected before its reader receipt can be mutated. The receipt
+  sets `fresh_carry_in_provenance_claimed=false`, is not yet bound into an owned
+  preprocessor/model attempt or stage-evidence assembler, and does not enable
+  promotion. Like the stage-evidence receipt, it attests a sequence of
+  store-observed snapshots rather than making the same-user Windows namespace
+  immutable; a later exact retry detects post-closure mutation;
 - the fixed verifier now produces a version-6 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
@@ -737,8 +765,9 @@ At the current implementation checkpoint:
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
   no SEC request was made. `stage_access_identity` remains `BLOCKED` because
-  market, model, carry-in, artifact, and final stage-evidence generation are not
-  yet forced through owned components. The store no longer accepts a caller
+  the development carry-in root, market, model, artifact, final stage-evidence
+  generation, and carry-in-to-model binding are not yet forced through owned
+  components. The store no longer accepts a caller
   mapping at the output-receipt boundary, but a same-user process can still
   place coherently formed bytes in the fixed directory, so this milestone is
   durable replay rather than fresh end-to-end provenance. The owned SEC batch
@@ -772,10 +801,14 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is an owned carry-in reader that derives its
-scope from the parent request and replays the exact durable normalized SEC
-documents, followed by separately pinned extractor prompt/schema ownership and
-owned Ollama execution. The same owned chain must then cover presealed market
+The next implementation milestone is an owned development content root that
+persists and receipts the development normalized SEC documents before an
+intermediate request. That closes the currently unprovable development-to-
+intermediate carry-in transition; the same request-only reader contract can
+then cover both transitions. It must be followed by separately pinned extractor
+prompt/schema ownership, owned preprocessing, and owned Ollama execution that
+bind the exact carry-in receipt into each relevant attempt. The same owned chain
+must then cover presealed market
 reads, prediction sealing, and canonical stage-evidence assembly. A distinct
 zero-cost market acquirer must also preserve upstream provider bytes
 and a deterministic normalization receipt. This is required to turn the

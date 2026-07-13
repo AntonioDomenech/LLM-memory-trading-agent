@@ -458,6 +458,169 @@ def _prior_same_form_carry_ins(
     return carry_ins
 
 
+def validate_prior_same_form_carry_in_scope(
+    stage_access_manifest: Mapping[str, Any],
+    *,
+    corpus_universe_manifest: Mapping[str, Any],
+    prerequisite_content_manifest: Mapping[str, Any],
+    expected_prerequisite_stage: str,
+    expected_requested_stage: str,
+    expected_prerequisite_stage_evidence_sha256: str,
+) -> list[dict[str, Any]]:
+    """Rederive and validate the manifest's only permitted prior-stage text scope."""
+
+    prerequisite, requested = _transition(
+        expected_prerequisite_stage,
+        expected_requested_stage,
+    )
+    prerequisite_evidence_hash = _sha256(
+        expected_prerequisite_stage_evidence_sha256,
+        "expected prerequisite-stage evidence hash",
+    )
+    manifest = _expect_mapping(
+        _json_snapshot(stage_access_manifest, "persisted stage-access manifest"),
+        "persisted stage-access manifest",
+    )
+    if manifest.get("schema_version") != STAGE_ACCESS_MANIFEST_SCHEMA_VERSION:
+        raise SecFilingGemmaStageAccessError(
+            "Persisted stage-access manifest schema changed"
+        )
+    transition = _expect_mapping(
+        manifest.get("transition"),
+        "persisted stage-access transition",
+    )
+    if (
+        transition.get("prerequisite_stage") != prerequisite
+        or transition.get("requested_stage") != requested
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Persisted stage-access transition differs from the expected carry-in scope"
+        )
+    scope = _expect_mapping(
+        manifest.get("scope"),
+        "persisted stage-access scope",
+    )
+    expected_prohibited_stages = [
+        stage for stage in STAGE_ORDER if stage != requested
+    ]
+    if (
+        scope.get("exact_prior_same_form_carry_in_read_permitted") is not True
+        or scope.get("general_cross_stage_access_permitted") is not False
+        or scope.get("prohibited_stages") != expected_prohibited_stages
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Persisted stage-access scope does not permit only the exact carry-in read"
+        )
+
+    universe = _expect_mapping(
+        _json_snapshot(corpus_universe_manifest, "carry-in corpus universe"),
+        "carry-in corpus universe",
+    )
+    universe_hash = _sha256(
+        universe.get("universe_sha256"),
+        "carry-in corpus universe hash",
+    )
+    try:
+        validate_corpus_universe_manifest(
+            universe,
+            session_dates=EXPECTED_SESSIONS,
+            expected_universe_sha256=universe_hash,
+            require_complete_coverage=True,
+        )
+    except SecFilingGemmaContractError as exc:
+        raise SecFilingGemmaStageAccessError(
+            "Carry-in scope requires the complete canonical corpus universe"
+        ) from exc
+
+    prerequisite_content = _expect_mapping(
+        _json_snapshot(
+            prerequisite_content_manifest,
+            "carry-in prerequisite content manifest",
+        ),
+        "carry-in prerequisite content manifest",
+    )
+    content_hash = _sha256(
+        prerequisite_content.get("content_manifest_sha256"),
+        "carry-in prerequisite content manifest hash",
+    )
+    try:
+        validate_stage_content_manifest(
+            prerequisite_content,
+            universe_manifest=universe,
+            expected_content_manifest_sha256=content_hash,
+        )
+    except SecFilingGemmaContractError as exc:
+        raise SecFilingGemmaStageAccessError(
+            "Carry-in scope requires canonical prerequisite content evidence"
+        ) from exc
+    if (
+        prerequisite_content.get("artifact_stage") != prerequisite
+        or prerequisite_content.get("corpus_universe_sha256") != universe_hash
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Carry-in prerequisite content belongs to another stage or universe"
+        )
+
+    derived = _prior_same_form_carry_ins(
+        universe,
+        prerequisite_content,
+        prerequisite_stage=prerequisite,
+        requested_stage=requested,
+        prerequisite_content_manifest_sha256=content_hash,
+    )
+    if (
+        len(derived) != 2
+        or [record.get("form") for record in derived] != ["10-K", "10-Q"]
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Carry-in scope must contain exactly one latest 10-K and one latest 10-Q"
+        )
+
+    carry_in = _expect_mapping(
+        manifest.get("prior_same_form_carry_in"),
+        "persisted prior same-form carry-in",
+    )
+    _expect_keys(
+        carry_in,
+        {
+            "selection_policy",
+            "artifact_scope",
+            "network_refetch_permitted",
+            "write_permitted",
+            "bound_by_prerequisite_stage_evidence_sha256",
+            "prerequisite_content_manifest_sha256",
+            "record_count",
+            "records_sha256",
+            "records",
+        },
+        "persisted prior same-form carry-in",
+    )
+    derived_hash = canonical_sha256(derived)
+    if (
+        carry_in["selection_policy"]
+        != "latest_prerequisite_stage_filing_of_each_requested_stage_form"
+        or carry_in["artifact_scope"] != "sealed_normalized_text_only"
+        or carry_in["network_refetch_permitted"] is not False
+        or carry_in["write_permitted"] is not False
+        or carry_in["bound_by_prerequisite_stage_evidence_sha256"]
+        != prerequisite_evidence_hash
+        or carry_in["prerequisite_content_manifest_sha256"] != content_hash
+        or type(carry_in["record_count"]) is not int
+        or carry_in["record_count"] != len(derived)
+        or carry_in["records_sha256"] != derived_hash
+        or carry_in["records"] != derived
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Persisted prior same-form carry-in differs from its exact rederivation"
+        )
+    detached = _json_snapshot(derived, "validated prior same-form carry-in records")
+    if type(detached) is not list:  # pragma: no cover - fixed local construction
+        raise SecFilingGemmaStageAccessError(
+            "Validated prior same-form carry-in records are not a list"
+        )
+    return detached
+
+
 def _canonical_market_sources(
     artifact_hashes: Any, window_hashes: Any
 ) -> list[dict[str, str]]:
@@ -1136,5 +1299,6 @@ __all__ = [
     "STAGE_ACCESS_MANIFEST_SCHEMA_VERSION",
     "SecFilingGemmaStageAccessError",
     "build_stage_access_manifest",
+    "validate_prior_same_form_carry_in_scope",
     "validate_stage_access_manifest",
 ]

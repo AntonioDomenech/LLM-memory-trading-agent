@@ -37,6 +37,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     SEMANTIC_PREREQUISITE_SCHEMA_VERSION,
+    STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION,
     STORE_SCHEMA_VERSION,
     TRUSTED_STAGE_CONTENT_AUTHENTICATION_SCHEMA_VERSION,
     TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION,
@@ -45,6 +46,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
+    build_stage_carry_in_reader_receipt,
     build_stage_sec_execution_abort,
     build_stage_sec_execution_claim,
     build_stage_sec_reader_receipt,
@@ -54,6 +56,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_consumed_stage_output_receipt,
     validate_consumed_stage_store_state_pin,
     validate_reveal_store_current_tip_anchor_transition,
+    validate_stage_carry_in_reader_receipt,
     validate_trusted_stage_content_authentication_receipt,
     _sec_component_plan_from_bundle,
 )
@@ -487,6 +490,7 @@ def _next_tip(
             "authorization_bundles",
             "trusted_stage_content_pins",
             "consumed_stage_output_receipts",
+            "stage_carry_in_reader_receipts",
             "stage_sec_execution_claims",
             "stage_sec_reader_receipts",
             "stage_sec_execution_aborts",
@@ -542,6 +546,439 @@ def _completed_sec_output_ancestry(
     return claim, reader, reader_tip
 
 
+def _rewrite_entry(
+    raw_entry: dict,
+    *,
+    access: dict,
+    identity_request: dict | None = None,
+    prerequisite_evidence_sha256: str | None = None,
+) -> dict:
+    entry = copy.deepcopy(raw_entry)
+    access_body = {
+        key: value for key, value in access.items() if key != "stage_access_manifest_sha256"
+    }
+    access = {
+        **access_body,
+        "stage_access_manifest_sha256": canonical_sha256(access_body),
+    }
+    request = copy.deepcopy(entry["request"])
+    request["stage_access_manifest_sha256"] = access[
+        "stage_access_manifest_sha256"
+    ]
+    if prerequisite_evidence_sha256 is not None:
+        request["prerequisite_stage_evidence_sha256"] = prerequisite_evidence_sha256
+    if identity_request is not None:
+        for field in (
+            "registry_sha256",
+            "registry_tip_sha256",
+            "registered_entry_count",
+            "historical_final_reveal_count_lower_bound",
+            "attempt_id",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+        ):
+            request[field] = identity_request[field]
+        access["candidate"] = copy.deepcopy(
+            entry["stage_access_manifest"]["candidate"]
+        )
+        access["candidate"].update(
+            {
+                "attempt_id": request["attempt_id"],
+                "candidate_sha256": request["candidate_sha256"],
+                "candidate_design_sha256": request["candidate_design_sha256"],
+            }
+        )
+        access["output"]["namespace"] = (
+            f"aapl-sec-gemma-{request['attempt_id']}-{request['stage']}"
+        )
+        access_body = {
+            key: value
+            for key, value in access.items()
+            if key != "stage_access_manifest_sha256"
+        }
+        access["stage_access_manifest_sha256"] = canonical_sha256(access_body)
+        request["stage_access_manifest_sha256"] = access[
+            "stage_access_manifest_sha256"
+        ]
+    request_body = {
+        key: value for key, value in request.items() if key != "request_sha256"
+    }
+    request = {**request_body, "request_sha256": canonical_sha256(request_body)}
+    validation = copy.deepcopy(entry["prerequisite_validation"])
+    validation.update(
+        {
+            "request_sha256": request["request_sha256"],
+            "prerequisite_stage_evidence_sha256": request[
+                "prerequisite_stage_evidence_sha256"
+            ],
+            "attempt_id": request["attempt_id"],
+            "candidate_sha256": request["candidate_sha256"],
+            "candidate_design_sha256": request["candidate_design_sha256"],
+            "registry_entry_sha256": request["registry_entry_sha256"],
+            "stage_access_manifest_sha256": request[
+                "stage_access_manifest_sha256"
+            ],
+            "registry_sha256": request["registry_sha256"],
+            "registry_tip_sha256": request["registry_tip_sha256"],
+        }
+    )
+    validation["semantic_receipt"] = {
+        **validation["semantic_receipt"],
+        "request_sha256": request["request_sha256"],
+    }
+    validation["semantic_receipt_sha256"] = canonical_sha256(
+        validation["semantic_receipt"]
+    )
+    validation_body = {
+        key: value for key, value in validation.items() if key != "result_sha256"
+    }
+    validation = {
+        **validation_body,
+        "result_sha256": canonical_sha256(validation_body),
+    }
+    entry.update(
+        {
+            "request_sha256": request["request_sha256"],
+            "request": request,
+            "stage_access_manifest": access,
+            "attempt_id": request["attempt_id"],
+            "candidate_sha256": request["candidate_sha256"],
+            "registry_entry_sha256": request["registry_entry_sha256"],
+            "prerequisite_validation": validation,
+        }
+    )
+    if entry["stage"] == "final":
+        entry["final_touch_delta"] = 1
+        entry["cumulative_actual_final_touch_count"] = 1
+    entry_body = {key: value for key, value in entry.items() if key != "entry_sha256"}
+    return {**entry_body, "entry_sha256": canonical_sha256(entry_body)}
+
+
+def _state_from_entries(entries: list[dict], candidate: dict) -> dict:
+    anchor = {"schema_version": "synthetic-store-anchor-v1", "root": _h("anchor")}
+    actual_final = sum(entry["stage"] == "final" for entry in entries)
+    ledger_body = {
+        "schema_version": CONSUMPTION_LEDGER_SCHEMA_VERSION,
+        "entries": entries,
+        "chain": {
+            "genesis_tip_sha256": _genesis(anchor),
+            "tip_sha256": entries[-1]["entry_sha256"],
+            "consumed_request_count": len(entries),
+            "actual_final_touch_count": actual_final,
+            "historical_final_reveal_count_lower_bound": 10,
+            "repository_final_touch_count_lower_bound": 10 + actual_final,
+        },
+    }
+    ledger = {**ledger_body, "ledger_sha256": canonical_sha256(ledger_body)}
+    registry = {
+        "schema_version": "synthetic-registry-v1",
+        "entries": [
+            {
+                "entry_sha256": entries[0]["registry_entry_sha256"],
+                "candidate_manifest": candidate,
+            }
+        ],
+        "chain": {"tip_sha256": _h("registry tip"), "registered_entry_count": 1},
+        "registry_sha256": _h("registry"),
+    }
+    state_body = {
+        "schema_version": STORE_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "anchor": anchor,
+        "latest_registry": registry,
+        "latest_registry_pin": {
+            "schema_version": "synthetic-registry-pin-v1",
+            "registry_sha256": registry["registry_sha256"],
+            "tip_sha256": registry["chain"]["tip_sha256"],
+            "registered_entry_count": 1,
+        },
+        "consumption_ledger": ledger,
+    }
+    return {**state_body, "state_sha256": canonical_sha256(state_body)}
+
+
+def _bundle_for_state(state: dict) -> tuple[dict, dict, dict]:
+    pin = derive_consumed_stage_store_state_pin(state)
+    entry = state["consumption_ledger"]["entries"][-1]
+    grant = build_consumed_stage_authorization_grant(
+        authenticated_store_snapshot=state,
+        external_store_state_pin=pin,
+        expected_new_consumption_entry_sha256=entry["entry_sha256"],
+    )
+    body = {
+        "schema_version": CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
+        "authenticated_store_snapshot": state,
+        "store_state_pin": pin,
+        "authorization_grant": grant,
+    }
+    return entry, grant, {**body, "bundle_sha256": canonical_sha256(body)}
+
+
+def _final_carry_in_fixture() -> tuple[dict, dict, dict, dict]:
+    candidate = _sec_candidate(1)
+    parent_documents = [
+        {
+            "accession_number": "0000320193-23-000111",
+            "official_url": (
+                "https://www.sec.gov/Archives/edgar/data/320193/"
+                "000032019323000111/aapl-20230930.htm"
+            ),
+        },
+        {
+            "accession_number": "0000320193-23-000222",
+            "official_url": (
+                "https://www.sec.gov/Archives/edgar/data/320193/"
+                "000032019323000222/aapl-20230701.htm"
+            ),
+        },
+    ]
+    parent_raw = _entry(
+        sequence=1,
+        prior_tip=_genesis(
+            {"schema_version": "synthetic-store-anchor-v1", "root": _h("anchor")}
+        ),
+        stage="intermediate",
+        candidate_sha256_override=candidate["candidate_sha256"],
+    )
+    parent_access = copy.deepcopy(parent_raw["stage_access_manifest"])
+    parent_access["sec_access_plan"] = {
+        "selection_policy": "all_and_only_requested_stage_universe_primary_documents",
+        "method": "GET",
+        "network_scope": "official_sec_https_only",
+        "redirects_permitted": False,
+        "retries_permitted": False,
+        "cache_substitution_permitted": False,
+        "document_count": 2,
+        "accessions_sha256": canonical_sha256(
+            [item["accession_number"] for item in parent_documents]
+        ),
+        "official_urls_sha256": canonical_sha256(
+            [item["official_url"] for item in parent_documents]
+        ),
+        "documents": parent_documents,
+    }
+    parent_access["budgets"] = {
+        "max_sec_requests": 2,
+        "max_sec_response_bytes": 1_000_000,
+        "max_sec_acquisition_seconds": 30.0,
+    }
+    parent_entry = _rewrite_entry(parent_raw, access=parent_access)
+    parent_state = _state_from_entries([parent_entry], candidate)
+    parent_entry, parent_grant, parent_bundle = _bundle_for_state(parent_state)
+    parent_request_hash = parent_entry["request_sha256"]
+    parent_tip = build_reveal_store_current_tip_anchor(
+        parent_state,
+        revision=1,
+        previous_tip_anchor_sha256=_h("parent prior tip"),
+        authorization_bundles={parent_request_hash: parent_bundle},
+    )
+    parent_claim = build_stage_sec_execution_claim(
+        parent_bundle,
+        independent_current_tip_anchor=parent_tip,
+        execution_source_hashes=_execution_source_hashes(),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    parent_claim_tip = _next_tip(
+        parent_state,
+        parent_tip,
+        stage_sec_execution_claims={parent_request_hash: parent_claim},
+    )
+    normalized = [
+        (101, _h("parent 10-K normalized")),
+        (102, _h("parent 10-Q normalized")),
+    ]
+    parent_reader = build_stage_sec_reader_receipt(
+        parent_claim,
+        byte_index=[
+            {
+                "ordinal": ordinal,
+                "logical_id": f"document-{ordinal:04d}-normalized",
+                "relative_path": f"document-{ordinal:04d}.normalized.txt",
+                "byte_count": byte_count,
+                "sha256": digest,
+            }
+            for ordinal, (byte_count, digest) in enumerate(normalized, start=1)
+        ],
+        complete_marker_sha256=_h("parent SEC marker"),
+    )
+    parent_reader_tip = _next_tip(
+        parent_state,
+        parent_claim_tip,
+        stage_sec_reader_receipts={parent_request_hash: parent_reader},
+    )
+    parent_evidence_hash = _h("exact intermediate output evidence")
+    parent_binding = _output_binding(parent_grant, salt="intermediate parent")
+    parent_binding["output_stage_evidence_sha256"] = parent_evidence_hash
+    parent_output = build_consumed_stage_output_receipt(
+        parent_bundle,
+        stage_sec_execution_claim=parent_claim,
+        stage_sec_reader_receipt=parent_reader,
+        **parent_binding,
+    )
+
+    records = [
+        {
+            "accession_number": document["accession_number"],
+            "form": form,
+            "availability_session": session,
+            "artifact_stage": "intermediate",
+            "source_record_sha256": _h(f"source record {form}"),
+            "normalized_text_sha256": normalized[index][1],
+            "normalized_text_bytes": normalized[index][0],
+            "content_record_sha256": _h(f"content record {form}"),
+            "content_manifest_sha256": _h("intermediate content manifest"),
+        }
+        for index, (document, form, session) in enumerate(
+            zip(parent_documents, ("10-K", "10-Q"), ("2023-11-03", "2023-08-04"))
+        )
+    ]
+    child_raw = _entry(
+        sequence=2,
+        prior_tip=parent_entry["entry_sha256"],
+        stage="final",
+        candidate_sha256_override=candidate["candidate_sha256"],
+    )
+    child_access = copy.deepcopy(child_raw["stage_access_manifest"])
+    child_document = {
+        "accession_number": "0000320193-24-000333",
+        "official_url": (
+            "https://www.sec.gov/Archives/edgar/data/320193/"
+            "000032019324000333/aapl-20240928.htm"
+        ),
+    }
+    child_access["sec_access_plan"] = {
+        "selection_policy": "all_and_only_requested_stage_universe_primary_documents",
+        "method": "GET",
+        "network_scope": "official_sec_https_only",
+        "redirects_permitted": False,
+        "retries_permitted": False,
+        "cache_substitution_permitted": False,
+        "document_count": 1,
+        "accessions_sha256": canonical_sha256(
+            [child_document["accession_number"]]
+        ),
+        "official_urls_sha256": canonical_sha256([child_document["official_url"]]),
+        "documents": [child_document],
+    }
+    child_access["budgets"] = {
+        "max_sec_requests": 1,
+        "max_sec_response_bytes": 1_000_000,
+        "max_sec_acquisition_seconds": 30.0,
+    }
+    child_access["prerequisite_evidence_pin"] = {
+        "stage": "intermediate",
+        "content_manifest_sha256": _h("intermediate content manifest"),
+        "stage_artifact_sha256": _h("intermediate stage artifact"),
+        "external_seal_receipt_sha256": _h("intermediate external seal"),
+    }
+    child_access["prior_same_form_carry_in"] = {
+        "selection_policy": "latest_prerequisite_stage_filing_of_each_requested_stage_form",
+        "artifact_scope": "sealed_normalized_text_only",
+        "network_refetch_permitted": False,
+        "write_permitted": False,
+        "bound_by_prerequisite_stage_evidence_sha256": parent_evidence_hash,
+        "prerequisite_content_manifest_sha256": _h(
+            "intermediate content manifest"
+        ),
+        "record_count": 2,
+        "records_sha256": canonical_sha256(records),
+        "records": records,
+    }
+    child_access["scope"].update(
+        {
+            "general_cross_stage_access_permitted": False,
+            "exact_prior_same_form_carry_in_read_permitted": True,
+        }
+    )
+    child_entry = _rewrite_entry(
+        child_raw,
+        access=child_access,
+        identity_request=parent_entry["request"],
+        prerequisite_evidence_sha256=parent_evidence_hash,
+    )
+    child_state = _state_from_entries([parent_entry, child_entry], candidate)
+    child_entry, child_grant, child_bundle = _bundle_for_state(child_state)
+    child_request_hash = child_entry["request_sha256"]
+    child_tip = build_reveal_store_current_tip_anchor(
+        child_state,
+        revision=parent_reader_tip["revision"] + 1,
+        previous_tip_anchor_sha256=parent_reader_tip["tip_anchor_sha256"],
+        authorization_bundles={
+            parent_request_hash: parent_bundle,
+            child_request_hash: child_bundle,
+        },
+        consumed_stage_output_receipts={parent_request_hash: parent_output},
+        stage_sec_execution_claims={parent_request_hash: parent_claim},
+        stage_sec_reader_receipts={parent_request_hash: parent_reader},
+    )
+    child_claim = build_stage_sec_execution_claim(
+        child_bundle,
+        independent_current_tip_anchor=child_tip,
+        execution_source_hashes=_execution_source_hashes(),
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    child_claim_tip = _next_tip(
+        child_state,
+        child_tip,
+        stage_sec_execution_claims={
+            parent_request_hash: parent_claim,
+            child_request_hash: child_claim,
+        },
+    )
+    child_reader = build_stage_sec_reader_receipt(
+        child_claim,
+        byte_index=[
+            {
+                "ordinal": 1,
+                "logical_id": "final-stage-byte",
+                "relative_path": "final-stage-byte.raw",
+                "byte_count": 1,
+                "sha256": _h("final stage byte"),
+            }
+        ],
+        complete_marker_sha256=_h("child SEC marker"),
+    )
+    child_reader_tip = _next_tip(
+        child_state,
+        child_claim_tip,
+        stage_sec_reader_receipts={
+            parent_request_hash: parent_reader,
+            child_request_hash: child_reader,
+        },
+    )
+    copied_index = [
+        {
+            "ordinal": ordinal,
+            "logical_id": f"carry-in-{ordinal:04d}-normalized",
+            "relative_path": f"carry-in-{ordinal:04d}.normalized.txt",
+            "byte_count": byte_count,
+            "sha256": digest,
+        }
+        for ordinal, (byte_count, digest) in enumerate(normalized, start=1)
+    ]
+    receipt = build_stage_carry_in_reader_receipt(
+        child_bundle,
+        stage_sec_execution_claim=child_claim,
+        stage_sec_reader_receipt=child_reader,
+        parent_authorization_bundle=parent_bundle,
+        parent_stage_sec_execution_claim=parent_claim,
+        parent_stage_sec_reader_receipt=parent_reader,
+        parent_consumed_stage_output_receipt=parent_output,
+        carry_in_byte_index=copied_index,
+        carry_in_complete_marker_sha256=_h("carry-in complete marker"),
+        reader_source_sha256=child_claim["execution_source_hashes"]["reveal_store"],
+    )
+    return child_state, child_reader_tip, receipt, {
+        "byte_index": copied_index,
+        "complete_marker_sha256": _h("carry-in complete marker"),
+        "reader_source_sha256": child_claim["execution_source_hashes"][
+            "reveal_store"
+        ],
+        "request_sha256": child_request_hash,
+    }
+
+
 def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     state, pin, entry, grant, current_tip = _grant_context()
     assert pin["schema_version"] == CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION
@@ -557,6 +994,59 @@ def test_exact_ledger_tip_mints_compact_no_outcome_grant() -> None:
     assert _validate(state, pin, entry, grant, current_tip) == grant[
         "authorization_grant_sha256"
     ]
+
+
+def test_final_carry_in_receipt_is_exact_dedicated_current_tip_append() -> None:
+    state, reader_tip, receipt, binding = _final_carry_in_fixture()
+    request_hash = binding["request_sha256"]
+    next_tip = _next_tip(
+        state,
+        reader_tip,
+        stage_carry_in_reader_receipts={request_hash: receipt},
+    )
+    prior, validated = validate_reveal_store_current_tip_anchor_transition(
+        reader_tip,
+        next_tip,
+    )
+    assert prior == reader_tip
+    assert validated == next_tip
+    assert receipt["schema_version"] == (
+        STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION
+    )
+    assert receipt["authorized_stage"] == "final"
+    assert receipt["input_prerequisite_stage"] == "intermediate"
+    assert receipt["carry_in_record_count"] == 2
+    assert [record["form"] for record in receipt["carry_in_records"]] == [
+        "10-K",
+        "10-Q",
+    ]
+    assert receipt["reader_output_recomputed_by_store"] is True
+    assert receipt["network_refetch_permitted"] is False
+    assert receipt["write_permitted"] is False
+    assert receipt["general_cross_stage_access_permitted"] is False
+    assert receipt["fresh_carry_in_provenance_claimed"] is False
+    assert validate_stage_carry_in_reader_receipt(
+        receipt,
+        authenticated_store_snapshot=state,
+        independent_current_tip_anchor=next_tip,
+        carry_in_byte_index=binding["byte_index"],
+        carry_in_complete_marker_sha256=binding[
+            "complete_marker_sha256"
+        ],
+        reader_source_sha256=binding["reader_source_sha256"],
+    ) == receipt["receipt_sha256"]
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="differs from revalidated durable inputs",
+    ):
+        validate_stage_carry_in_reader_receipt(
+            receipt,
+            authenticated_store_snapshot=state,
+            independent_current_tip_anchor=next_tip,
+            carry_in_byte_index=binding["byte_index"],
+            carry_in_complete_marker_sha256=_h("substituted marker"),
+            reader_source_sha256=binding["reader_source_sha256"],
+        )
 
 
 def test_output_receipt_schema_is_synchronized_with_parent_verifier() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from datetime import date
 import hashlib
 import inspect
 import json
@@ -21,6 +22,8 @@ from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
     REQUIRED_SOURCE_HASHES,
     build_candidate_manifest,
+    build_corpus_universe_manifest,
+    build_stage_content_manifest,
     canonical_sha256,
     session_calendar_sha256,
 )
@@ -56,6 +59,7 @@ from agent_benchmark.sec_filing_gemma_reveal_store import (
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+    _prior_same_form_carry_ins,
 )
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
@@ -266,6 +270,9 @@ def _grant_request(
     stage: str,
     evidence: dict,
     include_sec_plan: bool = False,
+    sec_documents: list[dict] | None = None,
+    prior_same_form_carry_in: dict | None = None,
+    prerequisite_evidence_pin: dict | None = None,
 ) -> tuple[dict, dict]:
     prerequisite = "development" if stage == "intermediate" else "intermediate"
     attempt = candidate["bindings"]["holdout_attempt_id"]
@@ -308,12 +315,26 @@ def _grant_request(
             ),
         },
     }
-    if include_sec_plan:
-        accession = "0000320193-24-000123"
-        official_url = (
-            "https://www.sec.gov/Archives/edgar/data/320193/"
-            "000032019324000123/aapl-20240928.htm"
+    if prerequisite_evidence_pin is not None:
+        access_body["prerequisite_evidence_pin"] = copy.deepcopy(
+            prerequisite_evidence_pin
         )
+    if include_sec_plan:
+        documents = (
+            [
+                {
+                    "accession_number": "0000320193-24-000123",
+                    "official_url": (
+                        "https://www.sec.gov/Archives/edgar/data/320193/"
+                        "000032019324000123/aapl-20240928.htm"
+                    ),
+                }
+            ]
+            if sec_documents is None
+            else copy.deepcopy(sec_documents)
+        )
+        accessions = [document["accession_number"] for document in documents]
+        official_urls = [document["official_url"] for document in documents]
         access_body["sec_access_plan"] = {
             "selection_policy": (
                 "all_and_only_requested_stage_universe_primary_documents"
@@ -323,17 +344,35 @@ def _grant_request(
             "redirects_permitted": False,
             "retries_permitted": False,
             "cache_substitution_permitted": False,
-            "document_count": 1,
-            "accessions_sha256": canonical_sha256([accession]),
-            "official_urls_sha256": canonical_sha256([official_url]),
-            "documents": [
-                {"accession_number": accession, "official_url": official_url}
-            ],
+            "document_count": len(documents),
+            "accessions_sha256": canonical_sha256(accessions),
+            "official_urls_sha256": canonical_sha256(official_urls),
+            "documents": documents,
         }
         access_body["budgets"] = {
-            "max_sec_requests": 1,
+            "max_sec_requests": len(documents),
             "max_sec_response_bytes": 1_000_000,
             "max_sec_acquisition_seconds": 30.0,
+        }
+    if prior_same_form_carry_in is not None:
+        access_body["prior_same_form_carry_in"] = copy.deepcopy(
+            prior_same_form_carry_in
+        )
+        access_body["scope"] = {
+            "authorized_stage": stage,
+            "prohibited_stages": [
+                value
+                for value in ("development", "intermediate", "final")
+                if value != stage
+            ],
+            "prerequisite_stage_data_scope": (
+                "sealed_evidence_identity_plus_exact_read_only_prior_same_form_"
+                "normalized_text_carry_in"
+            ),
+            "general_cross_stage_access_permitted": False,
+            "exact_prior_same_form_carry_in_read_permitted": True,
+            "future_stage_access_permitted": False,
+            "outcome_access_before_atomic_request_consumption_permitted": False,
         }
     access_manifest = {
         **access_body,
@@ -684,6 +723,8 @@ def _rewrite_complete_marker(marker_path: Path, marker: dict) -> None:
 def _complete_fixed_sec_ancestry(
     store: SecFilingGemmaRevealStore,
     request_sha256: str,
+    *,
+    payloads: tuple[bytes, ...] | None = None,
 ) -> tuple[dict, dict]:
     tip = store.load_current_tip_anchor()
     claim = tip["stage_sec_execution_claims"].get(request_sha256)
@@ -696,7 +737,10 @@ def _complete_fixed_sec_ancestry(
     tip = store.load_current_tip_anchor()
     reader = tip["stage_sec_reader_receipts"].get(request_sha256)
     if reader is None:
-        _write_fixed_sec_component(store, claim)
+        if payloads is None:
+            _write_fixed_sec_component(store, claim)
+        else:
+            _write_fixed_sec_component(store, claim, payloads=payloads)
         reader = store._record_authorized_sec_stage_reader_output(
             request_sha256=request_sha256,
         )
@@ -780,10 +824,12 @@ def _prepare_fixed_stage_evidence_output(
     *,
     salt: str,
     stage_evidence: dict | None = None,
+    sec_payloads: tuple[bytes, ...] | None = None,
 ) -> dict:
     claim, sec_reader = _complete_fixed_sec_ancestry(
         store,
         request["request_sha256"],
+        payloads=sec_payloads,
     )
     tip = store.load_current_tip_anchor()
     grant = tip["authorization_bundles"][request["request_sha256"]][
@@ -806,6 +852,339 @@ def _prepare_fixed_stage_evidence_output(
         "sec_reader_receipt": sec_reader,
         "evidence_path": evidence_path,
         "marker_path": marker_path,
+    }
+
+
+def _sec_plan_document(accession_number: str, filename: str) -> dict:
+    return {
+        "accession_number": accession_number,
+        "official_url": (
+            "https://www.sec.gov/Archives/edgar/data/320193/"
+            f"{accession_number.replace('-', '')}/{filename}"
+        ),
+    }
+
+
+def _complete_test_carry_in_universe(*, salt: str) -> dict:
+    records: list[dict] = []
+    serial = 1
+    for year in range(2000, 2026):
+        for form, month in (
+            ("10-K", 2),
+            ("10-Q", 5),
+            ("10-Q", 8),
+            ("10-Q", 11),
+        ):
+            evidence_date = date(year, month, 15)
+            records.append(
+                {
+                    "accession_number": (
+                        f"0000320193-{year % 100:02d}-{serial:06d}"
+                    ),
+                    "subject_cik": "0000320193",
+                    "form": form,
+                    "acceptance_datetime": (
+                        evidence_date.strftime("%Y%m%d") + "160000"
+                    ),
+                    "filing_date": evidence_date.isoformat(),
+                    "filing_date_change": None,
+                    "primary_document": f"filing-{serial}.htm",
+                    "source_record_sha256": _digest(
+                        f"{salt}:universe:{serial}"
+                    ),
+                }
+            )
+            serial += 1
+    for form, month in (("10-Q", 2), ("10-Q", 5)):
+        evidence_date = date(2026, month, 15)
+        records.append(
+            {
+                "accession_number": f"0000320193-26-{serial:06d}",
+                "subject_cik": "0000320193",
+                "form": form,
+                "acceptance_datetime": evidence_date.strftime("%Y%m%d") + "160000",
+                "filing_date": evidence_date.isoformat(),
+                "filing_date_change": None,
+                "primary_document": f"filing-{serial}.htm",
+                "source_record_sha256": _digest(
+                    f"{salt}:universe:{serial}"
+                ),
+            }
+        )
+        serial += 1
+    return build_corpus_universe_manifest(
+        catalog_artifact_sha256=_digest(f"{salt}:catalog"),
+        calendar_artifact_sha256=_digest(f"{salt}:calendar"),
+        catalog_total_record_count=1_000,
+        catalog_eligible_record_count=len(records),
+        session_dates=EXPECTED_SESSIONS,
+        records=records,
+    )
+
+
+def _prepare_final_owned_carry_in_chain(
+    store: SecFilingGemmaRevealStore,
+    *,
+    salt: str,
+    tamper_carry_scope: bool = False,
+) -> dict:
+    store.initialize()
+    registered, candidate = _register(store, salt=salt)
+    universe = _complete_test_carry_in_universe(salt=salt)
+    final_universe_records = sorted(
+        (
+            record
+            for record in universe["records"]
+            if record["artifact_stage"] == "final"
+        ),
+        key=lambda record: (
+            record["availability_session"],
+            record["accession_number"],
+        ),
+    )
+    selected_parent_records = []
+    for form in ("10-K", "10-Q"):
+        first_final = next(
+            record for record in final_universe_records if record["form"] == form
+        )
+        selected_parent_records.append(
+            max(
+                (
+                    record
+                    for record in universe["records"]
+                    if record["form"] == form
+                    and record["artifact_stage"] == "intermediate"
+                    and (
+                        record["availability_session"],
+                        record["accession_number"],
+                    )
+                    < (
+                        first_final["availability_session"],
+                        first_final["accession_number"],
+                    )
+                ),
+                key=lambda record: (
+                    record["availability_session"],
+                    record["accession_number"],
+                ),
+            )
+        )
+    selected_parent_records.sort(key=lambda record: record["accession_number"])
+    parent_documents = [
+        _sec_plan_document(
+            record["accession_number"],
+            record["primary_document"],
+        )
+        for record in selected_parent_records
+    ]
+    final_documents = [
+        _sec_plan_document("0000320193-25-000201", "aapl-20250927.htm"),
+        _sec_plan_document("0000320193-26-000202", "aapl-20251227.htm"),
+    ]
+    parent_payloads = (
+        b"<html><body><p>Owned intermediate annual carry in.</p></body></html>",
+        b"<html><body><p>Owned intermediate quarterly carry in.</p></body></html>",
+    )
+    development_evidence = _evidence(
+        "development", candidate, salt=f"{salt}-development"
+    )
+    parent_request, parent_access = _grant_request(
+        registered,
+        candidate,
+        stage="intermediate",
+        evidence=development_evidence,
+        include_sec_plan=True,
+        sec_documents=parent_documents,
+    )
+    parent_bundle = _consume_with_grant(
+        store,
+        parent_request,
+        candidate,
+        development_evidence,
+        stage="intermediate",
+        access_manifest=parent_access,
+    )
+    parent_claim_result = store.claim_authorized_sec_stage_execution(
+        request_sha256=parent_request["request_sha256"],
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+    parent_claim = parent_claim_result["claim"]
+    _write_fixed_sec_component(
+        store,
+        parent_claim,
+        payloads=parent_payloads,
+    )
+    parent_reader = store._record_authorized_sec_stage_reader_output(
+        request_sha256=parent_request["request_sha256"],
+    )
+    parent_sec_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / parent_claim["claim_sha256"]
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+    )
+    normalized_payloads = tuple(
+        (
+            parent_sec_directory
+            / f"document-{ordinal:04d}.normalized.txt"
+        ).read_bytes()
+        for ordinal in range(1, len(parent_documents) + 1)
+    )
+    normalized_by_accession = {
+        document["accession_number"]: payload
+        for document, payload in zip(parent_documents, normalized_payloads)
+    }
+    content_documents = [
+        {
+            "accession_number": record["accession_number"],
+            "primary_document_sha256": _digest(
+                f"{salt}:{record['accession_number']}:primary"
+            ),
+            "normalized_text_sha256": (
+                hashlib.sha256(
+                    normalized_by_accession[record["accession_number"]]
+                ).hexdigest()
+                if record["accession_number"] in normalized_by_accession
+                else _digest(
+                    f"{salt}:{record['accession_number']}:normalized"
+                )
+            ),
+            "primary_document_bytes": 2_000,
+            "normalized_text_bytes": (
+                len(normalized_by_accession[record["accession_number"]])
+                if record["accession_number"] in normalized_by_accession
+                else 1_000
+            ),
+        }
+        for record in universe["records"]
+        if record["artifact_stage"] == "intermediate"
+    ]
+    parent_content_manifest = build_stage_content_manifest(
+        artifact_stage="intermediate",
+        corpus_universe_sha256=universe["universe_sha256"],
+        documents=content_documents,
+        universe_manifest=universe,
+    )
+    parent_tip = store.load_current_tip_anchor()
+    parent_grant = parent_tip["authorization_bundles"][
+        parent_request["request_sha256"]
+    ]["authorization_grant"]
+    parent_evidence = _owned_v3_stage_evidence(
+        candidate,
+        parent_grant,
+        salt=f"{salt}-parent-output",
+    )
+    parent_evidence["corpus_universe_manifest"] = universe
+    parent_evidence["prerequisite_content_manifest"] = (
+        parent_content_manifest
+    )
+    parent_evidence["stage_evidence_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in parent_evidence.items()
+            if key != "stage_evidence_sha256"
+        }
+    )
+    parent_evidence_path, parent_marker_path = (
+        _write_fixed_stage_evidence_component(
+            store,
+            parent_claim,
+            parent_reader,
+            parent_evidence,
+        )
+    )
+    parent_output_receipt = store._record_owned_stage_evidence_output(
+        request_sha256=parent_request["request_sha256"],
+    )
+    carry_records = _prior_same_form_carry_ins(
+        parent_evidence["corpus_universe_manifest"],
+        parent_content_manifest,
+        prerequisite_stage="intermediate",
+        requested_stage="final",
+        prerequisite_content_manifest_sha256=parent_content_manifest[
+            "content_manifest_sha256"
+        ],
+    )
+    carry_scope = {
+        "selection_policy": (
+            "latest_prerequisite_stage_filing_of_each_requested_stage_form"
+        ),
+        "artifact_scope": "sealed_normalized_text_only",
+        "network_refetch_permitted": False,
+        "write_permitted": False,
+        "bound_by_prerequisite_stage_evidence_sha256": parent_evidence[
+            "stage_evidence_sha256"
+        ],
+        "prerequisite_content_manifest_sha256": parent_content_manifest[
+            "content_manifest_sha256"
+        ],
+        "record_count": len(carry_records),
+        "records_sha256": canonical_sha256(carry_records),
+        "records": carry_records,
+    }
+    if tamper_carry_scope:
+        carry_scope["records"] = copy.deepcopy(carry_records)
+        carry_scope["records"][0]["normalized_text_sha256"] = _digest(
+            f"{salt}:cross-scope-normalized-text"
+        )
+        carry_scope["records_sha256"] = canonical_sha256(
+            carry_scope["records"]
+        )
+    final_request, final_access = _grant_request(
+        parent_bundle["authenticated_store_snapshot"],
+        candidate,
+        stage="final",
+        evidence=parent_evidence,
+        include_sec_plan=True,
+        sec_documents=final_documents,
+        prior_same_form_carry_in=carry_scope,
+        prerequisite_evidence_pin={
+            "stage": "intermediate",
+            "content_manifest_sha256": parent_content_manifest[
+                "content_manifest_sha256"
+            ],
+            "stage_artifact_sha256": _digest(
+                f"{salt}:intermediate:stage-artifact"
+            ),
+            "external_seal_receipt_sha256": _digest(
+                f"{salt}:intermediate:external-seal"
+            ),
+        },
+    )
+    final_bundle = _consume_with_grant(
+        store,
+        final_request,
+        candidate,
+        parent_evidence,
+        stage="final",
+        access_manifest=final_access,
+    )
+    child_claim, child_reader = _complete_fixed_sec_ancestry(
+        store,
+        final_request["request_sha256"],
+        payloads=(
+            b"<html><body><p>Owned final annual filing.</p></body></html>",
+            b"<html><body><p>Owned final quarterly filing.</p></body></html>",
+        ),
+    )
+    return {
+        "candidate": candidate,
+        "parent_request": parent_request,
+        "parent_bundle": parent_bundle,
+        "parent_claim": parent_claim,
+        "parent_reader": parent_reader,
+        "parent_output_receipt": parent_output_receipt,
+        "parent_evidence": parent_evidence,
+        "parent_evidence_path": parent_evidence_path,
+        "parent_marker_path": parent_marker_path,
+        "parent_normalized_payloads": normalized_payloads,
+        "parent_sec_directory": parent_sec_directory,
+        "final_request": final_request,
+        "final_access": final_access,
+        "final_bundle": final_bundle,
+        "child_claim": child_claim,
+        "child_reader": child_reader,
+        "carry_records": carry_records,
     }
 
 
@@ -2086,6 +2465,413 @@ def test_owned_stage_output_finalizer_has_no_public_caller_mapping_api() -> None
     assert signature.parameters["request_sha256"].kind is (
         inspect.Parameter.KEYWORD_ONLY
     )
+
+
+def test_owned_final_carry_in_reader_is_request_only_durable_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-happy",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    receipt = store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+
+    tip_after = store.load_current_tip_anchor()
+    assert store.state_path.read_bytes() == state_bytes
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["stage_carry_in_reader_receipts"] == {
+        request_hash: receipt
+    }
+    assert receipt["request_sha256"] == request_hash
+    assert receipt["parent_request_sha256"] == prepared["parent_request"][
+        "request_sha256"
+    ]
+    assert receipt["carry_in_records"] == prepared["carry_records"]
+    assert receipt["carry_in_byte_count_total"] == sum(
+        len(payload) for payload in prepared["parent_normalized_payloads"]
+    )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    assert sorted(path.name for path in component_directory.iterdir()) == [
+        "carry-in-0001.normalized.txt",
+        "carry-in-0002.normalized.txt",
+        reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME,
+    ]
+    assert tuple(
+        (component_directory / f"carry-in-{ordinal:04d}.normalized.txt").read_bytes()
+        for ordinal in range(1, 3)
+    ) == prepared["parent_normalized_payloads"]
+    tip_bytes_after = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+
+    assert repeated == receipt
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes_after
+    public_names = {
+        name
+        for name, _member in inspect.getmembers(
+            SecFilingGemmaRevealStore,
+            predicate=inspect.isfunction,
+        )
+        if not name.startswith("_")
+    }
+    assert "record_owned_stage_carry_in_reader_output" not in public_names
+    signature = inspect.signature(
+        SecFilingGemmaRevealStore._record_owned_stage_carry_in_reader_output
+    )
+    assert tuple(signature.parameters) == ("self", "request_sha256")
+    assert signature.parameters["request_sha256"].kind is (
+        inspect.Parameter.KEYWORD_ONLY
+    )
+
+
+def test_owned_carry_in_reader_rejects_intermediate_before_reader_mutation(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _candidate_value, request, _bundle, claim = _issued_sec_claim(
+        store,
+        salt="owned-carry-in-invalid-intermediate",
+    )
+    _write_fixed_sec_component(store, claim)
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="requires a consumed final child",
+    ):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request["request_sha256"],
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert request["request_sha256"] not in store.load_current_tip_anchor()[
+        "stage_sec_reader_receipts"
+    ]
+
+
+@pytest.mark.parametrize("mutated_artifact", ("child_marker", "parent_raw"))
+def test_owned_final_carry_in_replays_full_sec_batches_under_final_lock(
+    tmp_path: Path,
+    mutated_artifact: str,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt=f"owned-final-carry-in-sec-closure-{mutated_artifact}",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    child_sec_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+    )
+    original_replayer = store._record_authorized_sec_stage_reader_output
+    call_count = 0
+
+    def replay_then_mutate(*, request_sha256: str):
+        nonlocal call_count
+        receipt = original_replayer(request_sha256=request_sha256)
+        call_count += 1
+        if call_count == 2:
+            if mutated_artifact == "child_marker":
+                path = child_sec_directory / SEC_BATCH_COMPLETE_MARKER_FILENAME
+                path.write_bytes(path.read_bytes() + b" ")
+            else:
+                path = prepared["parent_sec_directory"] / "document-0001.raw"
+                path.write_bytes(b"changed parent raw bytes after outside replay")
+        return receipt
+
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+    with patch.object(
+        store,
+        "_record_authorized_sec_stage_reader_output",
+        side_effect=replay_then_mutate,
+    ), pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert call_count == 2
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert request_hash not in store.load_current_tip_anchor()[
+        "stage_carry_in_reader_receipts"
+    ]
+
+
+def test_owned_final_carry_in_reader_retry_rejects_copied_byte_tamper(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-tamper",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    (component_directory / "carry-in-0001.normalized.txt").write_bytes(
+        b"coherently wrong copied carry-in bytes"
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="differs from the exact owned replay",
+    ):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+
+
+def test_owned_final_carry_in_reader_recovers_partial_file_before_marker(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-partial-recovery",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir()
+    partial_path = component_directory / "carry-in-0001.normalized.txt"
+    partial_path.write_bytes(b"interrupted pre-marker bytes")
+    tip_before = store.load_current_tip_anchor()
+
+    receipt = store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+
+    assert partial_path.read_bytes() == prepared["parent_normalized_payloads"][0]
+    assert (
+        component_directory
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME
+    ).is_file()
+    tip_after = store.load_current_tip_anchor()
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["stage_carry_in_reader_receipts"][request_hash] == receipt
+
+
+def test_owned_final_carry_in_reader_recovers_partial_marker_before_receipt(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-partial-marker",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir()
+    marker_path = (
+        component_directory
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME
+    )
+    marker_path.write_bytes(b'{"schema_version":')
+
+    receipt = store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+
+    marker = json.loads(marker_path.read_bytes())
+    assert marker["schema_version"] == (
+        reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_SCHEMA_VERSION
+    )
+    assert hashlib.sha256(marker_path.read_bytes()).hexdigest() == receipt[
+        "carry_in_complete_marker_sha256"
+    ]
+
+
+def test_owned_final_carry_in_does_not_repair_after_marker_before_receipt(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-marker-before-receipt",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    with patch.object(
+        store,
+        "_commit_state_and_tip_locked",
+        side_effect=RuntimeError("simulated crash before carry receipt CAS"),
+    ), pytest.raises(RuntimeError, match="simulated crash"):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    assert (
+        component_directory
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME
+    ).is_file()
+    assert request_hash not in store.load_current_tip_anchor()[
+        "stage_carry_in_reader_receipts"
+    ]
+    (component_directory / "carry-in-0001.normalized.txt").write_bytes(
+        b"wrong bytes after committed marker before receipt"
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="differs from the exact owned replay",
+    ):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+
+
+def test_owned_final_carry_in_replays_valid_marker_after_pre_receipt_crash(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-valid-marker-retry",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    tip_before = store.load_current_tip_anchor()
+    with patch.object(
+        store,
+        "_commit_state_and_tip_locked",
+        side_effect=RuntimeError("simulated crash before carry receipt CAS"),
+    ), pytest.raises(RuntimeError, match="simulated crash"):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+    tip_after_crash = store.load_current_tip_anchor()
+    assert tip_after_crash == tip_before
+
+    receipt = store._record_owned_stage_carry_in_reader_output(
+        request_sha256=request_hash,
+    )
+
+    tip_after_retry = store.load_current_tip_anchor()
+    assert tip_after_retry["revision"] == tip_before["revision"] + 1
+    assert tip_after_retry["stage_carry_in_reader_receipts"][request_hash] == receipt
+
+
+@pytest.mark.parametrize("attack", ("extra_file", "hardlink"))
+def test_owned_final_carry_in_rejects_component_namespace_attacks(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt=f"owned-final-carry-in-namespace-{attack}",
+    )
+    request_hash = prepared["final_request"]["request_sha256"]
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir()
+    if attack == "extra_file":
+        (component_directory / "unexpected.txt").write_bytes(b"unexpected")
+    else:
+        external = tmp_path / "external-carry-in-hardlink-target.txt"
+        external.write_bytes(b"linked bytes")
+        os.link(
+            external,
+            component_directory / "carry-in-0001.normalized.txt",
+        )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=request_hash,
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    assert request_hash not in store.load_current_tip_anchor()[
+        "stage_carry_in_reader_receipts"
+    ]
+
+
+def test_owned_final_carry_in_reader_rejects_coherently_rehashed_cross_scope(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    prepared = _prepare_final_owned_carry_in_chain(
+        store,
+        salt="owned-final-carry-in-cross-scope",
+        tamper_carry_scope=True,
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="cannot be rederived from durable parent evidence",
+    ):
+        store._record_owned_stage_carry_in_reader_output(
+            request_sha256=prepared["final_request"]["request_sha256"],
+        )
+
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == tip_bytes
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / prepared["child_claim"]["claim_sha256"]
+        / reveal_store_module.PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+    )
+    assert not component_directory.exists()
 
 
 @pytest.mark.parametrize(

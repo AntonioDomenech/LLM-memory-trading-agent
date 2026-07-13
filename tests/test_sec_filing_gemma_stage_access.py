@@ -29,6 +29,7 @@ from agent_benchmark.sec_filing_gemma_stage_access import (
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
     SecFilingGemmaStageAccessError,
     build_stage_access_manifest,
+    validate_prior_same_form_carry_in_scope,
     validate_stage_access_manifest,
 )
 from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
@@ -407,6 +408,208 @@ def test_exact_two_permitted_transitions_build_and_validate(stage: str) -> None:
     assert set(manifest["scope"]["prohibited_stages"]) == {
         value for value in ("development", "intermediate", "final") if value != stage
     }
+
+
+@pytest.mark.parametrize("stage", ["intermediate", "final"])
+def test_carry_in_scope_is_rederived_as_detached_latest_10k_and_10q(
+    stage: str,
+) -> None:
+    context = _context(stage)
+    manifest = context["manifest"]
+
+    records = validate_prior_same_form_carry_in_scope(
+        MappingProxyType(manifest),
+        corpus_universe_manifest=MappingProxyType(
+            context["corpus_universe_manifest"]
+        ),
+        prerequisite_content_manifest=MappingProxyType(
+            context["prerequisite_content_manifest"]
+        ),
+        expected_prerequisite_stage=context["prerequisite_stage"],
+        expected_requested_stage=context["requested_stage"],
+        expected_prerequisite_stage_evidence_sha256=context["identity"][
+            "prerequisite_stage_evidence_sha256"
+        ],
+    )
+
+    assert type(records) is list
+    assert records == manifest["prior_same_form_carry_in"]["records"]
+    assert [record["form"] for record in records] == ["10-K", "10-Q"]
+    for record in records:
+        first_requested = min(
+            (
+                item
+                for item in context["corpus_universe_manifest"]["records"]
+                if item["artifact_stage"] == stage and item["form"] == record["form"]
+            ),
+            key=lambda item: (
+                item["availability_session"],
+                item["accession_number"],
+            ),
+        )
+        expected_prior = max(
+            (
+                item
+                for item in context["corpus_universe_manifest"]["records"]
+                if item["form"] == record["form"]
+                and (
+                    item["availability_session"],
+                    item["accession_number"],
+                )
+                < (
+                    first_requested["availability_session"],
+                    first_requested["accession_number"],
+                )
+            ),
+            key=lambda item: (
+                item["availability_session"],
+                item["accession_number"],
+            ),
+        )
+        assert record["accession_number"] == expected_prior["accession_number"]
+
+    records[0]["form"] = "forged"
+    assert manifest["prior_same_form_carry_in"]["records"][0]["form"] == "10-K"
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda section: section.pop("selection_policy"),
+        lambda section: section.update({"extra": "scope"}),
+        lambda section: section.update({"selection_policy": "caller_selected"}),
+        lambda section: section.update({"artifact_scope": "raw_or_normalized"}),
+        lambda section: section.update({"network_refetch_permitted": True}),
+        lambda section: section.update({"write_permitted": True}),
+        lambda section: section.update(
+            {"bound_by_prerequisite_stage_evidence_sha256": _h("other evidence")}
+        ),
+        lambda section: section.update(
+            {"prerequisite_content_manifest_sha256": _h("other content")}
+        ),
+        lambda section: section.update({"record_count": True}),
+        lambda section: section.update({"record_count": 1}),
+        lambda section: section.update({"records_sha256": _h("other records")}),
+        lambda section: section["records"].reverse(),
+        lambda section: section["records"][0].update(
+            {"accession_number": "0000320193-18-999999"}
+        ),
+    ],
+    ids=[
+        "missing-key",
+        "extra-key",
+        "selection-policy",
+        "artifact-scope",
+        "network-refetch",
+        "write",
+        "evidence-binding",
+        "content-hash",
+        "boolean-count",
+        "count",
+        "records-hash",
+        "record-order",
+        "record-selection",
+    ],
+)
+def test_carry_in_scope_rejects_every_mutated_declaration(mutator) -> None:
+    context = _context()
+    forged = copy.deepcopy(context["manifest"])
+    mutator(forged["prior_same_form_carry_in"])
+
+    with pytest.raises(SecFilingGemmaStageAccessError):
+        validate_prior_same_form_carry_in_scope(
+            forged,
+            corpus_universe_manifest=context["corpus_universe_manifest"],
+            prerequisite_content_manifest=context["prerequisite_content_manifest"],
+            expected_prerequisite_stage=context["prerequisite_stage"],
+            expected_requested_stage=context["requested_stage"],
+            expected_prerequisite_stage_evidence_sha256=context["identity"][
+                "prerequisite_stage_evidence_sha256"
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "scope_change",
+    [
+        {"exact_prior_same_form_carry_in_read_permitted": False},
+        {"general_cross_stage_access_permitted": True},
+        {"prohibited_stages": ["development"]},
+        {"prohibited_stages": ["development", "intermediate", "final"]},
+    ],
+    ids=[
+        "carry-read-disabled",
+        "general-cross-stage-enabled",
+        "another-stage-not-prohibited",
+        "requested-stage-prohibited",
+    ],
+)
+def test_carry_in_scope_rejects_broadened_or_disabled_manifest_scope(
+    scope_change: dict,
+) -> None:
+    context = _context()
+    forged = copy.deepcopy(context["manifest"])
+    forged["scope"].update(scope_change)
+
+    with pytest.raises(SecFilingGemmaStageAccessError, match="exact carry-in read"):
+        validate_prior_same_form_carry_in_scope(
+            forged,
+            corpus_universe_manifest=context["corpus_universe_manifest"],
+            prerequisite_content_manifest=context["prerequisite_content_manifest"],
+            expected_prerequisite_stage=context["prerequisite_stage"],
+            expected_requested_stage=context["requested_stage"],
+            expected_prerequisite_stage_evidence_sha256=context["identity"][
+                "prerequisite_stage_evidence_sha256"
+            ],
+        )
+
+
+def test_carry_in_scope_rejects_canonical_parent_content_drift() -> None:
+    context = _context()
+    content_document_keys = {
+        "accession_number",
+        "primary_document_sha256",
+        "normalized_text_sha256",
+        "primary_document_bytes",
+        "normalized_text_bytes",
+    }
+    documents = [
+        {
+            key: copy.deepcopy(value)
+            for key, value in document.items()
+            if key in content_document_keys
+        }
+        for document in context["prerequisite_content_manifest"]["documents"]
+    ]
+    carry_accession = context["manifest"]["prior_same_form_carry_in"]["records"][0][
+        "accession_number"
+    ]
+    next(
+        document
+        for document in documents
+        if document["accession_number"] == carry_accession
+    )["normalized_text_sha256"] = _h("changed normalized carry-in")
+    changed_content = build_stage_content_manifest(
+        artifact_stage=context["prerequisite_stage"],
+        corpus_universe_sha256=context["corpus_universe_manifest"]["universe_sha256"],
+        documents=documents,
+        universe_manifest=context["corpus_universe_manifest"],
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAccessError,
+        match="exact rederivation",
+    ):
+        validate_prior_same_form_carry_in_scope(
+            context["manifest"],
+            corpus_universe_manifest=context["corpus_universe_manifest"],
+            prerequisite_content_manifest=changed_content,
+            expected_prerequisite_stage=context["prerequisite_stage"],
+            expected_requested_stage=context["requested_stage"],
+            expected_prerequisite_stage_evidence_sha256=context["identity"][
+                "prerequisite_stage_evidence_sha256"
+            ],
+        )
 
 
 @pytest.mark.parametrize(

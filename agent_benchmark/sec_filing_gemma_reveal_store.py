@@ -7,10 +7,14 @@ registry appends with compare-and-swap semantics, and consumes stage reveal
 requests exactly once only after the fixed semantic prerequisite verifier
 returns a strongly bound result.
 
-No market data, filing text, model runtime, clock, or network service is used.
-The store contains governance receipts only.  Registration and intermediate
-access never count as a final-period touch; successful final-request
-consumption increments the separate actual-final-touch counter exactly once.
+No market data, model runtime, or network service is used by this module.  Its
+owned carry-in helper may re-read and copy only normalized filing bytes that a
+terminal SEC reader receipt already binds; it cannot fetch or accept filing
+text from a caller.  The anchor files contain governance receipts, while the
+adjacent fixed ``stage_outputs`` namespace contains their replayed bytes.
+Registration and intermediate access never count as a final-period touch;
+successful final-request consumption increments the separate actual-final-
+touch counter exactly once.
 """
 
 from __future__ import annotations
@@ -64,6 +68,10 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
     detach_untrusted_stage_json,
     preflight_untrusted_stage_json,
 )
+from agent_benchmark.sec_filing_gemma_stage_access import (
+    SecFilingGemmaStageAccessError,
+    validate_prior_same_form_carry_in_scope,
+)
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
@@ -72,6 +80,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
+    build_stage_carry_in_reader_receipt,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
@@ -85,6 +94,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
     validate_reveal_store_current_tip_anchor_transition,
+    validate_stage_carry_in_reader_receipt,
     validate_trusted_stage_content_authentication_receipt,
     _sec_component_plan_from_bundle,
 )
@@ -135,6 +145,40 @@ _STAGE_EVIDENCE_COMPLETE_MARKER_KEYS: Final[frozenset[str]] = frozenset(
         "byte_count",
         "document_sha256",
         "stage_evidence_sha256",
+        "marker_sha256",
+    }
+)
+PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME: Final[str] = (
+    "prior_same_form_carry_in"
+)
+PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
+PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-prior-same-form-carry-in-complete-v1"
+)
+PRIOR_SAME_FORM_CARRY_IN_COMPONENT_ID: Final[str] = (
+    "owned_prior_same_form_normalized_text_carry_in"
+)
+MAX_PRIOR_SAME_FORM_CARRY_IN_RECORDS: Final[int] = 16
+MAX_PRIOR_SAME_FORM_CARRY_IN_TOTAL_BYTES: Final[int] = 256 * 1024 * 1024
+_PRIOR_SAME_FORM_CARRY_IN_MARKER_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "request_sha256",
+        "claim_sha256",
+        "sec_reader_receipt_sha256",
+        "parent_request_sha256",
+        "parent_claim_sha256",
+        "parent_sec_reader_receipt_sha256",
+        "parent_stage_output_receipt_sha256",
+        "parent_stage_evidence_sha256",
+        "parent_stage_evidence_document_sha256",
+        "parent_stage_evidence_complete_marker_sha256",
+        "component_id",
+        "carry_in_records_sha256",
+        "prerequisite_content_manifest_sha256",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
         "marker_sha256",
     }
 )
@@ -523,6 +567,100 @@ def _read_regular_bytes(
         return b"".join(chunks)
     finally:
         os.close(descriptor)
+
+
+def _create_or_replay_regular_bytes(
+    path: Path,
+    payload: bytes,
+    location: str,
+    *,
+    max_bytes: int,
+    recover_interrupted_precommit: bool = False,
+) -> bytes:
+    """Create one owned file exactly once, or replay its identical bytes."""
+
+    if type(payload) is not bytes or not payload:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} payload must be non-empty exact bytes"
+        )
+    if type(max_bytes) is not int or max_bytes < 1 or len(payload) > max_bytes:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} payload exceeds its fixed safety limit"
+        )
+    try:
+        existing_details = path.lstat()
+    except FileNotFoundError:
+        existing_details = None
+    if type(recover_interrupted_precommit) is not bool:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} recovery policy must be exact"
+        )
+    if existing_details is not None:
+        _validate_regular_details(existing_details, location)
+        existing = _read_regular_bytes(path, location, max_bytes=max_bytes)
+        if existing != payload:
+            if not recover_interrupted_precommit:
+                raise SecFilingGemmaRevealStoreError(
+                    f"{location} differs from the exact owned replay"
+                )
+            path.unlink()
+            _fsync_directory(path.parent)
+        else:
+            return existing
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _BINARY | _NOFOLLOW
+    descriptor: int | None = None
+    completed = False
+    created_here = False
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        created_here = True
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise SecFilingGemmaRevealStoreError(
+                    f"Could not finish writing {location}"
+                )
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        details = os.fstat(descriptor)
+        _validate_regular_details(details, location)
+        if details.st_size != len(payload):
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} size differs from its exact owned bytes"
+            )
+        completed = True
+    except FileExistsError:
+        # Another owner cannot legitimately race while the store lock is held,
+        # but fail by replaying rather than ever replacing an existing path.
+        existing = _read_regular_bytes(path, location, max_bytes=max_bytes)
+        if existing != payload:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} raced with different durable bytes"
+            )
+        return existing
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created_here and not completed:
+            try:
+                details = path.lstat()
+            except FileNotFoundError:
+                details = None
+            if details is not None:
+                try:
+                    _validate_regular_details(details, location)
+                    path.unlink()
+                except Exception:
+                    pass
+    _fsync_directory(path.parent)
+    observed = _read_regular_bytes(path, location, max_bytes=max_bytes)
+    if observed != payload:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} changed after its create-new write"
+        )
+    return observed
 
 
 def _execution_source_hashes(repository_root: Path) -> dict[str, str]:
@@ -2601,6 +2739,7 @@ class SecFilingGemmaRevealStore:
         stage_sec_execution_claim: Mapping[str, Any] | None = None,
         stage_sec_reader_receipt: Mapping[str, Any] | None = None,
         stage_sec_execution_abort: Mapping[str, Any] | None = None,
+        stage_carry_in_reader_receipt: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated_state = _validate_state(
             _expect_mapping(next_state, "next reveal-store state"),
@@ -2616,6 +2755,9 @@ class SecFilingGemmaRevealStore:
             prior_tip_anchor["stage_sec_reader_receipts"]
         )
         sec_aborts = copy.deepcopy(prior_tip_anchor["stage_sec_execution_aborts"])
+        carry_in_receipts = copy.deepcopy(
+            prior_tip_anchor["stage_carry_in_reader_receipts"]
+        )
         transition_payload_count = sum(
             value is not None
             for value in (
@@ -2625,6 +2767,7 @@ class SecFilingGemmaRevealStore:
                 stage_sec_execution_claim,
                 stage_sec_reader_receipt,
                 stage_sec_execution_abort,
+                stage_carry_in_reader_receipt,
             )
         )
         if transition_payload_count > 1:
@@ -2720,6 +2863,23 @@ class SecFilingGemmaRevealStore:
                     "A persisted stage SEC execution abort cannot be replaced"
                 )
             sec_aborts[request_hash] = sec_abort
+        if stage_carry_in_reader_receipt is not None:
+            carry_receipt = _exact_caller_dict(
+                stage_carry_in_reader_receipt,
+                "stage carry-in reader receipt",
+            )
+            request_hash = _sha256(
+                carry_receipt.get("request_sha256"),
+                "stage carry-in reader receipt request hash",
+            )
+            if (
+                request_hash in carry_in_receipts
+                and carry_in_receipts[request_hash] != carry_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted stage carry-in reader receipt cannot be replaced"
+                )
+            carry_in_receipts[request_hash] = carry_receipt
         try:
             next_tip = build_reveal_store_current_tip_anchor(
                 validated_state,
@@ -2731,6 +2891,7 @@ class SecFilingGemmaRevealStore:
                 stage_sec_execution_claims=sec_claims,
                 stage_sec_reader_receipts=sec_reader_receipts,
                 stage_sec_execution_aborts=sec_aborts,
+                stage_carry_in_reader_receipts=carry_in_receipts,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -3277,6 +3438,339 @@ class SecFilingGemmaRevealStore:
                 )
             return copy.deepcopy(persisted)
 
+    def _replay_owned_sec_reader_bytes_locked(
+        self,
+        *,
+        claim: Mapping[str, Any],
+        reader_receipt: Mapping[str, Any],
+    ) -> None:
+        """Rehash one terminal SEC batch under the caller's existing lock."""
+
+        claim_value = _expect_mapping(claim, "owned SEC closure claim")
+        reader = _expect_mapping(
+            reader_receipt,
+            "owned SEC closure reader receipt",
+        )
+        if (
+            reader.get("request_sha256") != claim_value.get("request_sha256")
+            or reader.get("claim_sha256") != claim_value.get("claim_sha256")
+            or reader.get("sec_component_id")
+            != SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure crossed its terminal reader ancestry"
+            )
+        self._revalidate_authorized_sec_execution_sources(claim_value)
+        component_directory = (
+            self.store_directory
+            / STAGE_OUTPUTS_DIRECTORY_NAME
+            / claim_value["claim_sha256"]
+            / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+        )
+        secured = _secure_directory(
+            component_directory,
+            create=False,
+            location="owned SEC closure component directory",
+        )
+        directory_before = _validate_real_directory(
+            secured,
+            "owned SEC closure component directory",
+        )
+        byte_index = reader.get("byte_index")
+        if (
+            type(byte_index) is not list
+            or not byte_index
+            or reader.get("byte_index_sha256") != canonical_sha256(byte_index)
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure reader byte index is not exact"
+            )
+        expected_names = {
+            item.get("relative_path") for item in byte_index if type(item) is dict
+        } | {SEC_BATCH_COMPLETE_MARKER_FILENAME}
+        if None in expected_names or len(expected_names) != len(byte_index) + 1:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure reader byte index repeats a path"
+            )
+        names_before = [item.name for item in secured.iterdir()]
+        if (
+            len(names_before) != len(expected_names)
+            or len({name.casefold() for name in names_before}) != len(names_before)
+            or set(names_before) != expected_names
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure directory has missing, extra, or case-colliding files"
+            )
+        marker_bytes = _read_regular_bytes(
+            secured / SEC_BATCH_COMPLETE_MARKER_FILENAME,
+            "owned SEC closure complete marker",
+            max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+        )
+        marker = _strict_json_bytes(
+            marker_bytes,
+            "owned SEC closure complete marker",
+        )
+        marker_keys = {
+            "schema_version",
+            "request_sha256",
+            "claim_sha256",
+            "component_id",
+            "byte_index",
+            "byte_index_sha256",
+            "marker_sha256",
+        }
+        if type(marker) is not dict or set(marker) != marker_keys:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure complete marker keys changed"
+            )
+        marker_body = {
+            key: marker[key] for key in marker if key != "marker_sha256"
+        }
+        if (
+            marker.get("schema_version") != SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION
+            or marker.get("request_sha256") != claim_value["request_sha256"]
+            or marker.get("claim_sha256") != claim_value["claim_sha256"]
+            or marker.get("component_id") != SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID
+            or marker.get("byte_index") != byte_index
+            or marker.get("byte_index_sha256") != reader["byte_index_sha256"]
+            or marker.get("marker_sha256") != canonical_sha256(marker_body)
+            or marker_bytes != _encoded_state(marker)
+            or hashlib.sha256(marker_bytes).hexdigest()
+            != reader.get("complete_marker_sha256")
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure marker differs from its reader receipt"
+            )
+        total_bytes = 0
+        payloads: dict[str, bytes] = {}
+        for ordinal, item in enumerate(byte_index, start=1):
+            if (
+                type(item) is not dict
+                or set(item)
+                != {"ordinal", "logical_id", "relative_path", "byte_count", "sha256"}
+                or item.get("ordinal") != ordinal
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC closure byte-index item is not exact"
+                )
+            relative_path = item["relative_path"]
+            if (
+                type(relative_path) is not str
+                or not relative_path
+                or "/" in relative_path
+                or "\\" in relative_path
+                or relative_path in {".", "..", SEC_BATCH_COMPLETE_MARKER_FILENAME}
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC closure byte-index path is unsafe"
+                )
+            payload = _read_regular_bytes(
+                secured / relative_path,
+                f"owned SEC closure byte {relative_path}",
+                max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+            )
+            total_bytes += len(payload)
+            if (
+                total_bytes > MAX_SEC_BATCH_TOTAL_BYTES
+                or item.get("byte_count") != len(payload)
+                or item.get("sha256") != hashlib.sha256(payload).hexdigest()
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned SEC closure bytes differ from their reader receipt"
+                )
+            payloads[relative_path] = payload
+        if total_bytes != reader.get("byte_count_total"):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure byte total differs from its reader receipt"
+            )
+        self._revalidate_authorized_sec_execution_sources(claim_value)
+        if (
+            _read_regular_bytes(
+                secured / SEC_BATCH_COMPLETE_MARKER_FILENAME,
+                "owned SEC closure marker replay",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            != marker_bytes
+            or any(
+                _read_regular_bytes(
+                    secured / relative_path,
+                    f"owned SEC closure replay {relative_path}",
+                    max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+                )
+                != payload
+                for relative_path, payload in payloads.items()
+            )
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure bytes changed during replay"
+            )
+        directory_after = _validate_real_directory(
+            secured,
+            "owned SEC closure component directory",
+        )
+        names_after = [item.name for item in secured.iterdir()]
+        if (
+            (directory_before.st_dev, directory_before.st_ino)
+            != (directory_after.st_dev, directory_after.st_ino)
+            or len(names_after) != len(expected_names)
+            or len({name.casefold() for name in names_after}) != len(names_after)
+            or set(names_after) != expected_names
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned SEC closure directory changed during replay"
+            )
+
+    def _locate_owned_final_carry_in_ancestry_locked(
+        self,
+        *,
+        authenticated_store_snapshot: Mapping[str, Any],
+        independent_current_tip_anchor: Mapping[str, Any],
+        request_sha256: str,
+        require_terminal_child_reader: bool = True,
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve a final child and its immediately preceding parent internally."""
+
+        state = _expect_mapping(
+            authenticated_store_snapshot,
+            "owned carry-in authenticated store snapshot",
+        )
+        tip = _expect_mapping(
+            independent_current_tip_anchor,
+            "owned carry-in independent current tip",
+        )
+        request_hash = _sha256(request_sha256, "owned carry-in request hash")
+        if type(require_terminal_child_reader) is not bool:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in child-reader policy must be exact"
+            )
+        entries = state["consumption_ledger"]["entries"]
+        if type(entries) is not list or len(entries) < 2:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in requires a consumed final child and intermediate parent"
+            )
+        child_entry = entries[-1]
+        parent_entry = entries[-2]
+        child_request = _expect_mapping(
+            child_entry.get("request"),
+            "owned carry-in final child request",
+        )
+        parent_request = _expect_mapping(
+            parent_entry.get("request"),
+            "owned carry-in intermediate parent request",
+        )
+        if (
+            child_entry.get("request_sha256") != request_hash
+            or child_request.get("request_sha256") != request_hash
+            or child_entry.get("entry_sha256")
+            != state["consumption_ledger"]["chain"]["tip_sha256"]
+            or child_request.get("stage") != "final"
+            or child_request.get("prerequisite_stage") != "intermediate"
+            or parent_entry.get("stage") != "intermediate"
+            or parent_request.get("stage") != "intermediate"
+            or parent_request.get("prerequisite_stage") != "development"
+            or child_entry.get("sequence") != parent_entry.get("sequence") + 1
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in request is not the exact final ledger tip after its parent"
+            )
+        for field in (
+            "attempt_id",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "registry_sha256",
+            "registry_tip_sha256",
+        ):
+            if child_request.get(field) != parent_request.get(field):
+                raise SecFilingGemmaRevealStoreError(
+                    f"Owned carry-in crossed parent/child identity {field}"
+                )
+        parent_hash = _sha256(
+            parent_request.get("request_sha256"),
+            "owned carry-in parent request hash",
+        )
+        child_bundle = tip["authorization_bundles"].get(request_hash)
+        parent_bundle = tip["authorization_bundles"].get(parent_hash)
+        child_claim = tip["stage_sec_execution_claims"].get(request_hash)
+        parent_claim = tip["stage_sec_execution_claims"].get(parent_hash)
+        child_reader = tip["stage_sec_reader_receipts"].get(request_hash)
+        parent_reader = tip["stage_sec_reader_receipts"].get(parent_hash)
+        parent_output = tip["consumed_stage_output_receipts"].get(parent_hash)
+        required_values = (
+            child_bundle,
+            parent_bundle,
+            child_claim,
+            parent_claim,
+            parent_reader,
+            parent_output,
+        )
+        if any(type(value) is not dict for value in required_values) or (
+            require_terminal_child_reader and type(child_reader) is not dict
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in lacks exact child or parent durable ancestry"
+            )
+        if (
+            request_hash in tip["stage_sec_execution_aborts"]
+            or parent_hash in tip["stage_sec_execution_aborts"]
+            or child_bundle["authorization_grant"].get("request_sha256")
+            != request_hash
+            or parent_bundle["authorization_grant"].get("request_sha256")
+            != parent_hash
+            or child_claim.get("request_sha256") != request_hash
+            or parent_claim.get("request_sha256") != parent_hash
+            or (
+                child_reader is not None
+                and (
+                    type(child_reader) is not dict
+                    or child_reader.get("claim_sha256")
+                    != child_claim.get("claim_sha256")
+                )
+            )
+            or parent_reader.get("claim_sha256")
+            != parent_claim.get("claim_sha256")
+            or parent_output.get("request_sha256") != parent_hash
+            or parent_output.get("output_stage_evidence_sha256")
+            != child_request.get("prerequisite_stage_evidence_sha256")
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in ancestry crossed its exact final parent boundary"
+            )
+        return {
+            "child_entry": copy.deepcopy(child_entry),
+            "child_request": copy.deepcopy(child_request),
+            "child_bundle": copy.deepcopy(child_bundle),
+            "child_claim": copy.deepcopy(child_claim),
+            "child_reader": copy.deepcopy(child_reader),
+            "parent_entry": copy.deepcopy(parent_entry),
+            "parent_request": copy.deepcopy(parent_request),
+            "parent_bundle": copy.deepcopy(parent_bundle),
+            "parent_claim": copy.deepcopy(parent_claim),
+            "parent_reader": copy.deepcopy(parent_reader),
+            "parent_output_receipt": copy.deepcopy(parent_output),
+        }
+
+    def _owned_final_carry_in_parent_request_sha256(
+        self,
+        *,
+        request_sha256: str,
+    ) -> str:
+        """Resolve the parent hash before replaying its reader outside the lock."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            ancestry = self._locate_owned_final_carry_in_ancestry_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                request_sha256=request_sha256,
+                require_terminal_child_reader=False,
+            )
+            return ancestry["parent_request"]["request_sha256"]
+
     def _read_owned_stage_evidence_output_locked(
         self,
         *,
@@ -3284,6 +3778,7 @@ class SecFilingGemmaRevealStore:
         independent_current_tip_anchor: Mapping[str, Any],
         authorization_bundle: Mapping[str, Any],
         request_sha256: str,
+        require_current_store_state: bool = True,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Replay one fixed durable stage-evidence document under the store lock."""
 
@@ -3328,30 +3823,35 @@ class SecFilingGemmaRevealStore:
             raise SecFilingGemmaRevealStoreError(
                 "Owned stage evidence SEC ancestry is inconsistent"
             )
-        try:
-            validate_consumed_stage_authorization_grant(
-                grant,
-                authenticated_store_snapshot=current,
-                external_store_state_pin=bundle["store_state_pin"],
-                independent_current_tip_anchor=current_tip,
-                expected_consumption_entry_sha256=grant[
-                    "consumption_entry_sha256"
-                ],
-                expected_request_sha256=request_hash,
-                expected_candidate_sha256=grant["candidate_sha256"],
-                expected_stage=grant["stage"],
-                expected_prerequisite_stage_evidence_sha256=grant[
-                    "prerequisite_stage_evidence_sha256"
-                ],
-                expected_stage_access_manifest_sha256=grant[
-                    "stage_access_manifest_sha256"
-                ],
-                expected_output_namespace=grant["output_namespace"],
-            )
-        except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+        if type(require_current_store_state) is not bool:
             raise SecFilingGemmaRevealStoreError(
-                "Owned stage evidence lacks an exact current grant"
-            ) from exc
+                "Owned stage-evidence current-state policy must be exact"
+            )
+        if require_current_store_state:
+            try:
+                validate_consumed_stage_authorization_grant(
+                    grant,
+                    authenticated_store_snapshot=current,
+                    external_store_state_pin=bundle["store_state_pin"],
+                    independent_current_tip_anchor=current_tip,
+                    expected_consumption_entry_sha256=grant[
+                        "consumption_entry_sha256"
+                    ],
+                    expected_request_sha256=request_hash,
+                    expected_candidate_sha256=grant["candidate_sha256"],
+                    expected_stage=grant["stage"],
+                    expected_prerequisite_stage_evidence_sha256=grant[
+                        "prerequisite_stage_evidence_sha256"
+                    ],
+                    expected_stage_access_manifest_sha256=grant[
+                        "stage_access_manifest_sha256"
+                    ],
+                    expected_output_namespace=grant["output_namespace"],
+                )
+            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned stage evidence lacks an exact current grant"
+                ) from exc
         self._revalidate_authorized_sec_execution_sources(claim)
 
         component_directory = (
@@ -3534,6 +4034,490 @@ class SecFilingGemmaRevealStore:
                 ).hexdigest(),
             },
         )
+
+    def _read_and_seal_owned_final_carry_in_locked(
+        self,
+        *,
+        authenticated_store_snapshot: Mapping[str, Any],
+        independent_current_tip_anchor: Mapping[str, Any],
+        request_sha256: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Replay a final parent's SEC text and seal only its authorized subset."""
+
+        current = _expect_mapping(
+            authenticated_store_snapshot,
+            "owned carry-in authenticated store snapshot",
+        )
+        current_tip = _expect_mapping(
+            independent_current_tip_anchor,
+            "owned carry-in independent current tip",
+        )
+        ancestry = self._locate_owned_final_carry_in_ancestry_locked(
+            authenticated_store_snapshot=current,
+            independent_current_tip_anchor=current_tip,
+            request_sha256=request_sha256,
+        )
+        child_request = ancestry["child_request"]
+        child_entry = ancestry["child_entry"]
+        child_claim = ancestry["child_claim"]
+        child_reader = ancestry["child_reader"]
+        parent_request = ancestry["parent_request"]
+        parent_bundle = ancestry["parent_bundle"]
+        parent_claim = ancestry["parent_claim"]
+        parent_reader = ancestry["parent_reader"]
+        parent_output = ancestry["parent_output_receipt"]
+        self._replay_owned_sec_reader_bytes_locked(
+            claim=child_claim,
+            reader_receipt=child_reader,
+        )
+        self._replay_owned_sec_reader_bytes_locked(
+            claim=parent_claim,
+            reader_receipt=parent_reader,
+        )
+        parent_evidence, parent_evidence_binding = (
+            self._read_owned_stage_evidence_output_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                authorization_bundle=parent_bundle,
+                request_sha256=parent_request["request_sha256"],
+                require_current_store_state=False,
+            )
+        )
+        try:
+            expected_parent_output = build_consumed_stage_output_receipt(
+                parent_bundle,
+                stage_sec_execution_claim=parent_claim,
+                stage_sec_reader_receipt=parent_reader,
+                **parent_evidence_binding,
+            )
+        except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in parent output receipt failed durable replay"
+            ) from exc
+        if parent_output != expected_parent_output:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in parent output receipt differs from durable replay"
+            )
+
+        child_access = _expect_mapping(
+            child_entry.get("stage_access_manifest"),
+            "owned carry-in child stage-access manifest",
+        )
+        raw_carry_scope = _expect_mapping(
+            child_access.get("prior_same_form_carry_in"),
+            "owned prior same-form carry-in scope",
+        )
+        scope = _expect_mapping(
+            child_access.get("scope"),
+            "owned carry-in child access scope",
+        )
+        parent_content = _expect_mapping(
+            parent_evidence.get("prerequisite_content_manifest"),
+            "owned carry-in parent content manifest",
+        )
+        parent_universe = _expect_mapping(
+            parent_evidence.get("corpus_universe_manifest"),
+            "owned carry-in parent corpus universe",
+        )
+        content_hash = _sha256(
+            parent_content.get("content_manifest_sha256"),
+            "owned carry-in prerequisite content manifest hash",
+        )
+        try:
+            derived_records = validate_prior_same_form_carry_in_scope(
+                child_access,
+                corpus_universe_manifest=parent_universe,
+                prerequisite_content_manifest=parent_content,
+                expected_prerequisite_stage=child_request[
+                    "prerequisite_stage"
+                ],
+                expected_requested_stage=child_request["stage"],
+                expected_prerequisite_stage_evidence_sha256=child_request[
+                    "prerequisite_stage_evidence_sha256"
+                ],
+            )
+        except (KeyError, SecFilingGemmaStageAccessError, TypeError) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in scope cannot be rederived from durable parent evidence"
+            ) from exc
+        if (
+            not 0 < len(derived_records) <= MAX_PRIOR_SAME_FORM_CARRY_IN_RECORDS
+            or raw_carry_scope.get("records") != derived_records
+            or scope.get("authorized_stage") != "final"
+            or scope.get("prerequisite_stage_data_scope")
+            != (
+                "sealed_evidence_identity_plus_exact_read_only_prior_same_form_"
+                "normalized_text_carry_in"
+            )
+            or scope.get("general_cross_stage_access_permitted") is not False
+            or scope.get("exact_prior_same_form_carry_in_read_permitted")
+            is not True
+            or scope.get("future_stage_access_permitted") is not False
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in persisted scope differs from its exact durable derivation"
+            )
+
+        try:
+            _exact_parent_bundle, _parent_grant, parent_component_plan = (
+                _sec_component_plan_from_bundle(parent_bundle)
+            )
+        except SecFilingGemmaStageAuthorizationError as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in parent SEC plan is no longer exact"
+            ) from exc
+        parent_documents = parent_component_plan["sec_access_plan"]["documents"]
+        parent_document_ordinals = {
+            document["accession_number"]: ordinal
+            for ordinal, document in enumerate(parent_documents, start=1)
+        }
+        reader_rows_by_path = {
+            row["relative_path"]: row for row in parent_reader["byte_index"]
+        }
+        if len(parent_document_ordinals) != len(parent_documents):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in parent SEC plan repeats an accession"
+            )
+        self._revalidate_authorized_sec_execution_sources(parent_claim)
+        self._revalidate_authorized_sec_execution_sources(child_claim)
+        parent_component_directory = (
+            self.store_directory
+            / STAGE_OUTPUTS_DIRECTORY_NAME
+            / parent_claim["claim_sha256"]
+            / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+        )
+        secured_parent_component = _secure_directory(
+            parent_component_directory,
+            create=False,
+            location="owned carry-in parent SEC component directory",
+        )
+        parent_directory_before = _validate_real_directory(
+            secured_parent_component,
+            "owned carry-in parent SEC component directory",
+        )
+        expected_parent_names = {
+            row["relative_path"] for row in parent_reader["byte_index"]
+        } | {SEC_BATCH_COMPLETE_MARKER_FILENAME}
+        observed_parent_names_before = [
+            item.name for item in secured_parent_component.iterdir()
+        ]
+        if (
+            len(observed_parent_names_before) != len(expected_parent_names)
+            or len({name.casefold() for name in observed_parent_names_before})
+            != len(observed_parent_names_before)
+            or set(observed_parent_names_before) != expected_parent_names
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in parent SEC directory has missing, extra, or case-colliding files"
+            )
+
+        selected: list[tuple[dict[str, Any], bytes, str]] = []
+        total_bytes = 0
+        for carry_ordinal, record in enumerate(derived_records, start=1):
+            parent_document_ordinal = parent_document_ordinals.get(
+                record["accession_number"]
+            )
+            if type(parent_document_ordinal) is not int:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in accession is absent from the exact parent SEC plan"
+                )
+            source_relative_path = (
+                f"document-{parent_document_ordinal:04d}.normalized.txt"
+            )
+            reader_row = reader_rows_by_path.get(source_relative_path)
+            if type(reader_row) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in normalized source is absent from the parent reader receipt"
+                )
+            payload = _read_regular_bytes(
+                secured_parent_component / source_relative_path,
+                f"owned carry-in parent normalized text {carry_ordinal}",
+                max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+            )
+            try:
+                if payload.decode("utf-8").encode("utf-8") != payload:
+                    raise UnicodeError
+            except UnicodeError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in parent normalized text is not exact UTF-8"
+                ) from exc
+            total_bytes += len(payload)
+            payload_hash = hashlib.sha256(payload).hexdigest()
+            if (
+                total_bytes > MAX_PRIOR_SAME_FORM_CARRY_IN_TOTAL_BYTES
+                or reader_row.get("logical_id")
+                != f"document-{parent_document_ordinal:04d}-normalized"
+                or reader_row.get("byte_count") != len(payload)
+                or reader_row.get("sha256") != payload_hash
+                or record["normalized_text_bytes"] != len(payload)
+                or record["normalized_text_sha256"] != payload_hash
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in parent normalized bytes crossed their sealed record"
+                )
+            destination_relative_path = (
+                f"carry-in-{carry_ordinal:04d}.normalized.txt"
+            )
+            row = {
+                "ordinal": carry_ordinal,
+                "logical_id": f"carry-in-{carry_ordinal:04d}-normalized",
+                "relative_path": destination_relative_path,
+                "byte_count": len(payload),
+                "sha256": payload_hash,
+            }
+            selected.append((row, payload, source_relative_path))
+
+        child_claim_directory = (
+            self.store_directory
+            / STAGE_OUTPUTS_DIRECTORY_NAME
+            / child_claim["claim_sha256"]
+        )
+        secured_child_claim_directory = _secure_directory(
+            child_claim_directory,
+            create=False,
+            location="owned carry-in child claim directory",
+        )
+        component_directory = (
+            secured_child_claim_directory
+            / PRIOR_SAME_FORM_CARRY_IN_COMPONENT_DIRECTORY_NAME
+        )
+        try:
+            component_directory.mkdir(exist_ok=False)
+            _fsync_directory(secured_child_claim_directory)
+        except FileExistsError:
+            pass
+        secured_component = _secure_directory(
+            component_directory,
+            create=False,
+            location="owned prior same-form carry-in component directory",
+        )
+        component_directory_before = _validate_real_directory(
+            secured_component,
+            "owned prior same-form carry-in component directory",
+        )
+        byte_index = [row for row, _payload, _source in selected]
+        marker_body = {
+            "schema_version": (
+                PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_SCHEMA_VERSION
+            ),
+            "request_sha256": child_request["request_sha256"],
+            "claim_sha256": child_claim["claim_sha256"],
+            "sec_reader_receipt_sha256": child_reader["receipt_sha256"],
+            "parent_request_sha256": parent_request["request_sha256"],
+            "parent_claim_sha256": parent_claim["claim_sha256"],
+            "parent_sec_reader_receipt_sha256": parent_reader["receipt_sha256"],
+            "parent_stage_output_receipt_sha256": parent_output[
+                "output_receipt_sha256"
+            ],
+            "parent_stage_evidence_sha256": parent_evidence_binding[
+                "output_stage_evidence_sha256"
+            ],
+            "parent_stage_evidence_document_sha256": parent_evidence_binding[
+                "output_stage_evidence_document_sha256"
+            ],
+            "parent_stage_evidence_complete_marker_sha256": (
+                parent_evidence_binding[
+                    "output_stage_evidence_complete_marker_sha256"
+                ]
+            ),
+            "component_id": PRIOR_SAME_FORM_CARRY_IN_COMPONENT_ID,
+            "carry_in_records_sha256": raw_carry_scope["records_sha256"],
+            "prerequisite_content_manifest_sha256": content_hash,
+            "byte_index": byte_index,
+            "byte_index_sha256": canonical_sha256(byte_index),
+            "byte_count_total": total_bytes,
+        }
+        marker = {**marker_body, "marker_sha256": canonical_sha256(marker_body)}
+        marker_bytes = _encoded_state(marker)
+        expected_names = {
+            row["relative_path"] for row, _payload, _source in selected
+        } | {PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME}
+        observed_names_before = [item.name for item in secured_component.iterdir()]
+        marker_present = (
+            PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME
+            in observed_names_before
+        )
+        receipt_present = (
+            child_request["request_sha256"]
+            in current_tip["stage_carry_in_reader_receipts"]
+        )
+        if marker_present:
+            marker_path = (
+                secured_component
+                / PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME
+            )
+            structurally_committed_marker = False
+            try:
+                existing_marker_bytes = _read_regular_bytes(
+                    marker_path,
+                    "owned carry-in pre-existing complete marker",
+                    max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+                )
+                existing_marker = _strict_json_bytes(
+                    existing_marker_bytes,
+                    "owned carry-in pre-existing complete marker",
+                )
+                if type(existing_marker) is dict:
+                    existing_marker_body = {
+                        key: existing_marker[key]
+                        for key in existing_marker
+                        if key != "marker_sha256"
+                    }
+                    structurally_committed_marker = (
+                        set(existing_marker)
+                        == _PRIOR_SAME_FORM_CARRY_IN_MARKER_KEYS
+                        and existing_marker.get("schema_version")
+                        == PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_SCHEMA_VERSION
+                        and existing_marker.get("marker_sha256")
+                        == canonical_sha256(existing_marker_body)
+                        and existing_marker_bytes == _encoded_state(existing_marker)
+                    )
+            except (KeyError, SecFilingGemmaRevealStoreError):
+                structurally_committed_marker = False
+            if not structurally_committed_marker:
+                if receipt_present:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted carry-in receipt lost its complete marker"
+                    )
+                _validate_regular_details(
+                    marker_path.lstat(),
+                    "interrupted owned carry-in complete marker",
+                )
+                marker_path.unlink()
+                _fsync_directory(secured_component)
+                observed_names_before = [
+                    name
+                    for name in observed_names_before
+                    if name != PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME
+                ]
+                marker_present = False
+        if (
+            len({name.casefold() for name in observed_names_before})
+            != len(observed_names_before)
+            or not set(observed_names_before).issubset(expected_names)
+            or (
+                (marker_present or receipt_present)
+                and set(observed_names_before) != expected_names
+            )
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in component has an extra or case-colliding file"
+            )
+        recover_interrupted_precommit = not marker_present and not receipt_present
+        for row, payload, _source_relative_path in selected:
+            _create_or_replay_regular_bytes(
+                secured_component / row["relative_path"],
+                payload,
+                f"owned carry-in normalized text {row['ordinal']}",
+                max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+                recover_interrupted_precommit=recover_interrupted_precommit,
+            )
+        _create_or_replay_regular_bytes(
+            secured_component / PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME,
+            marker_bytes,
+            "owned carry-in complete marker",
+            max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+        )
+        replayed_marker = _strict_json_bytes(
+            _read_regular_bytes(
+                secured_component
+                / PRIOR_SAME_FORM_CARRY_IN_COMPLETE_MARKER_FILENAME,
+                "owned carry-in complete marker replay",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            ),
+            "owned carry-in complete marker replay",
+        )
+        if (
+            type(replayed_marker) is not dict
+            or set(replayed_marker) != _PRIOR_SAME_FORM_CARRY_IN_MARKER_KEYS
+            or replayed_marker != marker
+            or _encoded_state(replayed_marker) != marker_bytes
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in complete marker is not exact canonical ancestry"
+            )
+        for row, payload, source_relative_path in selected:
+            if (
+                _read_regular_bytes(
+                    secured_parent_component / source_relative_path,
+                    f"owned carry-in parent closure text {row['ordinal']}",
+                    max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+                )
+                != payload
+                or _read_regular_bytes(
+                    secured_component / row["relative_path"],
+                    f"owned carry-in child closure text {row['ordinal']}",
+                    max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+                )
+                != payload
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in bytes changed during closure replay"
+                )
+        parent_directory_after = _validate_real_directory(
+            secured_parent_component,
+            "owned carry-in parent SEC component directory",
+        )
+        component_directory_after = _validate_real_directory(
+            secured_component,
+            "owned prior same-form carry-in component directory",
+        )
+        observed_parent_names_after = [
+            item.name for item in secured_parent_component.iterdir()
+        ]
+        observed_names_after = [item.name for item in secured_component.iterdir()]
+        if (
+            (parent_directory_before.st_dev, parent_directory_before.st_ino)
+            != (parent_directory_after.st_dev, parent_directory_after.st_ino)
+            or (
+                component_directory_before.st_dev,
+                component_directory_before.st_ino,
+            )
+            != (
+                component_directory_after.st_dev,
+                component_directory_after.st_ino,
+            )
+            or len(observed_parent_names_after) != len(expected_parent_names)
+            or len({name.casefold() for name in observed_parent_names_after})
+            != len(observed_parent_names_after)
+            or set(observed_parent_names_after) != expected_parent_names
+            or len(observed_names_after) != len(expected_names)
+            or len({name.casefold() for name in observed_names_after})
+            != len(observed_names_after)
+            or set(observed_names_after) != expected_names
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Owned carry-in directory changed during closure replay"
+            )
+        self._revalidate_authorized_sec_execution_sources(parent_claim)
+        self._revalidate_authorized_sec_execution_sources(child_claim)
+        self._replay_owned_sec_reader_bytes_locked(
+            claim=child_claim,
+            reader_receipt=child_reader,
+        )
+        self._replay_owned_sec_reader_bytes_locked(
+            claim=parent_claim,
+            reader_receipt=parent_reader,
+        )
+        binding = {
+            "carry_in_records": copy.deepcopy(derived_records),
+            "carry_in_byte_index": copy.deepcopy(byte_index),
+            "carry_in_complete_marker_sha256": hashlib.sha256(
+                marker_bytes
+            ).hexdigest(),
+            "reader_source_sha256": child_claim["execution_source_hashes"][
+                "reveal_store"
+            ],
+            "parent_stage_evidence_document_sha256": parent_evidence_binding[
+                "output_stage_evidence_document_sha256"
+            ],
+            "parent_stage_evidence_complete_marker_sha256": (
+                parent_evidence_binding[
+                    "output_stage_evidence_complete_marker_sha256"
+                ]
+            ),
+        }
+        return ancestry, binding
 
     def _locate_owned_parent_intermediate_predecessor_locked(
         self,
@@ -4215,6 +5199,131 @@ class SecFilingGemmaRevealStore:
             except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
                 raise SecFilingGemmaRevealStoreError(
                     "Committed authorization bundle failed independent current-tip validation"
+                ) from exc
+            return copy.deepcopy(persisted)
+
+    def _record_owned_stage_carry_in_reader_output(
+        self,
+        *,
+        request_sha256: str,
+    ) -> dict[str, Any]:
+        """Copy and receipt the exact final child's authorized parent texts."""
+
+        request_hash = _sha256(
+            request_sha256,
+            "owned carry-in reader request hash",
+        )
+        # Reject a non-final or non-lineal request read-only before either SEC
+        # replayer can append a terminal reader receipt.
+        parent_request_hash = self._owned_final_carry_in_parent_request_sha256(
+            request_sha256=request_hash,
+        )
+        # Both SEC replayers own their own transactions and locks.  Replaying
+        # them here avoids recursive locking while ensuring that finalization
+        # starts from exact terminal reader receipts, never caller ancestry.
+        replayed_child_reader = self._record_authorized_sec_stage_reader_output(
+            request_sha256=request_hash,
+        )
+        replayed_parent_reader = self._record_authorized_sec_stage_reader_output(
+            request_sha256=parent_request_hash,
+        )
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            ancestry, binding = self._read_and_seal_owned_final_carry_in_locked(
+                authenticated_store_snapshot=current,
+                independent_current_tip_anchor=current_tip,
+                request_sha256=request_hash,
+            )
+            if (
+                ancestry["child_reader"] != replayed_child_reader
+                or ancestry["parent_reader"] != replayed_parent_reader
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in reader ancestry changed after SEC replay"
+                )
+            try:
+                receipt = build_stage_carry_in_reader_receipt(
+                    ancestry["child_bundle"],
+                    stage_sec_execution_claim=ancestry["child_claim"],
+                    stage_sec_reader_receipt=ancestry["child_reader"],
+                    parent_authorization_bundle=ancestry["parent_bundle"],
+                    parent_stage_sec_execution_claim=ancestry["parent_claim"],
+                    parent_stage_sec_reader_receipt=ancestry["parent_reader"],
+                    parent_consumed_stage_output_receipt=ancestry[
+                        "parent_output_receipt"
+                    ],
+                    carry_in_byte_index=binding["carry_in_byte_index"],
+                    carry_in_complete_marker_sha256=binding[
+                        "carry_in_complete_marker_sha256"
+                    ],
+                    reader_source_sha256=binding["reader_source_sha256"],
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in reader output is not exact authorized ancestry"
+                ) from exc
+            closure_ancestry, closure_binding = (
+                self._read_and_seal_owned_final_carry_in_locked(
+                    authenticated_store_snapshot=current,
+                    independent_current_tip_anchor=current_tip,
+                    request_sha256=request_hash,
+                )
+            )
+            if closure_ancestry != ancestry or closure_binding != binding:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned carry-in ancestry changed before receipt CAS"
+                )
+            existing = current_tip["stage_carry_in_reader_receipts"].get(
+                request_hash
+            )
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Final child already has a different carry-in reader receipt"
+                    )
+                try:
+                    validate_stage_carry_in_reader_receipt(
+                        existing,
+                        authenticated_store_snapshot=current,
+                        independent_current_tip_anchor=current_tip,
+                        carry_in_byte_index=binding["carry_in_byte_index"],
+                        carry_in_complete_marker_sha256=binding[
+                            "carry_in_complete_marker_sha256"
+                        ],
+                        reader_source_sha256=binding["reader_source_sha256"],
+                    )
+                except SecFilingGemmaStageAuthorizationError as exc:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted carry-in reader receipt failed durable replay"
+                    ) from exc
+                return copy.deepcopy(existing)
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                stage_carry_in_reader_receipt=receipt,
+            )
+            persisted = committed_tip["stage_carry_in_reader_receipts"].get(
+                request_hash
+            )
+            try:
+                validate_stage_carry_in_reader_receipt(
+                    persisted,
+                    authenticated_store_snapshot=committed_state,
+                    independent_current_tip_anchor=committed_tip,
+                    carry_in_byte_index=binding["carry_in_byte_index"],
+                    carry_in_complete_marker_sha256=binding[
+                        "carry_in_complete_marker_sha256"
+                    ],
+                    reader_source_sha256=binding["reader_source_sha256"],
+                )
+            except (KeyError, SecFilingGemmaStageAuthorizationError) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed carry-in reader receipt failed durable validation"
                 ) from exc
             return copy.deepcopy(persisted)
 
