@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from contextlib import contextmanager
 from datetime import date
 import hashlib
 import inspect
@@ -16,6 +17,7 @@ from unittest.mock import patch
 import pytest
 
 import agent_benchmark.sec_filing_gemma_reveal_store as reveal_store_module
+import agent_benchmark.sec_filing_gemma_stage_runner as stage_runner_module
 
 from agent_benchmark.sec_audit_transport import ResponseAudit
 from agent_benchmark.sec_filing_gemma_contract import (
@@ -58,8 +60,10 @@ from agent_benchmark.sec_filing_gemma_reveal_store import (
     SemanticPrerequisiteValidation,
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
+    DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
     _prior_same_form_carry_ins,
+    build_development_content_root_plan,
 )
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_AUTHORIZATION_BUNDLE_SCHEMA_VERSION,
@@ -70,6 +74,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_consumed_stage_authorization_grant,
     validate_consumed_stage_authorization_grant,
     _sec_component_plan_from_bundle,
+)
+from agent_benchmark.sec_filing_gemma_stage_runner import (
+    run_owned_development_sec_root,
 )
 from agent_benchmark.sec_filing_gemma_source_identity import (
     CANONICAL_SOURCE_ROLE_PATHS,
@@ -922,6 +929,209 @@ def _complete_test_carry_in_universe(*, salt: str) -> dict:
     )
 
 
+def _registered_development_root(
+    store: SecFilingGemmaRevealStore,
+    *,
+    salt: str,
+) -> tuple[dict, dict, dict, dict]:
+    """Register one source-current candidate and build its complete root plan."""
+
+    store.initialize()
+    initial = store.load()
+    prior_registry = initial["latest_registry"]
+    prior_pin = initial["latest_registry_pin"]
+    universe = _complete_test_carry_in_universe(salt=salt)
+    sequence = len(prior_registry["entries"]) + 1
+    candidate = build_candidate_manifest(
+        model_digest=_digest(f"{salt}:model"),
+        ollama_runtime_fingerprint_sha256=_digest(f"{salt}:runtime"),
+        sec_audit_checksums_json_sha256=_digest(f"{salt}:audit"),
+        sec_catalog_artifact_sha256=universe["catalog_artifact_sha256"],
+        sec_audit_source_commit=_commit(f"{salt}:audit-commit"),
+        calendar_source_evidence_sha256=universe["calendar_artifact_sha256"],
+        calendar_sessions_sha256=universe["calendar_sessions_sha256"],
+        corpus_universe_sha256=universe["universe_sha256"],
+        corpus_universe_semantic_sha256=universe[
+            "universe_semantic_sha256"
+        ],
+        identity_lexicon_sha256=_digest(f"{salt}:lexicon"),
+        predecessor_reveal_registry_sha256=prior_registry["registry_sha256"],
+        holdout_attempt_id=f"aapl-sec-filing-gemma-v1-attempt-{sequence:03d}",
+        experiment_source_commit=_commit(f"{salt}:experiment-commit"),
+        source_tree_sha256=_digest(f"{salt}:tree"),
+        source_hashes={
+            name: hashlib.sha256(
+                (REPO_ROOT / CANONICAL_SOURCE_ROLE_PATHS[name]).read_bytes()
+            ).hexdigest()
+            if CANONICAL_SOURCE_ROLE_PATHS[name] is not None
+            else _digest(f"{salt}:source:{name}")
+            for name in REQUIRED_SOURCE_HASHES
+        },
+    )
+    appended = append_candidate_attempt(
+        prior_registry,
+        external_prior_pin=prior_pin,
+        candidate_manifest=candidate,
+    )
+    transition = build_registry_pin_transition(
+        prior_registry,
+        external_prior_pin=prior_pin,
+        appended_registry=appended,
+    )
+    registered = store.compare_and_swap_append(
+        transition=transition,
+        appended_registry=appended,
+    )
+    plan = build_development_content_root_plan(
+        candidate_manifest=candidate,
+        expected_candidate_sha256=candidate["candidate_sha256"],
+        expected_candidate_design_sha256=candidate_design_sha256(candidate),
+        expected_attempt_id=candidate["bindings"]["holdout_attempt_id"],
+        base_corpus_universe_sha256=universe["universe_sha256"],
+        corpus_universe_manifest=universe,
+        session_calendar_sha256=universe["calendar_sessions_sha256"],
+    )
+    return registered, candidate, universe, plan
+
+
+def _write_fixed_development_sec_root(
+    store: SecFilingGemmaRevealStore,
+    claim: dict,
+    plan: dict,
+) -> tuple[Path, Path, list[dict], dict]:
+    """Persist a complete synthetic development batch without network access."""
+
+    documents_plan = plan["sec_access_plan"]["documents"]
+    budgets = plan["budgets"]
+    transport_plan = {
+        "max_sec_requests": budgets["max_sec_requests"],
+        "max_sec_response_bytes": budgets["max_raw_batch_bytes"],
+        "max_sec_acquisition_seconds": budgets["max_sec_acquisition_seconds"],
+    }
+    transport_payloads = {
+        document["official_url"]: (
+            "<html><body><p>Synthetic development filing "
+            f"{ordinal:04d} {document['accession_number']}.</p></body></html>"
+        ).encode("ascii")
+        for ordinal, document in enumerate(documents_plan, start=1)
+    }
+    batch = _acquire_authenticated_stage_access_document_batch(
+        authenticated_document_plan=documents_plan,
+        transport=_FixedSecTransport(transport_payloads, transport_plan),
+        user_agent=SEC_TEST_USER_AGENT,
+        budget=SecCorpusBudget(
+            clock=lambda: 0.0,
+            max_requests=budgets["max_sec_requests"],
+            max_bytes=budgets["max_raw_batch_bytes"],
+            max_seconds=float(budgets["max_sec_acquisition_seconds"]),
+        ),
+    )
+    content_manifest = build_stage_content_manifest(
+        artifact_stage="development",
+        corpus_universe_sha256=plan["corpus_provenance"][
+            "corpus_universe_sha256"
+        ],
+        documents=[
+            {
+                "accession_number": document.accession_number,
+                "primary_document_sha256": document.primary_document_sha256,
+                "normalized_text_sha256": document.normalized_text_sha256,
+                "primary_document_bytes": len(document.raw_primary_document),
+                "normalized_text_bytes": len(document.normalized_text),
+            }
+            for document in batch.documents
+        ],
+        universe_manifest=plan["corpus_universe_manifest"],
+    )
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / claim["claim_sha256"]
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+    )
+    component_directory.mkdir(parents=True)
+    evidence_payloads: list[tuple[str, str, bytes]] = []
+    for document_ordinal, document in enumerate(batch.documents, start=1):
+        prefix = f"document-{document_ordinal:04d}"
+        evidence_payloads.extend(
+            (
+                (f"{prefix}-raw", f"{prefix}.raw", document.raw_primary_document),
+                (
+                    f"{prefix}-normalized",
+                    f"{prefix}.normalized.txt",
+                    document.normalized_text,
+                ),
+            )
+        )
+    evidence_payloads.extend(
+        (
+            (
+                "request-receipts-json",
+                "request-receipts.json",
+                batch.request_receipts_json,
+            ),
+            (
+                "byte-manifest-json",
+                "byte-manifest.json",
+                batch.byte_manifest_json,
+            ),
+            (
+                "corpus-universe-json",
+                "corpus-universe.json",
+                reveal_store_module._encoded_state(
+                    plan["corpus_universe_manifest"]
+                ),
+            ),
+            (
+                "development-content-manifest-json",
+                "development-content-manifest.json",
+                reveal_store_module._encoded_state(content_manifest),
+            ),
+        )
+    )
+    byte_index: list[dict] = []
+    for ordinal, (logical_id, relative_path, payload) in enumerate(
+        evidence_payloads, start=1
+    ):
+        (component_directory / relative_path).write_bytes(payload)
+        byte_index.append(
+            {
+                "ordinal": ordinal,
+                "logical_id": logical_id,
+                "relative_path": relative_path,
+                "byte_count": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    marker_body = {
+        "schema_version": (
+            reveal_store_module.DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION
+        ),
+        "development_root_scope_sha256": claim[
+            "development_root_scope_sha256"
+        ],
+        "claim_sha256": claim["claim_sha256"],
+        "candidate_sha256": claim["candidate_sha256"],
+        "corpus_universe_sha256": claim["corpus_universe_sha256"],
+        "development_content_root_plan_sha256": claim[
+            "development_content_root_plan_sha256"
+        ],
+        "component_id": DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+        "development_content_manifest_sha256": content_manifest[
+            "content_manifest_sha256"
+        ],
+        "byte_index": byte_index,
+        "byte_index_sha256": canonical_sha256(byte_index),
+    }
+    marker = {
+        **marker_body,
+        "marker_sha256": canonical_sha256(marker_body),
+    }
+    marker_path = component_directory / SEC_BATCH_COMPLETE_MARKER_FILENAME
+    marker_path.write_bytes(reveal_store_module._encoded_state(marker))
+    return component_directory, marker_path, byte_index, content_manifest
+
+
 def _prepare_final_owned_carry_in_chain(
     store: SecFilingGemmaRevealStore,
     *,
@@ -1186,6 +1396,296 @@ def _prepare_final_owned_carry_in_chain(
         "child_reader": child_reader,
         "carry_records": carry_records,
     }
+
+
+def test_development_sec_root_tip_maps_are_empty_at_genesis(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    state = store.initialize()
+
+    tip = store.load_current_tip_anchor()
+    assert store.load() == state
+    assert tip["development_sec_execution_claims"] == {}
+    assert tip["development_sec_reader_receipts"] == {}
+    assert tip["development_sec_execution_aborts"] == {}
+
+
+def test_development_sec_root_claim_is_state_preserving_idempotent_and_blocks_cas(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _registered, _candidate_value, _universe, plan = (
+        _registered_development_root(store, salt="development-root-claim")
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    first = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+
+    scope_hash = plan["development_root_scope_sha256"]
+    tip_after = store.load_current_tip_anchor()
+    assert first["created"] is True
+    assert first["reader_receipt"] is None
+    assert first["abort"] is None
+    assert first["claim"]["development_content_root_plan"] == plan
+    assert first["claim"]["sec_user_agent_sha256"] == SEC_TEST_USER_AGENT_SHA256
+    assert tip_after["development_sec_execution_claims"] == {
+        scope_hash: first["claim"]
+    }
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["state_sha256"] == tip_before["state_sha256"]
+    assert store.state_path.read_bytes() == state_bytes
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+
+    assert repeated == {**first, "created": False}
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="contact differs",
+    ):
+        store.claim_owned_development_sec_root_execution(
+            development_content_root_plan=plan,
+            sec_user_agent_sha256=content_sha256(b"another development contact"),
+        )
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    current = store.load()
+    prior_registry = current["latest_registry"]
+    appended_candidate = _candidate(
+        prior_registry,
+        len(prior_registry["entries"]) + 1,
+        salt="development-root-active-cas",
+    )
+    appended_registry = append_candidate_attempt(
+        prior_registry,
+        external_prior_pin=current["latest_registry_pin"],
+        candidate_manifest=appended_candidate,
+    )
+    transition = build_registry_pin_transition(
+        prior_registry,
+        external_prior_pin=current["latest_registry_pin"],
+        appended_registry=appended_registry,
+    )
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Current-tip transaction is not a valid monotonic CAS transition",
+    ):
+        store.compare_and_swap_append(
+            transition=transition,
+            appended_registry=appended_registry,
+        )
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+def test_development_sec_root_abort_is_terminal_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _registered, _candidate_value, _universe, plan = (
+        _registered_development_root(store, salt="development-root-abort")
+    )
+    claim_result = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    abort = store.abort_owned_development_sec_root_execution(
+        development_root_scope_sha256=scope_hash,
+        reason="claim_recovered_without_terminal_receipt",
+    )
+
+    tip_after = store.load_current_tip_anchor()
+    assert abort["claim_sha256"] == claim_result["claim"]["claim_sha256"]
+    assert abort["external_effect_retry_permitted"] is False
+    assert tip_after["development_sec_execution_aborts"] == {scope_hash: abort}
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["state_sha256"] == tip_before["state_sha256"]
+    assert store.state_path.read_bytes() == state_bytes
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store.abort_owned_development_sec_root_execution(
+        development_root_scope_sha256=scope_hash,
+        reason="claim_recovered_without_terminal_receipt",
+    )
+    assert repeated == abort
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="another terminal abort",
+    ):
+        store.abort_owned_development_sec_root_execution(
+            development_root_scope_sha256=scope_hash,
+            reason="durable_output_verification_failed",
+        )
+    with pytest.raises(
+        SecFilingGemmaRevealStoreError,
+        match="Aborted development SEC execution",
+    ):
+        store._record_owned_development_sec_root_reader_output(
+            development_root_scope_sha256=scope_hash,
+        )
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+def test_development_sec_root_reader_replays_complete_layout_and_detects_mutation(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _registered, _candidate_value, _universe, plan = (
+        _registered_development_root(store, salt="development-root-reader")
+    )
+    claim_result = store.claim_owned_development_sec_root_execution(
+        development_content_root_plan=plan,
+        sec_user_agent_sha256=SEC_TEST_USER_AGENT_SHA256,
+    )
+    claim = claim_result["claim"]
+    scope_hash = plan["development_root_scope_sha256"]
+    component_directory, marker_path, byte_index, content_manifest = (
+        _write_fixed_development_sec_root(store, claim, plan)
+    )
+    state_bytes = store.state_path.read_bytes()
+    tip_before = store.load_current_tip_anchor()
+
+    receipt = store._record_owned_development_sec_root_reader_output(
+        development_root_scope_sha256=scope_hash,
+    )
+
+    tip_after = store.load_current_tip_anchor()
+    assert tip_after["development_sec_reader_receipts"] == {scope_hash: receipt}
+    assert tip_after["revision"] == tip_before["revision"] + 1
+    assert tip_after["state_sha256"] == tip_before["state_sha256"]
+    assert receipt["claim_sha256"] == claim["claim_sha256"]
+    assert receipt["content_manifest_sha256"] == content_manifest[
+        "content_manifest_sha256"
+    ]
+    assert receipt["byte_index"] == byte_index
+    assert receipt["byte_index_sha256"] == canonical_sha256(byte_index)
+    assert receipt["byte_count_total"] == sum(
+        item["byte_count"] for item in byte_index
+    )
+    assert receipt["complete_marker_sha256"] == hashlib.sha256(
+        marker_path.read_bytes()
+    ).hexdigest()
+    assert receipt["reader_output_recomputed_by_store"] is True
+    assert receipt["fresh_network_provenance_claimed"] is False
+    assert store.state_path.read_bytes() == state_bytes
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    repeated = store._record_owned_development_sec_root_reader_output(
+        development_root_scope_sha256=scope_hash,
+    )
+    assert repeated == receipt
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+    first_payload = component_directory / byte_index[0]["relative_path"]
+    first_payload.write_bytes(first_payload.read_bytes() + b"mutation")
+    with pytest.raises(SecFilingGemmaRevealStoreError):
+        store._record_owned_development_sec_root_reader_output(
+            development_root_scope_sha256=scope_hash,
+        )
+    assert store.state_path.read_bytes() == state_bytes
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+
+
+def test_development_sec_root_runner_real_store_offline_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _registered, _candidate_value, _universe, plan = (
+        _registered_development_root(store, salt="development-root-end-to-end")
+    )
+    documents = plan["sec_access_plan"]["documents"]
+    budgets = plan["budgets"]
+    transport_plan = {
+        "max_sec_requests": budgets["max_sec_requests"],
+        "max_sec_response_bytes": budgets["max_raw_batch_bytes"],
+        "max_sec_acquisition_seconds": budgets[
+            "max_sec_acquisition_seconds"
+        ],
+    }
+    payloads = {
+        document["official_url"]: (
+            "<html><body><p>Offline owned root "
+            f"{ordinal:04d} {document['accession_number']}.</p></body></html>"
+        ).encode("ascii")
+        for ordinal, document in enumerate(documents, start=1)
+    }
+    factory_calls: list[str] = []
+
+    @contextmanager
+    def fixed_factory(**kwargs):
+        factory_calls.append("factory")
+        assert kwargs["user_agent"] == SEC_TEST_USER_AGENT
+        assert kwargs["transport_budget"].max_requests == len(documents)
+        assert (
+            kwargs["transport_budget"].max_bytes
+            == budgets["max_raw_batch_bytes"]
+        )
+        yield _FixedSecTransport(payloads, transport_plan)
+
+    monkeypatch.setattr(
+        stage_runner_module,
+        "_owned_transport_factory",
+        fixed_factory,
+    )
+    result = run_owned_development_sec_root(
+        reveal_store=store,
+        development_content_root_plan=plan,
+        user_agent=SEC_TEST_USER_AGENT,
+    )
+
+    scope_hash = plan["development_root_scope_sha256"]
+    receipt = result["reader_receipt"]
+    tip = store.load_current_tip_anchor()
+    assert tip["development_sec_reader_receipts"] == {scope_hash: receipt}
+    assert receipt["content_manifest_sha256"]
+    assert factory_calls == ["factory"]
+    component_directory = (
+        store.store_directory
+        / STAGE_OUTPUTS_DIRECTORY_NAME
+        / result["claim"]["claim_sha256"]
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+    )
+    assert (component_directory / "corpus-universe.json").is_file()
+    assert (
+        component_directory / "development-content-manifest.json"
+    ).is_file()
+    stable_tip_bytes = store.current_tip_anchor_path.read_bytes()
+
+    monkeypatch.setattr(
+        stage_runner_module,
+        "_owned_transport_factory",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed real-store root must not refetch")
+        ),
+    )
+    repeated = run_owned_development_sec_root(
+        reveal_store=store,
+        development_content_root_plan=plan,
+        user_agent=SEC_TEST_USER_AGENT,
+    )
+    assert repeated == result
+    assert store.current_tip_anchor_path.read_bytes() == stable_tip_bytes
+    assert factory_calls == ["factory"]
 
 
 def test_sec_execution_claim_is_current_tip_only_and_idempotently_reports_created(

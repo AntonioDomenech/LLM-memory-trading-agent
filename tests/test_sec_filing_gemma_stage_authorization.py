@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+from datetime import date
+from functools import lru_cache
 import hashlib
 from unittest.mock import patch
 
@@ -13,15 +15,19 @@ from agent_benchmark.sec_filing_gemma_contract import (
     REQUIRED_SOURCE_HASHES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
     build_candidate_manifest,
+    build_corpus_universe_manifest,
     canonical_sha256,
     session_calendar_sha256,
 )
 from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
+    candidate_design_sha256,
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
+    DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+    build_development_content_root_plan,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     STAGE_EVIDENCE_SCHEMA_VERSION,
@@ -33,6 +39,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION,
     CONSUMPTION_ENTRY_SCHEMA_VERSION,
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
+    DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION,
+    DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION,
+    DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION,
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_EXECUTION_RESOLVED_SOURCE_PATHS,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
@@ -46,6 +55,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
     build_consumed_stage_output_receipt,
+    build_development_sec_execution_abort,
+    build_development_sec_execution_claim,
+    build_development_sec_reader_receipt,
     build_stage_carry_in_reader_receipt,
     build_stage_sec_execution_abort,
     build_stage_sec_execution_claim,
@@ -86,6 +98,133 @@ def _execution_source_hashes(sequence: int = 1) -> dict[str, str]:
         role: source_hashes[role]
         for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
     }
+
+
+def _development_source_record(
+    year: int,
+    serial: int,
+    form: str,
+    month: int,
+) -> dict:
+    evidence_date = date(year, month, 15)
+    return {
+        "accession_number": f"0000320193-{year % 100:02d}-{serial:06d}",
+        "subject_cik": "0000320193",
+        "form": form,
+        "acceptance_datetime": evidence_date.strftime("%Y%m%d") + "160000",
+        "filing_date": evidence_date.isoformat(),
+        "filing_date_change": None,
+        "primary_document": f"filing-{serial}.htm",
+        "source_record_sha256": f"{serial + 70_000:064x}",
+    }
+
+
+@lru_cache(maxsize=1)
+def _development_universe() -> dict:
+    records: list[dict] = []
+    serial = 1
+    for year in range(2000, 2026):
+        for form, month in (
+            ("10-K", 2),
+            ("10-Q", 5),
+            ("10-Q", 8),
+            ("10-Q", 11),
+        ):
+            records.append(
+                _development_source_record(year, serial, form, month)
+            )
+            serial += 1
+    for form, month in (("10-Q", 2), ("10-Q", 5)):
+        records.append(_development_source_record(2026, serial, form, month))
+        serial += 1
+    return build_corpus_universe_manifest(
+        catalog_artifact_sha256=_h("development catalog"),
+        calendar_artifact_sha256=_h("development calendar evidence"),
+        catalog_total_record_count=1_000,
+        catalog_eligible_record_count=len(records),
+        session_dates=EXPECTED_SESSIONS,
+        records=records,
+    )
+
+
+def _development_root_context() -> tuple[dict, dict, dict, dict]:
+    universe = copy.deepcopy(_development_universe())
+    source_hashes = {
+        role: _h(f"development source:{role}")
+        for role in REQUIRED_SOURCE_HASHES
+    }
+    attempt_id = f"{CONTRACT_VERSION}-attempt-001"
+    candidate = build_candidate_manifest(
+        model_digest=_h("development model"),
+        ollama_runtime_fingerprint_sha256=_h("development runtime"),
+        sec_audit_checksums_json_sha256=_h("development audit"),
+        sec_catalog_artifact_sha256=universe["catalog_artifact_sha256"],
+        sec_audit_source_commit=_commit("development audit source"),
+        calendar_source_evidence_sha256=universe[
+            "calendar_artifact_sha256"
+        ],
+        calendar_sessions_sha256=universe["calendar_sessions_sha256"],
+        corpus_universe_sha256=universe["universe_sha256"],
+        corpus_universe_semantic_sha256=universe[
+            "universe_semantic_sha256"
+        ],
+        identity_lexicon_sha256=_h("development identity lexicon"),
+        predecessor_reveal_registry_sha256=_h(
+            "development predecessor registry"
+        ),
+        holdout_attempt_id=attempt_id,
+        experiment_source_commit=_commit("development experiment source"),
+        source_tree_sha256=_h("development source tree"),
+        source_hashes=source_hashes,
+    )
+    design_hash = candidate_design_sha256(candidate)
+    plan = build_development_content_root_plan(
+        candidate_manifest=candidate,
+        expected_candidate_sha256=candidate["candidate_sha256"],
+        expected_candidate_design_sha256=design_hash,
+        expected_attempt_id=attempt_id,
+        base_corpus_universe_sha256=universe["universe_sha256"],
+        corpus_universe_manifest=universe,
+        session_calendar_sha256=universe["calendar_sessions_sha256"],
+    )
+    state = _snapshot(entry_count=0)
+    registry_entry = {
+        "entry_sha256": _h("development current registry entry"),
+        "sequence": 1,
+        "attempt_id": attempt_id,
+        "candidate_sha256": candidate["candidate_sha256"],
+        "candidate_design_sha256": design_hash,
+        "candidate_manifest": candidate,
+    }
+    registry_hash = _h("development current registry")
+    registry_tip = _h("development current registry tip")
+    state["latest_registry"] = {
+        "schema_version": "synthetic-development-registry-v1",
+        "entries": [registry_entry],
+        "chain": {
+            "tip_sha256": registry_tip,
+            "registered_entry_count": 1,
+        },
+        "registry_sha256": registry_hash,
+    }
+    state["latest_registry_pin"] = {
+        "schema_version": "synthetic-development-registry-pin-v1",
+        "registry_sha256": registry_hash,
+        "tip_sha256": registry_tip,
+        "registered_entry_count": 1,
+    }
+    _rehash(state, "state_sha256")
+    current_tip = build_reveal_store_current_tip_anchor(
+        state,
+        revision=0,
+        previous_tip_anchor_sha256=None,
+        authorization_bundles={},
+    )
+    execution_sources = {
+        role: source_hashes[role]
+        for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    }
+    return state, plan, current_tip, execution_sources
 
 
 def _sec_candidate(sequence: int) -> dict:
@@ -494,6 +633,9 @@ def _next_tip(
             "stage_sec_execution_claims",
             "stage_sec_reader_receipts",
             "stage_sec_execution_aborts",
+            "development_sec_execution_claims",
+            "development_sec_reader_receipts",
+            "development_sec_execution_aborts",
         )
     }
     maps.update(map_overrides)
@@ -2057,4 +2199,320 @@ def test_active_sec_claim_allows_only_its_exact_terminal_receipt_or_abort() -> N
             state,
             completed_tip,
             stage_sec_execution_aborts={request_hash: abort},
+        )
+
+
+def test_development_sec_claim_is_request_free_exact_and_dedicated() -> None:
+    state, plan, prior_tip, execution_sources = _development_root_context()
+    claim = build_development_sec_execution_claim(
+        state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    repeated = build_development_sec_execution_claim(
+        state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        development_sec_execution_claims={scope_hash: claim},
+    )
+
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, claimed_tip)
+
+    assert repeated == claim
+    assert claim["schema_version"] == DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION
+    assert claim["development_content_root_plan"] == plan
+    assert claim["development_content_root_plan_sha256"] == plan[
+        "development_content_root_plan_sha256"
+    ]
+    assert claim["development_root_scope_sha256"] == scope_hash
+    assert claim["sec_component_id"] == DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+    assert claim["start_current_tip_anchor_sha256"] == prior_tip[
+        "tip_anchor_sha256"
+    ]
+    assert claim["start_consumption_ledger_tip_sha256"] == prior_tip[
+        "consumption_ledger_tip_sha256"
+    ]
+    for field in (
+        "authorizes_outcome_access",
+        "market_access_permitted",
+        "model_access_permitted",
+        "future_stage_access_permitted",
+        "reveal_request_consumption_permitted",
+        "consumption_ledger_mutation_permitted",
+        "effect_may_be_repeated_after_indeterminate_crash",
+    ):
+        assert claim[field] is False
+    assert claimed_tip["development_sec_execution_claims"] == {
+        scope_hash: claim
+    }
+    assert claimed_tip["development_sec_reader_receipts"] == {}
+    assert claimed_tip["development_sec_execution_aborts"] == {}
+
+
+def test_active_development_sec_claim_allows_only_exact_terminal_artifact() -> None:
+    state, plan, prior_tip, execution_sources = _development_root_context()
+    claim = build_development_sec_execution_claim(
+        state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        development_sec_execution_claims={scope_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, claimed_tip)
+    byte_index = [
+        {
+            "ordinal": 1,
+            "logical_id": "development-content-manifest",
+            "relative_path": "development-content-manifest.json",
+            "byte_count": 128,
+            "sha256": _h("development content manifest bytes"),
+        }
+    ]
+    receipt = build_development_sec_reader_receipt(
+        claim,
+        content_manifest_sha256=_h("development content manifest"),
+        byte_index=byte_index,
+        complete_marker_sha256=_h("development complete marker"),
+    )
+    assert receipt == build_development_sec_reader_receipt(
+        claim,
+        content_manifest_sha256=_h("development content manifest"),
+        byte_index=byte_index,
+        complete_marker_sha256=_h("development complete marker"),
+    )
+    assert receipt["schema_version"] == DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION
+    completed_tip = _next_tip(
+        state,
+        claimed_tip,
+        development_sec_reader_receipts={scope_hash: receipt},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        claimed_tip,
+        completed_tip,
+    )
+
+    abort = build_development_sec_execution_abort(
+        claim,
+        reason="external_effect_failed_or_completion_unknown",
+    )
+    assert abort["schema_version"] == DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION
+    aborted_tip = _next_tip(
+        state,
+        claimed_tip,
+        development_sec_execution_aborts={scope_hash: abort},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        claimed_tip,
+        aborted_tip,
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="cannot be both completed and aborted",
+    ):
+        _next_tip(
+            state,
+            completed_tip,
+            development_sec_execution_aborts={scope_hash: abort},
+        )
+
+
+def test_active_development_claim_blocks_noop_and_combined_append() -> None:
+    state, plan, prior_tip, execution_sources = _development_root_context()
+    claim = build_development_sec_execution_claim(
+        state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        development_sec_execution_claims={scope_hash: claim},
+    )
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, claimed_tip)
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="Active development SEC execution claim blocks every transition",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            claimed_tip,
+            _next_tip(state, claimed_tip),
+        )
+
+    receipt = build_development_sec_reader_receipt(
+        claim,
+        content_manifest_sha256=_h("combined content manifest"),
+        byte_index=[
+            {
+                "ordinal": 1,
+                "logical_id": "combined-root-byte",
+                "relative_path": "combined-root-byte.json",
+                "byte_count": 1,
+                "sha256": _h("combined root byte"),
+            }
+        ],
+        complete_marker_sha256=_h("combined root marker"),
+    )
+    combined_tip = _next_tip(
+        state,
+        prior_tip,
+        development_sec_execution_claims={scope_hash: claim},
+        development_sec_reader_receipts={scope_hash: receipt},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="require separate transitions",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            prior_tip,
+            combined_tip,
+        )
+
+
+def test_development_claim_rejects_stale_tip_source_and_plan_substitution() -> None:
+    state, plan, prior_tip, execution_sources = _development_root_context()
+    claim = build_development_sec_execution_claim(
+        state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    advanced_tip = _next_tip(state, prior_tip)
+    validate_reveal_store_current_tip_anchor_transition(prior_tip, advanced_tip)
+    stale_tip = _next_tip(
+        state,
+        advanced_tip,
+        development_sec_execution_claims={scope_hash: claim},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="does not bind the exact current registry and ledger tip",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            advanced_tip,
+            stale_tip,
+        )
+
+    substituted_sources = copy.deepcopy(execution_sources)
+    substituted_sources["runner"] = _h("substituted development runner")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="differ from the registered candidate",
+    ):
+        build_development_sec_execution_claim(
+            state,
+            development_content_root_plan=plan,
+            independent_current_tip_anchor=prior_tip,
+            execution_source_hashes=substituted_sources,
+            sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+        )
+
+    changed_plan = copy.deepcopy(plan)
+    changed_plan["scope"]["future_stage_access_permitted"] = True
+    _rehash(changed_plan, "development_content_root_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="authorization scope changed",
+    ):
+        build_development_sec_execution_claim(
+            state,
+            development_content_root_plan=changed_plan,
+            independent_current_tip_anchor=prior_tip,
+            execution_source_hashes=execution_sources,
+            sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+        )
+
+
+def test_development_sec_maps_are_append_only_after_terminal_receipt() -> None:
+    state, plan, prior_tip, execution_sources = _development_root_context()
+    claim = build_development_sec_execution_claim(
+        state,
+        development_content_root_plan=plan,
+        independent_current_tip_anchor=prior_tip,
+        execution_source_hashes=execution_sources,
+        sec_user_agent_sha256=SEC_USER_AGENT_SHA256,
+    )
+    scope_hash = plan["development_root_scope_sha256"]
+    claimed_tip = _next_tip(
+        state,
+        prior_tip,
+        development_sec_execution_claims={scope_hash: claim},
+    )
+    receipt = build_development_sec_reader_receipt(
+        claim,
+        content_manifest_sha256=_h("append-only content manifest"),
+        byte_index=[
+            {
+                "ordinal": 1,
+                "logical_id": "append-only-root-byte",
+                "relative_path": "append-only-root-byte.json",
+                "byte_count": 1,
+                "sha256": _h("append-only root byte"),
+            }
+        ],
+        complete_marker_sha256=_h("append-only root marker"),
+    )
+    completed_tip = _next_tip(
+        state,
+        claimed_tip,
+        development_sec_reader_receipts={scope_hash: receipt},
+    )
+    validate_reveal_store_current_tip_anchor_transition(
+        claimed_tip,
+        completed_tip,
+    )
+
+    replaced_receipt = copy.deepcopy(receipt)
+    replaced_receipt["content_manifest_sha256"] = _h(
+        "replacement content manifest"
+    )
+    _rehash(replaced_receipt, "receipt_sha256")
+    replacement_tip = _next_tip(
+        state,
+        completed_tip,
+        development_sec_reader_receipts={scope_hash: replaced_receipt},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="removed or changed a persisted development SEC reader receipt",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            completed_tip,
+            replacement_tip,
+        )
+
+    deleted_tip = _next_tip(
+        state,
+        completed_tip,
+        development_sec_execution_claims={},
+        development_sec_reader_receipts={},
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="removed or changed a persisted development SEC execution claim",
+    ):
+        validate_reveal_store_current_tip_anchor_transition(
+            completed_tip,
+            deleted_tip,
         )

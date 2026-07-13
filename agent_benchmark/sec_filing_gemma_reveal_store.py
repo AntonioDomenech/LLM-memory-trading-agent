@@ -42,7 +42,9 @@ from agent_benchmark.sec_filing_gemma_contract import (
     CONTRACT_VERSION,
     REQUIRED_STAGE_VERIFIER_CHECKS,
     SecFilingGemmaContractError,
+    build_stage_content_manifest,
     canonical_sha256,
+    validate_stage_content_manifest,
 )
 from agent_benchmark.sec_filing_gemma_corpus import (
     SecFilingGemmaCorpusError,
@@ -69,7 +71,10 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
     preflight_untrusted_stage_json,
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
+    DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
     SecFilingGemmaStageAccessError,
+    build_development_content_root_plan,
+    validate_development_content_root_plan,
     validate_prior_same_form_carry_in_scope,
 )
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
@@ -80,6 +85,9 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
+    build_development_sec_execution_abort,
+    build_development_sec_execution_claim,
+    build_development_sec_reader_receipt,
     build_stage_carry_in_reader_receipt,
     build_reveal_store_current_tip_anchor,
     build_consumed_stage_authorization_grant,
@@ -122,11 +130,17 @@ RESTORE_PENDING_FILENAME: Final[str] = (
     "sec_gemma_reveal_store_restore_pending.json"
 )
 LOCK_FILENAME: Final[str] = ".sec_gemma_reveal_store.lock"
+DEVELOPMENT_SEC_EXECUTION_LOCKS_DIRECTORY_NAME: Final[str] = (
+    ".development-sec-execution-locks"
+)
 STAGE_OUTPUTS_DIRECTORY_NAME: Final[str] = "stage_outputs"
 SEC_STAGE_COMPONENT_DIRECTORY_NAME: Final[str] = "sec"
 SEC_BATCH_COMPLETE_MARKER_FILENAME: Final[str] = "complete.json"
 SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-owned-sec-batch-complete-v1"
+)
+DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-sec-root-complete-v1"
 )
 STAGE_EVIDENCE_COMPONENT_DIRECTORY_NAME: Final[str] = "stage_evidence"
 STAGE_EVIDENCE_FILENAME: Final[str] = "stage_evidence.json"
@@ -702,6 +716,191 @@ def _execution_source_hashes(repository_root: Path) -> dict[str, str]:
         )
         observed[role] = hashlib.sha256(payload).hexdigest()
     return observed
+
+
+def _validated_development_root_plan_for_store(
+    authenticated_store_snapshot: Mapping[str, Any],
+    development_content_root_plan: Any,
+    *,
+    require_latest_candidate: bool,
+) -> dict[str, Any]:
+    """Rebuild one request-free root plan from its registered candidate.
+
+    The embedded universe is evidence, not caller selection authority.  Every
+    URL, budget, and scope field is deterministically reconstructed from the
+    exact candidate entry already authenticated by the reveal-store state.
+    """
+
+    state = _expect_mapping(
+        authenticated_store_snapshot,
+        "development-root authenticated store snapshot",
+    )
+    plan = _exact_caller_dict(
+        development_content_root_plan,
+        "development content root plan",
+    )
+    root_scope = _expect_mapping(
+        plan.get("root_scope"),
+        "development content root plan scope",
+    )
+    candidate_hash = _sha256(
+        root_scope.get("candidate_sha256"),
+        "development content root candidate hash",
+    )
+    registry = _expect_mapping(
+        state.get("latest_registry"),
+        "development-root latest registry",
+    )
+    entries = registry.get("entries")
+    if type(entries) is not list or not entries:
+        raise SecFilingGemmaRevealStoreError(
+            "Development-content root requires a registered candidate"
+        )
+    matching = [
+        entry
+        for entry in entries
+        if type(entry) is dict and entry.get("candidate_sha256") == candidate_hash
+    ]
+    if len(matching) != 1:
+        raise SecFilingGemmaRevealStoreError(
+            "Development-content root candidate is not uniquely registered"
+        )
+    entry = matching[0]
+    if require_latest_candidate and entry != entries[-1]:
+        raise SecFilingGemmaRevealStoreError(
+            "Development-content root must belong to the latest registered candidate"
+        )
+    candidate = _expect_mapping(
+        entry.get("candidate_manifest"),
+        "development-root registered candidate manifest",
+    )
+    bindings = _expect_mapping(
+        candidate.get("bindings"),
+        "development-root candidate bindings",
+    )
+    universe = _expect_mapping(
+        plan.get("corpus_universe_manifest"),
+        "development-root embedded corpus universe",
+    )
+    try:
+        expected = build_development_content_root_plan(
+            candidate_manifest=candidate,
+            expected_candidate_sha256=entry["candidate_sha256"],
+            expected_candidate_design_sha256=entry["candidate_design_sha256"],
+            expected_attempt_id=entry["attempt_id"],
+            base_corpus_universe_sha256=bindings["corpus_universe_sha256"],
+            corpus_universe_manifest=universe,
+            session_calendar_sha256=bindings["calendar_sessions_sha256"],
+        )
+        validate_development_content_root_plan(
+            plan,
+            expected_development_content_root_plan_sha256=plan[
+                "development_content_root_plan_sha256"
+            ],
+            candidate_manifest=candidate,
+            expected_candidate_sha256=entry["candidate_sha256"],
+            expected_candidate_design_sha256=entry["candidate_design_sha256"],
+            expected_attempt_id=entry["attempt_id"],
+            base_corpus_universe_sha256=bindings["corpus_universe_sha256"],
+            corpus_universe_manifest=universe,
+            session_calendar_sha256=bindings["calendar_sessions_sha256"],
+        )
+    except (KeyError, SecFilingGemmaStageAccessError) as exc:
+        raise SecFilingGemmaRevealStoreError(
+            "Development-content root plan is not the exact registered-candidate construction"
+        ) from exc
+    if plan != expected:
+        raise SecFilingGemmaRevealStoreError(
+            "Development-content root plan changed after deterministic reconstruction"
+        )
+    return expected
+
+
+def _read_owned_sec_indexed_payloads(
+    component_directory: Path,
+    raw_index: Any,
+    *,
+    location: str,
+) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+    """Rehash one flat create-new SEC payload directory exactly."""
+
+    secured = _secure_directory(
+        component_directory,
+        create=False,
+        location=location,
+    )
+    if type(raw_index) is not list or not raw_index:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} complete marker has no byte index"
+        )
+    observed_names = [item.name for item in secured.iterdir()]
+    if len(observed_names) > MAX_SEC_BATCH_FILES:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} contains too many files"
+        )
+    if len({name.casefold() for name in observed_names}) != len(observed_names):
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} contains a case-colliding file"
+        )
+    byte_index: list[dict[str, Any]] = []
+    payloads_by_name: dict[str, bytes] = {}
+    total_bytes = 0
+    expected_names = {SEC_BATCH_COMPLETE_MARKER_FILENAME}
+    for ordinal, raw_item in enumerate(raw_index, start=1):
+        if type(raw_item) is not dict or set(raw_item) != {
+            "ordinal",
+            "logical_id",
+            "relative_path",
+            "byte_count",
+            "sha256",
+        }:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} byte-index item is not exact"
+            )
+        relative = raw_item["relative_path"]
+        if (
+            type(relative) is not str
+            or not relative
+            or "/" in relative
+            or "\\" in relative
+            or relative in {".", "..", SEC_BATCH_COMPLETE_MARKER_FILENAME}
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} byte-index path is unsafe"
+            )
+        if relative in payloads_by_name:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} byte-index path is duplicated"
+            )
+        payload = _read_regular_bytes(
+            secured / relative,
+            f"{location} byte {relative}",
+            max_bytes=MAX_SEC_BATCH_FILE_BYTES,
+        )
+        total_bytes += len(payload)
+        if total_bytes > MAX_SEC_BATCH_TOTAL_BYTES:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} exceeds its total byte limit"
+            )
+        observed = {
+            "ordinal": ordinal,
+            "logical_id": raw_item["logical_id"],
+            "relative_path": relative,
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        if observed != raw_item:
+            raise SecFilingGemmaRevealStoreError(
+                f"{location} bytes differ from their complete marker"
+            )
+        byte_index.append(observed)
+        payloads_by_name[relative] = payload
+        expected_names.add(relative)
+    if set(observed_names) != expected_names:
+        raise SecFilingGemmaRevealStoreError(
+            f"{location} has missing or extra durable bytes"
+        )
+    return byte_index, payloads_by_name
 
 
 def _git(repo_root: Path, *arguments: str) -> bytes:
@@ -2560,6 +2759,32 @@ class SecFilingGemmaRevealStore:
             self.lock_path, timeout_seconds=self._lock_timeout_seconds
         )
 
+    def _owned_development_sec_root_execution_lock(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> _ExclusiveFileLock:
+        """Serialize one root runner without holding the reveal-store CAS lock."""
+
+        scope_hash = _sha256(
+            development_root_scope_sha256,
+            "development SEC execution-lock root scope hash",
+        )
+        store_directory = _secure_directory(
+            self._store_directory,
+            create=True,
+            location="reveal-store directory",
+        )
+        locks_directory = _secure_directory(
+            store_directory / DEVELOPMENT_SEC_EXECUTION_LOCKS_DIRECTORY_NAME,
+            create=True,
+            location="development SEC execution-lock directory",
+        )
+        return _ExclusiveFileLock(
+            locks_directory / f"{scope_hash}.lock",
+            timeout_seconds=self._lock_timeout_seconds,
+        )
+
     def _recover_pending_restore_locked(
         self, tracked_anchor: Mapping[str, Any]
     ) -> None:
@@ -2740,6 +2965,9 @@ class SecFilingGemmaRevealStore:
         stage_sec_reader_receipt: Mapping[str, Any] | None = None,
         stage_sec_execution_abort: Mapping[str, Any] | None = None,
         stage_carry_in_reader_receipt: Mapping[str, Any] | None = None,
+        development_sec_execution_claim: Mapping[str, Any] | None = None,
+        development_sec_reader_receipt: Mapping[str, Any] | None = None,
+        development_sec_execution_abort: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated_state = _validate_state(
             _expect_mapping(next_state, "next reveal-store state"),
@@ -2758,6 +2986,15 @@ class SecFilingGemmaRevealStore:
         carry_in_receipts = copy.deepcopy(
             prior_tip_anchor["stage_carry_in_reader_receipts"]
         )
+        development_sec_claims = copy.deepcopy(
+            prior_tip_anchor["development_sec_execution_claims"]
+        )
+        development_sec_reader_receipts = copy.deepcopy(
+            prior_tip_anchor["development_sec_reader_receipts"]
+        )
+        development_sec_aborts = copy.deepcopy(
+            prior_tip_anchor["development_sec_execution_aborts"]
+        )
         transition_payload_count = sum(
             value is not None
             for value in (
@@ -2768,6 +3005,9 @@ class SecFilingGemmaRevealStore:
                 stage_sec_reader_receipt,
                 stage_sec_execution_abort,
                 stage_carry_in_reader_receipt,
+                development_sec_execution_claim,
+                development_sec_reader_receipt,
+                development_sec_execution_abort,
             )
         )
         if transition_payload_count > 1:
@@ -2880,6 +3120,58 @@ class SecFilingGemmaRevealStore:
                     "A persisted stage carry-in reader receipt cannot be replaced"
                 )
             carry_in_receipts[request_hash] = carry_receipt
+        if development_sec_execution_claim is not None:
+            development_claim = _exact_caller_dict(
+                development_sec_execution_claim,
+                "development SEC execution claim",
+            )
+            root_scope_hash = _sha256(
+                development_claim.get("development_root_scope_sha256"),
+                "development SEC execution claim root scope hash",
+            )
+            if (
+                root_scope_hash in development_sec_claims
+                and development_sec_claims[root_scope_hash] != development_claim
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development SEC execution claim cannot be replaced"
+                )
+            development_sec_claims[root_scope_hash] = development_claim
+        if development_sec_reader_receipt is not None:
+            development_receipt = _exact_caller_dict(
+                development_sec_reader_receipt,
+                "development SEC reader receipt",
+            )
+            root_scope_hash = _sha256(
+                development_receipt.get("development_root_scope_sha256"),
+                "development SEC reader receipt root scope hash",
+            )
+            if (
+                root_scope_hash in development_sec_reader_receipts
+                and development_sec_reader_receipts[root_scope_hash]
+                != development_receipt
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development SEC reader receipt cannot be replaced"
+                )
+            development_sec_reader_receipts[root_scope_hash] = development_receipt
+        if development_sec_execution_abort is not None:
+            development_abort = _exact_caller_dict(
+                development_sec_execution_abort,
+                "development SEC execution abort",
+            )
+            root_scope_hash = _sha256(
+                development_abort.get("development_root_scope_sha256"),
+                "development SEC execution abort root scope hash",
+            )
+            if (
+                root_scope_hash in development_sec_aborts
+                and development_sec_aborts[root_scope_hash] != development_abort
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "A persisted development SEC execution abort cannot be replaced"
+                )
+            development_sec_aborts[root_scope_hash] = development_abort
         try:
             next_tip = build_reveal_store_current_tip_anchor(
                 validated_state,
@@ -2892,6 +3184,9 @@ class SecFilingGemmaRevealStore:
                 stage_sec_reader_receipts=sec_reader_receipts,
                 stage_sec_execution_aborts=sec_aborts,
                 stage_carry_in_reader_receipts=carry_in_receipts,
+                development_sec_execution_claims=development_sec_claims,
+                development_sec_reader_receipts=development_sec_reader_receipts,
+                development_sec_execution_aborts=development_sec_aborts,
             )
         except SecFilingGemmaStageAuthorizationError as exc:
             raise SecFilingGemmaRevealStoreError(
@@ -2962,6 +3257,9 @@ class SecFilingGemmaRevealStore:
                     stage_sec_execution_claims={},
                     stage_sec_reader_receipts={},
                     stage_sec_execution_aborts={},
+                    development_sec_execution_claims={},
+                    development_sec_reader_receipts={},
+                    development_sec_execution_aborts={},
                 )
             except SecFilingGemmaStageAuthorizationError as exc:
                 raise SecFilingGemmaRevealStoreError(
@@ -3019,6 +3317,458 @@ class SecFilingGemmaRevealStore:
                 self._read_state_and_tip_locked(tracked_anchor)
             )
             return copy.deepcopy(tip)
+
+    def claim_owned_development_sec_root_execution(
+        self,
+        *,
+        development_content_root_plan: Mapping[str, Any],
+        sec_user_agent_sha256: str,
+    ) -> dict[str, Any]:
+        """Claim the complete pre-reveal development corpus exactly once."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            caller_plan = _exact_caller_dict(
+                development_content_root_plan,
+                "development content root plan",
+            )
+            root_scope_hash = _sha256(
+                caller_plan.get("development_root_scope_sha256"),
+                "development content root scope hash",
+            )
+            user_agent_hash = _tagged_sha256(
+                sec_user_agent_sha256,
+                "development SEC execution User-Agent hash",
+            )
+            existing_claim = current_tip[
+                "development_sec_execution_claims"
+            ].get(root_scope_hash)
+            if existing_claim is not None:
+                exact_plan = _validated_development_root_plan_for_store(
+                    current,
+                    caller_plan,
+                    require_latest_candidate=False,
+                )
+                if (
+                    existing_claim.get("sec_user_agent_sha256")
+                    != user_agent_hash
+                ):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Development SEC execution contact differs from its durable claim"
+                    )
+                if existing_claim.get("development_content_root_plan") != exact_plan:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Development SEC execution plan differs from its durable claim"
+                    )
+                return {
+                    "claim": copy.deepcopy(existing_claim),
+                    "created": False,
+                    "reader_receipt": copy.deepcopy(
+                        current_tip["development_sec_reader_receipts"].get(
+                            root_scope_hash
+                        )
+                    ),
+                    "abort": copy.deepcopy(
+                        current_tip["development_sec_execution_aborts"].get(
+                            root_scope_hash
+                        )
+                    ),
+                }
+            exact_plan = _validated_development_root_plan_for_store(
+                current,
+                caller_plan,
+                require_latest_candidate=True,
+            )
+            execution_sources = _execution_source_hashes(self.repository_root)
+            try:
+                claim = build_development_sec_execution_claim(
+                    current,
+                    development_content_root_plan=exact_plan,
+                    independent_current_tip_anchor=current_tip,
+                    execution_source_hashes=execution_sources,
+                    sec_user_agent_sha256=user_agent_hash,
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Could not claim the exact development SEC content root"
+                ) from exc
+            committed_state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_sec_execution_claim=claim,
+            )
+            if committed_state != current:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development SEC execution claim changed reveal-store state"
+                )
+            persisted = committed_tip["development_sec_execution_claims"].get(
+                root_scope_hash
+            )
+            if persisted != claim:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development SEC claim differs from its CAS target"
+                )
+            return {
+                "claim": copy.deepcopy(persisted),
+                "created": True,
+                "reader_receipt": None,
+                "abort": None,
+            }
+
+    def abort_owned_development_sec_root_execution(
+        self,
+        *,
+        development_root_scope_sha256: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Terminally close an indeterminate development-root SEC claim."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            root_scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development SEC abort root scope hash",
+            )
+            claim = current_tip["development_sec_execution_claims"].get(
+                root_scope_hash
+            )
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development SEC execution cannot abort before its durable claim"
+                )
+            if root_scope_hash in current_tip["development_sec_reader_receipts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Completed development SEC execution cannot be aborted"
+                )
+            existing = current_tip["development_sec_execution_aborts"].get(
+                root_scope_hash
+            )
+            try:
+                abort = build_development_sec_execution_abort(
+                    claim,
+                    reason=reason,
+                )
+            except SecFilingGemmaStageAuthorizationError as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development SEC execution abort is not canonical"
+                ) from exc
+            if existing is not None:
+                if existing != abort:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Development SEC execution already has another terminal abort"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_sec_execution_abort=abort,
+            )
+            persisted = committed_tip["development_sec_execution_aborts"].get(
+                root_scope_hash
+            )
+            if persisted != abort:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development SEC abort differs from its CAS target"
+                )
+            return copy.deepcopy(persisted)
+
+    def _record_owned_development_sec_root_reader_output(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Replay the immutable development corpus and append its receipt."""
+
+        with self._locked():
+            _cleanup_interrupted_temporaries(self.store_directory)
+            tracked_anchor = _load_tracked_anchor(self.repository_root)
+            current, current_tip, _state_bytes, _tip_bytes = (
+                self._read_state_and_tip_locked(tracked_anchor)
+            )
+            root_scope_hash = _sha256(
+                development_root_scope_sha256,
+                "development SEC reader root scope hash",
+            )
+            claim = current_tip["development_sec_execution_claims"].get(
+                root_scope_hash
+            )
+            if type(claim) is not dict:
+                raise SecFilingGemmaRevealStoreError(
+                    "Development SEC reader output lacks its durable execution claim"
+                )
+            if root_scope_hash in current_tip["development_sec_execution_aborts"]:
+                raise SecFilingGemmaRevealStoreError(
+                    "Aborted development SEC execution cannot publish reader bytes"
+                )
+            existing = current_tip["development_sec_reader_receipts"].get(
+                root_scope_hash
+            )
+            self._revalidate_authorized_sec_execution_sources(claim)
+            plan = _validated_development_root_plan_for_store(
+                current,
+                claim.get("development_content_root_plan"),
+                require_latest_candidate=False,
+            )
+            if (
+                plan["development_root_scope_sha256"] != root_scope_hash
+                or plan["development_content_root_plan_sha256"]
+                != claim.get("development_content_root_plan_sha256")
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development SEC reader crossed its claimed root plan"
+                )
+            component_directory = (
+                self.store_directory
+                / STAGE_OUTPUTS_DIRECTORY_NAME
+                / claim["claim_sha256"]
+                / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+            )
+            secured = _secure_directory(
+                component_directory,
+                create=False,
+                location="owned development SEC root directory",
+            )
+            marker_path = secured / SEC_BATCH_COMPLETE_MARKER_FILENAME
+            marker_bytes = _read_regular_bytes(
+                marker_path,
+                "owned development SEC root complete marker",
+                max_bytes=MAX_TRACKED_ANCHOR_FILE_BYTES,
+            )
+            marker = _strict_json_bytes(
+                marker_bytes,
+                "owned development SEC root complete marker",
+            )
+            expected_marker_keys = {
+                "schema_version",
+                "development_root_scope_sha256",
+                "claim_sha256",
+                "candidate_sha256",
+                "corpus_universe_sha256",
+                "development_content_root_plan_sha256",
+                "component_id",
+                "development_content_manifest_sha256",
+                "byte_index",
+                "byte_index_sha256",
+                "marker_sha256",
+            }
+            if type(marker) is not dict or set(marker) != expected_marker_keys:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root marker keys changed"
+                )
+            marker_body = {
+                key: marker[key] for key in marker if key != "marker_sha256"
+            }
+            if (
+                marker["schema_version"]
+                != DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION
+                or marker["development_root_scope_sha256"] != root_scope_hash
+                or marker["claim_sha256"] != claim["claim_sha256"]
+                or marker["candidate_sha256"] != claim["candidate_sha256"]
+                or marker["corpus_universe_sha256"]
+                != claim["corpus_universe_sha256"]
+                or marker["development_content_root_plan_sha256"]
+                != claim["development_content_root_plan_sha256"]
+                or marker["component_id"]
+                != DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+                or marker["marker_sha256"] != canonical_sha256(marker_body)
+                or marker_bytes != _encoded_state(marker)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root marker is not canonical or claim-bound"
+                )
+            byte_index, payloads_by_name = _read_owned_sec_indexed_payloads(
+                secured,
+                marker["byte_index"],
+                location="owned development SEC root directory",
+            )
+            if marker["byte_index_sha256"] != canonical_sha256(byte_index):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root byte index is not canonical"
+                )
+            documents_plan = plan["sec_access_plan"]["documents"]
+            expected_layout: list[tuple[str, str]] = []
+            for document_ordinal in range(1, len(documents_plan) + 1):
+                prefix = f"document-{document_ordinal:04d}"
+                expected_layout.extend(
+                    (
+                        (f"{prefix}-raw", f"{prefix}.raw"),
+                        (f"{prefix}-normalized", f"{prefix}.normalized.txt"),
+                    )
+                )
+            expected_layout.extend(
+                (
+                    ("request-receipts-json", "request-receipts.json"),
+                    ("byte-manifest-json", "byte-manifest.json"),
+                    ("corpus-universe-json", "corpus-universe.json"),
+                    (
+                        "development-content-manifest-json",
+                        "development-content-manifest.json",
+                    ),
+                )
+            )
+            observed_layout = [
+                (item["logical_id"], item["relative_path"])
+                for item in byte_index
+            ]
+            if observed_layout != expected_layout:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root lacks its exact evidence layout"
+                )
+            budgets = plan["budgets"]
+            try:
+                _validate_persisted_authenticated_stage_access_batch(
+                    authenticated_document_plan=documents_plan,
+                    raw_documents=tuple(
+                        payloads_by_name[f"document-{ordinal:04d}.raw"]
+                        for ordinal in range(1, len(documents_plan) + 1)
+                    ),
+                    normalized_documents=tuple(
+                        payloads_by_name[
+                            f"document-{ordinal:04d}.normalized.txt"
+                        ]
+                        for ordinal in range(1, len(documents_plan) + 1)
+                    ),
+                    request_receipts_json=payloads_by_name[
+                        "request-receipts.json"
+                    ],
+                    byte_manifest_json=payloads_by_name["byte-manifest.json"],
+                    expected_max_requests=budgets["max_sec_requests"],
+                    expected_max_bytes=budgets["max_raw_batch_bytes"],
+                    expected_max_seconds=float(
+                        budgets["max_sec_acquisition_seconds"]
+                    ),
+                    expected_user_agent_sha256=claim["sec_user_agent_sha256"],
+                )
+            except (
+                KeyError,
+                SecFilingGemmaCorpusError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root bytes fail independent semantic replay"
+                ) from exc
+            universe_bytes = payloads_by_name["corpus-universe.json"]
+            universe = _strict_json_bytes(
+                universe_bytes,
+                "owned development SEC root corpus universe",
+            )
+            if (
+                type(universe) is not dict
+                or universe != plan["corpus_universe_manifest"]
+                or universe_bytes != _encoded_state(universe)
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root universe differs from its claim"
+                )
+            actual_content_documents = []
+            for ordinal, document_plan in enumerate(documents_plan, start=1):
+                raw_document = payloads_by_name[f"document-{ordinal:04d}.raw"]
+                normalized_document = payloads_by_name[
+                    f"document-{ordinal:04d}.normalized.txt"
+                ]
+                actual_content_documents.append(
+                    {
+                        "accession_number": document_plan["accession_number"],
+                        "primary_document_sha256": hashlib.sha256(
+                            raw_document
+                        ).hexdigest(),
+                        "normalized_text_sha256": hashlib.sha256(
+                            normalized_document
+                        ).hexdigest(),
+                        "primary_document_bytes": len(raw_document),
+                        "normalized_text_bytes": len(normalized_document),
+                    }
+                )
+            try:
+                expected_content_manifest = build_stage_content_manifest(
+                    artifact_stage="development",
+                    corpus_universe_sha256=plan["corpus_provenance"][
+                        "corpus_universe_sha256"
+                    ],
+                    documents=actual_content_documents,
+                    universe_manifest=universe,
+                )
+                content_manifest_bytes = payloads_by_name[
+                    "development-content-manifest.json"
+                ]
+                content_manifest = _strict_json_bytes(
+                    content_manifest_bytes,
+                    "owned development SEC root content manifest",
+                )
+                validate_stage_content_manifest(
+                    content_manifest,
+                    universe_manifest=universe,
+                    expected_content_manifest_sha256=marker[
+                        "development_content_manifest_sha256"
+                    ],
+                )
+            except (
+                KeyError,
+                SecFilingGemmaContractError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root content manifest does not replay"
+                ) from exc
+            if (
+                type(content_manifest) is not dict
+                or content_manifest != expected_content_manifest
+                or content_manifest_bytes != _encoded_state(content_manifest)
+                or marker["development_content_manifest_sha256"]
+                != expected_content_manifest["content_manifest_sha256"]
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC root content manifest differs from exact bytes"
+                )
+            try:
+                self._revalidate_authorized_sec_execution_sources(claim)
+                receipt = build_development_sec_reader_receipt(
+                    claim,
+                    content_manifest_sha256=expected_content_manifest[
+                        "content_manifest_sha256"
+                    ],
+                    byte_index=byte_index,
+                    complete_marker_sha256=hashlib.sha256(marker_bytes).hexdigest(),
+                )
+            except (
+                SecFilingGemmaRevealStoreError,
+                SecFilingGemmaStageAuthorizationError,
+            ) as exc:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development SEC reader receipt could not be finalized"
+                ) from exc
+            if existing is not None:
+                if existing != receipt:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Persisted development SEC receipt differs from replayed bytes"
+                    )
+                return copy.deepcopy(existing)
+            _state, committed_tip = self._commit_state_and_tip_locked(
+                tracked_anchor=tracked_anchor,
+                prior_tip_anchor=current_tip,
+                next_state=current,
+                development_sec_reader_receipt=receipt,
+            )
+            persisted = committed_tip["development_sec_reader_receipts"].get(
+                root_scope_hash
+            )
+            if persisted != receipt:
+                raise SecFilingGemmaRevealStoreError(
+                    "Committed development SEC receipt differs from rehashed bytes"
+                )
+            return copy.deepcopy(persisted)
 
     def claim_authorized_sec_stage_execution(
         self,

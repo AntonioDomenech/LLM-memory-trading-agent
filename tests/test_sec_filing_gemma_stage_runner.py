@@ -15,12 +15,17 @@ import agent_benchmark.sec_filing_gemma_stage_runner as runner_module
 from agent_benchmark.sec_audit_transport import ResponseAudit
 from agent_benchmark.sec_filing_gemma_contract import canonical_sha256
 from agent_benchmark.sec_filing_gemma_reveal_store import (
+    DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION,
     SEC_BATCH_COMPLETE_MARKER_FILENAME,
     SEC_BATCH_COMPLETE_MARKER_SCHEMA_VERSION,
     SEC_STAGE_COMPONENT_DIRECTORY_NAME,
     SecFilingGemmaRevealStore,
 )
 from agent_benchmark.sec_filing_gemma_corpus import SecCorpusBudget
+from agent_benchmark.sec_filing_gemma_stage_access import (
+    DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+    DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES,
+)
 from agent_benchmark.sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
@@ -28,6 +33,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
 from agent_benchmark.sec_filing_gemma_stage_runner import (
     SecFilingGemmaStageRunnerError,
     run_authorized_sec_stage,
+    run_owned_development_sec_root,
 )
 from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
 
@@ -43,6 +49,8 @@ OFFICIAL_URL = (
     "000032019324000001/apple-2024.htm"
 )
 RAW_DOCUMENT = b"<html><body><p>Exact filing bytes &amp; evidence.</p></body></html>"
+DEVELOPMENT_CANDIDATE_SHA256 = "5" * 64
+DEVELOPMENT_UNIVERSE_SHA256 = "6" * 64
 
 
 def _claim() -> dict[str, Any]:
@@ -68,6 +76,95 @@ def _component_plan() -> dict[str, Any]:
     }
 
 
+def _development_root_plan() -> dict[str, Any]:
+    universe = {
+        "universe_sha256": DEVELOPMENT_UNIVERSE_SHA256,
+        "records": [
+            {
+                "accession_number": ACCESSION,
+                "artifact_stage": "development",
+                "form": "10-K",
+                "availability_session": "2018-11-05",
+                "primary_document": "apple-2024.htm",
+            }
+        ],
+    }
+    root_scope = {
+        "artifact_stage": "development",
+        "candidate_sha256": DEVELOPMENT_CANDIDATE_SHA256,
+        "candidate_design_sha256": "7" * 64,
+        "attempt_id": "attempt-001",
+        "corpus_universe_sha256": DEVELOPMENT_UNIVERSE_SHA256,
+        "corpus_universe_semantic_sha256": "8" * 64,
+        "document_count": 1,
+        "output_namespace": "development-root-attempt-001",
+        "component_id": DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+    }
+    body = {
+        "development_root_scope_sha256": canonical_sha256(root_scope),
+        "root_scope": root_scope,
+        "corpus_universe_manifest": universe,
+        "sec_access_plan": {
+            "artifact_stage": "development",
+            "document_count": 1,
+            "documents": [
+                {"accession_number": ACCESSION, "official_url": OFFICIAL_URL}
+            ],
+        },
+        "budgets": {
+            "max_sec_requests": 1,
+            "max_raw_batch_bytes": DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES,
+            "max_sec_acquisition_seconds": 10.0,
+        },
+        "output": {
+            "namespace": "development-root-attempt-001",
+            "component_id": DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+        },
+    }
+    return {
+        **body,
+        "development_content_root_plan_sha256": canonical_sha256(body),
+    }
+
+
+def _development_root_claim(
+    plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    exact_plan = plan or _development_root_plan()
+    return {
+        "development_root_scope_sha256": exact_plan[
+            "development_root_scope_sha256"
+        ],
+        "development_content_root_plan_sha256": exact_plan[
+            "development_content_root_plan_sha256"
+        ],
+        "development_content_root_plan": exact_plan,
+        "claim_sha256": CLAIM_SHA256,
+        "output_namespace": "development-root-attempt-001",
+        "candidate_sha256": DEVELOPMENT_CANDIDATE_SHA256,
+        "sec_user_agent_sha256": USER_AGENT_SHA256,
+        "execution_source_hashes": {},
+    }
+
+
+def _development_root_component_plan(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "documents": [
+            {"accession_number": ACCESSION, "official_url": OFFICIAL_URL}
+        ],
+        "max_requests": 1,
+        "max_bytes": DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES,
+        "max_seconds": 10.0,
+        "corpus_universe_sha256": DEVELOPMENT_UNIVERSE_SHA256,
+        "corpus_universe_manifest": plan["corpus_universe_manifest"],
+        "development_content_root_plan_sha256": plan[
+            "development_content_root_plan_sha256"
+        ],
+    }
+
+
 def _new_store(tmp_path: Path) -> SecFilingGemmaRevealStore:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -81,9 +178,20 @@ def _new_store(tmp_path: Path) -> SecFilingGemmaRevealStore:
 
 
 class FakeTransport:
-    def __init__(self, *, payload: bytes = RAW_DOCUMENT, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        payload: bytes = RAW_DOCUMENT,
+        fail: bool = False,
+        max_requests: int = 1,
+        max_bytes: int = 100_000,
+        max_seconds: float = 10.0,
+    ) -> None:
         self.payload = payload
         self.fail = fail
+        self.max_requests = max_requests
+        self.max_bytes = max_bytes
+        self.max_seconds = max_seconds
         self.calls: list[str] = []
         self.user_agent_audit = validate_sec_user_agent(USER_AGENT)
 
@@ -99,9 +207,9 @@ class FakeTransport:
             "streaming_body": True,
             "content_length_preflight": True,
             "incremental_byte_budget": True,
-            "transport_max_requests": 1,
-            "transport_max_bytes": 100_000,
-            "transport_max_seconds": 10.0,
+            "transport_max_requests": self.max_requests,
+            "transport_max_bytes": self.max_bytes,
+            "transport_max_seconds": self.max_seconds,
         }
 
     def fetch(self, url: str) -> tuple[bytes, ResponseAudit]:
@@ -174,11 +282,73 @@ def _install_created_claim_store(
     return records, aborts
 
 
+def _install_created_development_root_store(
+    store: SecFilingGemmaRevealStore,
+    *,
+    plan: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    records: list[str] = []
+    aborts: list[str] = []
+    claim = _development_root_claim(plan)
+    root_scope_sha256 = plan["development_root_scope_sha256"]
+
+    def claim_execution(
+        *,
+        development_content_root_plan: dict[str, Any],
+        sec_user_agent_sha256: str,
+    ) -> dict[str, Any]:
+        assert development_content_root_plan == plan
+        assert sec_user_agent_sha256 == USER_AGENT_SHA256
+        return {
+            "claim": claim,
+            "created": True,
+            "reader_receipt": None,
+            "abort": None,
+        }
+
+    def record_output(*, development_root_scope_sha256: str) -> dict[str, Any]:
+        assert development_root_scope_sha256 == root_scope_sha256
+        records.append(development_root_scope_sha256)
+        return {
+            "development_root_scope_sha256": root_scope_sha256,
+            "claim_sha256": CLAIM_SHA256,
+            "receipt_sha256": "3" * 64,
+        }
+
+    def abort_execution(
+        *,
+        development_root_scope_sha256: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        assert development_root_scope_sha256 == root_scope_sha256
+        aborts.append(reason)
+        return {"reason": reason}
+
+    store.claim_owned_development_sec_root_execution = claim_execution
+    store._record_owned_development_sec_root_reader_output = record_output
+    store.abort_owned_development_sec_root_execution = abort_execution
+    store._revalidate_authorized_sec_execution_sources = lambda _claim: None
+    return records, aborts
+
+
 def _install_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         runner_module,
         "_load_component_plan",
         lambda _store, *, request_sha256, claim: _component_plan(),
+    )
+
+
+def _install_development_root_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    plan: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        runner_module,
+        "_load_development_root_component_plan",
+        lambda _store, *, development_root_scope_sha256, claim: (
+            _development_root_component_plan(plan)
+        ),
     )
 
 
@@ -193,6 +363,27 @@ def _install_transport_factory(
         assert kwargs["user_agent"] == USER_AGENT
         assert kwargs["transport_budget"].max_requests == 1
         assert kwargs["transport_budget"].max_bytes == 100_000
+        assert kwargs["transport_budget"].max_seconds == 10.0
+        assert kwargs["cache_directory"].name == ".disabled-sec-cache"
+        yield transport
+
+    monkeypatch.setattr(runner_module, "_owned_transport_factory", factory)
+
+
+def _install_development_root_transport_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    transport: FakeTransport,
+    calls: list[str],
+) -> None:
+    @contextmanager
+    def factory(**kwargs: Any) -> Iterator[FakeTransport]:
+        calls.append("factory")
+        assert kwargs["user_agent"] == USER_AGENT
+        assert kwargs["transport_budget"].max_requests == 1
+        assert (
+            kwargs["transport_budget"].max_bytes
+            == DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES
+        )
         assert kwargs["transport_budget"].max_seconds == 10.0
         assert kwargs["cache_directory"].name == ".disabled-sec-cache"
         yield transport
@@ -226,7 +417,32 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
     assert runner_module.__all__ == [
         "SecFilingGemmaStageRunnerError",
         "run_authorized_sec_stage",
+        "run_owned_development_sec_root",
     ]
+
+
+def test_public_development_root_runner_signature_has_no_direct_effect_authority() -> None:
+    signature = inspect.signature(run_owned_development_sec_root)
+    assert tuple(signature.parameters) == (
+        "reveal_store",
+        "development_content_root_plan",
+        "user_agent",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    assert {
+        "request_sha256",
+        "stage",
+        "candidate",
+        "url",
+        "path",
+        "digest",
+        "bytes",
+        "transport",
+        "budget",
+    }.isdisjoint(signature.parameters)
 
 
 def test_runner_persists_exact_raw_normalized_and_canonical_batch_bytes(
@@ -296,6 +512,381 @@ def test_runner_persists_exact_raw_normalized_and_canonical_batch_bytes(
     assert b"owner-contact@real-domain-for-tests.dev" not in b"".join(
         observed.values()
     )
+
+
+def test_development_root_runner_persists_complete_universe_and_content_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    plan = _development_root_plan()
+    records, aborts = _install_created_development_root_store(store, plan=plan)
+    _install_development_root_plan(monkeypatch, plan)
+    transport = FakeTransport(
+        max_bytes=DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES
+    )
+    factory_calls: list[str] = []
+    _install_development_root_transport_factory(
+        monkeypatch,
+        transport,
+        factory_calls,
+    )
+
+    result = run_owned_development_sec_root(
+        reveal_store=store,
+        development_content_root_plan=plan,
+        user_agent=USER_AGENT,
+    )
+
+    root_scope_sha256 = plan["development_root_scope_sha256"]
+    assert result["claim"] == _development_root_claim(plan)
+    assert result["reader_receipt"]["claim_sha256"] == CLAIM_SHA256
+    assert records == [root_scope_sha256]
+    assert aborts == []
+    assert factory_calls == ["factory"]
+    assert transport.calls == [OFFICIAL_URL]
+
+    directory = (
+        store.store_directory
+        / "stage_outputs"
+        / CLAIM_SHA256
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+    )
+    observed = {path.name: path.read_bytes() for path in directory.iterdir()}
+    assert observed["document-0001.raw"] == RAW_DOCUMENT
+    assert json.loads(observed["corpus-universe.json"]) == plan[
+        "corpus_universe_manifest"
+    ]
+    assert observed["corpus-universe.json"] == runner_module._canonical_marker_bytes(
+        plan["corpus_universe_manifest"]
+    )
+    content_manifest = json.loads(observed["development-content-manifest.json"])
+    assert content_manifest["artifact_stage"] == "development"
+    assert content_manifest["corpus_universe_sha256"] == DEVELOPMENT_UNIVERSE_SHA256
+    assert content_manifest["document_count"] == 1
+    assert content_manifest["documents"][0]["accession_number"] == ACCESSION
+    assert content_manifest["documents"][0][
+        "primary_document_sha256"
+    ] == hashlib.sha256(RAW_DOCUMENT).hexdigest()
+    assert observed[
+        "development-content-manifest.json"
+    ] == runner_module._canonical_marker_bytes(content_manifest)
+
+    marker_bytes = observed[SEC_BATCH_COMPLETE_MARKER_FILENAME]
+    marker = json.loads(marker_bytes)
+    marker_body = {
+        key: value for key, value in marker.items() if key != "marker_sha256"
+    }
+    assert set(marker) == {
+        "schema_version",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "development_content_root_plan_sha256",
+        "component_id",
+        "development_content_manifest_sha256",
+        "byte_index",
+        "byte_index_sha256",
+        "marker_sha256",
+    }
+    assert (
+        marker["schema_version"]
+        == DEVELOPMENT_SEC_ROOT_COMPLETE_MARKER_SCHEMA_VERSION
+    )
+    assert marker["development_root_scope_sha256"] == root_scope_sha256
+    assert marker["claim_sha256"] == CLAIM_SHA256
+    assert marker["candidate_sha256"] == DEVELOPMENT_CANDIDATE_SHA256
+    assert marker["corpus_universe_sha256"] == DEVELOPMENT_UNIVERSE_SHA256
+    assert marker["development_content_root_plan_sha256"] == plan[
+        "development_content_root_plan_sha256"
+    ]
+    assert marker["component_id"] == DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+    assert marker["development_content_manifest_sha256"] == content_manifest[
+        "content_manifest_sha256"
+    ]
+    assert marker["marker_sha256"] == canonical_sha256(marker_body)
+    assert marker_bytes == runner_module._canonical_marker_bytes(marker)
+    assert [item["relative_path"] for item in marker["byte_index"]] == [
+        "document-0001.raw",
+        "document-0001.normalized.txt",
+        "request-receipts.json",
+        "byte-manifest.json",
+        "corpus-universe.json",
+        "development-content-manifest.json",
+    ]
+    assert USER_AGENT.encode() not in b"".join(observed.values())
+
+
+def test_completed_development_root_retry_replays_with_zero_network_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    plan = _development_root_plan()
+    claim = _development_root_claim(plan)
+    root_scope_sha256 = plan["development_root_scope_sha256"]
+    receipt = {
+        "development_root_scope_sha256": root_scope_sha256,
+        "claim_sha256": CLAIM_SHA256,
+        "receipt_sha256": "3" * 64,
+    }
+    replayed: list[str] = []
+    store.claim_owned_development_sec_root_execution = lambda **_kwargs: {
+        "claim": claim,
+        "created": False,
+        "reader_receipt": receipt,
+        "abort": None,
+    }
+    store._record_owned_development_sec_root_reader_output = (
+        lambda *, development_root_scope_sha256: (
+            replayed.append(development_root_scope_sha256) or receipt
+        )
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_owned_transport_factory",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed development root must perform zero I/O")
+        ),
+    )
+
+    result = run_owned_development_sec_root(
+        reveal_store=store,
+        development_content_root_plan=plan,
+        user_agent=USER_AGENT,
+    )
+
+    assert result == {"claim": claim, "reader_receipt": receipt}
+    assert replayed == [root_scope_sha256]
+
+
+def test_recovered_development_root_without_marker_aborts_with_zero_network_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    plan = _development_root_plan()
+    claim = _development_root_claim(plan)
+    root_scope_sha256 = plan["development_root_scope_sha256"]
+    aborts: list[str] = []
+    store.claim_owned_development_sec_root_execution = lambda **_kwargs: {
+        "claim": claim,
+        "created": False,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    store._record_owned_development_sec_root_reader_output = (
+        lambda *, development_root_scope_sha256: (_ for _ in ()).throw(
+            FileNotFoundError(SEC_BATCH_COMPLETE_MARKER_FILENAME)
+        )
+    )
+    store.abort_owned_development_sec_root_execution = (
+        lambda *, development_root_scope_sha256, reason: aborts.append(reason)
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_owned_transport_factory",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("indeterminate development root must perform zero I/O")
+        ),
+    )
+
+    with pytest.raises(SecFilingGemmaStageRunnerError, match="cannot be retried"):
+        run_owned_development_sec_root(
+            reveal_store=store,
+            development_content_root_plan=plan,
+            user_agent=USER_AGENT,
+        )
+
+    assert aborts == ["claim_recovered_without_terminal_receipt"]
+    assert root_scope_sha256 == claim["development_root_scope_sha256"]
+
+
+def test_development_root_crash_after_marker_recovers_with_zero_second_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    plan = _development_root_plan()
+    _records, aborts = _install_created_development_root_store(store, plan=plan)
+    _install_development_root_plan(monkeypatch, plan)
+    transport = FakeTransport(
+        max_bytes=DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES
+    )
+    factory_calls: list[str] = []
+    _install_development_root_transport_factory(
+        monkeypatch,
+        transport,
+        factory_calls,
+    )
+    root_scope_sha256 = plan["development_root_scope_sha256"]
+    record_calls: list[str] = []
+
+    def crash_then_record(
+        *, development_root_scope_sha256: str
+    ) -> dict[str, Any]:
+        record_calls.append(development_root_scope_sha256)
+        if len(record_calls) == 1:
+            raise SystemExit("simulated development root crash after marker")
+        marker = (
+            store.store_directory
+            / "stage_outputs"
+            / CLAIM_SHA256
+            / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+            / SEC_BATCH_COMPLETE_MARKER_FILENAME
+        )
+        assert marker.is_file()
+        return {
+            "development_root_scope_sha256": root_scope_sha256,
+            "claim_sha256": CLAIM_SHA256,
+            "receipt_sha256": "3" * 64,
+        }
+
+    store._record_owned_development_sec_root_reader_output = crash_then_record
+    with pytest.raises(SystemExit, match="simulated development root crash"):
+        run_owned_development_sec_root(
+            reveal_store=store,
+            development_content_root_plan=plan,
+            user_agent=USER_AGENT,
+        )
+    assert transport.calls == [OFFICIAL_URL]
+    assert factory_calls == ["factory"]
+    assert aborts == []
+
+    store.claim_owned_development_sec_root_execution = lambda **_kwargs: {
+        "claim": _development_root_claim(plan),
+        "created": False,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    monkeypatch.setattr(
+        runner_module,
+        "_owned_transport_factory",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("sealed development root must perform zero reader I/O")
+        ),
+    )
+    result = run_owned_development_sec_root(
+        reveal_store=store,
+        development_content_root_plan=plan,
+        user_agent=USER_AGENT,
+    )
+    assert result["reader_receipt"]["claim_sha256"] == CLAIM_SHA256
+    assert record_calls == [root_scope_sha256, root_scope_sha256]
+    assert transport.calls == [OFFICIAL_URL]
+    assert factory_calls == ["factory"]
+    assert aborts == []
+
+
+def test_development_root_finalizer_error_leaves_sealed_marker_recoverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    plan = _development_root_plan()
+    _records, aborts = _install_created_development_root_store(store, plan=plan)
+    _install_development_root_plan(monkeypatch, plan)
+    transport = FakeTransport(
+        max_bytes=DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES
+    )
+    factory_calls: list[str] = []
+    _install_development_root_transport_factory(
+        monkeypatch,
+        transport,
+        factory_calls,
+    )
+    root_scope_sha256 = plan["development_root_scope_sha256"]
+    record_calls: list[str] = []
+
+    def fail_then_record(
+        *, development_root_scope_sha256: str
+    ) -> dict[str, Any]:
+        record_calls.append(development_root_scope_sha256)
+        if len(record_calls) == 1:
+            raise PermissionError("simulated transient receipt failure")
+        return {
+            "development_root_scope_sha256": root_scope_sha256,
+            "claim_sha256": CLAIM_SHA256,
+            "receipt_sha256": "3" * 64,
+        }
+
+    store._record_owned_development_sec_root_reader_output = fail_then_record
+    with pytest.raises(
+        SecFilingGemmaStageRunnerError,
+        match="sealed marker remains recoverable",
+    ):
+        run_owned_development_sec_root(
+            reveal_store=store,
+            development_content_root_plan=plan,
+            user_agent=USER_AGENT,
+        )
+    marker = (
+        store.store_directory
+        / "stage_outputs"
+        / CLAIM_SHA256
+        / SEC_STAGE_COMPONENT_DIRECTORY_NAME
+        / SEC_BATCH_COMPLETE_MARKER_FILENAME
+    )
+    assert marker.is_file()
+    assert aborts == []
+    assert transport.calls == [OFFICIAL_URL]
+
+    store.claim_owned_development_sec_root_execution = lambda **_kwargs: {
+        "claim": _development_root_claim(plan),
+        "created": False,
+        "reader_receipt": None,
+        "abort": None,
+    }
+    monkeypatch.setattr(
+        runner_module,
+        "_owned_transport_factory",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("sealed development root must not refetch")
+        ),
+    )
+    result = run_owned_development_sec_root(
+        reveal_store=store,
+        development_content_root_plan=plan,
+        user_agent=USER_AGENT,
+    )
+    assert result["reader_receipt"]["claim_sha256"] == CLAIM_SHA256
+    assert record_calls == [root_scope_sha256, root_scope_sha256]
+    assert factory_calls == ["factory"]
+    assert aborts == []
+
+
+def test_development_root_lock_contention_cannot_claim_or_abort(
+    tmp_path: Path,
+) -> None:
+    store = _new_store(tmp_path)
+    plan = _development_root_plan()
+    claim_calls: list[str] = []
+
+    class UnavailableExecutionLock:
+        def __enter__(self) -> None:
+            raise TimeoutError("simulated concurrent owner")
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    store._owned_development_sec_root_execution_lock = (
+        lambda **_kwargs: UnavailableExecutionLock()
+    )
+    store.claim_owned_development_sec_root_execution = lambda **_kwargs: (
+        claim_calls.append("claim")
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageRunnerError,
+        match="already owned or cannot be locked",
+    ):
+        run_owned_development_sec_root(
+            reveal_store=store,
+            development_content_root_plan=plan,
+            user_agent=USER_AGENT,
+        )
+    assert claim_calls == []
 
 
 def test_completed_retry_replays_durable_receipt_with_zero_network_io(

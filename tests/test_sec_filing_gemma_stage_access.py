@@ -25,10 +25,15 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     candidate_design_sha256,
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
+    DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+    DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION,
+    DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES,
     MODEL_ENDPOINT,
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
     SecFilingGemmaStageAccessError,
+    build_development_content_root_plan,
     build_stage_access_manifest,
+    validate_development_content_root_plan,
     validate_prior_same_form_carry_in_scope,
     validate_stage_access_manifest,
 )
@@ -142,6 +147,309 @@ def _content_manifest(stage: str, universe: dict) -> dict:
         documents=documents,
         universe_manifest=universe,
     )
+
+
+def _development_root_context(universe: dict | None = None) -> dict:
+    exact_universe = copy.deepcopy(_frozen_universe() if universe is None else universe)
+    candidate = _candidate(exact_universe)
+    kwargs = {
+        "candidate_manifest": candidate,
+        "expected_candidate_sha256": candidate["candidate_sha256"],
+        "expected_candidate_design_sha256": candidate_design_sha256(candidate),
+        "expected_attempt_id": candidate["bindings"]["holdout_attempt_id"],
+        "base_corpus_universe_sha256": exact_universe["universe_sha256"],
+        "corpus_universe_manifest": exact_universe,
+        "session_calendar_sha256": exact_universe["calendar_sessions_sha256"],
+    }
+    plan = build_development_content_root_plan(**kwargs)
+    return {**kwargs, "plan": plan}
+
+
+def _validate_development_root(
+    context: dict,
+    *,
+    plan: dict | None = None,
+    expected_plan_hash: str | None = None,
+    **overrides: object,
+) -> str:
+    observed = context["plan"] if plan is None else plan
+    kwargs = {
+        key: context[key]
+        for key in (
+            "candidate_manifest",
+            "expected_candidate_sha256",
+            "expected_candidate_design_sha256",
+            "expected_attempt_id",
+            "base_corpus_universe_sha256",
+            "corpus_universe_manifest",
+            "session_calendar_sha256",
+        )
+    }
+    kwargs.update(overrides)
+    return validate_development_content_root_plan(
+        observed,
+        expected_development_content_root_plan_sha256=(
+            expected_plan_hash
+            or observed["development_content_root_plan_sha256"]
+        ),
+        **kwargs,
+    )
+
+
+def _rehash_development_root_plan(plan: dict) -> dict:
+    value = copy.deepcopy(plan)
+    body = {
+        key: value[key]
+        for key in value
+        if key != "development_content_root_plan_sha256"
+    }
+    value["development_content_root_plan_sha256"] = canonical_sha256(body)
+    return value
+
+
+def _fully_rehash_development_document_scope(plan: dict) -> dict:
+    value = copy.deepcopy(plan)
+    documents = value["sec_access_plan"]["documents"]
+    accessions = [document["accession_number"] for document in documents]
+    urls = [document["official_url"] for document in documents]
+    value["sec_access_plan"].update(
+        {
+            "document_count": len(documents),
+            "accessions_sha256": canonical_sha256(accessions),
+            "official_urls_sha256": canonical_sha256(urls),
+        }
+    )
+    value["root_scope"].update(
+        {
+            "document_count": len(documents),
+            "accessions_sha256": canonical_sha256(accessions),
+            "official_urls_sha256": canonical_sha256(urls),
+        }
+    )
+    value["budgets"]["max_sec_requests"] = len(documents)
+    value["development_root_scope_sha256"] = canonical_sha256(
+        value["root_scope"]
+    )
+    return _rehash_development_root_plan(value)
+
+
+def test_development_content_root_plan_is_complete_request_free_and_valid() -> None:
+    context = _development_root_context()
+    plan = context["plan"]
+    documents = _documents("development", context["corpus_universe_manifest"])
+
+    assert _validate_development_root(context) == plan[
+        "development_content_root_plan_sha256"
+    ]
+    assert plan["schema_version"] == DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION
+    assert plan["sec_access_plan"]["documents"] == documents
+    assert plan["sec_access_plan"]["document_count"] == len(documents)
+    assert plan["corpus_universe_manifest"] == context[
+        "corpus_universe_manifest"
+    ]
+    assert plan["root_scope"]["artifact_stage"] == "development"
+    assert plan["root_scope"]["document_count"] == len(documents)
+    assert plan["root_scope"]["component_id"] == (
+        DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+    )
+    assert plan["development_root_scope_sha256"] == canonical_sha256(
+        plan["root_scope"]
+    )
+    assert plan["output"] == {
+        "namespace": (
+            f"aapl-sec-gemma-{context['expected_attempt_id']}-"
+            "development-content-root"
+        ),
+        "component_id": DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+        "write_mode": "create_new_exclusive",
+        "existing_namespace_reuse_permitted": False,
+    }
+    assert plan["budgets"]["max_raw_batch_bytes"] == (
+        DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES
+    )
+    assert plan["budgets"]["max_paid_api_calls"] == 0
+    assert plan["budgets"]["max_estimated_cost_usd"] == 0.0
+    assert "reveal_request" not in plan
+    assert "market_access" not in plan
+    assert "model_access" not in plan
+    assert plan["scope"]["reveal_request_required"] is False
+    assert plan["scope"]["outcome_access_permitted"] is False
+    assert plan["scope"]["market_access_permitted"] is False
+    assert plan["scope"]["model_access_permitted"] is False
+    assert plan["scope"]["consumption_ledger_mutation_permitted"] is False
+
+    universe_by_accession = {
+        record["accession_number"]: record
+        for record in context["corpus_universe_manifest"]["records"]
+    }
+    assert {
+        universe_by_accession[document["accession_number"]]["artifact_stage"]
+        for document in documents
+    } == {"development"}
+    assert set(plan["scope"]["prohibited_artifact_stages"]) == {
+        "intermediate",
+        "final",
+    }
+
+
+def test_development_content_root_plan_detaches_complete_universe() -> None:
+    context = _development_root_context()
+    embedded = copy.deepcopy(context["plan"]["corpus_universe_manifest"])
+
+    context["corpus_universe_manifest"]["records"][0][
+        "primary_document"
+    ] = "caller-mutated.htm"
+
+    assert context["plan"]["corpus_universe_manifest"] == embedded
+
+
+def test_development_content_root_rejects_omission_extra_reorder_and_wrong_url() -> None:
+    context = _development_root_context()
+    base_documents = context["plan"]["sec_access_plan"]["documents"]
+    extra = _documents("intermediate", context["corpus_universe_manifest"])[0]
+
+    forged_document_sets = []
+    omitted = copy.deepcopy(base_documents[:-1])
+    forged_document_sets.append(omitted)
+    with_extra = copy.deepcopy(base_documents)
+    with_extra.append(copy.deepcopy(extra))
+    forged_document_sets.append(with_extra)
+    forged_document_sets.append(list(reversed(copy.deepcopy(base_documents))))
+    wrong_url = copy.deepcopy(base_documents)
+    wrong_url[0]["official_url"] = wrong_url[0]["official_url"].replace(
+        "www.sec.gov",
+        "evil.example",
+    )
+    forged_document_sets.append(wrong_url)
+
+    for documents in forged_document_sets:
+        forged = copy.deepcopy(context["plan"])
+        forged["sec_access_plan"]["documents"] = documents
+        forged = _fully_rehash_development_document_scope(forged)
+        with pytest.raises(
+            SecFilingGemmaStageAccessError,
+            match="exact candidate-bound construction",
+        ):
+            _validate_development_root(
+                context,
+                plan=forged,
+                expected_plan_hash=forged[
+                    "development_content_root_plan_sha256"
+                ],
+            )
+
+
+def test_development_content_root_uses_availability_stage_at_2018_boundary() -> None:
+    frozen = copy.deepcopy(_frozen_universe())
+    source_keys = (
+        "accession_number",
+        "subject_cik",
+        "form",
+        "acceptance_datetime",
+        "filing_date",
+        "filing_date_change",
+        "primary_document",
+        "source_record_sha256",
+    )
+    source_records = [
+        {key: record[key] for key in source_keys}
+        for record in frozen["records"]
+    ]
+    accession_2018 = next(
+        record
+        for record in source_records
+        if record["accession_number"].startswith("0000320193-18-")
+        and record["form"] == "10-K"
+    )
+    accession_2019 = next(
+        record
+        for record in source_records
+        if record["accession_number"].startswith("0000320193-19-")
+        and record["form"] == "10-K"
+    )
+    accession_2018.update(
+        {
+            "acceptance_datetime": "20181231160000",
+            "filing_date": "2018-12-31",
+        }
+    )
+    accession_2019.update(
+        {
+            "acceptance_datetime": "20181228160000",
+            "filing_date": "2018-12-28",
+        }
+    )
+    universe = build_corpus_universe_manifest(
+        catalog_artifact_sha256=frozen["catalog_artifact_sha256"],
+        calendar_artifact_sha256=frozen["calendar_artifact_sha256"],
+        catalog_total_record_count=frozen["catalog_total_record_count"],
+        catalog_eligible_record_count=len(source_records),
+        session_dates=EXPECTED_SESSIONS,
+        records=source_records,
+    )
+    context = _development_root_context(universe)
+    plan_accessions = {
+        document["accession_number"]
+        for document in context["plan"]["sec_access_plan"]["documents"]
+    }
+    records_by_accession = {
+        record["accession_number"]: record for record in universe["records"]
+    }
+
+    assert records_by_accession[accession_2019["accession_number"]][
+        "availability_session"
+    ] == "2018-12-31"
+    assert records_by_accession[accession_2019["accession_number"]][
+        "artifact_stage"
+    ] == "development"
+    assert accession_2019["accession_number"] in plan_accessions
+    assert records_by_accession[accession_2018["accession_number"]][
+        "availability_session"
+    ] == "2019-01-02"
+    assert records_by_accession[accession_2018["accession_number"]][
+        "artifact_stage"
+    ] == "intermediate"
+    assert accession_2018["accession_number"] not in plan_accessions
+    assert _validate_development_root(context) == context["plan"][
+        "development_content_root_plan_sha256"
+    ]
+
+
+def test_development_content_root_requires_scope_plan_and_external_self_hashes() -> None:
+    context = _development_root_context()
+    changed = copy.deepcopy(context["plan"])
+    changed["budgets"]["max_raw_batch_bytes"] -= 1
+    with pytest.raises(SecFilingGemmaStageAccessError, match="not canonical"):
+        _validate_development_root(context, plan=changed)
+
+    changed = _rehash_development_root_plan(changed)
+    with pytest.raises(
+        SecFilingGemmaStageAccessError,
+        match="exact candidate-bound construction",
+    ):
+        _validate_development_root(
+            context,
+            plan=changed,
+            expected_plan_hash=changed["development_content_root_plan_sha256"],
+        )
+
+    changed_scope = copy.deepcopy(context["plan"])
+    changed_scope["root_scope"]["candidate_sha256"] = _h("forged candidate")
+    changed_scope = _rehash_development_root_plan(changed_scope)
+    with pytest.raises(SecFilingGemmaStageAccessError, match="scope is not"):
+        _validate_development_root(
+            context,
+            plan=changed_scope,
+            expected_plan_hash=changed_scope[
+                "development_content_root_plan_sha256"
+            ],
+        )
+
+    with pytest.raises(SecFilingGemmaStageAccessError, match="externally pinned"):
+        _validate_development_root(
+            context,
+            expected_plan_hash=_h("wrong development root plan"),
+        )
 
 
 def _request_identity(

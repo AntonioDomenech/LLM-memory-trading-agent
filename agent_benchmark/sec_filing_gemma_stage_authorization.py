@@ -32,7 +32,10 @@ from agent_benchmark.sec_filing_gemma_reveal_registry import (
     REVEAL_REQUEST_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_stage_access import (
+    DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+    DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION,
     STAGE_ACCESS_MANIFEST_SCHEMA_VERSION,
+    validate_development_content_root_plan,
 )
 from agent_benchmark.sec_filing_gemma_stage_verifier import (
     STAGE_EVIDENCE_SCHEMA_VERSION,
@@ -77,8 +80,17 @@ STAGE_CARRY_IN_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
 STAGE_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-sec-execution-abort-v1"
 )
+DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-sec-execution-claim-v1"
+)
+DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-sec-reader-receipt-v1"
+)
+DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-sec-execution-abort-v1"
+)
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-reveal-store-current-tip-anchor-v5"
+    "aapl-sec-gemma-reveal-store-current-tip-anchor-v6"
 )
 TRUSTED_STAGE_CONTENT_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-trusted-stage-content-pin-v2"
@@ -433,6 +445,114 @@ _STAGE_SEC_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
         "abort_sha256",
     }
 )
+_DEVELOPMENT_CONTENT_ROOT_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "contract_sha256",
+        "root_scope",
+        "development_root_scope_sha256",
+        "corpus_provenance",
+        "corpus_universe_manifest",
+        "sec_access_plan",
+        "budgets",
+        "output",
+        "scope",
+        "authorization_semantics",
+        "development_content_root_plan_sha256",
+    }
+)
+_DEVELOPMENT_SEC_EXECUTION_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "claim_kind",
+        "development_root_scope_sha256",
+        "development_content_root_plan_sha256",
+        "development_content_root_plan",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "registry_sha256",
+        "registry_tip_sha256",
+        "registered_entry_count",
+        "corpus_universe_sha256",
+        "corpus_universe_semantic_sha256",
+        "start_current_tip_anchor_sha256",
+        "start_state_sha256",
+        "start_consumption_ledger_sha256",
+        "start_consumption_ledger_tip_sha256",
+        "start_consumed_request_count",
+        "output_namespace",
+        "output_write_mode",
+        "sec_component_id",
+        "runner_repository_path",
+        "runner_source_sha256",
+        "sec_corpus_repository_path",
+        "sec_corpus_source_sha256",
+        "execution_source_hashes",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "sec_user_agent_sha256",
+        "authorizes_outcome_access",
+        "market_access_permitted",
+        "model_access_permitted",
+        "future_stage_access_permitted",
+        "reveal_request_consumption_permitted",
+        "consumption_ledger_mutation_permitted",
+        "effect_may_be_repeated_after_indeterminate_crash",
+        "claim_sha256",
+    }
+)
+_DEVELOPMENT_SEC_READER_RECEIPT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "receipt_kind",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "development_content_root_plan_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "registry_entry_sha256",
+        "corpus_universe_sha256",
+        "corpus_universe_semantic_sha256",
+        "output_namespace",
+        "sec_component_id",
+        "runner_source_sha256",
+        "sec_corpus_source_sha256",
+        "execution_source_hashes_sha256",
+        "execution_source_role_count",
+        "sec_user_agent_sha256",
+        "content_manifest_sha256",
+        "byte_index",
+        "byte_index_sha256",
+        "byte_count_total",
+        "complete_marker_sha256",
+        "fresh_network_provenance_claimed",
+        "reader_output_recomputed_by_store",
+        "receipt_sha256",
+    }
+)
+_DEVELOPMENT_SEC_EXECUTION_ABORT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "abort_kind",
+        "development_root_scope_sha256",
+        "claim_sha256",
+        "development_content_root_plan_sha256",
+        "attempt_id",
+        "candidate_sha256",
+        "output_namespace",
+        "sec_component_id",
+        "reason",
+        "external_effect_retry_permitted",
+        "abort_sha256",
+    }
+)
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -454,6 +574,9 @@ _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
         "stage_sec_reader_receipts",
         "stage_carry_in_reader_receipts",
         "stage_sec_execution_aborts",
+        "development_sec_execution_claims",
+        "development_sec_reader_receipts",
+        "development_sec_execution_aborts",
         "tip_anchor_sha256",
     }
 )
@@ -1893,6 +2016,716 @@ def _validated_stage_sec_execution_aborts(
     return validated
 
 
+def _validated_development_content_root_plan(raw: Any) -> dict[str, Any]:
+    plan = _mapping(raw, "development-content root plan")
+    _expect_keys(
+        plan,
+        _DEVELOPMENT_CONTENT_ROOT_PLAN_KEYS,
+        "development-content root plan",
+    )
+    if (
+        plan["schema_version"] != DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION
+        or plan["contract_version"] != CONTRACT_VERSION
+        or plan["authorization_semantics"]
+        != "non_authorizing_request_free_plan_until_owned_development_root_claim"
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root plan semantics changed"
+        )
+    _sha256(plan["contract_sha256"], "development-content root contract hash")
+    plan_hash = _self_hash(
+        plan,
+        "development_content_root_plan_sha256",
+        "development-content root plan",
+    )
+    root_scope = _mapping(
+        plan["root_scope"],
+        "development-content root scope",
+    )
+    _expect_keys(
+        root_scope,
+        frozenset(
+            {
+                "scope_kind",
+                "artifact_stage",
+                "candidate_sha256",
+                "candidate_design_sha256",
+                "attempt_id",
+                "corpus_universe_sha256",
+                "corpus_universe_semantic_sha256",
+                "document_count",
+                "accessions_sha256",
+                "official_urls_sha256",
+                "output_namespace",
+                "component_id",
+            }
+        ),
+        "development-content root scope",
+    )
+    if (
+        root_scope["scope_kind"]
+        != "request_free_candidate_bound_complete_development_content_root"
+        or root_scope["artifact_stage"] != "development"
+        or root_scope["component_id"] != DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root scope semantics changed"
+        )
+    scope_hash = _sha256(
+        plan["development_root_scope_sha256"],
+        "development root scope hash",
+    )
+    if not hmac.compare_digest(scope_hash, canonical_sha256(root_scope)):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root scope self-hash is inconsistent"
+        )
+    _safe_id(root_scope["attempt_id"], "development root attempt id")
+    for field in (
+        "candidate_sha256",
+        "candidate_design_sha256",
+        "corpus_universe_sha256",
+        "corpus_universe_semantic_sha256",
+        "accessions_sha256",
+        "official_urls_sha256",
+    ):
+        _sha256(root_scope[field], f"development root scope {field}")
+    document_count = _strict_int(
+        root_scope["document_count"],
+        "development root document count",
+        minimum=1,
+    )
+    namespace = root_scope["output_namespace"]
+    if (
+        type(namespace) is not str
+        or _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root output namespace is invalid"
+        )
+
+    provenance = _mapping(
+        plan["corpus_provenance"],
+        "development-content root corpus provenance",
+    )
+    _expect_keys(
+        provenance,
+        frozenset(
+            {
+                "identity_role",
+                "corpus_universe_sha256",
+                "corpus_universe_semantic_sha256",
+                "sec_catalog_artifact_sha256",
+                "calendar_source_evidence_sha256",
+                "session_calendar_sha256",
+                "complete_coverage_required",
+                "caller_selection_permitted",
+            }
+        ),
+        "development-content root corpus provenance",
+    )
+    if (
+        provenance["identity_role"]
+        != "immutable_candidate_bound_complete_universe"
+        or provenance["complete_coverage_required"] is not True
+        or provenance["caller_selection_permitted"] is not False
+        or provenance["corpus_universe_sha256"]
+        != root_scope["corpus_universe_sha256"]
+        or provenance["corpus_universe_semantic_sha256"]
+        != root_scope["corpus_universe_semantic_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root corpus provenance changed"
+        )
+    for field in (
+        "corpus_universe_sha256",
+        "corpus_universe_semantic_sha256",
+        "sec_catalog_artifact_sha256",
+        "calendar_source_evidence_sha256",
+        "session_calendar_sha256",
+    ):
+        _sha256(provenance[field], f"development root provenance {field}")
+    universe = _mapping(
+        plan["corpus_universe_manifest"],
+        "development-content root corpus universe",
+    )
+    if (
+        universe.get("universe_sha256") != root_scope["corpus_universe_sha256"]
+        or universe.get("universe_semantic_sha256")
+        != root_scope["corpus_universe_semantic_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root universe crossed its scope"
+        )
+
+    sec_plan = _mapping(
+        plan["sec_access_plan"],
+        "development-content root SEC plan",
+    )
+    if (
+        sec_plan.get("artifact_stage") != "development"
+        or sec_plan.get("selection_policy")
+        != "all_and_only_development_stage_universe_primary_documents"
+        or sec_plan.get("method") != "GET"
+        or sec_plan.get("network_scope") != "official_sec_https_only"
+        or sec_plan.get("redirects_permitted") is not False
+        or sec_plan.get("retries_permitted") is not False
+        or sec_plan.get("cache_substitution_permitted") is not False
+        or sec_plan.get("document_count") != document_count
+        or sec_plan.get("accessions_sha256")
+        != root_scope["accessions_sha256"]
+        or sec_plan.get("official_urls_sha256")
+        != root_scope["official_urls_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root SEC plan crossed its exact scope"
+        )
+    if type(sec_plan.get("documents")) is not list or len(
+        sec_plan["documents"]
+    ) != document_count:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root SEC plan document count changed"
+        )
+
+    budgets = _mapping(plan["budgets"], "development-content root budgets")
+    if (
+        budgets.get("max_sec_requests") != document_count
+        or budgets.get("max_redirects") != 0
+        or budgets.get("max_retries") != 0
+        or budgets.get("max_paid_api_calls") != 0
+        or budgets.get("max_estimated_cost_usd") != 0.0
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root budgets changed their zero-cost scope"
+        )
+    _strict_int(
+        budgets.get("max_raw_batch_bytes"),
+        "development root raw batch cap",
+        minimum=1,
+    )
+
+    output = _mapping(plan["output"], "development-content root output")
+    _expect_keys(
+        output,
+        frozenset(
+            {
+                "namespace",
+                "component_id",
+                "write_mode",
+                "existing_namespace_reuse_permitted",
+            }
+        ),
+        "development-content root output",
+    )
+    if (
+        output["namespace"] != namespace
+        or output["component_id"] != DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+        or output["write_mode"] != "create_new_exclusive"
+        or output["existing_namespace_reuse_permitted"] is not False
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root output semantics changed"
+        )
+
+    scope = _mapping(plan["scope"], "development-content root authorization scope")
+    _expect_keys(
+        scope,
+        frozenset(
+            {
+                "authorized_artifact_stage",
+                "authorized_availability_window",
+                "prohibited_artifact_stages",
+                "pre_reveal_training_input",
+                "reveal_request_required",
+                "reveal_request_consumption_permitted",
+                "outcome_access_permitted",
+                "market_access_permitted",
+                "model_access_permitted",
+                "future_stage_access_permitted",
+                "consumption_ledger_mutation_permitted",
+            }
+        ),
+        "development-content root authorization scope",
+    )
+    window = _mapping(
+        scope["authorized_availability_window"],
+        "development-content root availability window",
+    )
+    if (
+        window != {"first_session": "2000-01-01", "last_session": "2018-12-31"}
+        or scope["authorized_artifact_stage"] != "development"
+        or scope["prohibited_artifact_stages"] != ["intermediate", "final"]
+        or scope["pre_reveal_training_input"] is not True
+        or scope["reveal_request_required"] is not False
+        or any(
+            scope[field] is not False
+            for field in (
+                "reveal_request_consumption_permitted",
+                "outcome_access_permitted",
+                "market_access_permitted",
+                "model_access_permitted",
+                "future_stage_access_permitted",
+                "consumption_ledger_mutation_permitted",
+            )
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development-content root authorization scope changed"
+        )
+    plan["development_content_root_plan_sha256"] = plan_hash
+    return plan
+
+
+def _development_registered_candidate(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    require_latest: bool,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    state, _ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    registry = _mapping(
+        state["latest_registry"],
+        "development root candidate registry",
+    )
+    entries = registry.get("entries")
+    if type(entries) is not list or not entries:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root requires one latest registered candidate"
+        )
+    registered_count = _strict_int(
+        state["latest_registry_pin"].get("registered_entry_count"),
+        "development root registered entry count",
+        minimum=1,
+    )
+    if len(entries) != registered_count:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root registry entry count is inconsistent"
+        )
+    root_scope = _mapping(plan["root_scope"], "development root plan scope")
+    candidate_hash = _sha256(
+        root_scope["candidate_sha256"],
+        "development root candidate hash",
+    )
+    candidate_matches: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    for index, raw_entry in enumerate(entries):
+        entry = _mapping(
+            raw_entry,
+            f"development root registry entry {index + 1}",
+        )
+        candidate = entry.get("candidate_manifest")
+        if (
+            entry.get("candidate_sha256") == candidate_hash
+            and entry.get("candidate_design_sha256")
+            == root_scope["candidate_design_sha256"]
+            and entry.get("attempt_id") == root_scope["attempt_id"]
+            and type(candidate) is dict
+        ):
+            candidate_matches.append(
+                (
+                    index,
+                    entry,
+                    _mapping(
+                        candidate,
+                        "development root registered candidate manifest",
+                    ),
+                )
+            )
+    if len(candidate_matches) != 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root plan lacks exactly one registered candidate"
+        )
+    entry_index, entry, candidate = candidate_matches[0]
+    if require_latest and entry_index != len(entries) - 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root plan is not bound to the latest registry candidate"
+        )
+    try:
+        validated_candidate_hash = validate_candidate_manifest(
+            candidate,
+            expected_candidate_sha256=candidate_hash,
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root candidate manifest is not canonical"
+        ) from exc
+    expected_identity = {
+        "candidate_sha256": candidate_hash,
+        "candidate_design_sha256": root_scope["candidate_design_sha256"],
+        "attempt_id": root_scope["attempt_id"],
+    }
+    if (
+        validated_candidate_hash != candidate_hash
+        or any(entry.get(field) != value for field, value in expected_identity.items())
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root plan crossed its registered candidate identity"
+        )
+    _sha256(entry.get("entry_sha256"), "development root registry entry hash")
+    try:
+        validate_development_content_root_plan(
+            plan,
+            expected_development_content_root_plan_sha256=plan[
+                "development_content_root_plan_sha256"
+            ],
+            candidate_manifest=candidate,
+            expected_candidate_sha256=candidate_hash,
+            expected_candidate_design_sha256=root_scope[
+                "candidate_design_sha256"
+            ],
+            expected_attempt_id=root_scope["attempt_id"],
+            base_corpus_universe_sha256=candidate["bindings"][
+                "corpus_universe_sha256"
+            ],
+            corpus_universe_manifest=plan["corpus_universe_manifest"],
+            session_calendar_sha256=plan["corpus_provenance"][
+                "session_calendar_sha256"
+            ],
+        )
+    except Exception as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development root plan failed its exact candidate-bound validation"
+        ) from exc
+    return state, entry, candidate
+
+
+def _validated_development_sec_execution_claims(
+    raw: Any,
+    *,
+    authenticated_store_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    claims = _mapping(raw, "current-tip development SEC execution claims")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_claim in claims.items():
+        scope_hash = _sha256(
+            raw_scope_sha256,
+            "development SEC execution claim map key",
+        )
+        claim = _mapping(
+            raw_claim,
+            f"development SEC execution claim {scope_hash}",
+        )
+        _expect_keys(
+            claim,
+            _DEVELOPMENT_SEC_EXECUTION_CLAIM_KEYS,
+            f"development SEC execution claim {scope_hash}",
+        )
+        if (
+            claim["schema_version"]
+            != DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION
+            or claim["contract_version"] != CONTRACT_VERSION
+            or claim["claim_kind"]
+            != "owned_development_sec_content_root"
+            or claim["runner_repository_path"] != STAGE_RUNNER_REPOSITORY_PATH
+            or claim["sec_corpus_repository_path"]
+            != SEC_CORPUS_REPOSITORY_PATH
+            or claim["sec_component_id"]
+            != DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID
+            or claim["output_write_mode"] != "create_new_exclusive"
+            or claim["authorizes_outcome_access"] is not False
+            or claim["market_access_permitted"] is not False
+            or claim["model_access_permitted"] is not False
+            or claim["future_stage_access_permitted"] is not False
+            or claim["reveal_request_consumption_permitted"] is not False
+            or claim["consumption_ledger_mutation_permitted"] is not False
+            or claim["effect_may_be_repeated_after_indeterminate_crash"]
+            is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution claim semantics changed"
+            )
+        _self_hash(claim, "claim_sha256", "development SEC execution claim")
+        plan = _validated_development_content_root_plan(
+            claim["development_content_root_plan"]
+        )
+        root_scope = plan["root_scope"]
+        expected_plan_bindings = {
+            "development_root_scope_sha256": scope_hash,
+            "development_content_root_plan_sha256": plan[
+                "development_content_root_plan_sha256"
+            ],
+            "attempt_id": root_scope["attempt_id"],
+            "candidate_sha256": root_scope["candidate_sha256"],
+            "candidate_design_sha256": root_scope[
+                "candidate_design_sha256"
+            ],
+            "corpus_universe_sha256": root_scope["corpus_universe_sha256"],
+            "corpus_universe_semantic_sha256": root_scope[
+                "corpus_universe_semantic_sha256"
+            ],
+            "output_namespace": root_scope["output_namespace"],
+            "sec_component_id": root_scope["component_id"],
+        }
+        if (
+            plan["development_root_scope_sha256"] != scope_hash
+            or any(
+                claim[field] != value
+                for field, value in expected_plan_bindings.items()
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution claim crossed its exact root plan"
+            )
+        for field in (
+            "development_root_scope_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "corpus_universe_sha256",
+            "corpus_universe_semantic_sha256",
+            "start_current_tip_anchor_sha256",
+            "start_state_sha256",
+            "start_consumption_ledger_sha256",
+            "start_consumption_ledger_tip_sha256",
+            "runner_source_sha256",
+            "sec_corpus_source_sha256",
+            "execution_source_hashes_sha256",
+        ):
+            _sha256(claim[field], f"development SEC execution claim {field}")
+        _safe_id(claim["attempt_id"], "development SEC execution attempt id")
+        _strict_int(
+            claim["registered_entry_count"],
+            "development SEC execution registered entry count",
+            minimum=1,
+        )
+        _strict_int(
+            claim["start_consumed_request_count"],
+            "development SEC execution consumed request count",
+        )
+        _tagged_sha256(
+            claim["sec_user_agent_sha256"],
+            "development SEC execution User-Agent hash",
+        )
+        raw_sources = _mapping(
+            claim["execution_source_hashes"],
+            "development SEC execution source hashes",
+        )
+        expected_roles = {role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS}
+        if set(raw_sources) != expected_roles:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution source closure is incomplete"
+            )
+        sources = {
+            role: _sha256(
+                raw_sources[role],
+                f"development SEC execution source hash {role}",
+            )
+            for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+        }
+        if (
+            claim["execution_source_hashes"] != sources
+            or claim["execution_source_hashes_sha256"]
+            != canonical_sha256(sources)
+            or claim["execution_source_role_count"] != len(sources)
+            or claim["runner_source_sha256"] != sources["runner"]
+            or claim["sec_corpus_source_sha256"]
+            != sources["sec_corpus_selector"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution source closure is inconsistent"
+            )
+        if authenticated_store_snapshot is not None:
+            state, registry_entry, candidate = _development_registered_candidate(
+                authenticated_store_snapshot,
+                plan=plan,
+                require_latest=False,
+            )
+            candidate_sources = _mapping(
+                _mapping(
+                    candidate.get("bindings"),
+                    "development root candidate bindings",
+                ).get("source_hashes"),
+                "development root candidate source hashes",
+            )
+            if (
+                claim["registry_entry_sha256"]
+                != registry_entry["entry_sha256"]
+            ) or any(
+                candidate_sources.get(role) != source_hash
+                for role, source_hash in sources.items()
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Development SEC execution claim crossed its registered candidate"
+                )
+        validated[scope_hash] = claim
+    return validated
+
+
+def _validated_development_sec_reader_receipts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    receipts = _mapping(raw, "current-tip development SEC reader receipts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_receipt in receipts.items():
+        scope_hash = _sha256(
+            raw_scope_sha256,
+            "development SEC reader receipt map key",
+        )
+        receipt = _mapping(
+            raw_receipt,
+            f"development SEC reader receipt {scope_hash}",
+        )
+        _expect_keys(
+            receipt,
+            _DEVELOPMENT_SEC_READER_RECEIPT_KEYS,
+            f"development SEC reader receipt {scope_hash}",
+        )
+        if (
+            receipt["schema_version"]
+            != DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION
+            or receipt["contract_version"] != CONTRACT_VERSION
+            or receipt["receipt_kind"]
+            != "store_rehashed_owned_development_sec_content_root"
+            or receipt["fresh_network_provenance_claimed"] is not False
+            or receipt["reader_output_recomputed_by_store"] is not True
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC reader receipt semantics changed"
+            )
+        _self_hash(receipt, "receipt_sha256", "development SEC reader receipt")
+        index = _validated_sec_byte_index(receipt["byte_index"])
+        if (
+            receipt["byte_index"] != index
+            or receipt["byte_index_sha256"] != canonical_sha256(index)
+            or receipt["byte_count_total"]
+            != sum(item["byte_count"] for item in index)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC reader receipt byte index is inconsistent"
+            )
+        for field in (
+            "development_root_scope_sha256",
+            "claim_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+            "candidate_design_sha256",
+            "registry_entry_sha256",
+            "corpus_universe_sha256",
+            "corpus_universe_semantic_sha256",
+            "runner_source_sha256",
+            "sec_corpus_source_sha256",
+            "execution_source_hashes_sha256",
+            "content_manifest_sha256",
+            "byte_index_sha256",
+            "complete_marker_sha256",
+        ):
+            _sha256(receipt[field], f"development SEC reader receipt {field}")
+        _tagged_sha256(
+            receipt["sec_user_agent_sha256"],
+            "development SEC reader receipt User-Agent hash",
+        )
+        claim = claims.get(scope_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC reader receipt lacks its execution claim"
+            )
+        expected = {
+            "development_root_scope_sha256": scope_hash,
+            "claim_sha256": claim.get("claim_sha256"),
+            "development_content_root_plan_sha256": claim.get(
+                "development_content_root_plan_sha256"
+            ),
+            "attempt_id": claim.get("attempt_id"),
+            "candidate_sha256": claim.get("candidate_sha256"),
+            "candidate_design_sha256": claim.get("candidate_design_sha256"),
+            "registry_entry_sha256": claim.get("registry_entry_sha256"),
+            "corpus_universe_sha256": claim.get("corpus_universe_sha256"),
+            "corpus_universe_semantic_sha256": claim.get(
+                "corpus_universe_semantic_sha256"
+            ),
+            "output_namespace": claim.get("output_namespace"),
+            "sec_component_id": claim.get("sec_component_id"),
+            "runner_source_sha256": claim.get("runner_source_sha256"),
+            "sec_corpus_source_sha256": claim.get("sec_corpus_source_sha256"),
+            "execution_source_hashes_sha256": claim.get(
+                "execution_source_hashes_sha256"
+            ),
+            "execution_source_role_count": claim.get(
+                "execution_source_role_count"
+            ),
+            "sec_user_agent_sha256": claim.get("sec_user_agent_sha256"),
+        }
+        if any(receipt[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC reader receipt crossed its execution claim"
+            )
+        validated[scope_hash] = receipt
+    return validated
+
+
+def _validated_development_sec_execution_aborts(
+    raw: Any,
+    *,
+    claims: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    aborts = _mapping(raw, "current-tip development SEC execution aborts")
+    validated: dict[str, dict[str, Any]] = {}
+    for raw_scope_sha256, raw_abort in aborts.items():
+        scope_hash = _sha256(
+            raw_scope_sha256,
+            "development SEC execution abort map key",
+        )
+        abort = _mapping(
+            raw_abort,
+            f"development SEC execution abort {scope_hash}",
+        )
+        _expect_keys(
+            abort,
+            _DEVELOPMENT_SEC_EXECUTION_ABORT_KEYS,
+            f"development SEC execution abort {scope_hash}",
+        )
+        if (
+            abort["schema_version"]
+            != DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION
+            or abort["contract_version"] != CONTRACT_VERSION
+            or abort["abort_kind"]
+            != "indeterminate_owned_development_sec_content_root"
+            or abort["reason"]
+            not in {
+                "claim_recovered_without_terminal_receipt",
+                "external_effect_failed_or_completion_unknown",
+                "durable_output_verification_failed",
+            }
+            or abort["external_effect_retry_permitted"] is not False
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution abort semantics changed"
+            )
+        _self_hash(abort, "abort_sha256", "development SEC execution abort")
+        for field in (
+            "development_root_scope_sha256",
+            "claim_sha256",
+            "development_content_root_plan_sha256",
+            "candidate_sha256",
+        ):
+            _sha256(abort[field], f"development SEC execution abort {field}")
+        claim = claims.get(scope_hash)
+        if type(claim) is not dict:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution abort lacks its execution claim"
+            )
+        expected = {
+            "development_root_scope_sha256": scope_hash,
+            "claim_sha256": claim.get("claim_sha256"),
+            "development_content_root_plan_sha256": claim.get(
+                "development_content_root_plan_sha256"
+            ),
+            "attempt_id": claim.get("attempt_id"),
+            "candidate_sha256": claim.get("candidate_sha256"),
+            "output_namespace": claim.get("output_namespace"),
+            "sec_component_id": claim.get("sec_component_id"),
+        }
+        if any(abort[field] != value for field, value in expected.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution abort crossed its claim"
+            )
+        validated[scope_hash] = abort
+    return validated
+
+
 def validate_reveal_store_current_tip_anchor_structure(
     current_tip_anchor: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1959,6 +2792,23 @@ def validate_reveal_store_current_tip_anchor_structure(
         anchor["stage_sec_execution_aborts"],
         claims=anchor["stage_sec_execution_claims"],
     )
+    anchor["development_sec_execution_claims"] = (
+        _validated_development_sec_execution_claims(
+            anchor["development_sec_execution_claims"]
+        )
+    )
+    anchor["development_sec_reader_receipts"] = (
+        _validated_development_sec_reader_receipts(
+            anchor["development_sec_reader_receipts"],
+            claims=anchor["development_sec_execution_claims"],
+        )
+    )
+    anchor["development_sec_execution_aborts"] = (
+        _validated_development_sec_execution_aborts(
+            anchor["development_sec_execution_aborts"],
+            claims=anchor["development_sec_execution_claims"],
+        )
+    )
     anchor["consumed_stage_output_receipts"] = (
         _validated_consumed_stage_output_receipts(
             anchor["consumed_stage_output_receipts"],
@@ -1984,12 +2834,23 @@ def validate_reveal_store_current_tip_anchor_structure(
         raise SecFilingGemmaStageAuthorizationError(
             "SEC execution cannot be both completed and aborted"
         )
-    active_claims = set(anchor["stage_sec_execution_claims"]) - set(
+    if set(anchor["development_sec_reader_receipts"]) & set(
+        anchor["development_sec_execution_aborts"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development SEC execution cannot be both completed and aborted"
+        )
+    active_stage_claims = set(anchor["stage_sec_execution_claims"]) - set(
         anchor["stage_sec_reader_receipts"]
     ) - set(anchor["stage_sec_execution_aborts"])
-    if len(active_claims) > 1:
+    active_development_claims = set(
+        anchor["development_sec_execution_claims"]
+    ) - set(anchor["development_sec_reader_receipts"]) - set(
+        anchor["development_sec_execution_aborts"]
+    )
+    if len(active_stage_claims) + len(active_development_claims) > 1:
         raise SecFilingGemmaStageAuthorizationError(
-            "At most one SEC execution claim may be active"
+            "At most one SEC execution claim may be globally active"
         )
     _self_hash(anchor, "tip_anchor_sha256", "independent current-tip anchor")
     return anchor
@@ -2007,6 +2868,9 @@ def build_reveal_store_current_tip_anchor(
     stage_sec_execution_claims: Mapping[str, Any] | None = None,
     stage_sec_reader_receipts: Mapping[str, Any] | None = None,
     stage_sec_execution_aborts: Mapping[str, Any] | None = None,
+    development_sec_execution_claims: Mapping[str, Any] | None = None,
+    development_sec_reader_receipts: Mapping[str, Any] | None = None,
+    development_sec_execution_aborts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the separately persisted CAS anchor for one exact store state."""
 
@@ -2042,9 +2906,45 @@ def build_reveal_store_current_tip_anchor(
         raise SecFilingGemmaStageAuthorizationError(
             "SEC execution cannot be both completed and aborted"
         )
-    if len(set(sec_claims) - set(sec_receipts) - set(sec_aborts)) > 1:
+    development_claims = _validated_development_sec_execution_claims(
+        (
+            {}
+            if development_sec_execution_claims is None
+            else development_sec_execution_claims
+        ),
+        authenticated_store_snapshot=state,
+    )
+    development_receipts = _validated_development_sec_reader_receipts(
+        (
+            {}
+            if development_sec_reader_receipts is None
+            else development_sec_reader_receipts
+        ),
+        claims=development_claims,
+    )
+    development_aborts = _validated_development_sec_execution_aborts(
+        (
+            {}
+            if development_sec_execution_aborts is None
+            else development_sec_execution_aborts
+        ),
+        claims=development_claims,
+    )
+    if set(development_receipts) & set(development_aborts):
         raise SecFilingGemmaStageAuthorizationError(
-            "At most one SEC execution claim may be active"
+            "Development SEC execution cannot be both completed and aborted"
+        )
+    active_stage_claim_count = len(
+        set(sec_claims) - set(sec_receipts) - set(sec_aborts)
+    )
+    active_development_claim_count = len(
+        set(development_claims)
+        - set(development_receipts)
+        - set(development_aborts)
+    )
+    if active_stage_claim_count + active_development_claim_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "At most one SEC execution claim may be globally active"
         )
     output_receipts = _validated_consumed_stage_output_receipts(
         (
@@ -2088,6 +2988,9 @@ def build_reveal_store_current_tip_anchor(
         "stage_sec_execution_claims": sec_claims,
         "stage_sec_reader_receipts": sec_receipts,
         "stage_sec_execution_aborts": sec_aborts,
+        "development_sec_execution_claims": development_claims,
+        "development_sec_reader_receipts": development_receipts,
+        "development_sec_execution_aborts": development_aborts,
     }
     return {**body, "tip_anchor_sha256": canonical_sha256(body)}
 
@@ -2302,6 +3205,63 @@ def validate_reveal_store_current_tip_anchor_transition(
             "Non-carry-in transition changed stage carry-in receipt membership"
         )
 
+    prior_development_claims = prior["development_sec_execution_claims"]
+    next_development_claims = next_anchor["development_sec_execution_claims"]
+    prior_development_receipts = prior["development_sec_reader_receipts"]
+    next_development_receipts = next_anchor["development_sec_reader_receipts"]
+    prior_development_aborts = prior["development_sec_execution_aborts"]
+    next_development_aborts = next_anchor["development_sec_execution_aborts"]
+    for prior_map, next_map, label in (
+        (
+            prior_development_claims,
+            next_development_claims,
+            "development SEC execution claim",
+        ),
+        (
+            prior_development_receipts,
+            next_development_receipts,
+            "development SEC reader receipt",
+        ),
+        (
+            prior_development_aborts,
+            next_development_aborts,
+            "development SEC execution abort",
+        ),
+    ):
+        if any(next_map.get(key) != value for key, value in prior_map.items()):
+            raise SecFilingGemmaStageAuthorizationError(
+                f"Current-tip transition removed or changed a persisted {label}"
+            )
+    development_claim_delta = len(next_development_claims) - len(
+        prior_development_claims
+    )
+    development_reader_delta = len(next_development_receipts) - len(
+        prior_development_receipts
+    )
+    development_abort_delta = len(next_development_aborts) - len(
+        prior_development_aborts
+    )
+    if any(
+        delta not in {0, 1}
+        for delta in (
+            development_claim_delta,
+            development_reader_delta,
+            development_abort_delta,
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Current-tip transition may append at most one development SEC execution artifact"
+        )
+    development_delta_count = (
+        development_claim_delta
+        + development_reader_delta
+        + development_abort_delta
+    )
+    if development_delta_count > 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development SEC claim, reader receipt, and abort require separate transitions"
+        )
+
     prior_sec_claims = prior["stage_sec_execution_claims"]
     next_sec_claims = next_anchor["stage_sec_execution_claims"]
     prior_sec_receipts = prior["stage_sec_reader_receipts"]
@@ -2349,12 +3309,21 @@ def validate_reveal_store_current_tip_anchor_transition(
             or bundle_delta
             or pin_delta
             or output_delta
+            or carry_in_delta
+            or development_delta_count
         ):
             raise SecFilingGemmaStageAuthorizationError(
                 "Active SEC execution claim blocks every transition except its exact terminal receipt"
             )
     if sec_delta_count:
-        if consumption_delta or bundle_delta or pin_delta or output_delta:
+        if (
+            consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+            or carry_in_delta
+            or development_delta_count
+        ):
             raise SecFilingGemmaStageAuthorizationError(
                 "SEC execution artifact append must be a dedicated tip-only transition"
             )
@@ -2415,6 +3384,103 @@ def validate_reveal_store_current_tip_anchor_transition(
             raise SecFilingGemmaStageAuthorizationError(
                 "Non-SEC transition changed SEC execution membership"
             )
+
+    prior_active_development = set(prior_development_claims) - set(
+        prior_development_receipts
+    ) - set(prior_development_aborts)
+    if prior_active_development:
+        active_scope = next(iter(prior_active_development))
+        terminal_scope: str | None = None
+        if development_reader_delta:
+            terminal_scope = next(
+                iter(
+                    set(next_development_receipts)
+                    - set(prior_development_receipts)
+                )
+            )
+        elif development_abort_delta:
+            terminal_scope = next(
+                iter(
+                    set(next_development_aborts)
+                    - set(prior_development_aborts)
+                )
+            )
+        if (
+            development_claim_delta
+            or development_delta_count != 1
+            or terminal_scope != active_scope
+            or consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+            or carry_in_delta
+            or sec_delta_count
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Active development SEC execution claim blocks every transition except its exact terminal receipt"
+            )
+    if development_delta_count:
+        if (
+            consumption_delta
+            or bundle_delta
+            or pin_delta
+            or output_delta
+            or carry_in_delta
+            or sec_delta_count
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution artifact append must be a dedicated tip-only transition"
+            )
+        immutable_state_fields = (
+            "state_sha256",
+            "state_snapshot_bytes_sha256",
+            "state_snapshot_byte_count",
+            "registry_sha256",
+            "registry_tip_sha256",
+            "consumption_ledger_sha256",
+            "consumption_ledger_tip_sha256",
+            "consumed_request_count",
+        )
+        if any(next_anchor[field] != prior[field] for field in immutable_state_fields):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution artifact append changed authenticated store state"
+            )
+    if development_claim_delta:
+        scope_hash = next(
+            iter(set(next_development_claims) - set(prior_development_claims))
+        )
+        claim = next_development_claims[scope_hash]
+        current_bindings = {
+            "development_root_scope_sha256": scope_hash,
+            "start_current_tip_anchor_sha256": prior["tip_anchor_sha256"],
+            "start_state_sha256": prior["state_sha256"],
+            "start_consumption_ledger_sha256": prior[
+                "consumption_ledger_sha256"
+            ],
+            "start_consumption_ledger_tip_sha256": prior[
+                "consumption_ledger_tip_sha256"
+            ],
+            "start_consumed_request_count": prior["consumed_request_count"],
+            "registry_sha256": prior["registry_sha256"],
+            "registry_tip_sha256": prior["registry_tip_sha256"],
+        }
+        if any(
+            claim[field] != expected
+            for field, expected in current_bindings.items()
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development SEC execution claim does not bind the exact current registry and ledger tip"
+            )
+    if not development_delta_count:
+        if (
+            set(next_development_claims) != set(prior_development_claims)
+            or set(next_development_receipts)
+            != set(prior_development_receipts)
+            or set(next_development_aborts) != set(prior_development_aborts)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Non-development transition changed development SEC execution membership"
+            )
     return prior, next_anchor
 
 
@@ -2443,6 +3509,15 @@ def validate_reveal_store_current_tip_anchor(
         stage_sec_execution_claims=observed["stage_sec_execution_claims"],
         stage_sec_reader_receipts=observed["stage_sec_reader_receipts"],
         stage_sec_execution_aborts=observed["stage_sec_execution_aborts"],
+        development_sec_execution_claims=observed[
+            "development_sec_execution_claims"
+        ],
+        development_sec_reader_receipts=observed[
+            "development_sec_reader_receipts"
+        ],
+        development_sec_execution_aborts=observed[
+            "development_sec_execution_aborts"
+        ],
     )
     if observed != expected:
         raise SecFilingGemmaStageAuthorizationError(
@@ -2909,6 +3984,221 @@ def _sec_component_plan_from_bundle(
             "SEC execution request budget differs from its document plan"
         )
     return bundle, grant, component_plan
+
+
+def build_development_sec_execution_claim(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_content_root_plan: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    execution_source_hashes: Mapping[str, Any],
+    sec_user_agent_sha256: str,
+) -> dict[str, Any]:
+    """Claim one request-free development SEC root at the exact store tip."""
+
+    plan = _validated_development_content_root_plan(
+        development_content_root_plan
+    )
+    state, registry_entry, candidate = _development_registered_candidate(
+        authenticated_store_snapshot,
+        plan=plan,
+        require_latest=True,
+    )
+    current_tip = validate_reveal_store_current_tip_anchor(
+        state,
+        independent_current_tip_anchor,
+    )
+    root_scope = plan["root_scope"]
+    raw_sources = _mapping(
+        execution_source_hashes,
+        "owned development SEC execution source hashes",
+    )
+    expected_roles = {role for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS}
+    if set(raw_sources) != expected_roles:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development SEC execution source closure is incomplete"
+        )
+    sources = {
+        role: _sha256(
+            raw_sources[role],
+            f"owned development SEC execution source hash {role}",
+        )
+        for role, _path in SEC_EXECUTION_RESOLVED_SOURCE_PATHS
+    }
+    candidate_sources = _mapping(
+        _mapping(
+            candidate.get("bindings"),
+            "development root candidate bindings",
+        ).get("source_hashes"),
+        "development root candidate source hashes",
+    )
+    if any(
+        candidate_sources.get(role) != source_hash
+        for role, source_hash in sources.items()
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Owned development SEC execution bytes differ from the registered candidate"
+        )
+    user_agent_hash = _tagged_sha256(
+        sec_user_agent_sha256,
+        "owned development SEC execution User-Agent hash",
+    )
+    registry_pin = state["latest_registry_pin"]
+    ledger = state["consumption_ledger"]
+    body = {
+        "schema_version": DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "claim_kind": "owned_development_sec_content_root",
+        "development_root_scope_sha256": plan[
+            "development_root_scope_sha256"
+        ],
+        "development_content_root_plan_sha256": plan[
+            "development_content_root_plan_sha256"
+        ],
+        "development_content_root_plan": plan,
+        "attempt_id": root_scope["attempt_id"],
+        "candidate_sha256": root_scope["candidate_sha256"],
+        "candidate_design_sha256": root_scope["candidate_design_sha256"],
+        "registry_entry_sha256": registry_entry["entry_sha256"],
+        "registry_sha256": state["latest_registry"]["registry_sha256"],
+        "registry_tip_sha256": registry_pin["tip_sha256"],
+        "registered_entry_count": registry_pin["registered_entry_count"],
+        "corpus_universe_sha256": root_scope["corpus_universe_sha256"],
+        "corpus_universe_semantic_sha256": root_scope[
+            "corpus_universe_semantic_sha256"
+        ],
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "start_state_sha256": state["state_sha256"],
+        "start_consumption_ledger_sha256": ledger["ledger_sha256"],
+        "start_consumption_ledger_tip_sha256": ledger["chain"]["tip_sha256"],
+        "start_consumed_request_count": ledger["chain"][
+            "consumed_request_count"
+        ],
+        "output_namespace": root_scope["output_namespace"],
+        "output_write_mode": plan["output"]["write_mode"],
+        "sec_component_id": root_scope["component_id"],
+        "runner_repository_path": STAGE_RUNNER_REPOSITORY_PATH,
+        "runner_source_sha256": sources["runner"],
+        "sec_corpus_repository_path": SEC_CORPUS_REPOSITORY_PATH,
+        "sec_corpus_source_sha256": sources["sec_corpus_selector"],
+        "execution_source_hashes": sources,
+        "execution_source_hashes_sha256": canonical_sha256(sources),
+        "execution_source_role_count": len(sources),
+        "sec_user_agent_sha256": user_agent_hash,
+        "authorizes_outcome_access": False,
+        "market_access_permitted": False,
+        "model_access_permitted": False,
+        "future_stage_access_permitted": False,
+        "reveal_request_consumption_permitted": False,
+        "consumption_ledger_mutation_permitted": False,
+        "effect_may_be_repeated_after_indeterminate_crash": False,
+    }
+    return {**body, "claim_sha256": canonical_sha256(body)}
+
+
+def build_development_sec_reader_receipt(
+    claim: Mapping[str, Any],
+    *,
+    content_manifest_sha256: str,
+    byte_index: list[dict[str, Any]],
+    complete_marker_sha256: str,
+) -> dict[str, Any]:
+    """Bind store-rehashed root bytes and content manifest to one claim."""
+
+    claim_value = _mapping(claim, "development SEC reader receipt claim")
+    scope_hash = _sha256(
+        claim_value.get("development_root_scope_sha256"),
+        "development SEC reader receipt scope hash",
+    )
+    claim_value = _validated_development_sec_execution_claims(
+        {scope_hash: claim_value}
+    )[scope_hash]
+    index = _validated_sec_byte_index(byte_index)
+    body = {
+        "schema_version": DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "receipt_kind": "store_rehashed_owned_development_sec_content_root",
+        "development_root_scope_sha256": scope_hash,
+        "claim_sha256": claim_value["claim_sha256"],
+        "development_content_root_plan_sha256": claim_value[
+            "development_content_root_plan_sha256"
+        ],
+        "attempt_id": claim_value["attempt_id"],
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "candidate_design_sha256": claim_value["candidate_design_sha256"],
+        "registry_entry_sha256": claim_value["registry_entry_sha256"],
+        "corpus_universe_sha256": claim_value["corpus_universe_sha256"],
+        "corpus_universe_semantic_sha256": claim_value[
+            "corpus_universe_semantic_sha256"
+        ],
+        "output_namespace": claim_value["output_namespace"],
+        "sec_component_id": claim_value["sec_component_id"],
+        "runner_source_sha256": claim_value["runner_source_sha256"],
+        "sec_corpus_source_sha256": claim_value["sec_corpus_source_sha256"],
+        "execution_source_hashes_sha256": claim_value[
+            "execution_source_hashes_sha256"
+        ],
+        "execution_source_role_count": claim_value[
+            "execution_source_role_count"
+        ],
+        "sec_user_agent_sha256": claim_value["sec_user_agent_sha256"],
+        "content_manifest_sha256": _sha256(
+            content_manifest_sha256,
+            "development SEC content-manifest hash",
+        ),
+        "byte_index": index,
+        "byte_index_sha256": canonical_sha256(index),
+        "byte_count_total": sum(item["byte_count"] for item in index),
+        "complete_marker_sha256": _sha256(
+            complete_marker_sha256,
+            "development SEC complete marker hash",
+        ),
+        "fresh_network_provenance_claimed": False,
+        "reader_output_recomputed_by_store": True,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_development_sec_execution_abort(
+    claim: Mapping[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Terminally refuse retry after an indeterminate development SEC effect."""
+
+    claim_value = _mapping(claim, "development SEC execution abort claim")
+    scope_hash = _sha256(
+        claim_value.get("development_root_scope_sha256"),
+        "development SEC execution abort scope hash",
+    )
+    claim_value = _validated_development_sec_execution_claims(
+        {scope_hash: claim_value}
+    )[scope_hash]
+    if reason not in {
+        "claim_recovered_without_terminal_receipt",
+        "external_effect_failed_or_completion_unknown",
+        "durable_output_verification_failed",
+    }:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development SEC execution abort reason is not canonical"
+        )
+    body = {
+        "schema_version": DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "abort_kind": "indeterminate_owned_development_sec_content_root",
+        "development_root_scope_sha256": scope_hash,
+        "claim_sha256": claim_value["claim_sha256"],
+        "development_content_root_plan_sha256": claim_value[
+            "development_content_root_plan_sha256"
+        ],
+        "attempt_id": claim_value["attempt_id"],
+        "candidate_sha256": claim_value["candidate_sha256"],
+        "output_namespace": claim_value["output_namespace"],
+        "sec_component_id": claim_value["sec_component_id"],
+        "reason": reason,
+        "external_effect_retry_permitted": False,
+    }
+    return {**body, "abort_sha256": canonical_sha256(body)}
 
 
 def build_stage_sec_execution_claim(
@@ -3824,6 +5114,11 @@ __all__ = [
     "CONSUMED_STAGE_AUTHORIZATION_GRANT_SCHEMA_VERSION",
     "CONSUMED_STAGE_OUTPUT_RECEIPT_SCHEMA_VERSION",
     "CONSUMED_STAGE_STORE_PIN_SCHEMA_VERSION",
+    "DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID",
+    "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_SEC_EXECUTION_ABORT_SCHEMA_VERSION",
+    "DEVELOPMENT_SEC_EXECUTION_CLAIM_SCHEMA_VERSION",
+    "DEVELOPMENT_SEC_READER_RECEIPT_SCHEMA_VERSION",
     "REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION",
     "OWNED_SEC_RAW_BATCH_MAX_BYTES",
     "SEC_EXECUTION_RESOLVED_SOURCE_PATHS",
@@ -3842,6 +5137,9 @@ __all__ = [
     "authenticate_reveal_store_trusted_stage_content_pin",
     "build_consumed_stage_authorization_grant",
     "build_consumed_stage_output_receipt",
+    "build_development_sec_execution_abort",
+    "build_development_sec_execution_claim",
+    "build_development_sec_reader_receipt",
     "build_stage_carry_in_reader_receipt",
     "build_stage_sec_execution_abort",
     "build_stage_sec_execution_claim",

@@ -696,14 +696,38 @@ At the current implementation checkpoint:
   linked, case-colliding, reordered or changed files fail closed. A partial
   local file or incomplete marker may be repaired only before any valid marker
   or persisted receipt exists; after either commitment, mismatches are never
-  repaired. The method is deliberately final-only: the development corpus has
-  no equivalent owned SEC claim/reader root yet, so an intermediate-stage
-  request is rejected before its reader receipt can be mutated. The receipt
-  sets `fresh_carry_in_provenance_claimed=false`, is not yet bound into an owned
+  repaired. The method is deliberately final-only: the development corpus now
+  has an owned SEC claim/reader root, but that receipt is not yet converted into
+  the exact development-to-intermediate carry-in receipt, so an intermediate-
+  stage request is still rejected before its reader receipt can be mutated. The
+  receipt sets `fresh_carry_in_provenance_claimed=false`, is not yet bound into an owned
   preprocessor/model attempt or stage-evidence assembler, and does not enable
   promotion. Like the stage-evidence receipt, it attests a sequence of
   store-observed snapshots rather than making the same-user Windows namespace
   immutable; a later exact retry detects post-closure mutation;
+- the request-free development-content root plan derives all and only the
+  2000-2018 development filings from the complete candidate-bound corpus
+  universe. It embeds that exact universe for recovery, fixes a 64 MiB raw-byte
+  ceiling, and grants no reveal-request, outcome, market, model, future-stage,
+  or consumption-ledger authority. Current-tip anchor version 6 adds separate
+  append-only development claim, reader, and abort maps keyed by the root-scope
+  hash and permits only one globally active SEC effect across ordinary stage
+  requests and this root. Claiming the root leaves the registry, state, and
+  consumption ledger unchanged. The owned root runner derives URLs and budgets
+  only from the persisted claim, performs one strict no-cache/no-retry SEC
+  acquisition, and seals raw and normalized filings, request receipts, the byte
+  manifest, complete corpus universe, and an actual-byte-derived development
+  content manifest under `stage_outputs/<claim_sha256>/sec/`. The distinct
+  complete marker and store reader receipt bind the candidate, universe, plan,
+  source closure, contact hash, content manifest, and every durable byte. A
+  separate root-scope execution lock prevents a concurrent invocation from
+  treating a live owner as an abandoned claim. An unchanged completed retry
+  only rehashes local bytes; an abandoned active claim with no valid marker is
+  terminally aborted without another SEC request, while a transient receipt
+  failure after a valid marker leaves that marker recoverable without
+  refetching. This proves
+  a durable pre-reveal training-corpus root, not yet the downstream carry-in,
+  preprocessing, Gemma, market, or stage-evidence ancestry;
 - the fixed verifier now produces a version-6 canonical non-authorizing audit
   that replays candidate/source pins, calendar and universe manifests, exact
   Ollama attempt receipts, market-stage snapshots, prediction-prefix ancestry,
@@ -759,14 +783,15 @@ At the current implementation checkpoint:
   binds the validated private-contact hash into that pre-effect claim,
   seals the actual raw/normalized bytes and canonical receipts into a fixed
   create-new directory, and has the reveal store independently replay the exact
-  files and semantics before committing the SEC reader receipt. It is the only exported production
-  stage-document network entry point; the older universe-derived fetch helper is
+  files and semantics before committing the SEC reader receipt. Together with
+  the request-free development-root function, these are the only exported
+  production SEC-document network entry points; the older universe-derived fetch helper is
   private and test-only. A noncanonical or invalid private SEC contact is rejected
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
   no SEC request was made. `stage_access_identity` remains `BLOCKED` because
-  the development carry-in root, market, model, artifact, final stage-evidence
-  generation, and carry-in-to-model binding are not yet forced through owned
+  the development-root-to-intermediate carry-in, market, model, artifact, final
+  stage-evidence generation, and carry-in-to-model binding are not yet forced through owned
   components. The store no longer accepts a caller
   mapping at the output-receipt boundary, but a same-user process can still
   place coherently formed bytes in the fixed directory, so this milestone is
@@ -801,12 +826,11 @@ snapshot came from; the production acquisition runner must also seal and bind
 the upstream provider response and its normalization receipt before the stage
 verifier may accept it.
 
-The next implementation milestone is an owned development content root that
-persists and receipts the development normalized SEC documents before an
-intermediate request. That closes the currently unprovable development-to-
-intermediate carry-in transition; the same request-only reader contract can
-then cover both transitions. It must be followed by separately pinned extractor
-prompt/schema ownership, owned preprocessing, and owned Ollama execution that
+The next implementation milestone is to derive the exact development-to-
+intermediate prior-same-form carry-in from the new owned development content
+root and bind that receipt into the intermediate request. The same request-only
+reader contract can then cover both stage transitions. It must be followed by
+separately pinned extractor prompt/schema ownership, owned preprocessing, and owned Ollama execution that
 bind the exact carry-in receipt into each relevant attempt. The same owned chain
 must then cover presealed market
 reads, prediction sealing, and canonical stage-evidence assembly. A distinct

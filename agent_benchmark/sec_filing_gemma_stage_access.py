@@ -37,6 +37,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     MAX_SEC_SECONDS,
     STAGE_MODEL_CALL_CAPS,
     STAGE_ORDER,
+    STAGE_WINDOWS,
     SecFilingGemmaContractError,
     build_contract_manifest,
     canonical_sha256,
@@ -59,6 +60,13 @@ from agent_benchmark.sec_session_calendar import EXPECTED_SESSIONS
 
 STAGE_ACCESS_MANIFEST_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-stage-access-manifest-v2"
+)
+DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-content-root-plan-v1"
+)
+DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES: Final[int] = 64 * 1024 * 1024
+DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID: Final[str] = (
+    "development_sec_document_batch"
 )
 MODEL_NAME: Final[str] = "gemma4:12b"
 MODEL_ENDPOINT: Final[str] = "http://127.0.0.1:11434/api/chat"
@@ -263,6 +271,15 @@ def _canonical_output_namespace(attempt_id: str, requested_stage: str) -> str:
     namespace = f"aapl-sec-gemma-{attempt_id}-{requested_stage}"
     if _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None:
         raise SecFilingGemmaStageAccessError("Derived output namespace is unsafe")
+    return namespace
+
+
+def _canonical_development_root_output_namespace(attempt_id: str) -> str:
+    namespace = f"aapl-sec-gemma-{attempt_id}-development-content-root"
+    if _OUTPUT_NAMESPACE_RE.fullmatch(namespace) is None:
+        raise SecFilingGemmaStageAccessError(
+            "Derived development-content root output namespace is unsafe"
+        )
     return namespace
 
 
@@ -748,6 +765,378 @@ def _validated_completed_reveal_request(
         for key in value
         if key not in {"stage_access_manifest_sha256", "request_sha256"}
     }
+
+
+def _validated_development_root_inputs(
+    *,
+    candidate_manifest: Mapping[str, Any],
+    expected_candidate_sha256: str,
+    expected_candidate_design_sha256: str,
+    expected_attempt_id: str,
+    base_corpus_universe_sha256: str,
+    corpus_universe_manifest: Mapping[str, Any],
+    session_calendar_sha256: str,
+) -> tuple[
+    Mapping[str, Any],
+    str,
+    str,
+    str,
+    Mapping[str, Any],
+    str,
+    str,
+    list[dict[str, str]],
+]:
+    """Detach and validate the complete candidate-bound development source."""
+
+    candidate = _expect_mapping(
+        _json_snapshot(candidate_manifest, "candidate manifest"),
+        "candidate manifest",
+    )
+    candidate_hash = validate_candidate_manifest(
+        candidate,
+        expected_candidate_sha256=_sha256(
+            expected_candidate_sha256, "expected_candidate_sha256"
+        ),
+    )
+    try:
+        design_hash = candidate_design_sha256(candidate)
+    except ValueError as exc:
+        raise SecFilingGemmaStageAccessError(
+            "Candidate design identity is invalid"
+        ) from exc
+    expected_design_hash = _sha256(
+        expected_candidate_design_sha256,
+        "expected_candidate_design_sha256",
+    )
+    if not hmac.compare_digest(design_hash, expected_design_hash):
+        raise SecFilingGemmaStageAccessError(
+            "Candidate design does not match its external pin"
+        )
+
+    attempt = expected_attempt_id
+    if (
+        not isinstance(attempt, str)
+        or _ATTEMPT_RE.fullmatch(attempt) is None
+        or candidate["bindings"]["holdout_attempt_id"] != attempt
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root attempt id is not candidate bound"
+        )
+
+    universe_hash = _sha256(
+        base_corpus_universe_sha256,
+        "base_corpus_universe_sha256",
+    )
+    calendar_hash = _sha256(
+        session_calendar_sha256,
+        "session_calendar_sha256",
+    )
+    if (
+        candidate["bindings"]["corpus_universe_sha256"] != universe_hash
+        or candidate["bindings"]["calendar_sessions_sha256"] != calendar_hash
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root corpus or calendar differs from the candidate"
+        )
+
+    universe = _expect_mapping(
+        _json_snapshot(
+            corpus_universe_manifest,
+            "complete development-root corpus universe",
+        ),
+        "complete development-root corpus universe",
+    )
+    try:
+        validated_universe_hash = validate_corpus_universe_manifest(
+            universe,
+            session_dates=EXPECTED_SESSIONS,
+            expected_universe_sha256=universe_hash,
+            require_complete_coverage=True,
+        )
+    except SecFilingGemmaContractError as exc:
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root requires the complete canonical corpus universe"
+        ) from exc
+    if (
+        validated_universe_hash != universe_hash
+        or universe["universe_semantic_sha256"]
+        != candidate["bindings"]["corpus_universe_semantic_sha256"]
+        or universe["catalog_artifact_sha256"]
+        != candidate["bindings"]["sec_catalog_artifact_sha256"]
+        or universe["calendar_artifact_sha256"]
+        != candidate["bindings"]["calendar_source_evidence_sha256"]
+        or universe["calendar_sessions_sha256"] != calendar_hash
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root evidence differs from the immutable candidate"
+        )
+
+    first_session, last_session = STAGE_WINDOWS["development"]
+    development_records = [
+        record
+        for record in universe["records"]
+        if record["artifact_stage"] == "development"
+    ]
+    if not development_records or any(
+        not first_session <= record["availability_session"] <= last_session
+        for record in development_records
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content records cross the frozen availability window"
+        )
+    documents = _documents_from_complete_universe(
+        universe,
+        requested_stage="development",
+    )
+    document_count = len(documents)
+    if (
+        document_count != len(development_records)
+        or document_count > STAGE_MODEL_CALL_CAPS["development"]
+        or document_count > MAX_SEC_REQUESTS
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root document scope exceeds its frozen cap"
+        )
+    return (
+        candidate,
+        candidate_hash,
+        design_hash,
+        attempt,
+        universe,
+        universe_hash,
+        calendar_hash,
+        documents,
+    )
+
+
+def build_development_content_root_plan(
+    *,
+    candidate_manifest: Mapping[str, Any],
+    expected_candidate_sha256: str,
+    expected_candidate_design_sha256: str,
+    expected_attempt_id: str,
+    base_corpus_universe_sha256: str,
+    corpus_universe_manifest: Mapping[str, Any],
+    session_calendar_sha256: str,
+) -> dict[str, Any]:
+    """Build the request-free, pre-reveal development SEC content plan.
+
+    The complete universe is caller-supplied evidence, never selection
+    authority: it is revalidated against the candidate and then embedded in
+    the plan so an already-persisted execution claim can recover without a
+    second caller supplying URLs or corpus bytes.
+    """
+
+    (
+        candidate,
+        candidate_hash,
+        design_hash,
+        attempt,
+        universe,
+        universe_hash,
+        calendar_hash,
+        documents,
+    ) = _validated_development_root_inputs(
+        candidate_manifest=candidate_manifest,
+        expected_candidate_sha256=expected_candidate_sha256,
+        expected_candidate_design_sha256=expected_candidate_design_sha256,
+        expected_attempt_id=expected_attempt_id,
+        base_corpus_universe_sha256=base_corpus_universe_sha256,
+        corpus_universe_manifest=corpus_universe_manifest,
+        session_calendar_sha256=session_calendar_sha256,
+    )
+    accessions = [document["accession_number"] for document in documents]
+    urls = [document["official_url"] for document in documents]
+    output_namespace = _canonical_development_root_output_namespace(attempt)
+    root_scope: dict[str, Any] = {
+        "scope_kind": (
+            "request_free_candidate_bound_complete_development_content_root"
+        ),
+        "artifact_stage": "development",
+        "candidate_sha256": candidate_hash,
+        "candidate_design_sha256": design_hash,
+        "attempt_id": attempt,
+        "corpus_universe_sha256": universe_hash,
+        "corpus_universe_semantic_sha256": universe[
+            "universe_semantic_sha256"
+        ],
+        "document_count": len(documents),
+        "accessions_sha256": canonical_sha256(accessions),
+        "official_urls_sha256": canonical_sha256(urls),
+        "output_namespace": output_namespace,
+        "component_id": DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+    }
+    first_session, last_session = STAGE_WINDOWS["development"]
+    body: dict[str, Any] = {
+        "schema_version": DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "root_scope": root_scope,
+        "development_root_scope_sha256": canonical_sha256(root_scope),
+        "corpus_provenance": {
+            "identity_role": "immutable_candidate_bound_complete_universe",
+            "corpus_universe_sha256": universe_hash,
+            "corpus_universe_semantic_sha256": universe[
+                "universe_semantic_sha256"
+            ],
+            "sec_catalog_artifact_sha256": candidate["bindings"][
+                "sec_catalog_artifact_sha256"
+            ],
+            "calendar_source_evidence_sha256": candidate["bindings"][
+                "calendar_source_evidence_sha256"
+            ],
+            "session_calendar_sha256": calendar_hash,
+            "complete_coverage_required": True,
+            "caller_selection_permitted": False,
+        },
+        "corpus_universe_manifest": universe,
+        "sec_access_plan": {
+            "selection_policy": (
+                "all_and_only_development_stage_universe_primary_documents"
+            ),
+            "artifact_stage": "development",
+            "method": "GET",
+            "network_scope": "official_sec_https_only",
+            "redirects_permitted": False,
+            "retries_permitted": False,
+            "cache_substitution_permitted": False,
+            "document_count": len(documents),
+            "accessions_sha256": canonical_sha256(accessions),
+            "official_urls_sha256": canonical_sha256(urls),
+            "documents": documents,
+        },
+        "budgets": {
+            "max_sec_requests": len(documents),
+            "max_raw_batch_bytes": DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES,
+            "max_sec_acquisition_seconds": MAX_SEC_SECONDS,
+            "max_redirects": 0,
+            "max_retries": 0,
+            "max_paid_api_calls": 0,
+            "max_estimated_cost_usd": 0.0,
+        },
+        "output": {
+            "namespace": output_namespace,
+            "component_id": DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID,
+            "write_mode": "create_new_exclusive",
+            "existing_namespace_reuse_permitted": False,
+        },
+        "scope": {
+            "authorized_artifact_stage": "development",
+            "authorized_availability_window": {
+                "first_session": first_session,
+                "last_session": last_session,
+            },
+            "prohibited_artifact_stages": ["intermediate", "final"],
+            "pre_reveal_training_input": True,
+            "reveal_request_required": False,
+            "reveal_request_consumption_permitted": False,
+            "outcome_access_permitted": False,
+            "market_access_permitted": False,
+            "model_access_permitted": False,
+            "future_stage_access_permitted": False,
+            "consumption_ledger_mutation_permitted": False,
+        },
+        "authorization_semantics": (
+            "non_authorizing_request_free_plan_until_owned_development_root_claim"
+        ),
+    }
+    _reject_forbidden_fields(body, "development content root plan")
+    return {
+        **body,
+        "development_content_root_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_content_root_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_development_content_root_plan_sha256: str,
+    candidate_manifest: Mapping[str, Any],
+    expected_candidate_sha256: str,
+    expected_candidate_design_sha256: str,
+    expected_attempt_id: str,
+    base_corpus_universe_sha256: str,
+    corpus_universe_manifest: Mapping[str, Any],
+    session_calendar_sha256: str,
+) -> str:
+    """Validate the root-scope hash, plan hash, external pin, and derivation."""
+
+    observed = _expect_mapping(
+        _json_snapshot(plan, "development content root plan"),
+        "development content root plan",
+    )
+    _reject_forbidden_fields(observed, "development content root plan")
+    _expect_keys(
+        observed,
+        {
+            "schema_version",
+            "contract_version",
+            "contract_sha256",
+            "root_scope",
+            "development_root_scope_sha256",
+            "corpus_provenance",
+            "corpus_universe_manifest",
+            "sec_access_plan",
+            "budgets",
+            "output",
+            "scope",
+            "authorization_semantics",
+            "development_content_root_plan_sha256",
+        },
+        "development content root plan",
+    )
+    root_scope = _expect_mapping(
+        observed["root_scope"],
+        "development content root scope",
+    )
+    observed_scope_hash = _sha256(
+        observed["development_root_scope_sha256"],
+        "development_root_scope_sha256",
+    )
+    if not hmac.compare_digest(
+        observed_scope_hash,
+        canonical_sha256(root_scope),
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root scope is not canonically self-hashed"
+        )
+
+    observed_plan_hash = _sha256(
+        observed["development_content_root_plan_sha256"],
+        "development_content_root_plan_sha256",
+    )
+    body = {
+        key: observed[key]
+        for key in observed
+        if key != "development_content_root_plan_sha256"
+    }
+    calculated_plan_hash = canonical_sha256(body)
+    external_plan_hash = _sha256(
+        expected_development_content_root_plan_sha256,
+        "expected_development_content_root_plan_sha256",
+    )
+    if (
+        not hmac.compare_digest(observed_plan_hash, calculated_plan_hash)
+        or not hmac.compare_digest(observed_plan_hash, external_plan_hash)
+    ):
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root plan is not canonical or externally pinned"
+        )
+
+    expected = build_development_content_root_plan(
+        candidate_manifest=candidate_manifest,
+        expected_candidate_sha256=expected_candidate_sha256,
+        expected_candidate_design_sha256=expected_candidate_design_sha256,
+        expected_attempt_id=expected_attempt_id,
+        base_corpus_universe_sha256=base_corpus_universe_sha256,
+        corpus_universe_manifest=corpus_universe_manifest,
+        session_calendar_sha256=session_calendar_sha256,
+    )
+    if observed != expected:
+        raise SecFilingGemmaStageAccessError(
+            "Development-content root plan differs from its exact candidate-bound construction"
+        )
+    return observed_plan_hash
 
 
 def build_stage_access_manifest(
@@ -1293,12 +1682,17 @@ def validate_stage_access_manifest(
 
 
 __all__ = [
+    "DEVELOPMENT_CONTENT_ROOT_COMPONENT_ID",
+    "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_CONTENT_ROOT_RAW_BATCH_CAP_BYTES",
     "MODEL_ENDPOINT",
     "MODEL_HOST",
     "MODEL_NAME",
     "STAGE_ACCESS_MANIFEST_SCHEMA_VERSION",
     "SecFilingGemmaStageAccessError",
+    "build_development_content_root_plan",
     "build_stage_access_manifest",
+    "validate_development_content_root_plan",
     "validate_prior_same_form_carry_in_scope",
     "validate_stage_access_manifest",
 ]
