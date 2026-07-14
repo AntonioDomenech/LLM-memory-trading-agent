@@ -44,7 +44,7 @@ OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-owned-development-policy-replay-projection-v1"
 )
 OWNED_DEVELOPMENT_POLICY_REPLAY_BATCH_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-owned-development-policy-replay-batch-v1"
+    "aapl-sec-gemma-owned-development-policy-replay-batch-v2"
 )
 POLICY_REPLAY_BINDING_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-policy-replay-binding-v1"
@@ -61,6 +61,13 @@ _THRESHOLD_COMPARISON_RULE: Final[str] = (
 _EPISODE_RULE: Final[str] = (
     "accepted_after_close_fill_t_plus_1_exit_t_plus_21_fixed_20_session_"
     "cash_episode_never_extend_scheduled_or_active_episode"
+)
+_UNAVAILABLE_PREDICTION_RULE: Final[str] = (
+    "unavailable_prediction_starts_no_new_cash_episode_"
+    "existing_episode_keeps_original_exit"
+)
+_POLICY_REPLAY_ORDER_RULE: Final[str] = (
+    "source_raw_prediction_ordinal_ascending_exactly_once"
 )
 _SOURCE_MARKET_CALENDAR_SHA256: Final[str] = market_session_calendar_sha256(
     EXPECTED_MARKET_HISTORY_SESSIONS
@@ -155,6 +162,8 @@ _BATCH_KEYS: Final[frozenset[str]] = frozenset(
         "candidate_grid_sha256",
         "threshold_comparison_rule",
         "cash_episode_rule",
+        "unavailable_prediction_rule",
+        "policy_replay_order_rule",
         "policy_replay_input_count",
         "policy_replay_input_specs_sha256",
         "policy_prefix",
@@ -665,6 +674,8 @@ def build_owned_development_policy_replay_batch(
         "candidate_grid_sha256": canonical_sha256(grid),
         "threshold_comparison_rule": _THRESHOLD_COMPARISON_RULE,
         "cash_episode_rule": _EPISODE_RULE,
+        "unavailable_prediction_rule": _UNAVAILABLE_PREDICTION_RULE,
+        "policy_replay_order_rule": _POLICY_REPLAY_ORDER_RULE,
         "policy_replay_input_count": len(input_specs),
         "policy_replay_input_specs_sha256": canonical_sha256(input_specs),
         "policy_prefix": copy.deepcopy(policy_prefix),
@@ -744,6 +755,9 @@ def _validated_policy_batch_structure(raw: Any) -> dict[str, Any]:
         != canonical_sha256(value["candidate_grid"])
         or value["threshold_comparison_rule"] != _THRESHOLD_COMPARISON_RULE
         or value["cash_episode_rule"] != _EPISODE_RULE
+        or value["unavailable_prediction_rule"]
+        != _UNAVAILABLE_PREDICTION_RULE
+        or value["policy_replay_order_rule"] != _POLICY_REPLAY_ORDER_RULE
         or value["policy_prefix_sha256"]
         != prefix.get("prediction_prefix_sha256")
         or value["binding_count"] != len(bindings)

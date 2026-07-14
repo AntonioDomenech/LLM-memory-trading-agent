@@ -61,6 +61,10 @@ from agent_benchmark.sec_filing_gemma_market_evidence import (
 )
 from agent_benchmark.sec_point_in_time import content_sha256, validate_sec_user_agent
 from agent_benchmark.sec_session_calendar import EXPECTED_MARKET_HISTORY_SESSIONS
+from tests import test_sec_filing_gemma_policy_replay as policy_replay_scaffold
+from tests import (
+    test_sec_filing_gemma_stage_authorization as authorization_scaffold,
+)
 
 
 USER_AGENT = "Private Owner owner-contact@real-domain-for-tests.dev"
@@ -722,7 +726,7 @@ def _development_policy_replay_projection(
             "unavailable_prediction_starts_no_new_cash_episode_"
             "existing_episode_keeps_original_exit"
         ),
-        "input_order_rule": (
+        "policy_replay_order_rule": (
             "source_raw_prediction_ordinal_ascending_exactly_once"
         ),
     }
@@ -2280,7 +2284,7 @@ def test_policy_replay_runner_uses_one_exact_projection_and_rebuild_validates(
             "unavailable_prediction_starts_no_new_cash_episode_"
             "existing_episode_keeps_original_exit"
         ),
-        "input_order_rule": (
+        "policy_replay_order_rule": (
             "source_raw_prediction_ordinal_ascending_exactly_once"
         ),
     }
@@ -2372,6 +2376,131 @@ def test_policy_replay_runner_uses_one_exact_projection_and_rebuild_validates(
             reveal_store=store,
             development_root_scope_sha256=scope,
         )
+
+
+def test_policy_replay_runner_composes_real_plan_batch_builder_and_validator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the production policy schema across the runner boundary."""
+
+    store = _new_store(tmp_path)
+    source = policy_replay_scaffold._raw_batch()
+    input_specs = runner_module.derive_development_policy_replay_input_specs(
+        source,
+        expected_source_prediction_batch_sha256=source[
+            "prediction_batch_sha256"
+        ],
+    )
+    _state, _tip, _prediction_plan, _specs, plan = (
+        authorization_scaffold._development_policy_replay_plan_fixture()
+    )
+    plan.update(
+        {
+            "development_root_scope_sha256": source[
+                "development_root_scope_sha256"
+            ],
+            "source_development_oof_prediction_plan_sha256": source[
+                "development_oof_prediction_plan_sha256"
+            ],
+            "source_development_oof_prediction_batch_sha256": source[
+                "prediction_batch_sha256"
+            ],
+            "source_raw_prediction_rows_sha256": source[
+                "raw_prediction_rows_sha256"
+            ],
+            "source_raw_prediction_tip_sha256": source[
+                "raw_prediction_tip_sha256"
+            ],
+            "source_raw_prediction_row_count": source[
+                "prediction_event_count"
+            ],
+            "policy_replay_input_count": len(input_specs),
+            "policy_replay_input_specs": input_specs,
+            "policy_replay_input_specs_sha256": canonical_sha256(input_specs),
+            "contract_sha256": source["contract_sha256"],
+            "candidate_sha256": source["candidate_sha256"],
+            "corpus_universe_sha256": source["corpus_universe_sha256"],
+            "calendar_sessions_sha256": source["calendar_sessions_sha256"],
+            "development_cutoff_session": source[
+                "development_cutoff_session"
+            ],
+            "model_variant_count": source["model_variant_count"],
+            "model_variant_ids": source["model_variant_ids"],
+        }
+    )
+    plan_body = {
+        key: value
+        for key, value in plan.items()
+        if key != "development_policy_replay_plan_sha256"
+    }
+    plan["development_policy_replay_plan_sha256"] = canonical_sha256(
+        plan_body
+    )
+    assert runner_module.validate_development_policy_replay_plan(
+        plan,
+        expected_development_policy_replay_plan_sha256=plan[
+            "development_policy_replay_plan_sha256"
+        ],
+    ) == plan["development_policy_replay_plan_sha256"]
+
+    projection_body = {
+        "schema_version": (
+            OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION
+        ),
+        "development_policy_replay_plan": plan,
+        "source_development_oof_prediction_batch": source,
+    }
+    projection = {
+        **projection_body,
+        "policy_replay_projection_sha256": canonical_sha256(projection_body),
+    }
+
+    def load_projection(
+        owned_store: SecFilingGemmaRevealStore,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        assert owned_store is store
+        assert development_root_scope_sha256 == source[
+            "development_root_scope_sha256"
+        ]
+        return copy.deepcopy(projection)
+
+    monkeypatch.setattr(
+        SecFilingGemmaRevealStore,
+        "_load_owned_development_policy_replay_projection",
+        load_projection,
+    )
+
+    result = run_owned_development_policy_replay_batch(
+        reveal_store=store,
+        development_root_scope_sha256=source[
+            "development_root_scope_sha256"
+        ],
+    )
+    assert result["unavailable_prediction_rule"] == plan[
+        "unavailable_prediction_rule"
+    ]
+    assert result["policy_replay_order_rule"] == plan[
+        "policy_replay_order_rule"
+    ]
+    assert runner_module.validate_owned_development_policy_replay_batch(
+        result,
+        source_prediction_batch=source,
+        expected_source_prediction_batch_sha256=source[
+            "prediction_batch_sha256"
+        ],
+        expected_development_policy_replay_plan_sha256=plan[
+            "development_policy_replay_plan_sha256"
+        ],
+        expected_source_prediction_projection_sha256=plan[
+            "source_development_oof_prediction_projection_sha256"
+        ],
+        expected_policy_replay_batch_sha256=result[
+            "policy_replay_batch_sha256"
+        ],
+    ) == result["policy_replay_batch_sha256"]
 
 
 def test_policy_replay_runner_rejects_every_crossing_before_replay(

@@ -18,7 +18,10 @@ from agent_benchmark.sec_filing_gemma_artifact_sealer import (
     SecFilingGemmaArtifactSealerError,
     SecFilingGemmaPredictionArtifactSealer,
     build_prediction_artifact_bytes,
+    build_prediction_artifact_genesis_pin_bytes,
+    validate_prediction_artifact_external_pin,
     validate_prediction_artifact_seal_receipt,
+    validate_prediction_artifact_store_state_bytes,
 )
 from agent_benchmark.sec_filing_gemma_prediction_evidence import (
     PREDICTION_PREFIX_SCHEMA_VERSION,
@@ -168,6 +171,246 @@ def test_exact_bytes_receipt_is_purely_verifiable_and_reloadable(
     assert receipt["artifact_size_bytes"] == len(artifact)
     assert receipt["artifact_sha256"] == hashlib.sha256(artifact).hexdigest()
     assert not any("outcome" in key or key == "labels" for key in receipt)
+
+
+def test_genesis_pin_and_store_state_are_purely_replayable(
+    tmp_path: Path,
+) -> None:
+    genesis = build_prediction_artifact_genesis_pin_bytes(CANDIDATE_SHA256)
+    validated_genesis = validate_prediction_artifact_external_pin(
+        external_pin_bytes=genesis,
+        expected_candidate_sha256=CANDIDATE_SHA256,
+        expected_stage="development",
+        expected_sealed_artifact_count=0,
+    )
+    assert validated_genesis.external_pin_bytes == genesis
+    assert validated_genesis.last_prediction_sequence_number == 0
+    assert validated_genesis.prediction_prefix_sha256 is None
+
+    store = _new_store(tmp_path)
+    assert store.initialize(
+        candidate_sha256=CANDIDATE_SHA256, stage="development"
+    ) == genesis
+    replay = validate_prediction_artifact_store_state_bytes(
+        state_bytes=store.state_path.read_bytes(),
+        expected_external_pin_bytes=genesis,
+    )
+    assert replay.artifact_bytes == ()
+    assert replay.receipt_bytes == ()
+    assert replay.current_external_pin == validated_genesis
+
+    with pytest.raises(SecFilingGemmaArtifactSealerError, match="exact canonical"):
+        validate_prediction_artifact_store_state_bytes(
+            state_bytes=replay.state_bytes + b" ",
+            expected_external_pin_bytes=genesis,
+        )
+
+    with pytest.raises(SecFilingGemmaArtifactSealerError, match="another candidate"):
+        validate_prediction_artifact_external_pin(
+            external_pin_bytes=genesis,
+            expected_candidate_sha256=OTHER_CANDIDATE_SHA256,
+        )
+    with pytest.raises(SecFilingGemmaArtifactSealerError, match="exact canonical"):
+        validate_prediction_artifact_external_pin(
+            external_pin_bytes=genesis + b" "
+        )
+
+
+def test_ordered_batch_commits_with_one_replace_and_replays_exact_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _new_store(tmp_path)
+    initial = store.initialize(candidate_sha256=CANDIDATE_SHA256, stage=STAGE)
+    prefix1 = _prediction_prefix()
+    prefix2 = _prediction_prefix(prefix1, nonce="two")
+    prefix3 = _prediction_prefix(prefix2, nonce="three")
+    artifacts = tuple(
+        build_prediction_artifact_bytes(prefix)
+        for prefix in (prefix1, prefix2, prefix3)
+    )
+    original_atomic_replace = sealer_module._atomic_replace
+    replace_calls: list[tuple[Path, bytes]] = []
+
+    def counted_atomic_replace(path: Path, payload: bytes) -> None:
+        replace_calls.append((path, payload))
+        original_atomic_replace(path, payload)
+
+    monkeypatch.setattr(sealer_module, "_atomic_replace", counted_atomic_replace)
+    result = store.compare_and_swap_seal_batch(
+        artifact_bytes_sequence=artifacts,
+        external_prior_pin_bytes=initial,
+    )
+
+    assert result.artifact_bytes == artifacts
+    assert result.recovered_existing_commit is False
+    assert len(result.receipt_bytes) == len(result.validations) == 3
+    assert len(replace_calls) == 1
+    cursor = initial
+    for artifact, receipt, validation in zip(
+        artifacts, result.receipt_bytes, result.validations, strict=True
+    ):
+        independent = validate_prediction_artifact_seal_receipt(
+            artifact_bytes=artifact,
+            receipt_bytes=receipt,
+            external_prior_pin_bytes=cursor,
+        )
+        assert independent == validation
+        cursor = independent.next_external_pin_bytes
+    assert cursor == result.next_external_pin_bytes
+    replay = validate_prediction_artifact_store_state_bytes(
+        state_bytes=store.state_path.read_bytes(),
+        expected_external_pin_bytes=result.next_external_pin_bytes,
+    )
+    assert replay.artifact_bytes == artifacts
+    assert replay.receipt_bytes == result.receipt_bytes
+    assert replay.current_external_pin.sealed_artifact_count == 3
+    with pytest.raises(SecFilingGemmaArtifactSealerError, match="rolled back"):
+        validate_prediction_artifact_store_state_bytes(
+            state_bytes=store.state_path.read_bytes(),
+            expected_external_pin_bytes=initial,
+        )
+
+
+def test_batch_exact_idempotent_recovery_never_rewrites_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _new_store(tmp_path)
+    initial = store.initialize(candidate_sha256=CANDIDATE_SHA256, stage=STAGE)
+    prefix1 = _prediction_prefix()
+    prefix2 = _prediction_prefix(prefix1, nonce="two")
+    prefix3 = _prediction_prefix(prefix2, nonce="three")
+    first = store.compare_and_swap_seal(
+        artifact_bytes=build_prediction_artifact_bytes(prefix1),
+        external_prior_pin_bytes=initial,
+    )
+    artifacts = (
+        build_prediction_artifact_bytes(prefix2),
+        build_prediction_artifact_bytes(prefix3),
+    )
+    committed = store.compare_and_swap_seal_batch(
+        artifact_bytes_sequence=artifacts,
+        external_prior_pin_bytes=first.next_external_pin_bytes,
+    )
+    state_bytes = store.state_path.read_bytes()
+
+    def forbidden_replace(path: Path, payload: bytes) -> None:
+        raise AssertionError(f"idempotent recovery tried to rewrite {path}")
+
+    monkeypatch.setattr(sealer_module, "_atomic_replace", forbidden_replace)
+    recovered = store.compare_and_swap_seal_batch(
+        artifact_bytes_sequence=artifacts,
+        external_prior_pin_bytes=first.next_external_pin_bytes,
+    )
+
+    assert recovered.recovered_existing_commit is True
+    assert recovered.artifact_bytes == committed.artifact_bytes
+    assert recovered.receipt_bytes == committed.receipt_bytes
+    assert recovered.validations == committed.validations
+    assert recovered.next_external_pin_bytes == committed.next_external_pin_bytes
+    assert store.state_path.read_bytes() == state_bytes
+
+
+def test_batch_rejects_stale_fork_partial_and_skipped_order_without_write(
+    tmp_path: Path,
+) -> None:
+    store = _new_store(tmp_path)
+    initial = store.initialize(candidate_sha256=CANDIDATE_SHA256, stage=STAGE)
+    prefix1 = _prediction_prefix()
+    prefix2 = _prediction_prefix(prefix1, nonce="two")
+    artifacts = (
+        build_prediction_artifact_bytes(prefix1),
+        build_prediction_artifact_bytes(prefix2),
+    )
+    committed = store.compare_and_swap_seal_batch(
+        artifact_bytes_sequence=artifacts,
+        external_prior_pin_bytes=initial,
+    )
+    state_bytes = store.state_path.read_bytes()
+    fork2 = build_prediction_artifact_bytes(
+        _prediction_prefix(prefix1, nonce="fork-two")
+    )
+
+    for rejected in ((artifacts[0], fork2), (artifacts[0],)):
+        with pytest.raises(
+            SecFilingGemmaArtifactSealerError,
+            match="stale, forked, rollback, partial, or different",
+        ):
+            store.compare_and_swap_seal_batch(
+                artifact_bytes_sequence=rejected,
+                external_prior_pin_bytes=initial,
+            )
+    with pytest.raises(
+        SecFilingGemmaArtifactSealerError,
+        match="duplicated, reordered, skipped",
+    ):
+        store.compare_and_swap_seal_batch(
+            artifact_bytes_sequence=(artifacts[0],),
+            external_prior_pin_bytes=committed.next_external_pin_bytes,
+        )
+    assert store.state_path.read_bytes() == state_bytes
+
+    fresh = _new_store(tmp_path / "skipped")
+    fresh_initial = fresh.initialize(
+        candidate_sha256=CANDIDATE_SHA256, stage=STAGE
+    )
+    prefix3 = _prediction_prefix(prefix2, nonce="three")
+    with pytest.raises(
+        SecFilingGemmaArtifactSealerError,
+        match="duplicated, reordered, skipped",
+    ):
+        fresh.compare_and_swap_seal_batch(
+            artifact_bytes_sequence=(
+                artifacts[0],
+                build_prediction_artifact_bytes(prefix3),
+            ),
+            external_prior_pin_bytes=fresh_initial,
+        )
+    assert fresh.load(external_pin_bytes=fresh_initial) == fresh_initial
+
+
+def test_batch_limits_and_failed_atomic_replace_preserve_prior_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _new_store(tmp_path)
+    initial = store.initialize(candidate_sha256=CANDIDATE_SHA256, stage=STAGE)
+    prefix1 = _prediction_prefix()
+    prefix2 = _prediction_prefix(prefix1, nonce="two")
+    artifacts = (
+        build_prediction_artifact_bytes(prefix1),
+        build_prediction_artifact_bytes(prefix2),
+    )
+    pristine = store.state_path.read_bytes()
+
+    monkeypatch.setattr(sealer_module, "MAX_SEAL_BATCH_ARTIFACT_COUNT", 1)
+    with pytest.raises(SecFilingGemmaArtifactSealerError, match="count limit"):
+        store.compare_and_swap_seal_batch(
+            artifact_bytes_sequence=artifacts,
+            external_prior_pin_bytes=initial,
+        )
+    monkeypatch.setattr(sealer_module, "MAX_SEAL_BATCH_ARTIFACT_COUNT", 4_096)
+    monkeypatch.setattr(
+        sealer_module, "MAX_SEAL_BATCH_ARTIFACT_BYTES", len(artifacts[0]) - 1
+    )
+    with pytest.raises(SecFilingGemmaArtifactSealerError, match="byte limit"):
+        store.compare_and_swap_seal_batch(
+            artifact_bytes_sequence=(artifacts[0],),
+            external_prior_pin_bytes=initial,
+        )
+    monkeypatch.setattr(
+        sealer_module, "MAX_SEAL_BATCH_ARTIFACT_BYTES", 256 * 1024 * 1024
+    )
+
+    def fail_atomic_replace(path: Path, payload: bytes) -> None:
+        raise OSError("simulated batch commit failure")
+
+    monkeypatch.setattr(sealer_module, "_atomic_replace", fail_atomic_replace)
+    with pytest.raises(OSError, match="simulated batch commit failure"):
+        store.compare_and_swap_seal_batch(
+            artifact_bytes_sequence=artifacts,
+            external_prior_pin_bytes=initial,
+        )
+    assert store.state_path.read_bytes() == pristine
+    assert store.load(external_pin_bytes=initial) == initial
 
 
 def test_noncanonical_or_arbitrary_checksum_bytes_are_never_trusted(

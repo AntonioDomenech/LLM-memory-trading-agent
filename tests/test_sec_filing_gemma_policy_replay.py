@@ -313,6 +313,13 @@ def test_policy_replay_is_exact_owned_numeric_only_and_deterministic() -> None:
     )
     assert result["threshold_evaluation_authorized"] is True
     assert result["policy_transition_authorized"] is True
+    assert result["unavailable_prediction_rule"] == (
+        "unavailable_prediction_starts_no_new_cash_episode_"
+        "existing_episode_keeps_original_exit"
+    )
+    assert result["policy_replay_order_rule"] == (
+        "source_raw_prediction_ordinal_ascending_exactly_once"
+    )
     assert result["labels_included"] is False
     assert result["outcomes_included"] is False
     assert result["market_prices_included"] is False

@@ -18,7 +18,7 @@ candidate, calendar, event, and market pins.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import base64
 import copy
 from dataclasses import dataclass
@@ -73,6 +73,8 @@ _BINARY = getattr(os, "O_BINARY", 0)
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _MAX_ARTIFACT_BYTES: Final[int] = 64 * 1024 * 1024
 _MAX_STATE_BYTES: Final[int] = 512 * 1024 * 1024
+MAX_SEAL_BATCH_ARTIFACT_COUNT: Final[int] = 4_096
+MAX_SEAL_BATCH_ARTIFACT_BYTES: Final[int] = 256 * 1024 * 1024
 
 _PREFIX_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -208,6 +210,47 @@ class PredictionArtifactSealResult:
     receipt_bytes: bytes
     next_external_pin_bytes: bytes
     validation: ValidatedPredictionArtifactSeal
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionArtifactSealBatchResult:
+    """One atomic ordered batch and its final externalizable pin."""
+
+    artifact_bytes: tuple[bytes, ...]
+    receipt_bytes: tuple[bytes, ...]
+    next_external_pin_bytes: bytes
+    validations: tuple[ValidatedPredictionArtifactSeal, ...]
+    recovered_existing_commit: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedPredictionArtifactExternalPin:
+    """Immutable identity extracted from exact canonical external-pin bytes."""
+
+    candidate_sha256: str
+    stage: str
+    sealed_artifact_count: int
+    last_prediction_sequence_number: int
+    prediction_prefix_sha256: str | None
+    prediction_tip_sha256: str | None
+    prediction_rows_sha256: str | None
+    artifact_sha256: str | None
+    seal_tip_sha256: str
+    external_pin_sha256: str
+    external_pin_bytes: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedPredictionArtifactStoreState:
+    """Pure replay result for exact canonical store-state bytes."""
+
+    candidate_sha256: str
+    stage: str
+    artifact_bytes: tuple[bytes, ...]
+    receipt_bytes: tuple[bytes, ...]
+    current_external_pin: ValidatedPredictionArtifactExternalPin
+    state_sha256: str
+    state_bytes: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,6 +650,18 @@ def _initial_pin(candidate_sha256: str, stage: str) -> dict[str, Any]:
     )
 
 
+def build_prediction_artifact_genesis_pin_bytes(
+    candidate_sha256: str, *, stage: str = "development"
+) -> bytes:
+    """Return the deterministic exact genesis pin without store access."""
+
+    candidate = _sha256(candidate_sha256, "candidate_sha256")
+    stage_value = _stage(stage)
+    return _canonical_json_bytes(
+        _initial_pin(candidate, stage_value), "genesis external pin"
+    )
+
+
 def _validate_pin(value: Any, location: str) -> dict[str, Any]:
     pin = _expect_mapping(value, location)
     _expect_keys(pin, _PIN_KEYS, location)
@@ -669,6 +724,56 @@ def _validate_pin(value: Any, location: str) -> dict[str, Any]:
 def _pin_from_exact_bytes(payload: bytes, location: str) -> dict[str, Any]:
     return _validate_pin(
         _strict_json_bytes(payload, location, maximum=64 * 1024), location
+    )
+
+
+def validate_prediction_artifact_external_pin(
+    *,
+    external_pin_bytes: bytes,
+    expected_candidate_sha256: str | None = None,
+    expected_stage: str | None = None,
+    expected_sealed_artifact_count: int | None = None,
+) -> ValidatedPredictionArtifactExternalPin:
+    """Purely validate exact canonical pin bytes and optional expectations."""
+
+    pin = _pin_from_exact_bytes(external_pin_bytes, "external pin bytes")
+    if expected_candidate_sha256 is not None:
+        candidate = _sha256(
+            expected_candidate_sha256, "expected_candidate_sha256"
+        )
+        if pin["candidate_sha256"] != candidate:
+            raise SecFilingGemmaArtifactSealerError(
+                "External pin belongs to another candidate"
+            )
+    if expected_stage is not None:
+        stage = _stage(expected_stage, "expected_stage")
+        if pin["stage"] != stage:
+            raise SecFilingGemmaArtifactSealerError(
+                "External pin has an unexpected stage"
+            )
+    if expected_sealed_artifact_count is not None:
+        count = _strict_int(
+            expected_sealed_artifact_count,
+            "expected_sealed_artifact_count",
+        )
+        if pin["sealed_artifact_count"] != count:
+            raise SecFilingGemmaArtifactSealerError(
+                "External pin has an unexpected sealed artifact count"
+            )
+    return ValidatedPredictionArtifactExternalPin(
+        candidate_sha256=pin["candidate_sha256"],
+        stage=pin["stage"],
+        sealed_artifact_count=pin["sealed_artifact_count"],
+        last_prediction_sequence_number=pin[
+            "last_prediction_sequence_number"
+        ],
+        prediction_prefix_sha256=pin["prediction_prefix_sha256"],
+        prediction_tip_sha256=pin["prediction_tip_sha256"],
+        prediction_rows_sha256=pin["prediction_rows_sha256"],
+        artifact_sha256=pin["artifact_sha256"],
+        seal_tip_sha256=pin["seal_tip_sha256"],
+        external_pin_sha256=pin["external_pin_sha256"],
+        external_pin_bytes=external_pin_bytes,
     )
 
 
@@ -920,6 +1025,66 @@ def _validate_state(value: Any) -> dict[str, Any]:
             "Artifact-sealer state hash or canonical content is inconsistent"
         )
     return expected
+
+
+def validate_prediction_artifact_store_state_bytes(
+    *,
+    state_bytes: bytes,
+    expected_external_pin_bytes: bytes | None = None,
+) -> ValidatedPredictionArtifactStoreState:
+    """Purely replay exact store bytes and optionally bind their final pin."""
+
+    state = _validate_state(
+        _strict_json_bytes(
+            state_bytes,
+            "artifact-sealer state bytes",
+            maximum=_MAX_STATE_BYTES,
+        )
+    )
+    current_pin_bytes = _canonical_json_bytes(
+        state["current_external_pin"], "current external pin"
+    )
+    if expected_external_pin_bytes is not None:
+        expected = validate_prediction_artifact_external_pin(
+            external_pin_bytes=expected_external_pin_bytes
+        )
+        if not hmac.compare_digest(
+            current_pin_bytes, expected.external_pin_bytes
+        ) or state["current_external_pin"]["external_pin_sha256"] != (
+            expected.external_pin_sha256
+        ):
+            raise SecFilingGemmaArtifactSealerError(
+                "Artifact-sealer state is stale, forked, or rolled back against the external pin"
+            )
+    current = validate_prediction_artifact_external_pin(
+        external_pin_bytes=current_pin_bytes,
+        expected_candidate_sha256=state["candidate_sha256"],
+        expected_stage=state["stage"],
+        expected_sealed_artifact_count=len(state["entries"]),
+    )
+    artifacts: list[bytes] = []
+    receipts: list[bytes] = []
+    for index, entry in enumerate(state["entries"], start=1):
+        artifacts.append(
+            _decode_artifact(
+                entry["artifact_bytes_base64"],
+                f"state entry {index} artifact",
+            )
+        )
+        receipts.append(
+            _canonical_json_bytes(
+                entry["receipt"], f"state entry {index} receipt"
+            )
+        )
+    return ValidatedPredictionArtifactStoreState(
+        candidate_sha256=state["candidate_sha256"],
+        stage=state["stage"],
+        artifact_bytes=tuple(artifacts),
+        receipt_bytes=tuple(receipts),
+        current_external_pin=current,
+        state_sha256=state["state_sha256"],
+        state_bytes=state_bytes,
+    )
 
 
 def _is_reparse(details: os.stat_result) -> bool:
@@ -1177,6 +1342,91 @@ def _cleanup_interrupted_temporaries(directory: Path) -> None:
     _fsync_directory(directory)
 
 
+def _recover_exact_committed_seal_batch(
+    *,
+    state: Mapping[str, Any],
+    artifact_bytes: tuple[bytes, ...],
+    external_prior_pin_bytes: bytes,
+    supplied_prior: Mapping[str, Any],
+) -> PredictionArtifactSealBatchResult:
+    """Recover only a complete byte-identical batch already at the state tip."""
+
+    entries = state["entries"]
+    prior_count = supplied_prior["sealed_artifact_count"]
+    if len(entries) != prior_count + len(artifact_bytes):
+        raise SecFilingGemmaArtifactSealerError(
+            "Seal batch recovery rejected a stale, forked, rollback, partial, or different commit"
+        )
+
+    cursor = _initial_pin(state["candidate_sha256"], "development")
+    cursor_bytes = _canonical_json_bytes(cursor, "recovery genesis pin")
+    for index, entry in enumerate(entries[:prior_count], start=1):
+        stored_artifact = _decode_artifact(
+            entry["artifact_bytes_base64"],
+            f"state entry {index} artifact",
+        )
+        stored_receipt_bytes = _canonical_json_bytes(
+            entry["receipt"], f"state entry {index} receipt"
+        )
+        validation = validate_prediction_artifact_seal_receipt(
+            artifact_bytes=stored_artifact,
+            receipt_bytes=stored_receipt_bytes,
+            external_prior_pin_bytes=cursor_bytes,
+        )
+        cursor_bytes = validation.next_external_pin_bytes
+        cursor = _pin_from_exact_bytes(
+            cursor_bytes, f"state entry {index} next pin"
+        )
+    if not hmac.compare_digest(
+        cursor_bytes, external_prior_pin_bytes
+    ) or cursor != supplied_prior:
+        raise SecFilingGemmaArtifactSealerError(
+            "Seal batch recovery rejected a stale, forked, rollback, partial, or different commit"
+        )
+
+    recovered_artifacts: list[bytes] = []
+    recovered_receipts: list[bytes] = []
+    validations: list[ValidatedPredictionArtifactSeal] = []
+    for offset, expected_artifact in enumerate(artifact_bytes):
+        entry_index = prior_count + offset
+        entry = entries[entry_index]
+        stored_artifact = _decode_artifact(
+            entry["artifact_bytes_base64"],
+            f"state entry {entry_index + 1} artifact",
+        )
+        if not hmac.compare_digest(stored_artifact, expected_artifact):
+            raise SecFilingGemmaArtifactSealerError(
+                "Seal batch recovery rejected a stale, forked, rollback, partial, or different commit"
+            )
+        stored_receipt_bytes = _canonical_json_bytes(
+            entry["receipt"], f"state entry {entry_index + 1} receipt"
+        )
+        validation = validate_prediction_artifact_seal_receipt(
+            artifact_bytes=stored_artifact,
+            receipt_bytes=stored_receipt_bytes,
+            external_prior_pin_bytes=cursor_bytes,
+        )
+        recovered_artifacts.append(stored_artifact)
+        recovered_receipts.append(stored_receipt_bytes)
+        validations.append(validation)
+        cursor_bytes = validation.next_external_pin_bytes
+
+    authoritative_pin_bytes = _canonical_json_bytes(
+        state["current_external_pin"], "current external pin"
+    )
+    if not hmac.compare_digest(cursor_bytes, authoritative_pin_bytes):
+        raise SecFilingGemmaArtifactSealerError(
+            "Seal batch recovery rejected a stale, forked, rollback, partial, or different commit"
+        )
+    return PredictionArtifactSealBatchResult(
+        artifact_bytes=tuple(recovered_artifacts),
+        receipt_bytes=tuple(recovered_receipts),
+        next_external_pin_bytes=authoritative_pin_bytes,
+        validations=tuple(validations),
+        recovered_existing_commit=True,
+    )
+
+
 class SecFilingGemmaPredictionArtifactSealer:
     """Single-candidate, single-stage append-only exact-byte seal store."""
 
@@ -1383,18 +1633,161 @@ class SecFilingGemmaPredictionArtifactSealer:
                 validation=validation,
             )
 
+    def compare_and_swap_seal_batch(
+        self,
+        *,
+        artifact_bytes_sequence: Sequence[bytes],
+        external_prior_pin_bytes: bytes,
+    ) -> PredictionArtifactSealBatchResult:
+        """Atomically seal one ordered batch or recover that exact full commit."""
+
+        if type(artifact_bytes_sequence) not in (list, tuple):
+            raise TypeError(
+                "artifact_bytes_sequence must be an exact list or tuple"
+            )
+        artifacts = tuple(artifact_bytes_sequence)
+        if not artifacts:
+            raise SecFilingGemmaArtifactSealerError(
+                "Seal batch must contain at least one artifact"
+            )
+        if len(artifacts) > MAX_SEAL_BATCH_ARTIFACT_COUNT:
+            raise SecFilingGemmaArtifactSealerError(
+                "Seal batch exceeds its artifact-count limit"
+            )
+        total_artifact_bytes = 0
+        for index, artifact in enumerate(artifacts, start=1):
+            if type(artifact) is not bytes:
+                raise TypeError(
+                    f"artifact_bytes_sequence[{index - 1}] must be exact immutable bytes"
+                )
+            total_artifact_bytes += len(artifact)
+            if total_artifact_bytes > MAX_SEAL_BATCH_ARTIFACT_BYTES:
+                raise SecFilingGemmaArtifactSealerError(
+                    "Seal batch exceeds its aggregate artifact-byte limit"
+                )
+
+        # Detach the exact immutable sequence and validate all artifacts before
+        # locking. Receipt validation below repeats causal checks under lock.
+        identities = tuple(_artifact_identity(artifact) for artifact in artifacts)
+        supplied_prior = _pin_from_exact_bytes(
+            external_prior_pin_bytes, "external prior pin bytes"
+        )
+        with self._locked():
+            locked_directory = self._store_directory
+            _cleanup_interrupted_temporaries(locked_directory)
+            state = self._read_state_locked()
+            current_pin_bytes = _canonical_json_bytes(
+                state["current_external_pin"], "current external pin"
+            )
+            if not (
+                hmac.compare_digest(
+                    current_pin_bytes, external_prior_pin_bytes
+                )
+                and supplied_prior == state["current_external_pin"]
+            ):
+                recovered = _recover_exact_committed_seal_batch(
+                    state=state,
+                    artifact_bytes=artifacts,
+                    external_prior_pin_bytes=external_prior_pin_bytes,
+                    supplied_prior=supplied_prior,
+                )
+                if self._store_directory != locked_directory:
+                    raise SecFilingGemmaArtifactSealerError(
+                        "Artifact-sealer path changed during batch recovery"
+                    )
+                return recovered
+
+            entries = copy.deepcopy(state["entries"])
+            cursor_pin = supplied_prior
+            cursor_pin_bytes = external_prior_pin_bytes
+            receipt_bytes_sequence: list[bytes] = []
+            validations: list[ValidatedPredictionArtifactSeal] = []
+            for index, (artifact, identity) in enumerate(
+                zip(artifacts, identities, strict=True), start=1
+            ):
+                if identity.candidate_sha256 != state["candidate_sha256"]:
+                    raise SecFilingGemmaArtifactSealerError(
+                        "Prediction artifact belongs to another candidate"
+                    )
+                receipt, _ = _build_receipt(identity, cursor_pin)
+                receipt_bytes = _canonical_json_bytes(
+                    receipt, f"seal batch receipt {index}"
+                )
+                validation = validate_prediction_artifact_seal_receipt(
+                    artifact_bytes=artifact,
+                    receipt_bytes=receipt_bytes,
+                    external_prior_pin_bytes=cursor_pin_bytes,
+                )
+                entries.append(
+                    {
+                        "schema_version": STATE_ENTRY_SCHEMA_VERSION,
+                        "artifact_bytes_base64": base64.b64encode(
+                            artifact
+                        ).decode("ascii"),
+                        "receipt": receipt,
+                    }
+                )
+                receipt_bytes_sequence.append(receipt_bytes)
+                validations.append(validation)
+                cursor_pin_bytes = validation.next_external_pin_bytes
+                cursor_pin = _pin_from_exact_bytes(
+                    cursor_pin_bytes, f"seal batch next pin {index}"
+                )
+
+            next_state = _state_snapshot(
+                candidate_sha256=state["candidate_sha256"],
+                stage=identities[-1].stage,
+                entries=entries,
+                current_pin=cursor_pin,
+            )
+            next_state_bytes = _canonical_json_bytes(
+                next_state, "next batch state"
+            )
+            if len(next_state_bytes) > _MAX_STATE_BYTES:
+                raise SecFilingGemmaArtifactSealerError(
+                    "Seal batch would exceed the authoritative state size limit"
+                )
+            _atomic_replace(
+                locked_directory / STATE_FILENAME,
+                next_state_bytes,
+            )
+            if self._store_directory != locked_directory:
+                raise SecFilingGemmaArtifactSealerError(
+                    "Artifact-sealer path changed during batch compare-and-swap"
+                )
+            reloaded = self._read_state_locked()
+            if reloaded != next_state:
+                raise SecFilingGemmaArtifactSealerError(
+                    "Persisted artifact-sealer state does not match the batch CAS result"
+                )
+            return PredictionArtifactSealBatchResult(
+                artifact_bytes=artifacts,
+                receipt_bytes=tuple(receipt_bytes_sequence),
+                next_external_pin_bytes=cursor_pin_bytes,
+                validations=tuple(validations),
+                recovered_existing_commit=False,
+            )
+
 
 __all__ = [
     "ARTIFACT_ENCODING",
     "EXTERNAL_PIN_SCHEMA_VERSION",
     "LOCK_FILENAME",
+    "MAX_SEAL_BATCH_ARTIFACT_BYTES",
+    "MAX_SEAL_BATCH_ARTIFACT_COUNT",
     "SEAL_RECEIPT_SCHEMA_VERSION",
     "STATE_FILENAME",
     "STORE_SCHEMA_VERSION",
+    "PredictionArtifactSealBatchResult",
     "PredictionArtifactSealResult",
     "SecFilingGemmaArtifactSealerError",
     "SecFilingGemmaPredictionArtifactSealer",
+    "ValidatedPredictionArtifactExternalPin",
     "ValidatedPredictionArtifactSeal",
+    "ValidatedPredictionArtifactStoreState",
     "build_prediction_artifact_bytes",
+    "build_prediction_artifact_genesis_pin_bytes",
+    "validate_prediction_artifact_external_pin",
     "validate_prediction_artifact_seal_receipt",
+    "validate_prediction_artifact_store_state_bytes",
 ]

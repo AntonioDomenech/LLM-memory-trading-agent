@@ -12,10 +12,12 @@ from agent_benchmark.sec_filing_gemma_contract import (
     ACTIVE_EDGE_TOLERANCE,
     BRIER_TARGET_COST_BPS,
     CANDIDATE_IDS,
+    DEVELOPMENT_POLICY_SESSION_DATES,
     HORIZON_SESSIONS,
     LABEL_MATURITY_OFFSET,
     SecFilingGemmaContractError,
     canonical_sha256,
+    development_policy_session_calendar_sha256,
     session_calendar_sha256,
 )
 from agent_benchmark.sec_filing_gemma_prediction_evidence import (
@@ -26,6 +28,7 @@ from agent_benchmark.sec_filing_gemma_prediction_evidence import (
     PREDICTION_ROW_SCHEMA_VERSION,
     UNAVAILABLE_PREDICTION_STATUS,
     append_prediction_row,
+    build_cumulative_development_prediction_artifact,
     build_label_release_ledger,
     build_prediction_ledger,
     build_prelabel_seal_ledger,
@@ -330,6 +333,67 @@ def test_exact_append_replay_and_external_prior_pins(evidence) -> None:
             expected_event_bindings=evidence["events"][:2],
             expected_prior_prefix_sha256=_hash("wrong-prior"),
             expected_prior_tip_sha256=prefix_1["tip_sha256"],
+        )
+
+
+def test_cumulative_development_artifact_reconstructs_validated_ancestry(
+    evidence,
+) -> None:
+    calendar_hash = development_policy_session_calendar_sha256(
+        DEVELOPMENT_POLICY_SESSION_DATES
+    )
+    prefix = build_prediction_ledger(
+        evidence["specs"],
+        session_dates=DEVELOPMENT_POLICY_SESSION_DATES,
+        expected_calendar_sessions_sha256=calendar_hash,
+        candidate_sha256=evidence["candidate_hash"],
+        corpus_universe_sha256=evidence["universe_hash"],
+        expected_event_bindings=evidence["events"],
+        fold_contexts=evidence["fold_contexts"],
+    )
+    summary = validate_prediction_prefix(
+        prefix,
+        session_dates=DEVELOPMENT_POLICY_SESSION_DATES,
+        expected_calendar_sessions_sha256=calendar_hash,
+        expected_candidate_sha256=evidence["candidate_hash"],
+        expected_corpus_universe_sha256=evidence["universe_hash"],
+        expected_event_bindings=evidence["events"],
+    )
+
+    artifacts = []
+    for count in range(1, len(prefix["rows"]) + 1):
+        artifact = build_cumulative_development_prediction_artifact(
+            prefix,
+            through_sequence_number=count,
+            expected_candidate_sha256=evidence["candidate_hash"],
+            expected_corpus_universe_sha256=evidence["universe_hash"],
+            expected_event_bindings=evidence["events"],
+        )
+        artifacts.append(artifact)
+        assert artifact["row_count"] == count
+        assert artifact["rows"] == prefix["rows"][:count]
+        assert artifact["prediction_prefix_sha256"] == summary[
+            "prefix_ancestry_sha256s"
+        ][count - 1]
+        assert artifact["prediction_prefix_sha256"] == prediction_prefix_sha256(
+            prefix, through_sequence_number=count
+        )
+        if count > 1:
+            assert artifact["parent_prefix_sha256"] == artifacts[-2][
+                "prediction_prefix_sha256"
+            ]
+            assert artifact["parent_tip_sha256"] == artifacts[-2][
+                "tip_sha256"
+            ]
+    assert artifacts[-1] == prefix
+
+    with pytest.raises(SecFilingGemmaContractError, match="calendar"):
+        build_cumulative_development_prediction_artifact(
+            evidence["prefix"],
+            through_sequence_number=1,
+            expected_candidate_sha256=evidence["candidate_hash"],
+            expected_corpus_universe_sha256=evidence["universe_hash"],
+            expected_event_bindings=evidence["events"],
         )
 
 

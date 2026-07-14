@@ -31,6 +31,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     CANDIDATE_IDS,
     CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
+    DEVELOPMENT_POLICY_SESSION_DATES,
     DEVELOPMENT_FOLD_SPECS,
     HORIZON_SESSIONS,
     LABEL_MATURITY_OFFSET,
@@ -44,6 +45,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     build_contract_manifest,
     build_stage_content_manifest,
     canonical_sha256,
+    development_policy_session_calendar_sha256,
     market_session_calendar_sha256,
     validate_candidate_manifest,
 )
@@ -74,6 +76,11 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
 )
 from agent_benchmark.sec_filing_gemma_source_identity import (
     CANONICAL_SOURCE_ROLE_PATHS,
+)
+from agent_benchmark.sec_filing_gemma_prediction_evidence import (
+    PREDICTION_PREFIX_SCHEMA_VERSION,
+    PREDICTION_ROW_SCHEMA_VERSION,
+    _PREDICTION_ROW_KEYS as _AUTHORITATIVE_PREDICTION_ROW_KEYS,
 )
 from agent_benchmark.sec_filing_gemma_learner import (
     MODEL_TYPE as LEARNER_MODEL_TYPE,
@@ -173,6 +180,15 @@ DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-policy-replay-plan-v1"
+)
+DEVELOPMENT_POLICY_PREFIX_SEAL_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-policy-prefix-seal-plan-v1"
+)
+DEVELOPMENT_POLICY_PREFIX_SEAL_RECEIPT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-policy-prefix-seal-receipt-v1"
+)
+DEVELOPMENT_POLICY_PREFIX_EXTERNAL_PIN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-policy-prefix-external-pin-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
@@ -1622,6 +1638,256 @@ _DEVELOPMENT_POLICY_REPLAY_PLAN_KEYS: Final[frozenset[str]] = frozenset(
         "stage_promotion_permitted",
         "production_permitted",
         "development_policy_replay_plan_sha256",
+    }
+)
+_DEVELOPMENT_POLICY_PREFIX_SEAL_INPUT_SPEC_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-policy-prefix-seal-input-spec-v1"
+)
+_PREDICTION_ARTIFACT_STORE_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-prediction-artifact-store-v1"
+)
+_PREDICTION_ARTIFACT_EXTERNAL_PIN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-prediction-artifact-external-pin-v1"
+)
+_PREDICTION_ARTIFACT_ENCODING: Final[str] = (
+    "canonical-json-utf8-sorted-keys-v1"
+)
+_DEVELOPMENT_POLICY_PREFIX_SEAL_NAMESPACE_KIND: Final[str] = (
+    "owned-development-policy-prefix-seals-v1"
+)
+_DEVELOPMENT_POLICY_PREFIX_SEAL_BATCH_RULE: Final[str] = (
+    "all_authorized_cumulative_prefixes_exactly_once_in_one_atomic_compare_and_swap"
+)
+_DEVELOPMENT_POLICY_PREFIX_SEAL_RECOVERY_RULE: Final[str] = (
+    "only_exact_same_plan_and_bytes_may_replay_after_crash_no_alternate_repair"
+)
+_DEVELOPMENT_POLICY_PREFIX_EXTERNAL_PIN_RULE: Final[str] = (
+    "exact_receipt_and_full_chain_pin_bytes_must_be_retained_outside_mutable_seal_namespace"
+)
+_OWNED_DEVELOPMENT_POLICY_REPLAY_BATCH_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-owned-development-policy-replay-batch-v2"
+)
+_DEVELOPMENT_POLICY_PREFIX_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "initial_event_sequence_sha256",
+        "event_sequence_sha256",
+        "row_count",
+        "genesis_sha256",
+        "parent_prefix_sha256",
+        "parent_tip_sha256",
+        "appended_row_sha256",
+        "tip_sha256",
+        "rows_sha256",
+        "rows",
+        "prediction_prefix_sha256",
+    }
+)
+_DEVELOPMENT_POLICY_EVENT_BINDING_KEYS: Final[tuple[str, ...]] = (
+    "accession_number",
+    "form",
+    "stage",
+    "decision_session",
+    "extraction_identity_sha256",
+    "market_prefix_chain_identity_sha256",
+    "market_feature_row_sha256",
+    "fold_id",
+)
+_DEVELOPMENT_POLICY_REPLAY_BATCH_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "development_policy_replay_plan_sha256",
+        "source_prediction_projection_sha256",
+        "source_prediction_batch_schema_version",
+        "source_prediction_batch_sha256",
+        "source_raw_prediction_rows_sha256",
+        "source_raw_prediction_tip_sha256",
+        "contract_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "source_market_calendar_sessions_sha256",
+        "policy_calendar_sessions_sha256",
+        "development_cutoff_session",
+        "source_prediction_event_count",
+        "available_prediction_count",
+        "unavailable_prediction_count",
+        "candidate_count",
+        "candidate_ids",
+        "model_variant_count",
+        "model_variant_ids",
+        "candidate_grid",
+        "candidate_grid_sha256",
+        "threshold_comparison_rule",
+        "cash_episode_rule",
+        "unavailable_prediction_rule",
+        "policy_replay_order_rule",
+        "policy_replay_input_count",
+        "policy_replay_input_specs_sha256",
+        "policy_prefix",
+        "policy_prefix_sha256",
+        "binding_count",
+        "raw_to_policy_bindings",
+        "raw_to_policy_bindings_sha256",
+        "prediction_components_equal_source",
+        "policy_prefix_included",
+        "raw_to_policy_bindings_included",
+        "threshold_evaluation_authorized",
+        "policy_transition_authorized",
+        "source_feature_rows_included",
+        "learner_states_included",
+        "labels_included",
+        "outcomes_included",
+        "market_prices_included",
+        "post_2018_prediction_rows_included",
+        "post_2018_market_or_outcome_data_included",
+        "calendar_schedule_after_cutoff_used_only_for_open_episode_dates",
+        "numeric_prediction_authorized",
+        "learner_fit_authorized",
+        "model_transport_authorized",
+        "network_access_authorized",
+        "scoring_authorized",
+        "candidate_selection_authorized",
+        "ranking_authorized",
+        "sealing_authorized",
+        "refit_authorized",
+        "holdout_access_authorized",
+        "ledger_mutation_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+        "policy_replay_batch_sha256",
+    }
+)
+_DEVELOPMENT_POLICY_PREFIX_SEAL_INPUT_SPEC_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "seal_ordinal",
+            "policy_sequence_number",
+            "decision_session",
+            "accession_number",
+            "prediction_row_sha256",
+            "parent_prediction_prefix_sha256",
+            "parent_prediction_tip_sha256",
+            "prediction_prefix_sha256",
+            "prediction_tip_sha256",
+            "prediction_rows_sha256",
+            "artifact_sha256",
+            "artifact_size_bytes",
+            "policy_prefix_seal_input_spec_sha256",
+        }
+    )
+)
+_DEVELOPMENT_POLICY_ARTIFACT_GENESIS_PIN_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "candidate_sha256",
+            "stage",
+            "sealed_artifact_count",
+            "last_prediction_sequence_number",
+            "prediction_prefix_sha256",
+            "prediction_tip_sha256",
+            "prediction_rows_sha256",
+            "artifact_sha256",
+            "seal_tip_sha256",
+            "external_pin_sha256",
+        }
+    )
+)
+_DEVELOPMENT_POLICY_PREFIX_SEAL_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "contract_sha256",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_store_state_bytes_sha256",
+        "start_store_state_sha256",
+        "start_current_tip_anchor_bytes_sha256",
+        "start_current_tip_anchor_sha256",
+        "start_current_tip_revision",
+        "start_consumed_request_count",
+        "source_development_policy_replay_plan_sha256",
+        "source_development_policy_replay_projection_sha256",
+        "source_development_policy_replay_batch_sha256",
+        "source_development_oof_prediction_plan_sha256",
+        "source_development_oof_prediction_projection_sha256",
+        "source_development_oof_prediction_batch_sha256",
+        "source_raw_prediction_rows_sha256",
+        "source_raw_prediction_tip_sha256",
+        "source_raw_prediction_row_count",
+        "source_raw_to_policy_bindings_sha256",
+        "source_identity_receipt_sha256",
+        "source_role_bindings_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "source_market_calendar_sessions_sha256",
+        "policy_calendar_sessions_sha256",
+        "development_cutoff_session",
+        "policy_prefix_count",
+        "final_policy_prefix_sha256",
+        "final_policy_tip_sha256",
+        "final_policy_rows_sha256",
+        "policy_prefix_seal_input_count",
+        "policy_prefix_seal_input_specs",
+        "policy_prefix_seal_input_specs_sha256",
+        "artifact_encoding",
+        "artifact_store_schema_version",
+        "artifact_sealer_genesis_pin_schema_version",
+        "artifact_sealer_genesis_pin_bytes_sha256",
+        "artifact_sealer_genesis_pin_sha256",
+        "artifact_sealer_genesis_seal_tip_sha256",
+        "seal_store_namespace_kind",
+        "seal_store_namespace_sha256",
+        "authorized_seal_receipt_schema_version",
+        "authorized_external_pin_schema_version",
+        "seal_batch_rule",
+        "seal_recovery_rule",
+        "external_pin_rule",
+        "source_development_policy_replay_batch_access_permitted",
+        "deterministic_policy_replay_validation_permitted",
+        "cumulative_policy_prefix_materialization_permitted",
+        "canonical_artifact_encoding_permitted",
+        "fixed_namespace_artifact_store_write_permitted",
+        "atomic_batch_compare_and_swap_permitted",
+        "exact_idempotent_recovery_permitted",
+        "seal_receipt_emission_permitted",
+        "external_pin_emission_permitted",
+        "raw_prediction_mutation_permitted",
+        "policy_row_drop_permitted",
+        "policy_row_reordering_permitted",
+        "alternate_policy_retry_permitted",
+        "source_feature_batch_access_permitted",
+        "source_label_batch_access_permitted",
+        "label_access_permitted",
+        "outcome_access_permitted",
+        "post_decision_market_data_access_permitted",
+        "post_2018_data_access_permitted",
+        "numeric_prediction_permitted",
+        "learner_state_access_permitted",
+        "learner_fit_permitted",
+        "learner_refit_permitted",
+        "learner_state_update_permitted",
+        "new_threshold_evaluation_permitted",
+        "new_policy_state_transition_permitted",
+        "candidate_selection_permitted",
+        "scoring_permitted",
+        "ranking_permitted",
+        "holdout_access_permitted",
+        "model_transport_access_permitted",
+        "network_access_permitted",
+        "mutable_store_pin_discovery_as_external_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+        "development_policy_prefix_seal_plan_sha256",
     }
 )
 _DEVELOPMENT_POLICY_REPLAY_MODEL_VARIANT_IDS: Final[tuple[str, ...]] = (
@@ -11664,6 +11930,49 @@ def _expected_development_policy_replay_capabilities() -> dict[str, bool]:
     }
 
 
+def _expected_development_policy_prefix_seal_capabilities() -> dict[str, bool]:
+    """Return the exact materialize-and-seal-only authority boundary."""
+
+    return {
+        "source_development_policy_replay_batch_access_permitted": True,
+        "deterministic_policy_replay_validation_permitted": True,
+        "cumulative_policy_prefix_materialization_permitted": True,
+        "canonical_artifact_encoding_permitted": True,
+        "fixed_namespace_artifact_store_write_permitted": True,
+        "atomic_batch_compare_and_swap_permitted": True,
+        "exact_idempotent_recovery_permitted": True,
+        "seal_receipt_emission_permitted": True,
+        "external_pin_emission_permitted": True,
+        "raw_prediction_mutation_permitted": False,
+        "policy_row_drop_permitted": False,
+        "policy_row_reordering_permitted": False,
+        "alternate_policy_retry_permitted": False,
+        "source_feature_batch_access_permitted": False,
+        "source_label_batch_access_permitted": False,
+        "label_access_permitted": False,
+        "outcome_access_permitted": False,
+        "post_decision_market_data_access_permitted": False,
+        "post_2018_data_access_permitted": False,
+        "numeric_prediction_permitted": False,
+        "learner_state_access_permitted": False,
+        "learner_fit_permitted": False,
+        "learner_refit_permitted": False,
+        "learner_state_update_permitted": False,
+        "new_threshold_evaluation_permitted": False,
+        "new_policy_state_transition_permitted": False,
+        "candidate_selection_permitted": False,
+        "scoring_permitted": False,
+        "ranking_permitted": False,
+        "holdout_access_permitted": False,
+        "model_transport_access_permitted": False,
+        "network_access_permitted": False,
+        "mutable_store_pin_discovery_as_external_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+
+
 def _development_policy_replay_candidate_threshold_specs() -> list[dict[str, Any]]:
     manifest = build_contract_manifest()
     predictor = _mapping(
@@ -12812,6 +13121,998 @@ def validate_development_policy_replay_plan(
     if not hmac.compare_digest(observed, expected):
         raise SecFilingGemmaStageAuthorizationError(
             "Development policy replay plan is not externally pinned"
+        )
+    return observed
+
+
+def _canonical_compact_json_bytes(value: Any, location: str) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must be finite canonical JSON"
+        ) from exc
+
+
+def _development_policy_prediction_genesis(
+    *,
+    contract_sha256: str,
+    candidate_sha256: str,
+    corpus_universe_sha256: str,
+    calendar_sessions_sha256: str,
+    initial_event_sequence_sha256: str,
+) -> str:
+    return canonical_sha256(
+        {
+            "domain": "aapl-sec-gemma-prediction-genesis-v3",
+            "contract_sha256": contract_sha256,
+            "candidate_sha256": candidate_sha256,
+            "corpus_universe_sha256": corpus_universe_sha256,
+            "calendar_sessions_sha256": calendar_sessions_sha256,
+            "initial_event_sequence_sha256": initial_event_sequence_sha256,
+        }
+    )
+
+
+def _development_policy_prefix_body(
+    *,
+    prefix: Mapping[str, Any],
+    rows: list[dict[str, Any]],
+    event_sequence_sha256: str,
+    parent_prefix_sha256: str | None,
+    parent_tip_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": PREDICTION_PREFIX_SCHEMA_VERSION,
+        "contract_sha256": prefix["contract_sha256"],
+        "candidate_sha256": prefix["candidate_sha256"],
+        "corpus_universe_sha256": prefix["corpus_universe_sha256"],
+        "calendar_sessions_sha256": prefix["calendar_sessions_sha256"],
+        "initial_event_sequence_sha256": prefix[
+            "initial_event_sequence_sha256"
+        ],
+        "event_sequence_sha256": event_sequence_sha256,
+        "row_count": len(rows),
+        "genesis_sha256": prefix["genesis_sha256"],
+        "parent_prefix_sha256": parent_prefix_sha256,
+        "parent_tip_sha256": parent_tip_sha256,
+        "appended_row_sha256": rows[-1]["prediction_row_sha256"],
+        "tip_sha256": rows[-1]["prediction_row_sha256"],
+        "rows_sha256": canonical_sha256(rows),
+        "rows": rows,
+    }
+
+
+def _validated_development_policy_prefix_seal_input_specs(
+    raw: Any,
+) -> list[dict[str, Any]]:
+    if type(raw) is not list or not raw:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix seal inputs must be a nonempty exact list"
+        )
+    specs: list[dict[str, Any]] = []
+    prior_prefix: str | None = None
+    prior_tip: str | None = None
+    prior_key: tuple[str, str] | None = None
+    observed_rows: set[str] = set()
+    observed_prefixes: set[str] = set()
+    observed_artifacts: set[str] = set()
+    for ordinal, raw_spec in enumerate(raw, start=1):
+        spec = _mapping(
+            raw_spec, f"development policy-prefix seal input {ordinal}"
+        )
+        _expect_keys(
+            spec,
+            _DEVELOPMENT_POLICY_PREFIX_SEAL_INPUT_SPEC_KEYS,
+            f"development policy-prefix seal input {ordinal}",
+        )
+        if (
+            spec["schema_version"]
+            != _DEVELOPMENT_POLICY_PREFIX_SEAL_INPUT_SPEC_SCHEMA_VERSION
+            or _strict_int(
+                spec["seal_ordinal"],
+                f"development policy-prefix seal input {ordinal} ordinal",
+                minimum=1,
+            )
+            != ordinal
+            or _strict_int(
+                spec["policy_sequence_number"],
+                f"development policy-prefix seal input {ordinal} sequence",
+                minimum=1,
+            )
+            != ordinal
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy-prefix seal input order changed"
+            )
+        decision = _validated_development_oof_iso_date(
+            spec["decision_session"],
+            f"development policy-prefix seal input {ordinal} decision session",
+        )
+        accession = spec["accession_number"]
+        if type(accession) is not str or _AAPL_ACCESSION_RE.fullmatch(accession) is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy-prefix seal input accession is invalid"
+            )
+        key = (decision, accession)
+        if prior_key is not None and key <= prior_key:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy-prefix seal inputs are reordered or duplicated"
+            )
+        prior_key = key
+        row_hash = _sha256(
+            spec["prediction_row_sha256"],
+            f"development policy-prefix seal input {ordinal} row",
+        )
+        parent_prefix = spec["parent_prediction_prefix_sha256"]
+        if ordinal == 1:
+            if parent_prefix is not None:
+                raise SecFilingGemmaStageAuthorizationError(
+                    "First development policy-prefix seal input cannot have a parent prefix"
+                )
+        else:
+            parent_prefix = _sha256(
+                parent_prefix,
+                f"development policy-prefix seal input {ordinal} parent prefix",
+            )
+            if parent_prefix != prior_prefix:
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Development policy-prefix seal input crossed its parent prefix"
+                )
+        parent_tip = _sha256(
+            spec["parent_prediction_tip_sha256"],
+            f"development policy-prefix seal input {ordinal} parent tip",
+        )
+        if ordinal > 1 and parent_tip != prior_tip:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy-prefix seal input crossed its parent tip"
+            )
+        prefix_hash = _sha256(
+            spec["prediction_prefix_sha256"],
+            f"development policy-prefix seal input {ordinal} prefix",
+        )
+        tip_hash = _sha256(
+            spec["prediction_tip_sha256"],
+            f"development policy-prefix seal input {ordinal} tip",
+        )
+        rows_hash = _sha256(
+            spec["prediction_rows_sha256"],
+            f"development policy-prefix seal input {ordinal} rows",
+        )
+        artifact_hash = _sha256(
+            spec["artifact_sha256"],
+            f"development policy-prefix seal input {ordinal} artifact",
+        )
+        if tip_hash != row_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy-prefix seal input tip differs from its appended row"
+            )
+        _strict_int(
+            spec["artifact_size_bytes"],
+            f"development policy-prefix seal input {ordinal} artifact size",
+            minimum=1,
+        )
+        _self_hash(
+            spec,
+            "policy_prefix_seal_input_spec_sha256",
+            f"development policy-prefix seal input {ordinal}",
+        )
+        for identity, observed, label in (
+            (row_hash, observed_rows, "row"),
+            (prefix_hash, observed_prefixes, "prefix"),
+            (artifact_hash, observed_artifacts, "artifact"),
+        ):
+            if identity in observed:
+                raise SecFilingGemmaStageAuthorizationError(
+                    f"Development policy-prefix seal inputs duplicate a {label}"
+                )
+            observed.add(identity)
+        prior_prefix = prefix_hash
+        prior_tip = tip_hash
+        specs.append(spec)
+    return specs
+
+
+def _validated_development_policy_artifact_genesis_pin(
+    raw: Any,
+    *,
+    expected_candidate_sha256: str,
+    expected_pin_bytes_sha256: str,
+) -> dict[str, Any]:
+    pin = _mapping(raw, "development policy artifact-sealer genesis pin")
+    _expect_keys(
+        pin,
+        _DEVELOPMENT_POLICY_ARTIFACT_GENESIS_PIN_KEYS,
+        "development policy artifact-sealer genesis pin",
+    )
+    candidate = _sha256(
+        expected_candidate_sha256,
+        "development policy artifact-sealer expected candidate",
+    )
+    seal_tip = canonical_sha256(
+        {
+            "domain": "aapl-sec-gemma-prediction-artifact-seal-genesis-v1",
+            "candidate_sha256": candidate,
+            "stage": "development",
+        }
+    )
+    body = {
+        "schema_version": _PREDICTION_ARTIFACT_EXTERNAL_PIN_SCHEMA_VERSION,
+        "candidate_sha256": candidate,
+        "stage": "development",
+        "sealed_artifact_count": 0,
+        "last_prediction_sequence_number": 0,
+        "prediction_prefix_sha256": None,
+        "prediction_tip_sha256": None,
+        "prediction_rows_sha256": None,
+        "artifact_sha256": None,
+        "seal_tip_sha256": seal_tip,
+    }
+    expected = {
+        **body,
+        "external_pin_sha256": canonical_sha256(body),
+    }
+    _strict_int(pin["sealed_artifact_count"], "genesis sealed artifact count")
+    _strict_int(
+        pin["last_prediction_sequence_number"],
+        "genesis prediction sequence number",
+    )
+    if pin != expected:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy artifact-sealer genesis pin changed identity"
+        )
+    encoded = _canonical_compact_json_bytes(pin, "artifact-sealer genesis pin")
+    expected_bytes_hash = _sha256(
+        expected_pin_bytes_sha256,
+        "development policy artifact-sealer genesis pin bytes hash",
+    )
+    if not hmac.compare_digest(hashlib.sha256(encoded).hexdigest(), expected_bytes_hash):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy artifact-sealer genesis pin bytes changed"
+        )
+    return pin
+
+
+def _validated_source_development_policy_replay_batch(
+    raw: Any,
+    *,
+    source_policy_replay_plan: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    batch = _mapping(raw, "source development policy replay batch")
+    _expect_keys(
+        batch,
+        _DEVELOPMENT_POLICY_REPLAY_BATCH_KEYS,
+        "source development policy replay batch",
+    )
+    if (
+        batch["schema_version"]
+        != _OWNED_DEVELOPMENT_POLICY_REPLAY_BATCH_SCHEMA_VERSION
+        or batch["artifact_stage"] != "development"
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy replay batch schema or stage changed"
+        )
+    batch_hash = _self_hash(
+        batch,
+        "policy_replay_batch_sha256",
+        "source development policy replay batch",
+    )
+    plan = source_policy_replay_plan
+    expected_policy_calendar = development_policy_session_calendar_sha256(
+        DEVELOPMENT_POLICY_SESSION_DATES
+    )
+    cross_bindings = {
+        "development_root_scope_sha256": plan["development_root_scope_sha256"],
+        "development_policy_replay_plan_sha256": plan[
+            "development_policy_replay_plan_sha256"
+        ],
+        "source_prediction_projection_sha256": plan[
+            "source_development_oof_prediction_projection_sha256"
+        ],
+        "source_prediction_batch_sha256": plan[
+            "source_development_oof_prediction_batch_sha256"
+        ],
+        "source_raw_prediction_rows_sha256": plan[
+            "source_raw_prediction_rows_sha256"
+        ],
+        "source_raw_prediction_tip_sha256": plan[
+            "source_raw_prediction_tip_sha256"
+        ],
+        "contract_sha256": plan["contract_sha256"],
+        "candidate_sha256": plan["candidate_sha256"],
+        "corpus_universe_sha256": plan["corpus_universe_sha256"],
+        "source_market_calendar_sessions_sha256": plan["calendar_sessions_sha256"],
+        "policy_calendar_sessions_sha256": expected_policy_calendar,
+        "development_cutoff_session": plan["development_cutoff_session"],
+        "source_prediction_event_count": plan["source_raw_prediction_row_count"],
+        "candidate_count": plan["candidate_count"],
+        "candidate_ids": plan["candidate_ids"],
+        "model_variant_count": plan["model_variant_count"],
+        "model_variant_ids": plan["model_variant_ids"],
+        "threshold_comparison_rule": plan["candidate_gate_comparison_rule"],
+        "cash_episode_rule": plan["cash_episode_rule"],
+        "unavailable_prediction_rule": plan["unavailable_prediction_rule"],
+        "policy_replay_order_rule": plan["policy_replay_order_rule"],
+        "policy_replay_input_count": plan["policy_replay_input_count"],
+        "policy_replay_input_specs_sha256": plan[
+            "policy_replay_input_specs_sha256"
+        ],
+    }
+    if any(batch.get(field) != expected for field, expected in cross_bindings.items()):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy replay batch crossed its plan ancestry"
+        )
+    event_count = _strict_int(
+        batch["source_prediction_event_count"],
+        "source development policy replay event count",
+        minimum=1,
+    )
+    available = _strict_int(
+        batch["available_prediction_count"],
+        "source development policy replay available count",
+    )
+    unavailable = _strict_int(
+        batch["unavailable_prediction_count"],
+        "source development policy replay unavailable count",
+    )
+    bindings = batch["raw_to_policy_bindings"]
+    if (
+        type(bindings) is not list
+        or available + unavailable != event_count
+        or _strict_int(batch["binding_count"], "policy replay binding count")
+        != event_count
+        or len(bindings) != event_count
+        or batch["raw_to_policy_bindings_sha256"] != canonical_sha256(bindings)
+        or batch["candidate_grid_sha256"]
+        != canonical_sha256(batch["candidate_grid"])
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy replay population or binding chain changed"
+        )
+    true_flags = (
+        "prediction_components_equal_source",
+        "policy_prefix_included",
+        "raw_to_policy_bindings_included",
+        "threshold_evaluation_authorized",
+        "policy_transition_authorized",
+        "calendar_schedule_after_cutoff_used_only_for_open_episode_dates",
+    )
+    false_flags = (
+        "source_feature_rows_included",
+        "learner_states_included",
+        "labels_included",
+        "outcomes_included",
+        "market_prices_included",
+        "post_2018_prediction_rows_included",
+        "post_2018_market_or_outcome_data_included",
+        "numeric_prediction_authorized",
+        "learner_fit_authorized",
+        "model_transport_authorized",
+        "network_access_authorized",
+        "scoring_authorized",
+        "candidate_selection_authorized",
+        "ranking_authorized",
+        "sealing_authorized",
+        "refit_authorized",
+        "holdout_access_authorized",
+        "ledger_mutation_authorized",
+        "stage_promotion_authorized",
+        "production_authorized",
+    )
+    if any(type(batch[field]) is not bool or batch[field] is not True for field in true_flags):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy replay lost an outcome-free replay proof"
+        )
+    if any(type(batch[field]) is not bool or batch[field] is not False for field in false_flags):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy replay crossed into sealing or outcome authority"
+        )
+
+    prefix = _mapping(batch["policy_prefix"], "source development policy prefix")
+    _expect_keys(prefix, _DEVELOPMENT_POLICY_PREFIX_KEYS, "source development policy prefix")
+    if (
+        prefix["schema_version"] != PREDICTION_PREFIX_SCHEMA_VERSION
+        or prefix["contract_sha256"] != batch["contract_sha256"]
+        or prefix["candidate_sha256"] != batch["candidate_sha256"]
+        or prefix["corpus_universe_sha256"] != batch["corpus_universe_sha256"]
+        or prefix["calendar_sessions_sha256"] != expected_policy_calendar
+        or batch["policy_prefix_sha256"] != prefix["prediction_prefix_sha256"]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy prefix crossed its batch identity"
+        )
+    rows_raw = prefix["rows"]
+    if type(rows_raw) is not list or len(rows_raw) != event_count:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy prefix omits or adds a policy row"
+        )
+    rows: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    sessions = DEVELOPMENT_POLICY_SESSION_DATES
+    session_index = {session: index for index, session in enumerate(sessions)}
+    prior_prefix_hash: str | None = None
+    prior_tip_hash: str | None = None
+    previous_key: tuple[str, str] | None = None
+    seal_specs: list[dict[str, Any]] = []
+    for ordinal, raw_row in enumerate(rows_raw, start=1):
+        row = _mapping(raw_row, f"source development policy row {ordinal}")
+        _expect_keys(
+            row,
+            frozenset(_AUTHORITATIVE_PREDICTION_ROW_KEYS),
+            f"source development policy row {ordinal}",
+        )
+        if (
+            row["schema_version"] != PREDICTION_ROW_SCHEMA_VERSION
+            or _strict_int(
+                row["sequence_number"],
+                f"source development policy row {ordinal} sequence",
+                minimum=1,
+            )
+            != ordinal
+            or row["stage"] != "development"
+            or row["contract_sha256"] != prefix["contract_sha256"]
+            or row["candidate_sha256"] != prefix["candidate_sha256"]
+            or row["corpus_universe_sha256"] != prefix["corpus_universe_sha256"]
+            or row["calendar_sessions_sha256"] != expected_policy_calendar
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Source development policy row identity or order changed"
+            )
+        decision = _validated_development_oof_iso_date(
+            row["decision_session"],
+            f"source development policy row {ordinal} decision session",
+        )
+        accession = row["accession_number"]
+        if (
+            type(accession) is not str
+            or _AAPL_ACCESSION_RE.fullmatch(accession) is None
+            or decision > STAGE_WINDOWS["development"][1]
+            or decision not in session_index
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Source development policy row is outside the bounded population"
+            )
+        key = (decision, accession)
+        if previous_key is not None and key <= previous_key:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Source development policy rows are duplicated or reordered"
+            )
+        previous_key = key
+        decision_index = session_index[decision]
+        if decision_index + LABEL_MATURITY_OFFSET >= len(sessions):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy calendar does not cover a fixed episode"
+            )
+        if (
+            row["market_feature_cutoff_session"] != decision
+            or row["fill_session"] != sessions[decision_index + 1]
+            or row["cash_exit_session"]
+            != sessions[decision_index + LABEL_MATURITY_OFFSET]
+            or row["label_maturity_session"]
+            != sessions[decision_index + LABEL_MATURITY_OFFSET]
+            or row["horizon_sessions"] != HORIZON_SESSIONS
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Source development policy row crossed its causal episode schedule"
+            )
+        event = {field: row[field] for field in _DEVELOPMENT_POLICY_EVENT_BINDING_KEYS}
+        events.append(event)
+        event_sequence_hash = canonical_sha256(events)
+        if row["event_sequence_sha256"] != event_sequence_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Source development policy row crossed its event prefix"
+            )
+        if ordinal == 1:
+            initial_event_hash = event_sequence_hash
+            prediction_genesis = _development_policy_prediction_genesis(
+                contract_sha256=prefix["contract_sha256"],
+                candidate_sha256=prefix["candidate_sha256"],
+                corpus_universe_sha256=prefix["corpus_universe_sha256"],
+                calendar_sessions_sha256=expected_policy_calendar,
+                initial_event_sequence_sha256=initial_event_hash,
+            )
+            if (
+                prefix["initial_event_sequence_sha256"] != initial_event_hash
+                or prefix["genesis_sha256"] != prediction_genesis
+                or row["prior_prediction_prefix_sha256"] is not None
+                or row["parent_prediction_sha256"] != prediction_genesis
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Source development policy genesis changed"
+                )
+            parent_tip = prediction_genesis
+        else:
+            if (
+                row["prior_prediction_prefix_sha256"] != prior_prefix_hash
+                or row["parent_prediction_sha256"] != prior_tip_hash
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Source development policy row crossed its cumulative parent"
+                )
+            assert prior_tip_hash is not None
+            parent_tip = prior_tip_hash
+        row_body = {
+            field: row[field]
+            for field in _AUTHORITATIVE_PREDICTION_ROW_KEYS
+            if field != "prediction_row_sha256"
+        }
+        row_hash = canonical_sha256(row_body)
+        if row["prediction_row_sha256"] != row_hash:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Source development policy row hash is inconsistent"
+            )
+        rows.append(row)
+        prefix_body = _development_policy_prefix_body(
+            prefix=prefix,
+            rows=rows,
+            event_sequence_sha256=event_sequence_hash,
+            parent_prefix_sha256=prior_prefix_hash,
+            parent_tip_sha256=parent_tip,
+        )
+        cumulative_prefix = {
+            **prefix_body,
+            "prediction_prefix_sha256": canonical_sha256(prefix_body),
+        }
+        artifact_bytes = _canonical_compact_json_bytes(
+            cumulative_prefix,
+            f"development policy-prefix artifact {ordinal}",
+        )
+        spec_body = {
+            "schema_version": (
+                _DEVELOPMENT_POLICY_PREFIX_SEAL_INPUT_SPEC_SCHEMA_VERSION
+            ),
+            "seal_ordinal": ordinal,
+            "policy_sequence_number": ordinal,
+            "decision_session": decision,
+            "accession_number": accession,
+            "prediction_row_sha256": row_hash,
+            "parent_prediction_prefix_sha256": prior_prefix_hash,
+            "parent_prediction_tip_sha256": parent_tip,
+            "prediction_prefix_sha256": cumulative_prefix[
+                "prediction_prefix_sha256"
+            ],
+            "prediction_tip_sha256": row_hash,
+            "prediction_rows_sha256": cumulative_prefix["rows_sha256"],
+            "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+            "artifact_size_bytes": len(artifact_bytes),
+        }
+        seal_specs.append(
+            {
+                **spec_body,
+                "policy_prefix_seal_input_spec_sha256": canonical_sha256(
+                    spec_body
+                ),
+            }
+        )
+        prior_prefix_hash = cumulative_prefix["prediction_prefix_sha256"]
+        prior_tip_hash = row_hash
+    final_prefix_body = _development_policy_prefix_body(
+        prefix=prefix,
+        rows=rows,
+        event_sequence_sha256=rows[-1]["event_sequence_sha256"],
+        parent_prefix_sha256=(seal_specs[-2]["prediction_prefix_sha256"] if len(seal_specs) > 1 else None),
+        parent_tip_sha256=(rows[-2]["prediction_row_sha256"] if len(rows) > 1 else prefix["genesis_sha256"]),
+    )
+    expected_final_prefix = {
+        **final_prefix_body,
+        "prediction_prefix_sha256": canonical_sha256(final_prefix_body),
+    }
+    if prefix != expected_final_prefix or prefix["rows_sha256"] != canonical_sha256(rows):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Source development policy prefix differs from its exact cumulative replay"
+        )
+    _validated_development_policy_prefix_seal_input_specs(seal_specs)
+    if batch_hash != batch["policy_replay_batch_sha256"]:
+        raise AssertionError("validated policy replay batch hash changed")
+    return batch, seal_specs
+
+
+def _development_policy_prefix_seal_namespace_sha256(
+    *,
+    development_root_scope_sha256: str,
+    source_development_policy_replay_plan_sha256: str,
+    source_development_policy_replay_batch_sha256: str,
+    final_policy_prefix_sha256: str,
+    policy_prefix_seal_input_specs_sha256: str,
+    artifact_sealer_genesis_pin_sha256: str,
+) -> str:
+    return canonical_sha256(
+        {
+            "domain": _DEVELOPMENT_POLICY_PREFIX_SEAL_NAMESPACE_KIND,
+            "development_root_scope_sha256": development_root_scope_sha256,
+            "source_development_policy_replay_plan_sha256": (
+                source_development_policy_replay_plan_sha256
+            ),
+            "source_development_policy_replay_batch_sha256": (
+                source_development_policy_replay_batch_sha256
+            ),
+            "final_policy_prefix_sha256": final_policy_prefix_sha256,
+            "policy_prefix_seal_input_specs_sha256": (
+                policy_prefix_seal_input_specs_sha256
+            ),
+            "artifact_sealer_genesis_pin_sha256": (
+                artifact_sealer_genesis_pin_sha256
+            ),
+        }
+    )
+
+
+def build_development_policy_prefix_seal_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    authenticated_store_state_bytes_sha256: str,
+    source_development_policy_replay_plan: Mapping[str, Any],
+    source_development_policy_replay_projection_sha256: str,
+    source_development_policy_replay_batch: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+    independent_current_tip_anchor_bytes_sha256: str,
+    artifact_sealer_genesis_pin: Mapping[str, Any],
+    artifact_sealer_genesis_pin_bytes_sha256: str,
+    source_identity_receipt_sha256: str,
+    source_role_bindings_sha256: str,
+) -> dict[str, Any]:
+    """Authorize only exact cumulative-prefix materialization and atomic sealing."""
+
+    state, ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    current_tip = validate_reveal_store_current_tip_anchor(
+        state, independent_current_tip_anchor
+    )
+    state_bytes_hash = _sha256(
+        authenticated_store_state_bytes_sha256,
+        "development policy-prefix seal authenticated state bytes hash",
+    )
+    tip_bytes_hash = _sha256(
+        independent_current_tip_anchor_bytes_sha256,
+        "development policy-prefix seal current-tip bytes hash",
+    )
+    if (
+        not hmac.compare_digest(
+            state_bytes_hash,
+            hashlib.sha256(_encoded_store_snapshot(state)).hexdigest(),
+        )
+        or not hmac.compare_digest(
+            tip_bytes_hash,
+            hashlib.sha256(_encoded_store_snapshot(current_tip)).hexdigest(),
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix seal byte pins crossed their parsed state or tip"
+        )
+    consumed_count = _strict_int(
+        ledger["chain"]["consumed_request_count"],
+        "development policy-prefix seal consumed request count",
+    )
+    if consumed_count != 0 or current_tip["consumed_request_count"] != 0:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix sealing requires the untouched zero-consumption store"
+        )
+    root_scope_hash = _sha256(
+        development_root_scope_sha256,
+        "development policy-prefix seal root scope hash",
+    )
+    replay_plan = _mapping(
+        source_development_policy_replay_plan,
+        "source development policy replay plan",
+    )
+    replay_plan_hash = _sha256(
+        replay_plan.get("development_policy_replay_plan_sha256"),
+        "source development policy replay plan hash",
+    )
+    validate_development_policy_replay_plan(
+        replay_plan,
+        expected_development_policy_replay_plan_sha256=replay_plan_hash,
+    )
+    if (
+        replay_plan["development_root_scope_sha256"] != root_scope_hash
+        or replay_plan["start_store_state_bytes_sha256"] != state_bytes_hash
+        or replay_plan["start_store_state_sha256"] != state["state_sha256"]
+        or replay_plan["start_current_tip_anchor_bytes_sha256"] != tip_bytes_hash
+        or replay_plan["start_current_tip_anchor_sha256"]
+        != current_tip["tip_anchor_sha256"]
+        or replay_plan["start_current_tip_revision"] != current_tip["revision"]
+        or replay_plan["start_consumed_request_count"] != consumed_count
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix seal crossed its replay-plan store ancestry"
+        )
+    batch, seal_specs = _validated_source_development_policy_replay_batch(
+        source_development_policy_replay_batch,
+        source_policy_replay_plan=replay_plan,
+    )
+    prefix = batch["policy_prefix"]
+    genesis_pin = _validated_development_policy_artifact_genesis_pin(
+        artifact_sealer_genesis_pin,
+        expected_candidate_sha256=batch["candidate_sha256"],
+        expected_pin_bytes_sha256=artifact_sealer_genesis_pin_bytes_sha256,
+    )
+    specs_hash = canonical_sha256(seal_specs)
+    namespace_hash = _development_policy_prefix_seal_namespace_sha256(
+        development_root_scope_sha256=root_scope_hash,
+        source_development_policy_replay_plan_sha256=replay_plan_hash,
+        source_development_policy_replay_batch_sha256=batch[
+            "policy_replay_batch_sha256"
+        ],
+        final_policy_prefix_sha256=prefix["prediction_prefix_sha256"],
+        policy_prefix_seal_input_specs_sha256=specs_hash,
+        artifact_sealer_genesis_pin_sha256=genesis_pin["external_pin_sha256"],
+    )
+    capabilities = _expected_development_policy_prefix_seal_capabilities()
+    body = {
+        "schema_version": DEVELOPMENT_POLICY_PREFIX_SEAL_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "plan_kind": "request_free_development_policy_prefix_seal",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": root_scope_hash,
+        "start_store_state_bytes_sha256": state_bytes_hash,
+        "start_store_state_sha256": state["state_sha256"],
+        "start_current_tip_anchor_bytes_sha256": tip_bytes_hash,
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "start_current_tip_revision": current_tip["revision"],
+        "start_consumed_request_count": consumed_count,
+        "source_development_policy_replay_plan_sha256": replay_plan_hash,
+        "source_development_policy_replay_projection_sha256": _sha256(
+            source_development_policy_replay_projection_sha256,
+            "source development policy replay projection hash",
+        ),
+        "source_development_policy_replay_batch_sha256": batch[
+            "policy_replay_batch_sha256"
+        ],
+        "source_development_oof_prediction_plan_sha256": replay_plan[
+            "source_development_oof_prediction_plan_sha256"
+        ],
+        "source_development_oof_prediction_projection_sha256": replay_plan[
+            "source_development_oof_prediction_projection_sha256"
+        ],
+        "source_development_oof_prediction_batch_sha256": replay_plan[
+            "source_development_oof_prediction_batch_sha256"
+        ],
+        "source_raw_prediction_rows_sha256": replay_plan[
+            "source_raw_prediction_rows_sha256"
+        ],
+        "source_raw_prediction_tip_sha256": replay_plan[
+            "source_raw_prediction_tip_sha256"
+        ],
+        "source_raw_prediction_row_count": replay_plan[
+            "source_raw_prediction_row_count"
+        ],
+        "source_raw_to_policy_bindings_sha256": batch[
+            "raw_to_policy_bindings_sha256"
+        ],
+        "source_identity_receipt_sha256": _sha256(
+            source_identity_receipt_sha256,
+            "development policy-prefix seal source identity receipt hash",
+        ),
+        "source_role_bindings_sha256": _sha256(
+            source_role_bindings_sha256,
+            "development policy-prefix seal source-role bindings hash",
+        ),
+        "candidate_sha256": batch["candidate_sha256"],
+        "corpus_universe_sha256": batch["corpus_universe_sha256"],
+        "source_market_calendar_sessions_sha256": batch[
+            "source_market_calendar_sessions_sha256"
+        ],
+        "policy_calendar_sessions_sha256": batch[
+            "policy_calendar_sessions_sha256"
+        ],
+        "development_cutoff_session": batch["development_cutoff_session"],
+        "policy_prefix_count": len(seal_specs),
+        "final_policy_prefix_sha256": prefix["prediction_prefix_sha256"],
+        "final_policy_tip_sha256": prefix["tip_sha256"],
+        "final_policy_rows_sha256": prefix["rows_sha256"],
+        "policy_prefix_seal_input_count": len(seal_specs),
+        "policy_prefix_seal_input_specs": seal_specs,
+        "policy_prefix_seal_input_specs_sha256": specs_hash,
+        "artifact_encoding": _PREDICTION_ARTIFACT_ENCODING,
+        "artifact_store_schema_version": _PREDICTION_ARTIFACT_STORE_SCHEMA_VERSION,
+        "artifact_sealer_genesis_pin_schema_version": genesis_pin[
+            "schema_version"
+        ],
+        "artifact_sealer_genesis_pin_bytes_sha256": _sha256(
+            artifact_sealer_genesis_pin_bytes_sha256,
+            "development policy-prefix seal genesis pin bytes hash",
+        ),
+        "artifact_sealer_genesis_pin_sha256": genesis_pin[
+            "external_pin_sha256"
+        ],
+        "artifact_sealer_genesis_seal_tip_sha256": genesis_pin[
+            "seal_tip_sha256"
+        ],
+        "seal_store_namespace_kind": _DEVELOPMENT_POLICY_PREFIX_SEAL_NAMESPACE_KIND,
+        "seal_store_namespace_sha256": namespace_hash,
+        "authorized_seal_receipt_schema_version": (
+            DEVELOPMENT_POLICY_PREFIX_SEAL_RECEIPT_SCHEMA_VERSION
+        ),
+        "authorized_external_pin_schema_version": (
+            DEVELOPMENT_POLICY_PREFIX_EXTERNAL_PIN_SCHEMA_VERSION
+        ),
+        "seal_batch_rule": _DEVELOPMENT_POLICY_PREFIX_SEAL_BATCH_RULE,
+        "seal_recovery_rule": _DEVELOPMENT_POLICY_PREFIX_SEAL_RECOVERY_RULE,
+        "external_pin_rule": _DEVELOPMENT_POLICY_PREFIX_EXTERNAL_PIN_RULE,
+        **capabilities,
+    }
+    return {
+        **body,
+        "development_policy_prefix_seal_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_policy_prefix_seal_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_development_policy_prefix_seal_plan_sha256: str,
+) -> str:
+    """Validate one exact seal-only plan without reading labels or outcomes."""
+
+    value = _mapping(plan, "development policy-prefix seal plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_POLICY_PREFIX_SEAL_PLAN_KEYS,
+        "development policy-prefix seal plan",
+    )
+    capabilities = _expected_development_policy_prefix_seal_capabilities()
+    if any(type(value[field]) is not bool for field in capabilities):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix seal capabilities must be exact booleans"
+        )
+    for field in (
+        "contract_sha256",
+        "development_root_scope_sha256",
+        "start_store_state_bytes_sha256",
+        "start_store_state_sha256",
+        "start_current_tip_anchor_bytes_sha256",
+        "start_current_tip_anchor_sha256",
+        "source_development_policy_replay_plan_sha256",
+        "source_development_policy_replay_projection_sha256",
+        "source_development_policy_replay_batch_sha256",
+        "source_development_oof_prediction_plan_sha256",
+        "source_development_oof_prediction_projection_sha256",
+        "source_development_oof_prediction_batch_sha256",
+        "source_raw_prediction_rows_sha256",
+        "source_raw_prediction_tip_sha256",
+        "source_raw_to_policy_bindings_sha256",
+        "source_identity_receipt_sha256",
+        "source_role_bindings_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "source_market_calendar_sessions_sha256",
+        "policy_calendar_sessions_sha256",
+        "final_policy_prefix_sha256",
+        "final_policy_tip_sha256",
+        "final_policy_rows_sha256",
+        "policy_prefix_seal_input_specs_sha256",
+        "artifact_sealer_genesis_pin_bytes_sha256",
+        "artifact_sealer_genesis_pin_sha256",
+        "artifact_sealer_genesis_seal_tip_sha256",
+        "seal_store_namespace_sha256",
+    ):
+        _sha256(value[field], f"development policy-prefix seal {field}")
+    _strict_int(
+        value["start_current_tip_revision"],
+        "development policy-prefix seal start current-tip revision",
+    )
+    specs = _validated_development_policy_prefix_seal_input_specs(
+        value["policy_prefix_seal_input_specs"]
+    )
+    expected_count = len(specs)
+    for field, expected in (
+        ("start_consumed_request_count", 0),
+        ("source_raw_prediction_row_count", expected_count),
+        ("policy_prefix_count", expected_count),
+        ("policy_prefix_seal_input_count", expected_count),
+    ):
+        if _strict_int(value[field], f"development policy-prefix seal {field}") != expected:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy-prefix seal count changed"
+            )
+    expected_policy_calendar = development_policy_session_calendar_sha256(
+        DEVELOPMENT_POLICY_SESSION_DATES
+    )
+    last = specs[-1]
+    genesis_seal_tip = canonical_sha256(
+        {
+            "domain": "aapl-sec-gemma-prediction-artifact-seal-genesis-v1",
+            "candidate_sha256": value["candidate_sha256"],
+            "stage": "development",
+        }
+    )
+    genesis_body = {
+        "schema_version": _PREDICTION_ARTIFACT_EXTERNAL_PIN_SCHEMA_VERSION,
+        "candidate_sha256": value["candidate_sha256"],
+        "stage": "development",
+        "sealed_artifact_count": 0,
+        "last_prediction_sequence_number": 0,
+        "prediction_prefix_sha256": None,
+        "prediction_tip_sha256": None,
+        "prediction_rows_sha256": None,
+        "artifact_sha256": None,
+        "seal_tip_sha256": genesis_seal_tip,
+    }
+    genesis_pin = {
+        **genesis_body,
+        "external_pin_sha256": canonical_sha256(genesis_body),
+    }
+    genesis_pin_bytes_hash = hashlib.sha256(
+        _canonical_compact_json_bytes(genesis_pin, "expected genesis pin")
+    ).hexdigest()
+    namespace_hash = _development_policy_prefix_seal_namespace_sha256(
+        development_root_scope_sha256=value["development_root_scope_sha256"],
+        source_development_policy_replay_plan_sha256=value[
+            "source_development_policy_replay_plan_sha256"
+        ],
+        source_development_policy_replay_batch_sha256=value[
+            "source_development_policy_replay_batch_sha256"
+        ],
+        final_policy_prefix_sha256=value["final_policy_prefix_sha256"],
+        policy_prefix_seal_input_specs_sha256=value[
+            "policy_prefix_seal_input_specs_sha256"
+        ],
+        artifact_sealer_genesis_pin_sha256=value[
+            "artifact_sealer_genesis_pin_sha256"
+        ],
+    )
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_POLICY_PREFIX_SEAL_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["contract_sha256"] != canonical_sha256(build_contract_manifest())
+        or value["plan_kind"] != "request_free_development_policy_prefix_seal"
+        or value["artifact_stage"] != "development"
+        or value["development_cutoff_session"] != STAGE_WINDOWS["development"][1]
+        or value["policy_calendar_sessions_sha256"] != expected_policy_calendar
+        or value["policy_prefix_seal_input_specs_sha256"]
+        != canonical_sha256(specs)
+        or value["final_policy_prefix_sha256"]
+        != last["prediction_prefix_sha256"]
+        or value["final_policy_tip_sha256"] != last["prediction_tip_sha256"]
+        or value["final_policy_rows_sha256"] != last["prediction_rows_sha256"]
+        or value["artifact_encoding"] != _PREDICTION_ARTIFACT_ENCODING
+        or value["artifact_store_schema_version"]
+        != _PREDICTION_ARTIFACT_STORE_SCHEMA_VERSION
+        or value["artifact_sealer_genesis_pin_schema_version"]
+        != _PREDICTION_ARTIFACT_EXTERNAL_PIN_SCHEMA_VERSION
+        or value["artifact_sealer_genesis_pin_bytes_sha256"]
+        != genesis_pin_bytes_hash
+        or value["artifact_sealer_genesis_pin_sha256"]
+        != genesis_pin["external_pin_sha256"]
+        or value["artifact_sealer_genesis_seal_tip_sha256"] != genesis_seal_tip
+        or value["seal_store_namespace_kind"]
+        != _DEVELOPMENT_POLICY_PREFIX_SEAL_NAMESPACE_KIND
+        or value["seal_store_namespace_sha256"] != namespace_hash
+        or value["authorized_seal_receipt_schema_version"]
+        != DEVELOPMENT_POLICY_PREFIX_SEAL_RECEIPT_SCHEMA_VERSION
+        or value["authorized_external_pin_schema_version"]
+        != DEVELOPMENT_POLICY_PREFIX_EXTERNAL_PIN_SCHEMA_VERSION
+        or value["seal_batch_rule"]
+        != _DEVELOPMENT_POLICY_PREFIX_SEAL_BATCH_RULE
+        or value["seal_recovery_rule"]
+        != _DEVELOPMENT_POLICY_PREFIX_SEAL_RECOVERY_RULE
+        or value["external_pin_rule"]
+        != _DEVELOPMENT_POLICY_PREFIX_EXTERNAL_PIN_RULE
+        or any(value[field] is not expected for field, expected in capabilities.items())
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix seal identity, ancestry, or authority changed"
+        )
+    observed = _self_hash(
+        value,
+        "development_policy_prefix_seal_plan_sha256",
+        "development policy-prefix seal plan",
+    )
+    expected_hash = _sha256(
+        expected_development_policy_prefix_seal_plan_sha256,
+        "expected development policy-prefix seal plan hash",
+    )
+    if not hmac.compare_digest(observed, expected_hash):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy-prefix seal plan is not externally pinned"
         )
     return observed
 

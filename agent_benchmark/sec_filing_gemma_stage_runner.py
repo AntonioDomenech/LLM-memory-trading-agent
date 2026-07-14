@@ -4419,7 +4419,8 @@ def run_owned_development_policy_replay_batch(
             or batch["cash_episode_rule"] != plan["cash_episode_rule"]
             or batch["unavailable_prediction_rule"]
             != plan["unavailable_prediction_rule"]
-            or batch["input_order_rule"] != plan["input_order_rule"]
+            or batch["policy_replay_order_rule"]
+            != plan["policy_replay_order_rule"]
         ):
             raise SecFilingGemmaPolicyReplayError(
                 "Policy replay semantics crossed the authorized plan"

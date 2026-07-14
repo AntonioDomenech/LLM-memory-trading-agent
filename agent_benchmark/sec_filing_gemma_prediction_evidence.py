@@ -28,6 +28,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     BRIER_TARGET_COST_BPS,
     CANDIDATE_IDS,
     DEVELOPMENT_FOLD_SPECS,
+    DEVELOPMENT_POLICY_SESSION_DATES,
     HORIZON_SESSIONS,
     LABEL_MATURITY_OFFSET,
     STAGE_ORDER,
@@ -1592,47 +1593,115 @@ def validate_prediction_ledger(
     return validate_prediction_prefix(value, **kwargs)
 
 
-def prediction_prefix_sha256(
+def _cumulative_prediction_prefix_artifact(
     prediction_prefix: Mapping[str, Any], *, through_sequence_number: int
-) -> str:
+) -> dict[str, Any]:
+    """Reconstruct one cumulative prefix from its self-contained row ancestry."""
+
     count = _strict_int(
         through_sequence_number, "through_sequence_number", minimum=1
     )
-    rows = prediction_prefix.get("rows")
+    prefix = _expect_mapping(prediction_prefix, "prediction_prefix")
+    rows = prefix.get("rows")
     if not isinstance(rows, list) or count > len(rows):
         raise SecFilingGemmaContractError("Requested prediction prefix is unavailable")
-    # Every row carries the prior prefix, allowing the exact ancestry hash to be
-    # recovered without any future context map.
-    if count == len(rows):
-        return _sha256(
-            prediction_prefix["prediction_prefix_sha256"],
-            "prediction_prefix_sha256",
-        )
-    contract_hash = _sha256(prediction_prefix["contract_sha256"], "contract_sha256")
-    candidate_hash = _sha256(prediction_prefix["candidate_sha256"], "candidate_sha256")
-    universe_hash = _sha256(
-        prediction_prefix["corpus_universe_sha256"], "corpus_universe_sha256"
-    )
-    calendar_hash = _sha256(
-        prediction_prefix["calendar_sessions_sha256"], "calendar_sessions_sha256"
-    )
-    genesis = _sha256(prediction_prefix["genesis_sha256"], "genesis_sha256")
-    row = rows[count - 1]
+    row = _expect_mapping(rows[count - 1], f"prediction rows[{count - 1}]")
     body = _prefix_body(
-        contract_hash=contract_hash,
-        candidate_hash=candidate_hash,
-        universe_hash=universe_hash,
-        calendar_hash=calendar_hash,
-        initial_event_sequence_sha256=prediction_prefix[
-            "initial_event_sequence_sha256"
-        ],
-        event_sequence_sha256=row["event_sequence_sha256"],
-        genesis_hash=genesis,
-        parent_prefix_hash=row["prior_prediction_prefix_sha256"],
-        parent_tip_hash=row["parent_prediction_sha256"],
+        contract_hash=_sha256(prefix["contract_sha256"], "contract_sha256"),
+        candidate_hash=_sha256(prefix["candidate_sha256"], "candidate_sha256"),
+        universe_hash=_sha256(
+            prefix["corpus_universe_sha256"], "corpus_universe_sha256"
+        ),
+        calendar_hash=_sha256(
+            prefix["calendar_sessions_sha256"], "calendar_sessions_sha256"
+        ),
+        initial_event_sequence_sha256=_sha256(
+            prefix["initial_event_sequence_sha256"],
+            "initial_event_sequence_sha256",
+        ),
+        event_sequence_sha256=_sha256(
+            row["event_sequence_sha256"], "event_sequence_sha256"
+        ),
+        genesis_hash=_sha256(prefix["genesis_sha256"], "genesis_sha256"),
+        parent_prefix_hash=(
+            None
+            if row["prior_prediction_prefix_sha256"] is None
+            else _sha256(
+                row["prior_prediction_prefix_sha256"],
+                "prior_prediction_prefix_sha256",
+            )
+        ),
+        parent_tip_hash=_sha256(
+            row["parent_prediction_sha256"], "parent_prediction_sha256"
+        ),
         rows=rows[:count],
     )
-    return canonical_sha256(body)
+    return {**body, "prediction_prefix_sha256": canonical_sha256(body)}
+
+
+def build_cumulative_development_prediction_artifact(
+    prediction_prefix: Mapping[str, Any],
+    *,
+    through_sequence_number: int,
+    expected_candidate_sha256: str,
+    expected_corpus_universe_sha256: str,
+    expected_event_bindings: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build one exact development prefix artifact after full causal replay.
+
+    The calendar is deliberately not caller-selectable.  Development policy
+    artifacts use the bounded schedule ending after the last possible 2018
+    episode exit, so later calendar extensions cannot rewrite earlier seals.
+    """
+
+    calendar_hash = development_policy_session_calendar_sha256(
+        DEVELOPMENT_POLICY_SESSION_DATES
+    )
+    summary = validate_prediction_prefix(
+        prediction_prefix,
+        session_dates=DEVELOPMENT_POLICY_SESSION_DATES,
+        expected_calendar_sessions_sha256=calendar_hash,
+        expected_candidate_sha256=expected_candidate_sha256,
+        expected_corpus_universe_sha256=expected_corpus_universe_sha256,
+        expected_event_bindings=expected_event_bindings,
+    )
+    count = _strict_int(
+        through_sequence_number, "through_sequence_number", minimum=1
+    )
+    if count > summary["row_count"]:
+        raise SecFilingGemmaContractError("Requested prediction prefix is unavailable")
+    artifact = _cumulative_prediction_prefix_artifact(
+        prediction_prefix, through_sequence_number=count
+    )
+    if artifact["prediction_prefix_sha256"] != summary[
+        "prefix_ancestry_sha256s"
+    ][count - 1]:
+        raise SecFilingGemmaContractError(
+            "Reconstructed development prefix crossed its validated ancestry"
+        )
+    if count == summary["row_count"] and artifact != dict(prediction_prefix):
+        raise SecFilingGemmaContractError(
+            "Final development prefix artifact differs from its validated source"
+        )
+    return artifact
+
+
+def prediction_prefix_sha256(
+    prediction_prefix: Mapping[str, Any], *, through_sequence_number: int
+) -> str:
+    artifact = _cumulative_prediction_prefix_artifact(
+        prediction_prefix, through_sequence_number=through_sequence_number
+    )
+    rows = prediction_prefix.get("rows")
+    if (
+        isinstance(rows, list)
+        and through_sequence_number == len(rows)
+        and artifact != dict(prediction_prefix)
+    ):
+        raise SecFilingGemmaContractError(
+            "Final prediction prefix is not its canonical cumulative artifact"
+        )
+    return artifact["prediction_prefix_sha256"]
 
 
 def _normalize_external_checksums(
@@ -2253,6 +2322,7 @@ __all__ = [
     "UNAVAILABLE_PREDICTION_STATUS",
     "UNAVAILABLE_REASONS",
     "append_prediction_row",
+    "build_cumulative_development_prediction_artifact",
     "build_label_release_ledger",
     "build_prediction_ledger",
     "build_prelabel_seal_ledger",
