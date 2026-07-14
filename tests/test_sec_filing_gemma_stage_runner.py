@@ -37,9 +37,13 @@ from agent_benchmark.sec_filing_gemma_stage_runner import (
     run_owned_development_feature_batch,
     run_owned_development_label_batch,
     run_owned_development_model_batch,
+    run_owned_development_oof_learner_fit_batch,
     run_owned_development_sec_root,
     run_owned_development_training_membership_batch,
     run_owned_stage_model_batch,
+)
+from agent_benchmark.sec_filing_gemma_learner_fit import (
+    OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_training_membership import (
     OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
@@ -542,6 +546,54 @@ def _rehash_development_training_membership_projection(
     return projection
 
 
+def _development_oof_learner_fit_projection(
+    *, scope_sha256: str = "9" * 64
+) -> dict[str, Any]:
+    membership = {
+        "development_root_scope_sha256": scope_sha256,
+        "training_membership_assembly_plan_sha256": "1" * 64,
+        "training_membership_batch_sha256": "2" * 64,
+        "candidate_sha256": "3" * 64,
+        "corpus_universe_sha256": "4" * 64,
+        "calendar_sessions_sha256": "5" * 64,
+        "development_cutoff_session": "2018-12-31",
+        "private_training_rows": "MEMBERSHIP-SOURCE-MUST-NOT-ESCAPE",
+    }
+    plan = {
+        "development_oof_learner_fit_plan_sha256": "6" * 64,
+        "development_root_scope_sha256": scope_sha256,
+        "source_training_membership_batch_sha256": "2" * 64,
+        "source_training_membership_assembly_plan_sha256": "1" * 64,
+        "candidate_sha256": "3" * 64,
+        "corpus_universe_sha256": "4" * 64,
+        "calendar_sessions_sha256": "5" * 64,
+        "development_cutoff_session": "2018-12-31",
+    }
+    body = {
+        "schema_version": (
+            OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION
+        ),
+        "development_oof_learner_fit_plan": plan,
+        "source_training_membership_batch": membership,
+    }
+    return {
+        **body,
+        "learner_fit_projection_sha256": canonical_sha256(body),
+    }
+
+
+def _rehash_development_oof_learner_fit_projection(
+    projection: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        key: projection[key]
+        for key in projection
+        if key != "learner_fit_projection_sha256"
+    }
+    projection["learner_fit_projection_sha256"] = canonical_sha256(body)
+    return projection
+
+
 def _component_plan() -> dict[str, Any]:
     return {
         "documents": [
@@ -898,6 +950,7 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
         "run_authorized_sec_stage",
         "run_owned_development_feature_batch",
         "run_owned_development_label_batch",
+        "run_owned_development_oof_learner_fit_batch",
         "run_owned_development_training_membership_batch",
         "run_owned_development_market_batch",
         "run_owned_development_model_batch",
@@ -1569,6 +1622,175 @@ def test_training_membership_runner_rejects_projection_before_build(
 
     checksum = _development_training_membership_projection(scope_sha256=scope)
     checksum["membership_projection_sha256"] = "0" * 64
+    rejected(checksum, "checksum changed")
+
+
+def test_oof_learner_fit_runner_uses_only_one_owned_projection_and_returns_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signature = inspect.signature(run_owned_development_oof_learner_fit_batch)
+    assert tuple(signature.parameters) == (
+        "reveal_store",
+        "development_root_scope_sha256",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+    projection = _development_oof_learner_fit_projection(scope_sha256=scope)
+    loader_calls: list[str] = []
+    build_calls: list[dict[str, Any]] = []
+    validation_calls: list[dict[str, Any]] = []
+
+    def load_projection(*, development_root_scope_sha256: str) -> dict[str, Any]:
+        loader_calls.append(development_root_scope_sha256)
+        return copy.deepcopy(projection)
+
+    store._load_owned_development_oof_learner_fit_projection = load_projection
+
+    def forbidden_loader(**_kwargs: Any) -> None:
+        raise AssertionError("The public fit runner requested another store source")
+
+    store._load_owned_development_training_membership_projection = forbidden_loader
+    store._load_owned_development_feature_inputs = forbidden_loader
+    store._load_owned_development_label_projection = forbidden_loader
+
+    def validate_plan(
+        plan: dict[str, Any],
+        *,
+        expected_development_oof_learner_fit_plan_sha256: str,
+    ) -> str:
+        assert plan is not projection["development_oof_learner_fit_plan"]
+        assert expected_development_oof_learner_fit_plan_sha256 == "6" * 64
+        return expected_development_oof_learner_fit_plan_sha256
+
+    public_batch = {
+        "schema_version": (
+            "aapl-sec-gemma-owned-development-oof-learner-fit-batch-v1"
+        ),
+        "learner_fit_count": 10,
+        "learner_state_count": 10,
+        "deferred_training_view_state_included": False,
+        "prediction_included": False,
+        "prediction_authorized": False,
+        "learner_fit_batch_sha256": "7" * 64,
+    }
+
+    def build_batch(**kwargs: Any) -> dict[str, Any]:
+        build_calls.append(copy.deepcopy(kwargs))
+        return copy.deepcopy(public_batch)
+
+    def validate_batch(batch: dict[str, Any], **kwargs: Any) -> str:
+        assert batch == public_batch
+        validation_calls.append(copy.deepcopy(kwargs))
+        return batch["learner_fit_batch_sha256"]
+
+    monkeypatch.setattr(
+        runner_module,
+        "validate_development_oof_learner_fit_plan",
+        validate_plan,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_oof_learner_fit_batch",
+        build_batch,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_oof_learner_fit_batch",
+        validate_batch,
+    )
+
+    result = run_owned_development_oof_learner_fit_batch(
+        reveal_store=store,
+        development_root_scope_sha256=scope,
+    )
+    assert result == public_batch
+    assert result is not public_batch
+    assert loader_calls == [scope]
+    assert len(build_calls) == 1
+    assert set(build_calls[0]) == {
+        "development_oof_learner_fit_plan",
+        "expected_development_oof_learner_fit_plan_sha256",
+        "source_training_membership_batch",
+        "expected_source_training_membership_batch_sha256",
+    }
+    assert len(validation_calls) == 1
+    assert set(validation_calls[0]) == {
+        "development_oof_learner_fit_plan",
+        "expected_development_oof_learner_fit_plan_sha256",
+        "source_training_membership_batch",
+        "expected_source_training_membership_batch_sha256",
+        "expected_learner_fit_batch_sha256",
+    }
+    assert "MEMBERSHIP-SOURCE-MUST-NOT-ESCAPE" not in json.dumps(
+        result, sort_keys=True
+    )
+    source = inspect.getsource(run_owned_development_oof_learner_fit_batch)
+    assert ".predict" not in source
+
+
+def test_oof_learner_fit_runner_rejects_projection_before_fit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+
+    def validate_plan(
+        _plan: dict[str, Any],
+        *,
+        expected_development_oof_learner_fit_plan_sha256: str,
+    ) -> str:
+        return expected_development_oof_learner_fit_plan_sha256
+
+    def forbidden_builder(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("Invalid fit projection reached the fitter")
+
+    monkeypatch.setattr(
+        runner_module,
+        "validate_development_oof_learner_fit_plan",
+        validate_plan,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_oof_learner_fit_batch",
+        forbidden_builder,
+    )
+
+    def rejected(projection: dict[str, Any], match: str) -> None:
+        store._load_owned_development_oof_learner_fit_projection = (
+            lambda **_kwargs: copy.deepcopy(projection)
+        )
+        with pytest.raises(SecFilingGemmaStageRunnerError, match=match):
+            run_owned_development_oof_learner_fit_batch(
+                reveal_store=store,
+                development_root_scope_sha256=scope,
+            )
+
+    extra = _development_oof_learner_fit_projection(scope_sha256=scope)
+    extra["source_feature_batch"] = {}
+    rejected(extra, "not exact")
+
+    cross_root = _development_oof_learner_fit_projection(
+        scope_sha256="0" * 64
+    )
+    rejected(cross_root, "crossed its ancestry")
+
+    crossed_batch = _development_oof_learner_fit_projection(
+        scope_sha256=scope
+    )
+    crossed_batch["source_training_membership_batch"][
+        "training_membership_batch_sha256"
+    ] = "8" * 64
+    _rehash_development_oof_learner_fit_projection(crossed_batch)
+    rejected(crossed_batch, "crossed its ancestry")
+
+    checksum = _development_oof_learner_fit_projection(scope_sha256=scope)
+    checksum["learner_fit_projection_sha256"] = "0" * 64
     rejected(checksum, "checksum changed")
 
 

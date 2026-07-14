@@ -130,6 +130,7 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "extractor_prompt",
     "extractor_schema",
     "learner",
+    "learner_fit",
     "ledger",
     "market_acquirer",
     "market_evidence",

@@ -114,9 +114,16 @@ from .sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     _sec_component_plan_from_bundle,
+    validate_development_oof_learner_fit_plan,
     validate_development_training_membership_assembly_plan,
     validate_development_label_assembly_plan,
     validate_development_feature_assembly_plan,
+)
+from .sec_filing_gemma_learner_fit import (
+    OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaLearnerFitError,
+    build_owned_development_oof_learner_fit_batch,
+    validate_owned_development_oof_learner_fit_batch,
 )
 from .sec_filing_gemma_training_membership import (
     OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
@@ -178,6 +185,16 @@ _OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_KEYS: Final[frozenset[str]] = 
             "source_feature_batch",
             "source_label_batch",
             "membership_projection_sha256",
+        }
+    )
+)
+_OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "development_oof_learner_fit_plan",
+            "source_training_membership_batch",
+            "learner_fit_projection_sha256",
         }
     )
 )
@@ -3834,11 +3851,167 @@ def run_owned_development_training_membership_batch(
     return batch
 
 
+def _validated_owned_development_oof_learner_fit_projection(
+    loaded: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Require the exact four-key store-owned learner-fit projection."""
+
+    if type(loaded) is not dict or set(loaded) != set(
+        _OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_KEYS
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection is not exact"
+        )
+    if (
+        loaded["schema_version"]
+        != OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection schema changed"
+        )
+    plan = loaded["development_oof_learner_fit_plan"]
+    membership = loaded["source_training_membership_batch"]
+    if (
+        type(plan) is not dict
+        or type(membership) is not dict
+        or not _is_bare_sha256(
+            plan.get("development_oof_learner_fit_plan_sha256")
+        )
+        or not _is_bare_sha256(
+            membership.get("training_membership_batch_sha256")
+        )
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit sources are unavailable"
+        )
+    try:
+        validated_plan_hash = validate_development_oof_learner_fit_plan(
+            plan,
+            expected_development_oof_learner_fit_plan_sha256=plan[
+                "development_oof_learner_fit_plan_sha256"
+            ],
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit plan failed exact validation"
+        ) from None
+    if (
+        validated_plan_hash
+        != plan["development_oof_learner_fit_plan_sha256"]
+        or plan.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or membership.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or plan.get("source_training_membership_batch_sha256")
+        != membership.get("training_membership_batch_sha256")
+        or plan.get("source_training_membership_assembly_plan_sha256")
+        != membership.get("training_membership_assembly_plan_sha256")
+        or plan.get("candidate_sha256") != membership.get("candidate_sha256")
+        or plan.get("corpus_universe_sha256")
+        != membership.get("corpus_universe_sha256")
+        or plan.get("calendar_sessions_sha256")
+        != membership.get("calendar_sessions_sha256")
+        or plan.get("development_cutoff_session")
+        != membership.get("development_cutoff_session")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection crossed its ancestry"
+        )
+    projection_hash = loaded["learner_fit_projection_sha256"]
+    if not _is_bare_sha256(projection_hash):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection checksum is invalid"
+        )
+    body = {
+        key: loaded[key]
+        for key in loaded
+        if key != "learner_fit_projection_sha256"
+    }
+    try:
+        calculated = canonical_sha256(body)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection is not canonical JSON"
+        ) from None
+    if calculated != projection_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection checksum changed"
+        )
+    return copy.deepcopy(loaded)
+
+
+def run_owned_development_oof_learner_fit_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Fit the ten authorized OOF states from one owned store projection."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development OOF learner-fit scope must be a bare lowercase SHA-256"
+        )
+    try:
+        loaded = reveal_store._load_owned_development_oof_learner_fit_projection(
+            development_root_scope_sha256=development_root_scope_sha256
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit projection could not be loaded"
+        ) from None
+    projection = _validated_owned_development_oof_learner_fit_projection(
+        loaded,
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    plan = projection["development_oof_learner_fit_plan"]
+    membership = projection["source_training_membership_batch"]
+    try:
+        batch = build_owned_development_oof_learner_fit_batch(
+            development_oof_learner_fit_plan=plan,
+            expected_development_oof_learner_fit_plan_sha256=plan[
+                "development_oof_learner_fit_plan_sha256"
+            ],
+            source_training_membership_batch=membership,
+            expected_source_training_membership_batch_sha256=membership[
+                "training_membership_batch_sha256"
+            ],
+        )
+        validate_owned_development_oof_learner_fit_batch(
+            batch,
+            development_oof_learner_fit_plan=plan,
+            expected_development_oof_learner_fit_plan_sha256=plan[
+                "development_oof_learner_fit_plan_sha256"
+            ],
+            source_training_membership_batch=membership,
+            expected_source_training_membership_batch_sha256=membership[
+                "training_membership_batch_sha256"
+            ],
+            expected_learner_fit_batch_sha256=batch[
+                "learner_fit_batch_sha256"
+            ],
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        SecFilingGemmaLearnerFitError,
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF learner-fit batch failed deterministic replay"
+        ) from None
+    return batch
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
     "run_owned_development_feature_batch",
     "run_owned_development_label_batch",
+    "run_owned_development_oof_learner_fit_batch",
     "run_owned_development_training_membership_batch",
     "run_owned_development_market_batch",
     "run_owned_development_model_batch",

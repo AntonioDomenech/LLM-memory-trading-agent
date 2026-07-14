@@ -975,8 +975,12 @@ target values, retains the same ordered rows and targets for semantic and
 ablation variants, and emits canonical matrices, binary/edge targets, learner
 contexts, and fit-metadata templates while still denying fitting, prediction,
 holdout, ledger mutation, promotion, and production use. No owned
-prediction/learner/ledger assembler exists yet. The ledger source role is the
-sole unresolved source role.
+prediction or ledger assembler exists yet. A fourth store-owned projection now
+rebuilds and fully validates that membership artifact under the same lock,
+authorizes only `fold_1` through `fold_5`, and passes exactly ten fit inputs to
+the deterministic learner boundary. The frozen-through-2018 view remains
+explicitly deferred until a development winner has been selected. The ledger
+source role is the sole unresolved source role.
 
 The completed feature-only checkpoint is deliberately non-authorizing. Under one
 store lock it replays terminal non-aborted same-root SEC, market, and development
@@ -1013,15 +1017,30 @@ no caller-supplied paths and returns only the derived training artifact, with no
 source batches, paths, filing text, raw market rows, model envelopes, or
 later-stage evidence. It has no authority to fit or predict.
 
-The completed checkpoint passes the full local repository suite with `1664`
-tests passed and `13` skipped in `3119.02` seconds (`51:59`), below the frozen
-one-hour approach-test ceiling. The added membership tests are synthetic and
-make no network, Ollama, learner-fit, prediction, or production-store call.
+The completed development OOF learner-fit checkpoint creates one fresh frozen
+two-head learner for each of the five chronological development views and each
+of the semantic and ablation variants, in view-major order. Every emitted fit
+record binds the exact membership, feature-matrix, binary-target, edge-target,
+metadata, configuration, and source-view hashes. The public artifact contains
+the ten canonical learner states and compact hash-only fit contexts, but no
+training matrices, target vectors, membership rows, source feature/label
+batches, prediction rows, threshold actions, holdout material, or state for the
+deferred sixth view. Fit failure is terminal: there is no retry, row drop,
+rebalance, solver change, feature selection, prediction, or candidate selection
+inside this boundary. All ten fits share one frozen 60-second cap.
 
-The next implementation milestone is owned development learner state, followed
-by predictions and the continuous no-leverage ledger. Those later components
-must
-remove caller-supplied market snapshots from every authorizing path, parse
+The completed learner-fit checkpoint passes the full local repository suite
+with `1719` tests passed and `13` skipped in `3169.05` seconds (`52:49`), with
+an independently measured wall time of `3169.771` seconds. This remains below
+the frozen one-hour approach-test ceiling. The added membership and learner-fit
+tests are synthetic and make no network, Ollama, prediction, or
+production-store call.
+
+The next implementation milestone is owned development prediction from the ten
+OOF states, followed by development ranking, the separately authorized
+frozen-through-2018 refit, and the continuous no-leverage ledger. Those later
+components must remove caller-supplied market snapshots from every authorizing
+path, parse
 official calendar semantics, chain every artifact from genesis, and bind the
 development winner/output state to the intermediate learner input. A production
 trust domain must retain the current

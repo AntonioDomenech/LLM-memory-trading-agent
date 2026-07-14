@@ -17,9 +17,12 @@ the compact grant contains no market values, labels, scores, or returns.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import asdict
+from datetime import date
 import hashlib
 import hmac
 import json
+import math
 import re
 from typing import Any, Final
 
@@ -37,6 +40,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     REQUIRED_STAGE_VERIFIER_CHECKS,
     STAGE_WINDOWS,
     STAGE_MODEL_CALL_CAPS,
+    build_contract_manifest,
     build_stage_content_manifest,
     canonical_sha256,
     market_session_calendar_sha256,
@@ -69,6 +73,11 @@ from agent_benchmark.sec_filing_gemma_stage_verifier import (
 )
 from agent_benchmark.sec_filing_gemma_source_identity import (
     CANONICAL_SOURCE_ROLE_PATHS,
+)
+from agent_benchmark.sec_filing_gemma_learner import (
+    MODEL_TYPE as LEARNER_MODEL_TYPE,
+    STATE_SCHEMA_VERSION as LEARNER_STATE_SCHEMA_VERSION,
+    SecFilingGemmaLearnerConfig,
 )
 from agent_benchmark.sec_session_calendar import EXPECTED_MARKET_HISTORY_SESSIONS
 
@@ -154,6 +163,9 @@ DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-training-membership-assembly-plan-v1"
+)
+DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-oof-learner-fit-plan-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
@@ -1281,6 +1293,127 @@ _DEVELOPMENT_TRAINING_EDGE_TARGET_FIELD: Final[str] = (
     "cash_active_log_edge_10bps_hex"
 )
 _DEVELOPMENT_TRAINING_MINIMUM_ROW_COUNT: Final[int] = 2
+_DEVELOPMENT_OOF_LEARNER_FIT_INPUT_SPEC_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "fit_ordinal",
+            "source_training_view_ordinal",
+            "training_view_id",
+            "source_training_view_sha256",
+            "head_variant",
+            "training_row_count",
+            "training_positive_count",
+            "training_set_membership_sha256",
+            "training_feature_matrix_sha256",
+            "training_binary_target_sha256",
+            "training_edge_target_sha256",
+            "learner_input_context_sha256",
+            "fit_metadata_template_sha256",
+            "feature_schema_sha256",
+            "train_label_maturity_through",
+            "maximum_training_label_maturity_session",
+            "fit_input_spec_sha256",
+        }
+    )
+)
+_DEVELOPMENT_OOF_DEFERRED_TRAINING_VIEW_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "source_training_view_ordinal",
+            "training_view_id",
+            "reason",
+        }
+    )
+)
+_DEVELOPMENT_OOF_LEARNER_FIT_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "contract_sha256",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_consumed_request_count",
+        "source_training_membership_assembly_plan",
+        "source_training_membership_assembly_plan_sha256",
+        "source_training_membership_projection_sha256",
+        "source_training_membership_batch_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+        "source_training_view_count",
+        "source_training_view_ids",
+        "source_training_view_specs_sha256",
+        "authorized_training_view_count",
+        "authorized_training_view_ids",
+        "deferred_training_view_count",
+        "deferred_training_views",
+        "deferred_training_views_sha256",
+        "model_variant_count",
+        "model_variant_ids",
+        "learner_fit_input_count",
+        "learner_fit_input_specs",
+        "learner_fit_input_specs_sha256",
+        "learner_state_output_count",
+        "learner_model_type",
+        "learner_state_schema_version",
+        "learner_config",
+        "learner_config_sha256",
+        "fit_order_rule",
+        "maximum_fit_seconds",
+        "canonical_source_training_membership_batch_required",
+        "source_training_membership_batch_access_permitted",
+        "authorized_training_feature_matrices_access_permitted",
+        "authorized_training_target_vectors_access_permitted",
+        "deterministic_learner_fit_permitted",
+        "learner_state_output_permitted",
+        "compact_fit_audit_output_permitted",
+        "deterministic_refit_validation_permitted",
+        "source_feature_batch_access_permitted",
+        "source_label_batch_access_permitted",
+        "development_outcome_derivation_permitted",
+        "training_membership_derivation_permitted",
+        "training_membership_mutation_permitted",
+        "outcome_based_membership_filtering_permitted",
+        "row_rebalancing_permitted",
+        "deferred_training_view_fit_permitted",
+        "hyperparameter_change_permitted",
+        "solver_retry_permitted",
+        "feature_selection_permitted",
+        "model_transport_access_permitted",
+        "network_access_permitted",
+        "prediction_access_permitted",
+        "candidate_selection_permitted",
+        "threshold_action_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+        "development_oof_learner_fit_plan_sha256",
+    }
+)
+_DEVELOPMENT_OOF_AUTHORIZED_TRAINING_VIEW_IDS: Final[tuple[str, ...]] = (
+    "fold_1",
+    "fold_2",
+    "fold_3",
+    "fold_4",
+    "fold_5",
+)
+_DEVELOPMENT_OOF_MODEL_VARIANT_IDS: Final[tuple[str, ...]] = (
+    "semantic",
+    "ablation",
+)
+_DEVELOPMENT_OOF_DEFERRED_TRAINING_VIEW_ID: Final[str] = (
+    "intermediate_frozen_through_2018"
+)
+_DEVELOPMENT_OOF_DEFERRED_REASON: Final[str] = (
+    "requires_passed_development_ranking_receipt_and_frozen_candidate_selection"
+)
+_DEVELOPMENT_OOF_FIT_ORDER_RULE: Final[str] = (
+    "view_ordinal_ascending_then_semantic_then_ablation_exactly_once"
+)
+_DEVELOPMENT_OOF_MAXIMUM_FIT_SECONDS: Final[int] = 60
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -10621,6 +10754,581 @@ def validate_development_training_membership_assembly_plan(
     return observed
 
 
+def _expected_development_oof_learner_config() -> dict[str, Any]:
+    config = SecFilingGemmaLearnerConfig()
+    config.validate()
+    return asdict(config)
+
+
+def _validated_development_oof_learner_config(raw: Any) -> dict[str, Any]:
+    value = _mapping(raw, "development OOF learner config")
+    expected = _expected_development_oof_learner_config()
+    _expect_keys(
+        value,
+        frozenset(expected),
+        "development OOF learner config",
+    )
+    for field, expected_value in expected.items():
+        observed = value[field]
+        if type(expected_value) is int:
+            matches = type(observed) is int and observed == expected_value
+        else:
+            matches = (
+                type(expected_value) is float
+                and type(observed) is float
+                and math.isfinite(observed)
+                and observed.hex() == expected_value.hex()
+            )
+        if not matches:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF learner config differs from the frozen learner"
+            )
+    return value
+
+
+def _expected_development_oof_capabilities() -> dict[str, bool]:
+    return {
+        "canonical_source_training_membership_batch_required": True,
+        "source_training_membership_batch_access_permitted": True,
+        "authorized_training_feature_matrices_access_permitted": True,
+        "authorized_training_target_vectors_access_permitted": True,
+        "deterministic_learner_fit_permitted": True,
+        "learner_state_output_permitted": True,
+        "compact_fit_audit_output_permitted": True,
+        "deterministic_refit_validation_permitted": True,
+        "source_feature_batch_access_permitted": False,
+        "source_label_batch_access_permitted": False,
+        "development_outcome_derivation_permitted": False,
+        "training_membership_derivation_permitted": False,
+        "training_membership_mutation_permitted": False,
+        "outcome_based_membership_filtering_permitted": False,
+        "row_rebalancing_permitted": False,
+        "deferred_training_view_fit_permitted": False,
+        "hyperparameter_change_permitted": False,
+        "solver_retry_permitted": False,
+        "feature_selection_permitted": False,
+        "model_transport_access_permitted": False,
+        "network_access_permitted": False,
+        "prediction_access_permitted": False,
+        "candidate_selection_permitted": False,
+        "threshold_action_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+
+
+def _validated_development_oof_iso_date(value: Any, location: str) -> str:
+    if type(value) is not str or _ISO_DATE_RE.fullmatch(value) is None:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must be a canonical ISO date"
+        )
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must be a canonical ISO date"
+        ) from None
+    if parsed.isoformat() != value:
+        raise SecFilingGemmaStageAuthorizationError(
+            f"{location} must be a canonical ISO date"
+        )
+    return value
+
+
+def _validated_development_oof_fit_input_specs(
+    raw: Any,
+    *,
+    source_view_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    authorized_views = source_view_specs[: len(_DEVELOPMENT_OOF_AUTHORIZED_TRAINING_VIEW_IDS)]
+    expected_pairs = [
+        (view, head_variant)
+        for view in authorized_views
+        for head_variant in _DEVELOPMENT_OOF_MODEL_VARIANT_IDS
+    ]
+    if type(raw) is not list or len(raw) != len(expected_pairs):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF learner fit-input count changed"
+        )
+    observed: list[dict[str, Any]] = []
+    for fit_ordinal, (raw_item, (view, expected_variant)) in enumerate(
+        zip(raw, expected_pairs, strict=True),
+        start=1,
+    ):
+        item = _mapping(
+            raw_item,
+            f"development OOF learner fit input {fit_ordinal}",
+        )
+        _expect_keys(
+            item,
+            _DEVELOPMENT_OOF_LEARNER_FIT_INPUT_SPEC_KEYS,
+            f"development OOF learner fit input {fit_ordinal}",
+        )
+        source_view_ordinal = _strict_int(
+            item["source_training_view_ordinal"],
+            f"development OOF fit input {fit_ordinal} source view ordinal",
+            minimum=1,
+        )
+        row_count = _strict_int(
+            item["training_row_count"],
+            f"development OOF fit input {fit_ordinal} row count",
+            minimum=2,
+        )
+        positive_count = _strict_int(
+            item["training_positive_count"],
+            f"development OOF fit input {fit_ordinal} positive count",
+            minimum=1,
+        )
+        for field in (
+            "source_training_view_sha256",
+            "training_set_membership_sha256",
+            "training_feature_matrix_sha256",
+            "training_binary_target_sha256",
+            "training_edge_target_sha256",
+            "learner_input_context_sha256",
+            "fit_metadata_template_sha256",
+            "feature_schema_sha256",
+        ):
+            _sha256(
+                item[field],
+                f"development OOF fit input {fit_ordinal} {field}",
+            )
+        cutoff = _validated_development_oof_iso_date(
+            item["train_label_maturity_through"],
+            f"development OOF fit input {fit_ordinal} train cutoff",
+        )
+        maximum_maturity = _validated_development_oof_iso_date(
+            item["maximum_training_label_maturity_session"],
+            f"development OOF fit input {fit_ordinal} maximum maturity",
+        )
+        if (
+            _strict_int(
+                item["fit_ordinal"],
+                f"development OOF fit input {fit_ordinal} ordinal",
+                minimum=1,
+            )
+            != fit_ordinal
+            or source_view_ordinal != view["view_ordinal"]
+            or item["training_view_id"] != view["training_view_id"]
+            or item["head_variant"] != expected_variant
+            or cutoff != view["train_label_maturity_through"]
+            or maximum_maturity > cutoff
+            or maximum_maturity >= view["prediction_window_first_date"]
+            or positive_count >= row_count
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF learner fit input crossed its frozen view, "
+                "variant, class, or maturity boundary"
+            )
+        _self_hash(
+            item,
+            "fit_input_spec_sha256",
+            f"development OOF learner fit input {fit_ordinal}",
+        )
+        observed.append(item)
+
+    shared_pair_fields = (
+        "source_training_view_ordinal",
+        "training_view_id",
+        "source_training_view_sha256",
+        "training_row_count",
+        "training_positive_count",
+        "training_set_membership_sha256",
+        "training_binary_target_sha256",
+        "training_edge_target_sha256",
+        "learner_input_context_sha256",
+        "feature_schema_sha256",
+        "train_label_maturity_through",
+        "maximum_training_label_maturity_session",
+    )
+    for pair_start in range(0, len(observed), 2):
+        semantic = observed[pair_start]
+        ablation = observed[pair_start + 1]
+        if (
+            any(semantic[field] != ablation[field] for field in shared_pair_fields)
+            or hmac.compare_digest(
+                semantic["training_feature_matrix_sha256"],
+                ablation["training_feature_matrix_sha256"],
+            )
+            or hmac.compare_digest(
+                semantic["fit_metadata_template_sha256"],
+                ablation["fit_metadata_template_sha256"],
+            )
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF semantic and ablation fit inputs do not share "
+                "one exact causal training support"
+            )
+    return observed
+
+
+def _expected_development_oof_deferred_views(
+    source_view_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    deferred = source_view_specs[-1]
+    if deferred["training_view_id"] != _DEVELOPMENT_OOF_DEFERRED_TRAINING_VIEW_ID:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF source does not end with the frozen deferred view"
+        )
+    return [
+        {
+            "source_training_view_ordinal": deferred["view_ordinal"],
+            "training_view_id": _DEVELOPMENT_OOF_DEFERRED_TRAINING_VIEW_ID,
+            "reason": _DEVELOPMENT_OOF_DEFERRED_REASON,
+        }
+    ]
+
+
+def _validated_development_oof_deferred_views(
+    raw: Any,
+    *,
+    source_view_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    expected = _expected_development_oof_deferred_views(source_view_specs)
+    if type(raw) is not list or len(raw) != 1:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF deferred training-view count changed"
+        )
+    item = _mapping(raw[0], "development OOF deferred training view")
+    _expect_keys(
+        item,
+        _DEVELOPMENT_OOF_DEFERRED_TRAINING_VIEW_KEYS,
+        "development OOF deferred training view",
+    )
+    if (
+        _strict_int(
+            item["source_training_view_ordinal"],
+            "development OOF deferred source view ordinal",
+            minimum=1,
+        )
+        != len(source_view_specs)
+        or item != expected[0]
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF deferred training view changed"
+        )
+    return [item]
+
+
+def build_development_oof_learner_fit_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    source_training_membership_assembly_plan: Mapping[str, Any],
+    source_training_membership_projection_sha256: str,
+    source_training_membership_batch_sha256: str,
+    fit_input_specs: Any,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authorize only ten fixed development OOF learner fits."""
+
+    supplied_membership_plan = _mapping(
+        source_training_membership_assembly_plan,
+        "development OOF source training-membership assembly plan",
+    )
+    supplied_membership_plan_hash = _sha256(
+        supplied_membership_plan.get(
+            "training_membership_assembly_plan_sha256"
+        ),
+        "development OOF source training-membership assembly plan hash",
+    )
+    validate_development_training_membership_assembly_plan(
+        supplied_membership_plan,
+        expected_training_membership_assembly_plan_sha256=(
+            supplied_membership_plan_hash
+        ),
+    )
+    source_label_plan = _mapping(
+        supplied_membership_plan["source_label_assembly_plan"],
+        "development OOF source label assembly plan",
+    )
+    rebuilt_membership_plan = (
+        build_development_training_membership_assembly_plan(
+            authenticated_store_snapshot,
+            development_root_scope_sha256=development_root_scope_sha256,
+            source_label_assembly_plan=source_label_plan,
+            independent_current_tip_anchor=independent_current_tip_anchor,
+        )
+    )
+    if supplied_membership_plan != rebuilt_membership_plan:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF source training-membership plan differs from "
+            "the terminal store replay"
+        )
+
+    projection_hash = _sha256(
+        source_training_membership_projection_sha256,
+        "development OOF source training-membership projection hash",
+    )
+    batch_hash = _sha256(
+        source_training_membership_batch_sha256,
+        "development OOF source training-membership batch hash",
+    )
+    source_view_specs = _validated_development_training_membership_view_specs(
+        supplied_membership_plan["membership_view_specs"]
+    )
+    source_variant_specs = (
+        _validated_development_training_membership_variant_specs(
+            supplied_membership_plan["model_variant_specs"]
+        )
+    )
+    validated_fit_specs = _validated_development_oof_fit_input_specs(
+        fit_input_specs,
+        source_view_specs=source_view_specs,
+    )
+    source_view_ids = [item["training_view_id"] for item in source_view_specs]
+    authorized_view_ids = list(_DEVELOPMENT_OOF_AUTHORIZED_TRAINING_VIEW_IDS)
+    deferred_views = _expected_development_oof_deferred_views(source_view_specs)
+    variant_ids = [item["variant_id"] for item in source_variant_specs]
+    learner_config = _expected_development_oof_learner_config()
+    body = {
+        "schema_version": DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "plan_kind": "request_free_development_oof_learner_fit",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": supplied_membership_plan[
+            "development_root_scope_sha256"
+        ],
+        "start_consumed_request_count": supplied_membership_plan[
+            "start_consumed_request_count"
+        ],
+        "source_training_membership_assembly_plan": supplied_membership_plan,
+        "source_training_membership_assembly_plan_sha256": (
+            supplied_membership_plan_hash
+        ),
+        "source_training_membership_projection_sha256": projection_hash,
+        "source_training_membership_batch_sha256": batch_hash,
+        "candidate_sha256": supplied_membership_plan["candidate_sha256"],
+        "corpus_universe_sha256": supplied_membership_plan[
+            "corpus_universe_sha256"
+        ],
+        "calendar_sessions_sha256": supplied_membership_plan[
+            "calendar_sessions_sha256"
+        ],
+        "development_cutoff_session": supplied_membership_plan[
+            "development_cutoff_session"
+        ],
+        "source_training_view_count": len(source_view_ids),
+        "source_training_view_ids": source_view_ids,
+        "source_training_view_specs_sha256": supplied_membership_plan[
+            "membership_view_specs_sha256"
+        ],
+        "authorized_training_view_count": len(authorized_view_ids),
+        "authorized_training_view_ids": authorized_view_ids,
+        "deferred_training_view_count": len(deferred_views),
+        "deferred_training_views": deferred_views,
+        "deferred_training_views_sha256": canonical_sha256(deferred_views),
+        "model_variant_count": len(variant_ids),
+        "model_variant_ids": variant_ids,
+        "learner_fit_input_count": len(validated_fit_specs),
+        "learner_fit_input_specs": validated_fit_specs,
+        "learner_fit_input_specs_sha256": canonical_sha256(
+            validated_fit_specs
+        ),
+        "learner_state_output_count": len(validated_fit_specs),
+        "learner_model_type": LEARNER_MODEL_TYPE,
+        "learner_state_schema_version": LEARNER_STATE_SCHEMA_VERSION,
+        "learner_config": learner_config,
+        "learner_config_sha256": canonical_sha256(learner_config),
+        "fit_order_rule": _DEVELOPMENT_OOF_FIT_ORDER_RULE,
+        "maximum_fit_seconds": _DEVELOPMENT_OOF_MAXIMUM_FIT_SECONDS,
+        **_expected_development_oof_capabilities(),
+    }
+    return {
+        **body,
+        "development_oof_learner_fit_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_oof_learner_fit_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_development_oof_learner_fit_plan_sha256: str,
+) -> str:
+    """Validate the exact ten-fit OOF authority and its deferred sixth view."""
+
+    value = _mapping(plan, "development OOF learner-fit plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_OOF_LEARNER_FIT_PLAN_KEYS,
+        "development OOF learner-fit plan",
+    )
+    source_plan = _mapping(
+        value["source_training_membership_assembly_plan"],
+        "development OOF source training-membership assembly plan",
+    )
+    source_plan_hash = _sha256(
+        value["source_training_membership_assembly_plan_sha256"],
+        "development OOF source training-membership assembly plan hash",
+    )
+    validate_development_training_membership_assembly_plan(
+        source_plan,
+        expected_training_membership_assembly_plan_sha256=source_plan_hash,
+    )
+    source_view_specs = _validated_development_training_membership_view_specs(
+        source_plan["membership_view_specs"]
+    )
+    source_variant_specs = (
+        _validated_development_training_membership_variant_specs(
+            source_plan["model_variant_specs"]
+        )
+    )
+    fit_specs = _validated_development_oof_fit_input_specs(
+        value["learner_fit_input_specs"],
+        source_view_specs=source_view_specs,
+    )
+    deferred_views = _validated_development_oof_deferred_views(
+        value["deferred_training_views"],
+        source_view_specs=source_view_specs,
+    )
+    learner_config = _validated_development_oof_learner_config(
+        value["learner_config"]
+    )
+    capabilities = _expected_development_oof_capabilities()
+    if any(type(value[field]) is not bool for field in capabilities):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF learner-fit capabilities must be exact booleans"
+        )
+
+    source_view_count = _strict_int(
+        value["source_training_view_count"],
+        "development OOF source training-view count",
+        minimum=1,
+    )
+    authorized_view_count = _strict_int(
+        value["authorized_training_view_count"],
+        "development OOF authorized training-view count",
+        minimum=1,
+    )
+    deferred_view_count = _strict_int(
+        value["deferred_training_view_count"],
+        "development OOF deferred training-view count",
+        minimum=1,
+    )
+    variant_count = _strict_int(
+        value["model_variant_count"],
+        "development OOF model-variant count",
+        minimum=1,
+    )
+    fit_input_count = _strict_int(
+        value["learner_fit_input_count"],
+        "development OOF learner fit-input count",
+        minimum=1,
+    )
+    state_output_count = _strict_int(
+        value["learner_state_output_count"],
+        "development OOF learner state-output count",
+        minimum=1,
+    )
+    state_schema_version = _strict_int(
+        value["learner_state_schema_version"],
+        "development OOF learner state schema version",
+        minimum=1,
+    )
+    maximum_fit_seconds = _strict_int(
+        value["maximum_fit_seconds"],
+        "development OOF maximum fit seconds",
+        minimum=1,
+    )
+    start_count = _strict_int(
+        value["start_consumed_request_count"],
+        "development OOF start consumed-request count",
+    )
+    for field in (
+        "contract_sha256",
+        "development_root_scope_sha256",
+        "source_training_membership_projection_sha256",
+        "source_training_membership_batch_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "source_training_view_specs_sha256",
+        "deferred_training_views_sha256",
+        "learner_fit_input_specs_sha256",
+        "learner_config_sha256",
+    ):
+        _sha256(value[field], f"development OOF {field}")
+
+    source_view_ids = [item["training_view_id"] for item in source_view_specs]
+    authorized_view_ids = list(_DEVELOPMENT_OOF_AUTHORIZED_TRAINING_VIEW_IDS)
+    variant_ids = [item["variant_id"] for item in source_variant_specs]
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["contract_sha256"]
+        != canonical_sha256(build_contract_manifest())
+        or value["plan_kind"] != "request_free_development_oof_learner_fit"
+        or value["artifact_stage"] != "development"
+        or value["development_root_scope_sha256"]
+        != source_plan["development_root_scope_sha256"]
+        or start_count != 0
+        or start_count != source_plan["start_consumed_request_count"]
+        or value["source_training_membership_assembly_plan_sha256"]
+        != source_plan["training_membership_assembly_plan_sha256"]
+        or value["candidate_sha256"] != source_plan["candidate_sha256"]
+        or value["corpus_universe_sha256"]
+        != source_plan["corpus_universe_sha256"]
+        or value["calendar_sessions_sha256"]
+        != source_plan["calendar_sessions_sha256"]
+        or value["development_cutoff_session"]
+        != source_plan["development_cutoff_session"]
+        or source_view_count != len(source_view_specs)
+        or source_view_count != len(DEVELOPMENT_FOLD_SPECS) + 1
+        or type(value["source_training_view_ids"]) is not list
+        or value["source_training_view_ids"] != source_view_ids
+        or value["source_training_view_specs_sha256"]
+        != source_plan["membership_view_specs_sha256"]
+        or authorized_view_count != len(authorized_view_ids)
+        or type(value["authorized_training_view_ids"]) is not list
+        or value["authorized_training_view_ids"] != authorized_view_ids
+        or deferred_view_count != len(deferred_views)
+        or deferred_view_count != 1
+        or value["deferred_training_views_sha256"]
+        != canonical_sha256(deferred_views)
+        or variant_count != len(variant_ids)
+        or variant_count != len(_DEVELOPMENT_OOF_MODEL_VARIANT_IDS)
+        or type(value["model_variant_ids"]) is not list
+        or value["model_variant_ids"] != variant_ids
+        or variant_ids != list(_DEVELOPMENT_OOF_MODEL_VARIANT_IDS)
+        or fit_input_count != len(fit_specs)
+        or fit_input_count != len(authorized_view_ids) * len(variant_ids)
+        or value["learner_fit_input_specs_sha256"]
+        != canonical_sha256(fit_specs)
+        or state_output_count != fit_input_count
+        or value["learner_model_type"] != LEARNER_MODEL_TYPE
+        or state_schema_version != LEARNER_STATE_SCHEMA_VERSION
+        or value["learner_config_sha256"] != canonical_sha256(learner_config)
+        or value["fit_order_rule"] != _DEVELOPMENT_OOF_FIT_ORDER_RULE
+        or maximum_fit_seconds != _DEVELOPMENT_OOF_MAXIMUM_FIT_SECONDS
+        or any(
+            value[field] is not expected
+            for field, expected in capabilities.items()
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF learner-fit identity, order, or capability boundary changed"
+        )
+
+    observed = _self_hash(
+        value,
+        "development_oof_learner_fit_plan_sha256",
+        "development OOF learner-fit plan",
+    )
+    expected = _sha256(
+        expected_development_oof_learner_fit_plan_sha256,
+        "expected development OOF learner-fit plan hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF learner-fit plan is not externally pinned"
+        )
+    return observed
+
+
 def _reconstruct_development_content_manifest_from_root(
     development_sec_execution_claim: Mapping[str, Any],
     development_sec_reader_receipt: Mapping[str, Any],
@@ -11829,6 +12537,7 @@ __all__ = [
     "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
     "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
@@ -11870,6 +12579,7 @@ __all__ = [
     "build_development_market_reader_receipt",
     "build_development_feature_assembly_plan",
     "build_development_label_assembly_plan",
+    "build_development_oof_learner_fit_plan",
     "build_development_training_membership_assembly_plan",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
@@ -11896,6 +12606,7 @@ __all__ = [
     "validate_development_market_reader_receipt",
     "validate_development_feature_assembly_plan",
     "validate_development_label_assembly_plan",
+    "validate_development_oof_learner_fit_plan",
     "validate_development_training_membership_assembly_plan",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",

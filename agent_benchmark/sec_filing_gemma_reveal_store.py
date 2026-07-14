@@ -95,6 +95,14 @@ from agent_benchmark.sec_filing_gemma_features import (
 )
 from agent_benchmark.sec_filing_gemma_training_membership import (
     OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaTrainingMembershipError,
+    build_owned_development_training_membership_batch,
+    validate_owned_development_training_membership_batch,
+)
+from agent_benchmark.sec_filing_gemma_learner_fit import (
+    OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaLearnerFitError,
+    derive_development_oof_learner_fit_input_specs,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     MARKET_SYMBOLS,
@@ -138,6 +146,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     STAGE_EVIDENCE_OUTPUT_RELATIVE_PATH,
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
+    build_development_oof_learner_fit_plan,
     build_development_label_assembly_plan,
     build_development_training_membership_assembly_plan,
     build_development_model_execution_abort,
@@ -168,6 +177,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_root_carry_in_reader_receipt,
     validate_development_feature_assembly_plan,
     validate_development_label_assembly_plan,
+    validate_development_oof_learner_fit_plan,
     validate_development_training_membership_assembly_plan,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
@@ -6653,7 +6663,6 @@ class SecFilingGemmaRevealStore:
         """Project feature inputs while the caller holds the reveal-store lock."""
 
         def project_locked() -> dict[str, Any]:
-            _cleanup_interrupted_temporaries(self.store_directory)
             tracked_anchor = _load_tracked_anchor(self.repository_root)
             current, current_tip, _state_bytes, _tip_bytes = (
                 self._read_state_and_tip_locked(tracked_anchor)
@@ -7714,6 +7723,341 @@ class SecFilingGemmaRevealStore:
         return {
             **detached,
             "membership_projection_sha256": canonical_sha256(detached),
+        }
+
+    def _build_owned_development_training_membership_batch_from_projection_locked(
+        self,
+        *,
+        training_membership_projection: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Rebuild the exact compact membership batch from one locked projection."""
+
+        expected_keys = {
+            "schema_version",
+            "training_membership_assembly_plan",
+            "source_feature_batch",
+            "source_label_batch",
+            "membership_projection_sha256",
+        }
+        if (
+            type(training_membership_projection) is not dict
+            or set(training_membership_projection) != expected_keys
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development learner-fit source membership projection is not exact"
+            )
+        projection = _exact_builtin_json_copy(
+            training_membership_projection,
+            "development learner-fit source membership projection",
+        )
+        if type(projection) is not dict:  # pragma: no cover - guaranteed above
+            raise SecFilingGemmaRevealStoreError(
+                "Development learner-fit source membership projection is not an object"
+            )
+        projection_hash = projection["membership_projection_sha256"]
+        projection_body = {
+            key: projection[key]
+            for key in projection
+            if key != "membership_projection_sha256"
+        }
+        if (
+            projection["schema_version"]
+            != OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION
+            or not _same_digest(
+                _sha256(
+                    projection_hash,
+                    "development learner-fit source membership projection hash",
+                ),
+                canonical_sha256(projection_body),
+            )
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development learner-fit source membership projection checksum changed"
+            )
+
+        membership_plan = projection["training_membership_assembly_plan"]
+        source_feature_batch = projection["source_feature_batch"]
+        source_label_batch = projection["source_label_batch"]
+        try:
+            if (
+                type(membership_plan) is not dict
+                or type(source_feature_batch) is not dict
+                or type(source_label_batch) is not dict
+            ):
+                raise SecFilingGemmaTrainingMembershipError(
+                    "Development learner-fit membership sources must be objects"
+                )
+            validate_development_training_membership_assembly_plan(
+                membership_plan,
+                expected_training_membership_assembly_plan_sha256=(
+                    membership_plan["training_membership_assembly_plan_sha256"]
+                ),
+            )
+            batch = build_owned_development_training_membership_batch(
+                training_membership_assembly_plan=membership_plan,
+                source_feature_batch=source_feature_batch,
+                source_label_batch=source_label_batch,
+            )
+            validate_owned_development_training_membership_batch(
+                batch,
+                training_membership_assembly_plan=membership_plan,
+                expected_training_membership_assembly_plan_sha256=(
+                    membership_plan["training_membership_assembly_plan_sha256"]
+                ),
+                source_feature_batch=source_feature_batch,
+                expected_source_feature_batch_sha256=source_feature_batch[
+                    "feature_batch_sha256"
+                ],
+                source_label_batch=source_label_batch,
+                expected_source_label_batch_sha256=source_label_batch[
+                    "label_batch_sha256"
+                ],
+                expected_training_membership_batch_sha256=batch[
+                    "training_membership_batch_sha256"
+                ],
+            )
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaContractError,
+            SecFilingGemmaStageAuthorizationError,
+            SecFilingGemmaTrainingMembershipError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development learner-fit source membership batch failed exact replay"
+            ) from exc
+        return batch
+
+    def _load_owned_development_oof_learner_fit_projection(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project only the owned inputs authorized for ten OOF learner fits."""
+
+        with self._locked():
+            return self._load_owned_development_oof_learner_fit_projection_locked(
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+
+    def _load_owned_development_oof_learner_fit_projection_locked(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project OOF fit inputs while the caller holds the store lock."""
+
+        scope_hash = _sha256(
+            development_root_scope_sha256,
+            "owned development OOF learner-fit projection root scope hash",
+        )
+        tracked_anchor = _load_tracked_anchor(self.repository_root)
+        current, current_tip, state_bytes, tip_bytes = (
+            self._read_state_and_tip_locked(tracked_anchor)
+        )
+        raw_membership_projection = (
+            self._load_owned_development_training_membership_projection_locked(
+                development_root_scope_sha256=scope_hash,
+            )
+        )
+        membership_projection = _exact_builtin_json_copy(
+            raw_membership_projection,
+            "owned development OOF learner-fit source membership projection",
+        )
+        if type(membership_projection) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF learner-fit source membership projection is not exact"
+            )
+        membership_batch = (
+            self._build_owned_development_training_membership_batch_from_projection_locked(
+                training_membership_projection=membership_projection,
+            )
+        )
+        membership_plan = membership_projection[
+            "training_membership_assembly_plan"
+        ]
+        try:
+            fit_input_specs = derive_development_oof_learner_fit_input_specs(
+                membership_batch
+            )
+            learner_fit_plan = build_development_oof_learner_fit_plan(
+                current,
+                development_root_scope_sha256=scope_hash,
+                source_training_membership_assembly_plan=membership_plan,
+                source_training_membership_projection_sha256=(
+                    membership_projection["membership_projection_sha256"]
+                ),
+                source_training_membership_batch_sha256=membership_batch[
+                    "training_membership_batch_sha256"
+                ],
+                fit_input_specs=fit_input_specs,
+                independent_current_tip_anchor=current_tip,
+            )
+            validate_development_oof_learner_fit_plan(
+                learner_fit_plan,
+                expected_development_oof_learner_fit_plan_sha256=(
+                    learner_fit_plan[
+                        "development_oof_learner_fit_plan_sha256"
+                    ]
+                ),
+            )
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaContractError,
+            SecFilingGemmaLearnerFitError,
+            SecFilingGemmaStageAuthorizationError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF learner-fit plan failed exact store replay"
+            ) from exc
+
+        source_view_ids = membership_batch.get("training_view_ids")
+        variant_specs = membership_plan.get("model_variant_specs")
+        variant_ids = (
+            [item.get("variant_id") for item in variant_specs]
+            if type(variant_specs) is list
+            and all(type(item) is dict for item in variant_specs)
+            else None
+        )
+        deferred = learner_fit_plan.get("deferred_training_views")
+        lineage_matches = (
+            type(learner_fit_plan) is dict
+            and type(membership_plan) is dict
+            and type(membership_batch) is dict
+            and type(fit_input_specs) is list
+            and type(source_view_ids) is list
+            and len(source_view_ids) == 6
+            and learner_fit_plan.get("development_root_scope_sha256")
+            == scope_hash
+            == membership_plan.get("development_root_scope_sha256")
+            == membership_batch.get("development_root_scope_sha256")
+            and learner_fit_plan.get("start_consumed_request_count") == 0
+            == membership_plan.get("start_consumed_request_count")
+            and learner_fit_plan.get(
+                "source_training_membership_assembly_plan"
+            )
+            == membership_plan
+            and learner_fit_plan.get(
+                "source_training_membership_assembly_plan_sha256"
+            )
+            == membership_plan.get("training_membership_assembly_plan_sha256")
+            == membership_batch.get(
+                "training_membership_assembly_plan_sha256"
+            )
+            and learner_fit_plan.get(
+                "source_training_membership_projection_sha256"
+            )
+            == membership_projection.get("membership_projection_sha256")
+            and learner_fit_plan.get(
+                "source_training_membership_batch_sha256"
+            )
+            == membership_batch.get("training_membership_batch_sha256")
+            and learner_fit_plan.get("candidate_sha256")
+            == membership_plan.get("candidate_sha256")
+            == membership_batch.get("candidate_sha256")
+            and learner_fit_plan.get("corpus_universe_sha256")
+            == membership_plan.get("corpus_universe_sha256")
+            == membership_batch.get("corpus_universe_sha256")
+            and learner_fit_plan.get("calendar_sessions_sha256")
+            == membership_plan.get("calendar_sessions_sha256")
+            == membership_batch.get("calendar_sessions_sha256")
+            and learner_fit_plan.get("development_cutoff_session")
+            == membership_plan.get("development_cutoff_session")
+            == membership_batch.get("development_cutoff_session")
+            and membership_plan.get("event_count")
+            == membership_batch.get("event_count")
+            and membership_plan.get("matured_event_count")
+            == membership_batch.get("matured_label_count")
+            and membership_plan.get("unmatured_event_count")
+            == membership_batch.get("unmatured_event_count")
+            and learner_fit_plan.get("source_training_view_count")
+            == membership_plan.get("membership_view_count")
+            == membership_batch.get("training_view_count")
+            == len(source_view_ids)
+            and learner_fit_plan.get("source_training_view_ids")
+            == source_view_ids
+            and learner_fit_plan.get("source_training_view_specs_sha256")
+            == membership_plan.get("membership_view_specs_sha256")
+            == membership_batch.get("membership_view_specs_sha256")
+            and learner_fit_plan.get("authorized_training_view_count") == 5
+            and learner_fit_plan.get("authorized_training_view_ids")
+            == source_view_ids[:5]
+            and learner_fit_plan.get("deferred_training_view_count") == 1
+            and type(deferred) is list
+            and len(deferred) == 1
+            and type(deferred[0]) is dict
+            and deferred[0].get("source_training_view_ordinal") == 6
+            and deferred[0].get("training_view_id") == source_view_ids[5]
+            and deferred[0].get("reason")
+            == (
+                "requires_passed_development_ranking_receipt_and_frozen_"
+                "candidate_selection"
+            )
+            and learner_fit_plan.get("deferred_training_views_sha256")
+            == canonical_sha256(deferred)
+            and type(variant_ids) is list
+            and learner_fit_plan.get("model_variant_count") == 2
+            == membership_plan.get("model_variant_count")
+            == len(variant_ids)
+            and learner_fit_plan.get("model_variant_ids") == variant_ids
+            and membership_plan.get("model_variant_specs_sha256")
+            == membership_batch.get("model_variant_specs_sha256")
+            and learner_fit_plan.get("learner_fit_input_count")
+            == learner_fit_plan.get("learner_state_output_count")
+            == len(fit_input_specs)
+            == 10
+            and learner_fit_plan.get("learner_fit_input_specs")
+            == fit_input_specs
+            and learner_fit_plan.get("learner_fit_input_specs_sha256")
+            == canonical_sha256(fit_input_specs)
+        )
+        if not lineage_matches:
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF learner-fit crossed its membership ancestry"
+            )
+
+        body = {
+            "schema_version": (
+                OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION
+            ),
+            "development_oof_learner_fit_plan": copy.deepcopy(
+                learner_fit_plan
+            ),
+            "source_training_membership_batch": copy.deepcopy(
+                membership_batch
+            ),
+        }
+        detached = _exact_builtin_json_copy(
+            body,
+            "owned development OOF learner-fit projection",
+        )
+        if type(detached) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development OOF learner-fit projection is not exact JSON"
+            )
+        (
+            closure_current,
+            closure_tip,
+            closure_state_bytes,
+            closure_tip_bytes,
+        ) = self._read_state_and_tip_locked(tracked_anchor)
+        if (
+            closure_state_bytes != state_bytes
+            or closure_tip_bytes != tip_bytes
+            or closure_current != current
+            or closure_tip != current_tip
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF learner-fit authorization ancestry changed during projection"
+            )
+        return {
+            **detached,
+            "learner_fit_projection_sha256": canonical_sha256(detached),
         }
 
     def _record_owned_development_model_reader_output(
