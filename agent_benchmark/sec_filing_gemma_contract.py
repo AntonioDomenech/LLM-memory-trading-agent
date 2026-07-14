@@ -155,6 +155,7 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "stage_access",
     "stage_authorization",
     "stage_verifier",
+    "training_membership",
     "unleveraged_aapl",
 )
 REQUIRED_STAGE_VERIFIER_CHECKS: Final[tuple[str, ...]] = tuple(

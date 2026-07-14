@@ -38,7 +38,11 @@ from agent_benchmark.sec_filing_gemma_stage_runner import (
     run_owned_development_label_batch,
     run_owned_development_model_batch,
     run_owned_development_sec_root,
+    run_owned_development_training_membership_batch,
     run_owned_stage_model_batch,
+)
+from agent_benchmark.sec_filing_gemma_training_membership import (
+    OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     market_session_calendar_sha256,
@@ -473,6 +477,71 @@ def _rehash_development_label_projection(
     return projection
 
 
+def _development_training_membership_projection(
+    *, scope_sha256: str = "9" * 64
+) -> dict[str, Any]:
+    feature_batch = {
+        "development_root_scope_sha256": scope_sha256,
+        "feature_assembly_plan_sha256": "1" * 64,
+        "feature_batch_sha256": "2" * 64,
+        "candidate_sha256": "3" * 64,
+        "corpus_universe_sha256": "4" * 64,
+        "event_count": 4,
+        "private_market_rows": "FEATURE-SOURCE-MUST-NOT-ESCAPE",
+    }
+    label_batch = {
+        "development_root_scope_sha256": scope_sha256,
+        "source_feature_assembly_plan_sha256": "1" * 64,
+        "source_feature_batch_sha256": "2" * 64,
+        "label_assembly_plan_sha256": "5" * 64,
+        "label_batch_sha256": "6" * 64,
+        "candidate_sha256": "3" * 64,
+        "corpus_universe_sha256": "4" * 64,
+        "event_count": 4,
+        "matured_label_count": 4,
+        "unmatured_event_count": 0,
+        "private_adjusted_open_path": "LABEL-SOURCE-MUST-NOT-ESCAPE",
+    }
+    plan_body = {
+        "development_root_scope_sha256": scope_sha256,
+        "source_label_assembly_plan": {
+            "label_assembly_plan_sha256": "5" * 64,
+        },
+        "source_feature_assembly_plan_sha256": "1" * 64,
+        "source_label_assembly_plan_sha256": "5" * 64,
+        "candidate_sha256": "3" * 64,
+        "corpus_universe_sha256": "4" * 64,
+        "event_count": 4,
+        "matured_event_count": 4,
+        "unmatured_event_count": 0,
+    }
+    plan = {
+        **plan_body,
+        "training_membership_assembly_plan_sha256": canonical_sha256(plan_body),
+    }
+    body = {
+        "schema_version": (
+            OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION
+        ),
+        "training_membership_assembly_plan": plan,
+        "source_feature_batch": feature_batch,
+        "source_label_batch": label_batch,
+    }
+    return {**body, "membership_projection_sha256": canonical_sha256(body)}
+
+
+def _rehash_development_training_membership_projection(
+    projection: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        key: projection[key]
+        for key in projection
+        if key != "membership_projection_sha256"
+    }
+    projection["membership_projection_sha256"] = canonical_sha256(body)
+    return projection
+
+
 def _component_plan() -> dict[str, Any]:
     return {
         "documents": [
@@ -829,6 +898,7 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
         "run_authorized_sec_stage",
         "run_owned_development_feature_batch",
         "run_owned_development_label_batch",
+        "run_owned_development_training_membership_batch",
         "run_owned_development_market_batch",
         "run_owned_development_model_batch",
         "run_owned_development_sec_root",
@@ -1334,6 +1404,172 @@ def test_label_runner_rejects_extra_cross_root_bad_counts_and_checksum(
     tampered = _development_label_projection(plan, source_batch)
     tampered["label_projection_sha256"] = "0" * 64
     rejected(tampered, "checksum changed")
+
+
+def test_training_membership_runner_returns_only_derived_public_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signature = inspect.signature(
+        run_owned_development_training_membership_batch
+    )
+    assert tuple(signature.parameters) == (
+        "reveal_store",
+        "development_root_scope_sha256",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+    projection = _development_training_membership_projection(scope_sha256=scope)
+    loader_calls: list[str] = []
+    build_calls: list[dict[str, Any]] = []
+    validation_calls: list[dict[str, Any]] = []
+
+    def load_projection(*, development_root_scope_sha256: str) -> dict[str, Any]:
+        loader_calls.append(development_root_scope_sha256)
+        return copy.deepcopy(projection)
+
+    store._load_owned_development_training_membership_projection = load_projection
+
+    def validate_plan(
+        plan: dict[str, Any],
+        *,
+        expected_training_membership_assembly_plan_sha256: str,
+    ) -> str:
+        assert expected_training_membership_assembly_plan_sha256 == plan[
+            "training_membership_assembly_plan_sha256"
+        ]
+        return expected_training_membership_assembly_plan_sha256
+
+    public_batch = {
+        "schema_version": "aapl-sec-gemma-owned-development-training-membership-batch-v1",
+        "training_view_count": 6,
+        "training_views": [{"training_view_id": "fold_1"}],
+        "compact_adjusted_open_paths_included": False,
+        "full_market_rows_included": False,
+        "learner_fit_authorized": False,
+        "prediction_authorized": False,
+        "training_membership_batch_sha256": "7" * 64,
+    }
+
+    def build_batch(**kwargs: Any) -> dict[str, Any]:
+        build_calls.append(copy.deepcopy(kwargs))
+        return copy.deepcopy(public_batch)
+
+    def validate_batch(batch: dict[str, Any], **kwargs: Any) -> str:
+        assert batch == public_batch
+        validation_calls.append(copy.deepcopy(kwargs))
+        return batch["training_membership_batch_sha256"]
+
+    monkeypatch.setattr(
+        runner_module,
+        "validate_development_training_membership_assembly_plan",
+        validate_plan,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_training_membership_batch",
+        build_batch,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_training_membership_batch",
+        validate_batch,
+    )
+
+    result = run_owned_development_training_membership_batch(
+        reveal_store=store,
+        development_root_scope_sha256=scope,
+    )
+    assert result == public_batch
+    assert result is not public_batch
+    assert loader_calls == [scope]
+    assert len(build_calls) == 1
+    assert set(build_calls[0]) == {
+        "training_membership_assembly_plan",
+        "source_feature_batch",
+        "source_label_batch",
+    }
+    assert len(validation_calls) == 1
+    assert set(validation_calls[0]) == {
+        "training_membership_assembly_plan",
+        "expected_training_membership_assembly_plan_sha256",
+        "source_feature_batch",
+        "expected_source_feature_batch_sha256",
+        "source_label_batch",
+        "expected_source_label_batch_sha256",
+        "expected_training_membership_batch_sha256",
+    }
+    encoded = json.dumps(result, sort_keys=True)
+    assert "FEATURE-SOURCE-MUST-NOT-ESCAPE" not in encoded
+    assert "LABEL-SOURCE-MUST-NOT-ESCAPE" not in encoded
+    assert ".fit(" not in inspect.getsource(
+        run_owned_development_training_membership_batch
+    )
+    assert ".predict" not in inspect.getsource(
+        run_owned_development_training_membership_batch
+    )
+
+
+def test_training_membership_runner_rejects_projection_before_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+
+    def validate_plan(
+        plan: dict[str, Any],
+        *,
+        expected_training_membership_assembly_plan_sha256: str,
+    ) -> str:
+        del plan
+        return expected_training_membership_assembly_plan_sha256
+
+    def forbidden_builder(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("invalid membership projection reached the builder")
+
+    monkeypatch.setattr(
+        runner_module,
+        "validate_development_training_membership_assembly_plan",
+        validate_plan,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_training_membership_batch",
+        forbidden_builder,
+    )
+
+    def rejected(projection: dict[str, Any], match: str) -> None:
+        store._load_owned_development_training_membership_projection = (
+            lambda **_kwargs: copy.deepcopy(projection)
+        )
+        with pytest.raises(SecFilingGemmaStageRunnerError, match=match):
+            run_owned_development_training_membership_batch(
+                reveal_store=store,
+                development_root_scope_sha256=scope,
+            )
+
+    extra = _development_training_membership_projection(scope_sha256=scope)
+    extra["raw_market_rows"] = []
+    rejected(extra, "not exact")
+
+    cross_root = _development_training_membership_projection(
+        scope_sha256="0" * 64
+    )
+    rejected(cross_root, "crossed its root scope")
+
+    bool_count = _development_training_membership_projection(scope_sha256=scope)
+    bool_count["source_feature_batch"]["event_count"] = True
+    _rehash_development_training_membership_projection(bool_count)
+    rejected(bool_count, "sources crossed their plan")
+
+    checksum = _development_training_membership_projection(scope_sha256=scope)
+    checksum["membership_projection_sha256"] = "0" * 64
+    rejected(checksum, "checksum changed")
 
 
 def test_runner_persists_exact_raw_normalized_and_canonical_batch_bytes(

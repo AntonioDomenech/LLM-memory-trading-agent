@@ -875,10 +875,11 @@ At the current implementation checkpoint:
   before the claim transition, so its hash and transmitted header cannot diverge
   and a typo cannot consume a grant. Tests use synthetic transports only;
   no SEC request was made. `stage_access_identity` remains `BLOCKED` because
-  owned label assembly, prediction sealing, learner output, ledger, and final
+  learner fitting/output, prediction sealing, ledger, and final
   stage-evidence generation are not yet forced through owned components. The
   SEC, local market acquisition/replay, model, carry-in, and request-free
-  development feature paths are now owned and cross-bound. The store no longer
+  development feature, label, and training-membership paths are now owned and
+  cross-bound. The store no longer
   accepts a caller mapping at the output-receipt boundary, but a same-user
   process can
   still place coherently formed bytes in the fixed directory, so this milestone is
@@ -964,10 +965,18 @@ self-hashed development feature rows with explicit flags denying labels,
 outcomes, training membership, learner fit, promotion, and production use. A
 separate store-owned development label assembler now derives only outcomes
 whose `t+21` session is on or before 2018-12-31 and emits compact, self-hashed
-label evidence while still denying training membership, learner fit,
-prediction, holdout, ledger, promotion, and production use. No owned
-training-membership/prediction/learner/ledger assembler exists yet. The ledger
-source role is the sole unresolved source role.
+label evidence while its own public artifact still denies training membership,
+learner fit, prediction, holdout, ledger, promotion, and production use. A
+third store-owned projection supplies the exact feature and label sources to a
+pure public assembler, which creates the five frozen development-fold training
+sets plus the frozen-through-2018 intermediate training set. It selects and
+orders membership from chronology and feature availability without consulting
+target values, retains the same ordered rows and targets for semantic and
+ablation variants, and emits canonical matrices, binary/edge targets, learner
+contexts, and fit-metadata templates while still denying fitting, prediction,
+holdout, ledger mutation, promotion, and production use. No owned
+prediction/learner/ledger assembler exists yet. The ledger source role is the
+sole unresolved source role.
 
 The completed feature-only checkpoint is deliberately non-authorizing. Under one
 store lock it replays terminal non-aborted same-root SEC, market, and development
@@ -992,9 +1001,26 @@ paths rather than full market rows. Frozen-source integration tests replayed the
 feature projection in 459.77 seconds and the new label projection in 609.29
 seconds, both without network or live-model calls.
 
-The next implementation milestone is the separate request-free development
-training-membership assembler, followed by owned learner state, predictions,
-and the continuous no-leverage ledger. Those later components must
+The completed training-membership checkpoint retains an audit decision for
+every development event in every one of the six predeclared views. A row enters
+a view only when its label has matured before that view's prediction window and
+its causal feature row is available; wins, losses, and target magnitudes cannot
+alter membership or ordering. Only after that support is fixed are the exact
+`cash_beats_long_10bps` and `cash_active_log_edge_10bps_hex` targets copied into
+the view. Both model variants are therefore prepared to train on the same events
+and targets; no learner is fitted in this checkpoint. The public runner accepts
+no caller-supplied paths and returns only the derived training artifact, with no
+source batches, paths, filing text, raw market rows, model envelopes, or
+later-stage evidence. It has no authority to fit or predict.
+
+The completed checkpoint passes the full local repository suite with `1664`
+tests passed and `13` skipped in `3119.02` seconds (`51:59`), below the frozen
+one-hour approach-test ceiling. The added membership tests are synthetic and
+make no network, Ollama, learner-fit, prediction, or production-store call.
+
+The next implementation milestone is owned development learner state, followed
+by predictions and the continuous no-leverage ledger. Those later components
+must
 remove caller-supplied market snapshots from every authorizing path, parse
 official calendar semantics, chain every artifact from genesis, and bind the
 development winner/output state to the intermediate learner input. A production

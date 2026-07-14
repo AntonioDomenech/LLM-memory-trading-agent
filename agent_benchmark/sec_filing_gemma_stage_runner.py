@@ -3800,14 +3800,14 @@ def run_owned_development_training_membership_batch(
     label_batch = projection["source_label_batch"]
     try:
         batch = build_owned_development_training_membership_batch(
-            membership_assembly_plan=plan,
+            training_membership_assembly_plan=plan,
             source_feature_batch=feature_batch,
             source_label_batch=label_batch,
         )
         validate_owned_development_training_membership_batch(
             batch,
-            membership_assembly_plan=plan,
-            expected_membership_assembly_plan_sha256=plan[
+            training_membership_assembly_plan=plan,
+            expected_training_membership_assembly_plan_sha256=plan[
                 "training_membership_assembly_plan_sha256"
             ],
             source_feature_batch=feature_batch,

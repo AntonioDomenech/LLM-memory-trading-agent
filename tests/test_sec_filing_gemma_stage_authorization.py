@@ -5554,22 +5554,73 @@ def test_development_training_membership_plan_rejects_view_and_variant_tampering
             ],
         )
 
+    for nested_field, replacement in (
+        (("membership_view_specs", 0, "view_ordinal"), True),
+        (
+            (
+                "membership_view_specs",
+                0,
+                "state_updates_inside_prediction_window",
+            ),
+            0,
+        ),
+        (("model_variant_specs", 0, "variant_ordinal"), True),
+    ):
+        changed_type = copy.deepcopy(plan)
+        collection, index, field = nested_field
+        changed_type[collection][index][field] = replacement
+        changed_type[f"{collection}_sha256"] = canonical_sha256(
+            changed_type[collection]
+        )
+        _rehash(
+            changed_type,
+            "training_membership_assembly_plan_sha256",
+        )
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_training_membership_assembly_plan(
+                changed_type,
+                expected_training_membership_assembly_plan_sha256=(
+                    changed_type[
+                        "training_membership_assembly_plan_sha256"
+                    ]
+                ),
+            )
+
 
 def test_development_training_membership_plan_validation_fails_closed() -> None:
     _state, _reader_tip, _label_plan, plan = (
         _development_training_membership_assembly_plan_fixture()
     )
+    allowed_capabilities = (
+        "canonical_source_feature_rows_required",
+        "canonical_source_label_rows_required",
+        "source_feature_rows_access_permitted",
+        "source_label_rows_access_permitted",
+        "development_outcome_values_access_permitted",
+        "training_membership_access_permitted",
+        "training_membership_rows_output_permitted",
+        "training_feature_matrices_output_permitted",
+        "training_target_vectors_output_permitted",
+    )
+    denied_capabilities = (
+        "development_outcome_derivation_permitted",
+        "outcome_based_membership_filtering_permitted",
+        "row_rebalancing_permitted",
+        "post_cutoff_market_access_permitted",
+        "raw_market_output_permitted",
+        "compact_adjusted_open_paths_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+    )
     for field, replacement in (
-        ("source_feature_rows_access_permitted", False),
-        ("development_outcome_values_access_permitted", False),
-        ("development_outcome_derivation_permitted", True),
-        ("outcome_based_membership_filtering_permitted", True),
-        ("row_rebalancing_permitted", True),
-        ("post_cutoff_market_access_permitted", True),
-        ("learner_fit_permitted", True),
-        ("prediction_access_permitted", True),
-        ("holdout_access_permitted", True),
-        ("production_permitted", True),
+        *((field, False) for field in allowed_capabilities),
+        *((field, True) for field in denied_capabilities),
         ("both_binary_classes_required", False),
         ("semantic_ablation_feature_matrices_must_differ", False),
     ):
@@ -5650,4 +5701,35 @@ def test_development_training_membership_plan_validation_fails_closed() -> None:
             expected_training_membership_assembly_plan_sha256=_h(
                 "other membership plan"
             ),
+        )
+
+    inconsistent_self_hash = copy.deepcopy(plan)
+    inconsistent_self_hash[
+        "training_membership_assembly_plan_sha256"
+    ] = _h("internally inconsistent membership plan")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="self-hash is inconsistent",
+    ):
+        validate_development_training_membership_assembly_plan(
+            inconsistent_self_hash,
+            expected_training_membership_assembly_plan_sha256=(
+                inconsistent_self_hash[
+                    "training_membership_assembly_plan_sha256"
+                ]
+            ),
+        )
+
+    class DictSubclass(dict):
+        pass
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exact built-in dict",
+    ):
+        validate_development_training_membership_assembly_plan(
+            DictSubclass(plan),
+            expected_training_membership_assembly_plan_sha256=plan[
+                "training_membership_assembly_plan_sha256"
+            ],
         )

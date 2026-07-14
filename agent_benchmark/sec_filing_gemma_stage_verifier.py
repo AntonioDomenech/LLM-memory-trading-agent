@@ -328,8 +328,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "detached SEC catalogue and document bytes replay within the current "
         "envelope; the request-free development path now also owns preprocessing, "
         "extraction, causal market prefixes, feature proofs, and the mature-label "
-        "projection, but the detached envelope does not yet chain that label "
-        "projection, the prelabel ledger, or the full seal chain; parent lineage "
+        "projection plus fixed training membership, but the detached envelope does "
+        "not yet chain those projections, the prelabel ledger, or the full seal "
+        "chain; parent lineage "
         "is bound to the prior consumed entry and grant, but that does not replace "
         "the missing end-to-end artifact derivation proofs"
     ),
@@ -340,31 +341,36 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     "chronology": (
         "development event bindings and feature rows are now derived chronologically "
         "from replayed filing, model, and causal market evidence, and development "
-        "labels are derived only when mature by the frozen cutoff; training "
-        "membership and rows are not yet assembled through an owned reader"
+        "labels are derived only when mature by the development cutoff; all six "
+        "fixed training views admit only labels matured by their respective frozen "
+        "cutoffs and are assembled through an owned reader without target-based "
+        "membership filtering, but learner fit and prediction are not yet owned"
     ),
     "market_source_byte_reconciliation": (
         "the fixed provider responses now replay through a store-attested market "
         "reader into canonical snapshots, and the request-free development feature "
         "assembler loads only reader-bound causal prefixes; this detached stage "
         "verifier still accepts caller-supplied market snapshots, and the owned "
-        "development label projection has not yet been extended into owned training "
-        "membership or later-stage assembly"
+        "development label projection now extends into owned fixed training "
+        "membership, but not into learner or later-stage assembly"
     ),
     "model_attempt_replay": (
         "exact attempt bytes replay, but the independently expected payload is "
         "not yet derived from authoritative preprocessing of the replayed filing bytes"
     ),
     "prediction_replay": (
-        "policy-prefix transitions and learner arithmetic replay, but event "
-        "bindings and training matrices are still supplied by the evidence envelope"
+        "policy-prefix transitions and learner arithmetic replay; the request-free "
+        "development path now owns event bindings and training matrices, but this "
+        "prediction replay does not yet consume them through that owned boundary"
     ),
     "prerequisite_evidence_identity": (
         "the directly invoked verifier replays raw catalogue and content bytes but "
-        "still omits the owned development-label projection, prelabel-ledger, and "
-        "full seal-chain proofs; the request-free feature and label projections bind "
-        "preprocessing, model extraction, causal market evidence, and mature outcomes, "
-        "but training-membership and later downstream readers are not yet grant-bound"
+        "still omits the owned development-label and training-membership projections, "
+        "prelabel-ledger, and full seal-chain proofs; the request-free feature and "
+        "label projections bind their upstream preprocessing, model extraction, "
+        "causal market evidence, and mature outcomes, while the downstream membership "
+        "projection binds both sources; learner and later downstream readers are not "
+        "yet grant-bound"
     ),
     "runtime_budget": (
         "stage-specific measurements are internally reconciled but the owned "
@@ -380,8 +386,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "the owned runner now claims the exact current grant before the SEC batch and "
         "the store rehashes its durable actual bytes; model, carry-in, and development "
         "market reads plus request-free development feature and mature-label assembly "
-        "are owned and cross-bound, but training-membership, learner, prediction, "
-        "ledger, and stage-evidence readers are not yet forced through the same "
+        "plus fixed training-membership assembly are owned and cross-bound, but "
+        "learner, prediction, ledger, and stage-evidence readers are not yet forced "
+        "through the same "
         "authenticated lineage"
     ),
     "zero_cost": (

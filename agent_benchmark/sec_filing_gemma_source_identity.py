@@ -42,7 +42,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
 
 
 SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-source-identity-audit-v5"
+    "aapl-sec-gemma-source-identity-audit-v6"
 )
 SOURCE_TREE_SCHEMA_VERSION: Final[str] = "aapl-sec-gemma-source-tree-v1"
 MAX_RUNTIME_SOURCE_BYTES_PER_FILE: Final[int] = 8 * 1024 * 1024
@@ -124,6 +124,10 @@ _CANONICAL_SOURCE_ROLE_PATH_ITEMS: Final[tuple[tuple[str, str | None], ...]] = (
     (
         "stage_verifier",
         "agent_benchmark/sec_filing_gemma_stage_verifier.py",
+    ),
+    (
+        "training_membership",
+        "agent_benchmark/sec_filing_gemma_training_membership.py",
     ),
     ("unleveraged_aapl", "agent_benchmark/unleveraged_aapl.py"),
 )

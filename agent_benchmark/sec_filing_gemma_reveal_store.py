@@ -7567,6 +7567,10 @@ class SecFilingGemmaRevealStore:
             development_root_scope_sha256,
             "owned development training membership projection root scope hash",
         )
+        tracked_anchor = _load_tracked_anchor(self.repository_root)
+        current, current_tip, state_bytes, tip_bytes = (
+            self._read_state_and_tip_locked(tracked_anchor)
+        )
         raw_label_projection = (
             self._load_owned_development_label_projection_locked(
                 development_root_scope_sha256=scope_hash,
@@ -7588,10 +7592,6 @@ class SecFilingGemmaRevealStore:
         label_plan = label_projection["label_assembly_plan"]
         source_feature_batch = label_projection["source_feature_batch"]
 
-        tracked_anchor = _load_tracked_anchor(self.repository_root)
-        current, current_tip, state_bytes, tip_bytes = (
-            self._read_state_and_tip_locked(tracked_anchor)
-        )
         try:
             training_membership_plan = (
                 build_development_training_membership_assembly_plan(

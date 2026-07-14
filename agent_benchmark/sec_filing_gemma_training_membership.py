@@ -868,13 +868,13 @@ def _build_training_view(
 
 def build_owned_development_training_membership_batch(
     *,
-    membership_assembly_plan: Mapping[str, Any],
+    training_membership_assembly_plan: Mapping[str, Any],
     source_feature_batch: Mapping[str, Any],
     source_label_batch: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Derive all six fixed training views without fitting or target filtering."""
 
-    plan = _validated_membership_plan(membership_assembly_plan)
+    plan = _validated_membership_plan(training_membership_assembly_plan)
     _feature_plan, label_plan, feature_batch, label_batch = _validated_sources(
         plan=plan,
         source_feature_batch=source_feature_batch,
@@ -1016,8 +1016,8 @@ def build_owned_development_training_membership_batch(
 def validate_owned_development_training_membership_batch(
     batch: Mapping[str, Any],
     *,
-    membership_assembly_plan: Mapping[str, Any],
-    expected_membership_assembly_plan_sha256: str,
+    training_membership_assembly_plan: Mapping[str, Any],
+    expected_training_membership_assembly_plan_sha256: str,
     source_feature_batch: Mapping[str, Any],
     expected_source_feature_batch_sha256: str,
     source_label_batch: Mapping[str, Any],
@@ -1041,10 +1041,10 @@ def validate_owned_development_training_membership_batch(
         raise SecFilingGemmaTrainingMembershipError(
             "Owned development training membership batch checksum changed"
         )
-    plan = _validated_membership_plan(membership_assembly_plan)
+    plan = _validated_membership_plan(training_membership_assembly_plan)
     if plan["training_membership_assembly_plan_sha256"] != _sha256(
-        expected_membership_assembly_plan_sha256,
-        "expected_membership_assembly_plan_sha256",
+        expected_training_membership_assembly_plan_sha256,
+        "expected_training_membership_assembly_plan_sha256",
     ):
         raise SecFilingGemmaTrainingMembershipError(
             "Training membership assembly plan is not externally pinned"
@@ -1070,7 +1070,7 @@ def validate_owned_development_training_membership_batch(
             "Membership source label batch is not externally pinned"
         )
     rebuilt = build_owned_development_training_membership_batch(
-        membership_assembly_plan=plan,
+        training_membership_assembly_plan=plan,
         source_feature_batch=feature_batch,
         source_label_batch=label_batch,
     )
