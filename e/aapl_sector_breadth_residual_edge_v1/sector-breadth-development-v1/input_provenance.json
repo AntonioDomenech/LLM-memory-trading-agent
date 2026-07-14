@@ -1,0 +1,95 @@
+{
+  "boundary_audit": {
+    "context_first_date": "2000-05-26",
+    "context_last_date": "2023-12-29",
+    "context_rows": 5936,
+    "post_2023_rows_accessed": false,
+    "price_first_date": "1999-03-10",
+    "price_last_date": "2023-12-29",
+    "price_rows": 6244
+  },
+  "contract_version": "aapl-sector-breadth-residual-edge-v1",
+  "network_access": false,
+  "physical_data_end": "2023-12-31",
+  "post_2023_market_data_accessed": false,
+  "source": {
+    "context": {
+      "bounded_end": "2023-12-31",
+      "bounded_result_sha256": "sha256:40bd0e3a60c5f021008382aa101addf714aa20c4f2007430d0493bfce3a0b17a",
+      "bounded_rows": 5936,
+      "bounded_start": "2000-05-26",
+      "download_log": {
+        "bounded_result_sha256": "sha256:5eee730d691911886f0f1cbf9fa53f54068de0504b368a76f265c80f4f9c80ad",
+        "bounded_rows": 11,
+        "complete_fixed_symbol_coverage": true,
+        "expected_symbols": [
+          "IWM",
+          "XLB",
+          "XLE",
+          "XLF",
+          "XLI",
+          "XLK",
+          "XLP",
+          "XLU",
+          "XLV",
+          "XLY",
+          "^VIX"
+        ],
+        "file_sha256": "sha256:39305ff5ecbd27047c9f553f9c4523fb45d42ad569ca3f3ef87b51355c38bdac",
+        "first_acquisition_event_utc": "2026-06-13T14:39:13.122086+00:00",
+        "last_acquisition_event_utc": "2026-06-13T14:39:19.353711+00:00",
+        "observed_filesystem_creation_time_utc": "2026-06-14T22:35:08.356322+00:00",
+        "observed_filesystem_last_write_time_utc": "2026-06-14T22:35:08.356322+00:00",
+        "observed_symbols": [
+          "IWM",
+          "XLB",
+          "XLE",
+          "XLF",
+          "XLI",
+          "XLK",
+          "XLP",
+          "XLU",
+          "XLV",
+          "XLY",
+          "^VIX"
+        ],
+        "path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\data\\warehouse\\parquet\\download_log.parquet",
+        "present": true,
+        "query": "SELECT upper(trim(symbol)) AS symbol, created_at\nFROM read_parquet(?)\nWHERE task = 'prices'\n  AND status = 'ok'\n  AND upper(trim(symbol)) IN (\n    'IWM', 'XLB', 'XLE', 'XLF', 'XLI', 'XLK',\n    'XLP', 'XLU', 'XLV', 'XLY', '^VIX'\n  )\nORDER BY upper(trim(symbol)), created_at",
+        "timestamp_semantics": "filesystem observations bind this local artifact; the download log, when present, supplies the acquisition event timestamps"
+      },
+      "network_access": false,
+      "observed_filesystem_creation_time_utc": "2026-06-13T14:39:19.772236+00:00",
+      "observed_filesystem_last_write_time_utc": "2026-06-13T14:39:19.831739+00:00",
+      "post_2023_rows_returned": false,
+      "source_file_sha256": "sha256:e89afc65b631017773cab60e95d98d30d42cf3b8ead512b23cb7caff258fe444",
+      "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\data\\warehouse\\parquet\\context_daily.parquet",
+      "source_type": "local_sector_context_parquet_bounded_query",
+      "timestamp_semantics": "filesystem observations bind this local artifact; the download log, when present, supplies the acquisition event timestamps"
+    },
+    "price": {
+      "bounded_first_date": "1999-03-10",
+      "bounded_last_date": "2023-12-29",
+      "bounded_result_sha256": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535",
+      "bounded_rows": 6244,
+      "post_2023_rows_returned": false,
+      "query": "SELECT\n  CAST(date AS DATE) AS date,\n  CAST(aapl_open AS DOUBLE) AS aapl_open,\n  CAST(aapl_close AS DOUBLE) AS aapl_close,\n  CAST(aapl_adj_close AS DOUBLE) AS aapl_adj_close,\n  CAST(spy_adj_close AS DOUBLE) AS spy_adj_close,\n  CAST(qqq_adj_close AS DOUBLE) AS qqq_adj_close\nFROM read_csv_auto(?, header = true)\nWHERE CAST(date AS DATE) >= CAST(? AS DATE)\n  AND CAST(date AS DATE) <= CAST(? AS DATE)\nORDER BY CAST(date AS DATE)",
+      "query_parameters": [
+        "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\data\\unleveraged_aapl\\aapl_spy_qqq.csv",
+        "1999-01-01",
+        "2023-12-31"
+      ],
+      "source_file_sha256": "sha256:342102cdb5e8839c3162639561e7cfff8a459a309d235437a808187a34bf0527",
+      "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\data\\unleveraged_aapl\\aapl_spy_qqq.csv",
+      "source_type": "local_csv_bounded_duckdb_query"
+    }
+  },
+  "source_identity": {
+    "git": {
+      "branch": "codex/aapl-sector-breadth-residual-edge-v1",
+      "commit": "19787e74102e57041d368328ae7583a40331c206",
+      "dirty": false,
+      "status": ""
+    }
+  }
+}

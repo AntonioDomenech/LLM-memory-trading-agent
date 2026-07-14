@@ -1,0 +1,240 @@
+{
+  "candidate_family": [
+    {
+      "candidate_id": "price_only_p50_e0",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0,
+      "gate_id": "p50_e0",
+      "model_family": "price_only",
+      "probability_gate": 0.5
+    },
+    {
+      "candidate_id": "price_only_p55_e0",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0,
+      "gate_id": "p55_e0",
+      "model_family": "price_only",
+      "probability_gate": 0.55
+    },
+    {
+      "candidate_id": "price_only_p50_e25",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0025,
+      "gate_id": "p50_e25",
+      "model_family": "price_only",
+      "probability_gate": 0.5
+    },
+    {
+      "candidate_id": "price_only_p55_e25",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0025,
+      "gate_id": "p55_e25",
+      "model_family": "price_only",
+      "probability_gate": 0.55
+    },
+    {
+      "candidate_id": "sector_breadth_p50_e0",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0,
+      "gate_id": "p50_e0",
+      "model_family": "sector_breadth",
+      "probability_gate": 0.5
+    },
+    {
+      "candidate_id": "sector_breadth_p55_e0",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0,
+      "gate_id": "p55_e0",
+      "model_family": "sector_breadth",
+      "probability_gate": 0.55
+    },
+    {
+      "candidate_id": "sector_breadth_p50_e25",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0025,
+      "gate_id": "p50_e25",
+      "model_family": "sector_breadth",
+      "probability_gate": 0.5
+    },
+    {
+      "candidate_id": "sector_breadth_p55_e25",
+      "cash_decision_rows": 5,
+      "expected_edge_gate_10bps": 0.0025,
+      "gate_id": "p55_e25",
+      "model_family": "sector_breadth",
+      "probability_gate": 0.55
+    }
+  ],
+  "candidate_results_sha256": "sha256:c1cbfc2dcb806d0647de96bb4837bed97cb2acc76216f78501e362f50c735c5c",
+  "contract_version": "aapl-sector-breadth-residual-edge-v1",
+  "cost_scenarios_bps": {
+    "base_5bps": 5.0,
+    "stress_10bps": 10.0
+  },
+  "development_pass": false,
+  "development_selected_candidate_id": null,
+  "evidence_classification": "chronological_internal_selection_2005_2018_then_frozen_intermediate_validation_2019_2023",
+  "execution": {
+    "actions": [
+      "LONG_100_PERCENT",
+      "CASH_100_PERCENT"
+    ],
+    "asset": "AAPL",
+    "cash_interest_rate": 0.0,
+    "decision_information_cutoff": "after the completed AAPL/ETF close and the completed 4:15pm ET VIX daily value on decision session t",
+    "fill": "next adjusted AAPL open",
+    "leverage": false,
+    "maximum_target_exposure": 1.0,
+    "shorting": false
+  },
+  "explicit_no_winner_gate": {
+    "intermediate_validation_may_retune": false,
+    "price_only_candidate_may_advance": false,
+    "reason": "no_2005_2018_sector_breadth_candidate_passed",
+    "sector_breadth_must_pass_paired_price_ablation": true,
+    "triggered": true
+  },
+  "final_selection_frozen": false,
+  "frozen_policy": {
+    "final_filename": null,
+    "final_sha256": null,
+    "intermediate_filename": null,
+    "intermediate_sha256": null,
+    "maximum_training_label_maturity_date": null
+  },
+  "gam_config": {
+    "basis_scale_floor": 1e-06,
+    "edge_clip_lower": -0.2,
+    "edge_clip_upper": 0.2,
+    "hinge_knot": 1.0,
+    "huber_delta": 1.5,
+    "huber_max_iterations": 75,
+    "huber_tolerance": 1e-10,
+    "logistic_max_iterations": 50,
+    "logistic_tolerance": 1e-10,
+    "newton_line_search_max_steps": 50,
+    "raw_mad_multiplier": 1.4826,
+    "raw_scale_floor": 1e-06,
+    "raw_z_clip": 4.0,
+    "ridge_lambdas": [
+      0.001,
+      0.01,
+      0.1
+    ],
+    "target_mad_multiplier": 1.4826,
+    "target_scale_floor": 1e-06
+  },
+  "intermediate_validation_pass": false,
+  "intermediate_validation_performed": false,
+  "intermediate_validation_result_sha256": "sha256:2926ef4bae0745388c771fea94711e0419501b585d0b6a5f2d05debd89be2d6f",
+  "later_stage_lock": {
+    "candidate_grid_may_change": false,
+    "features_may_change": false,
+    "model_configuration_may_change": false,
+    "only_exact_committed_manifest_may_advance": true,
+    "only_selected_candidate_may_advance": true,
+    "thresholds_may_change": false
+  },
+  "manifest_sha256": "sha256:75093b811a62888bb1abe15b6a863adeb86ba4847c8a203e9203e551136c2e09",
+  "payload_sha256": {
+    ".gitattributes": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+    "development_context_through_2023.csv": "sha256:40bd0e3a60c5f021008382aa101addf714aa20c4f2007430d0493bfce3a0b17a",
+    "development_prices_through_2023.csv": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535",
+    "feature_label_through_2023.csv": "sha256:f8069009f610fed87694ca331985499baa25efe342694714df7694f16b0b07d4",
+    "input_provenance.json": "sha256:8460a2c403805772259aa6fe06cc27d557807db9748b058bb505bc72264dabe7",
+    "intermediate_validation_result.json": "sha256:76bb9643581628df706f1fc4edfaf3fb321405d2aff2d1f1d8c15799bb28873d",
+    "negative_and_stress_diagnostics.json": "sha256:b904efc44d2eb50a6b8e1c1dde94f57d099a9f8574163aecad24882fca09a137",
+    "selection_buy_hold_base_5bps.csv": "sha256:c75145be8a1667bc07f7a46bbddf0f37f92fce5a1c2c64ce8665120874764d8f",
+    "selection_buy_hold_stress_10bps.csv": "sha256:06ae5e8432a0543ec3da8f346b36d3a6f0f21d025150c6776f9c27fa7f9cb71a",
+    "selection_candidate_results.json": "sha256:07e04fcfc4096d4dc7325e460bb6121fd34d6c86cd1a22272a7c4e5ea6e416d3",
+    "selection_common_price_only_p50_e0_base_5bps.csv": "sha256:1fc0529bbbf2d82fae3d14628c9219ed28e2de63fbfee481e82caeb8078a7791",
+    "selection_common_price_only_p50_e0_stress_10bps.csv": "sha256:aaeec3fad02611776109d11c25887384e54b8b346bab099166e0bf905d77bed8",
+    "selection_common_price_only_p50_e25_base_5bps.csv": "sha256:dc15e14a4a2b0180bd4e920213eb05ed80f3ccc98eb2b03fd89ebdb34c58d958",
+    "selection_common_price_only_p50_e25_stress_10bps.csv": "sha256:69c1910cd92b355f511b1a8d003befa3bf327c84f71d08cb7f54fa1069071cde",
+    "selection_common_price_only_p55_e0_base_5bps.csv": "sha256:f8a9cd420ebf4a8ef313ea699ccd4c21482cd187e72ef45b6dc48999df0a9c0f",
+    "selection_common_price_only_p55_e0_stress_10bps.csv": "sha256:84e324e0bb785ff5f72ac2f5053cafa53e172bc9daa9cd6890a6ce0c621b22e5",
+    "selection_common_price_only_p55_e25_base_5bps.csv": "sha256:ab1814cb31213f3066f77b60c5df47beb80e411c10f997e266549810fc399f47",
+    "selection_common_price_only_p55_e25_stress_10bps.csv": "sha256:d20b26dcca63efce3f5540655f7575144378c67ad2f4c36fca7e9b6f1ec643a4",
+    "selection_common_sector_breadth_p50_e0_base_5bps.csv": "sha256:2ace7e4ac46865f8541adcc897b5e9652fcfb4c91b0845f9660c60d8c2d2d4d0",
+    "selection_common_sector_breadth_p50_e0_stress_10bps.csv": "sha256:593a1216a489e76beaddac07663bd639de86424f620fb2167bab8893a5197d30",
+    "selection_common_sector_breadth_p50_e25_base_5bps.csv": "sha256:c20db934f85de8101f9a6e375ee4cbd3152b0e555e215768cb2e89735bf047d9",
+    "selection_common_sector_breadth_p50_e25_stress_10bps.csv": "sha256:584c261c869012fccdf6a83946f28645eb765c5e19e3b6ba633def76df5b083f",
+    "selection_common_sector_breadth_p55_e0_base_5bps.csv": "sha256:726f1cf5bea5f2c3b128c5970356b263ae570a855ef1af877d6472fe6dffbbad",
+    "selection_common_sector_breadth_p55_e0_stress_10bps.csv": "sha256:d75d88d3dd74f32502afd3334112e6c00fbb0c7ad35a17f24c82ce9e141ef502",
+    "selection_common_sector_breadth_p55_e25_base_5bps.csv": "sha256:1cd01b55613e314f9cdc1a8d43bcd2f8b39e495654c464e066d62f430ccaa6b2",
+    "selection_common_sector_breadth_p55_e25_stress_10bps.csv": "sha256:8b2434ed224ada6225dd41df2c515fc51dd1a6707e54c3836a71937f344069bb",
+    "selection_oof_predictions_2005_2018.csv": "sha256:30e982cba2adc33e1904cff06898d048c5c53acb89769e2b69c2252b3e2bda60",
+    "selection_price_only_p50_e0_base_5bps.csv": "sha256:1fc0529bbbf2d82fae3d14628c9219ed28e2de63fbfee481e82caeb8078a7791",
+    "selection_price_only_p50_e0_stress_10bps.csv": "sha256:aaeec3fad02611776109d11c25887384e54b8b346bab099166e0bf905d77bed8",
+    "selection_price_only_p50_e25_base_5bps.csv": "sha256:dc15e14a4a2b0180bd4e920213eb05ed80f3ccc98eb2b03fd89ebdb34c58d958",
+    "selection_price_only_p50_e25_stress_10bps.csv": "sha256:69c1910cd92b355f511b1a8d003befa3bf327c84f71d08cb7f54fa1069071cde",
+    "selection_price_only_p55_e0_base_5bps.csv": "sha256:f8a9cd420ebf4a8ef313ea699ccd4c21482cd187e72ef45b6dc48999df0a9c0f",
+    "selection_price_only_p55_e0_stress_10bps.csv": "sha256:84e324e0bb785ff5f72ac2f5053cafa53e172bc9daa9cd6890a6ce0c621b22e5",
+    "selection_price_only_p55_e25_base_5bps.csv": "sha256:ab1814cb31213f3066f77b60c5df47beb80e411c10f997e266549810fc399f47",
+    "selection_price_only_p55_e25_stress_10bps.csv": "sha256:d20b26dcca63efce3f5540655f7575144378c67ad2f4c36fca7e9b6f1ec643a4",
+    "selection_sector_breadth_p50_e0_base_5bps.csv": "sha256:2ace7e4ac46865f8541adcc897b5e9652fcfb4c91b0845f9660c60d8c2d2d4d0",
+    "selection_sector_breadth_p50_e0_stress_10bps.csv": "sha256:593a1216a489e76beaddac07663bd639de86424f620fb2167bab8893a5197d30",
+    "selection_sector_breadth_p50_e25_base_5bps.csv": "sha256:c20db934f85de8101f9a6e375ee4cbd3152b0e555e215768cb2e89735bf047d9",
+    "selection_sector_breadth_p50_e25_stress_10bps.csv": "sha256:584c261c869012fccdf6a83946f28645eb765c5e19e3b6ba633def76df5b083f",
+    "selection_sector_breadth_p55_e0_base_5bps.csv": "sha256:726f1cf5bea5f2c3b128c5970356b263ae570a855ef1af877d6472fe6dffbbad",
+    "selection_sector_breadth_p55_e0_stress_10bps.csv": "sha256:d75d88d3dd74f32502afd3334112e6c00fbb0c7ad35a17f24c82ce9e141ef502",
+    "selection_sector_breadth_p55_e25_base_5bps.csv": "sha256:1cd01b55613e314f9cdc1a8d43bcd2f8b39e495654c464e066d62f430ccaa6b2",
+    "selection_sector_breadth_p55_e25_stress_10bps.csv": "sha256:8b2434ed224ada6225dd41df2c515fc51dd1a6707e54c3836a71937f344069bb"
+  },
+  "physical_data_end": "2023-12-31",
+  "post_2023_market_data_access_allowed": false,
+  "post_2023_market_data_accessed": false,
+  "selected_candidate_id": null,
+  "selection_tie_break": [
+    "highest 10bps minimum-fold active-log edge",
+    "highest 10bps total active-log edge",
+    "fewest 10bps cash episodes",
+    "lexical candidate id"
+  ],
+  "selection_walk_forward_folds": [
+    {
+      "first_year": 2005,
+      "fold_id": "2005-2006",
+      "last_year": 2006
+    },
+    {
+      "first_year": 2007,
+      "fold_id": "2007-2008",
+      "last_year": 2008
+    },
+    {
+      "first_year": 2009,
+      "fold_id": "2009-2010",
+      "last_year": 2010
+    },
+    {
+      "first_year": 2011,
+      "fold_id": "2011-2012",
+      "last_year": 2012
+    },
+    {
+      "first_year": 2013,
+      "fold_id": "2013-2014",
+      "last_year": 2014
+    },
+    {
+      "first_year": 2015,
+      "fold_id": "2015-2016",
+      "last_year": 2016
+    },
+    {
+      "first_year": 2017,
+      "fold_id": "2017-2018",
+      "last_year": 2018
+    }
+  ],
+  "source_identity": {
+    "git": {
+      "branch": "codex/aapl-sector-breadth-residual-edge-v1",
+      "commit": "19787e74102e57041d368328ae7583a40331c206",
+      "dirty": false,
+      "status": ""
+    }
+  },
+  "stage": "development"
+}

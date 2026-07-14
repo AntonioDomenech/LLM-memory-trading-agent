@@ -1,0 +1,29 @@
+{
+  "artifact_dir": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\aapl_sector_breadth_residual_edge_v1\\sector-breadth-development-v1",
+  "contract_version": "aapl-sector-breadth-residual-edge-v1",
+  "created_at_utc": "2026-07-14T23:26:08.300392+00:00",
+  "development_pass": false,
+  "development_selected_candidate_id": null,
+  "explicit_no_winner_gate": {
+    "intermediate_validation_may_retune": false,
+    "price_only_candidate_may_advance": false,
+    "reason": "no_2005_2018_sector_breadth_candidate_passed",
+    "sector_breadth_must_pass_paired_price_ablation": true,
+    "triggered": true
+  },
+  "intermediate_validation_pass": false,
+  "physical_data_end": "2023-12-31",
+  "post_2023_market_data_accessed": false,
+  "reproducibility": {
+    "api_cost_display": "$0.00",
+    "completed_before_seal_within_limit": true,
+    "estimated_external_cost_usd": 0.0,
+    "model_calls": 0,
+    "runtime_limit_seconds": 3600.0,
+    "runtime_seconds_before_seal": 23.156320500005677
+  },
+  "run_id": "sector-breadth-development-v1",
+  "selected_candidate_id": null,
+  "selection_manifest_sha256": "sha256:75093b811a62888bb1abe15b6a863adeb86ba4847c8a203e9203e551136c2e09",
+  "stage": "development"
+}
