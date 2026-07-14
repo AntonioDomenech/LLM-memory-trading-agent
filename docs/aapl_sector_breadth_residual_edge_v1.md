@@ -15,6 +15,15 @@ separate SEC/Gemma approach remains preserved on its own branch; this branch
 tests whether verified market-sentiment metrics contain an economic signal
 before more LLM infrastructure is justified.
 
+On the first execution attempt, before any candidate score or performance
+artifact was produced, the deterministic Huber solver reached its inherited
+50-iteration ceiling on one development fit. An outcome-blind convergence
+diagnostic showed that the frozen fits converged in at most 51 iterations.
+The only numerical correction therefore raises the Huber iteration ceiling to
+75; all features, targets, gates, regularization values, tolerances, periods,
+and ranking rules remain unchanged. This correction is committed before the
+first scored development run.
+
 ## Non-negotiable trading contract
 
 - Decisions are timestamped only after the completed Cboe VIX daily value for

@@ -38,7 +38,7 @@ class DirectEdgeGAMConfig:
     logistic_tolerance: float = 1e-10
     newton_line_search_max_steps: int = 50
     huber_delta: float = 1.5
-    huber_max_iterations: int = 50
+    huber_max_iterations: int = 75
     huber_tolerance: float = 1e-10
     edge_clip_lower: float = -0.2
     edge_clip_upper: float = 0.2

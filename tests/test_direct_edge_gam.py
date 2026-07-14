@@ -90,6 +90,7 @@ def test_frozen_config_and_basis_preprocessing_are_exact():
     assert config.hinge_knot == pytest.approx(1.0)
     assert config.logistic_max_iterations == 50
     assert config.huber_delta == pytest.approx(1.5)
+    assert config.huber_max_iterations == 75
     with pytest.raises(ValueError, match="frozen"):
         DirectEdgeGAMConfig(ridge_lambdas=(0.01,)).validate()
 
