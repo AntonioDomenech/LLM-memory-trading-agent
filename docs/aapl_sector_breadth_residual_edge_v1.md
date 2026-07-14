@@ -17,8 +17,10 @@ before more LLM infrastructure is justified.
 
 ## Non-negotiable trading contract
 
-- Decisions use completed information through AAPL close `t` and fill at the
-  adjusted AAPL open `t+1`.
+- Decisions are timestamped only after the completed Cboe VIX daily value for
+  session `t`, approximately 4:15 p.m. ET. AAPL and ETF closes for `t` are
+  already complete by then. The strategy cannot trade at those closes and
+  fills only at the adjusted AAPL open `t+1`.
 - Exposure is exactly `1.0` AAPL or `0.0` AAPL. Shorting, leverage, borrowing,
   fractional target exposure, margin interest, and negative cash are forbidden.
 - A triggered cash episode lasts five decision rows. Triggers during an active
@@ -44,18 +46,46 @@ market fear. AAPL, SPY, and QQQ prices come from the existing exact
 long/cash-ledger snapshot. No present-day stock constituent panel is allowed,
 which avoids a survivorship-biased current-member universe.
 
+The complete cross-sectional panel begins on `2000-05-26`, IWM's first listed
+session in the frozen source. Context before that date is forbidden. This
+still leaves more than 252 sessions of warm-up before the first 2005
+development prediction.
+
 Features are deterministic completed-close transformations only:
 
-- fraction of sectors with positive 1-, 5-, 20-, and 60-session returns;
-- median and cross-sectional dispersion of sector returns;
-- cyclical-minus-defensive participation;
-- IWM-minus-SPY risk-appetite momentum;
-- AAPL residual momentum versus XLK and QQQ;
-- VIX log level, changes, and trailing z-score; and
+- sector log returns are `log(close_t / close_t-w)` for fixed windows
+  `w in {1, 5, 20, 60}`; every cross-section requires all nine ETFs;
+- participation is the fraction of the nine returns strictly above zero,
+  the median is the ordinary cross-sectional median, and dispersion is the
+  population standard deviation (`ddof=0`);
+- the defensive group is exactly `XLP, XLU, XLV`; the cyclical group is exactly
+  `XLB, XLE, XLF, XLI, XLK, XLY`; both defensive-minus-cyclical participation
+  and defensive-minus-cyclical median log return are included at all four
+  fixed windows;
+- IWM-minus-SPY log-return momentum is included at all four fixed windows;
+- AAPL-minus-XLK log-return momentum is included at all four fixed windows;
+  AAPL-minus-QQQ at 5 and 20 sessions is already present in the common frozen
+  price controls, so the incremental sector vector adds only its nonduplicated
+  1- and 60-session versions;
+- VIX uses its completed 4:15 p.m. ET daily value: log level, 1-, 5-, 20-, and
+  60-session log changes, plus an inclusive trailing 252-session z-score of
+  log(VIX) using sample standard deviation (`ddof=1`); and
 - the existing frozen AAPL/market price feature set as common controls.
 
 Missing context is never forward-filled, interpolated, or replaced with zero.
 Rows without a complete feature vector cannot generate a full-model forecast.
+Before feature construction, the feature builder rejects context dates outside
+the explicitly authorized price-session index. The bounded Parquet loader may
+validate values while forming that panel; the experiment runner then requires
+its session index to equal the canonical price-session index exactly.
+
+Each run's input manifest must bind the resolved context artifact identity,
+its SHA-256 checksum, its UTC acquisition timestamp, the inclusive query
+bounds, the exact bounded query text, and the bounded-result checksum. A
+future/live extension must append new dated vintages; it may not silently
+refresh historical adjusted closes in place. A corrected historical source is
+a new explicit input version and cannot replace the bytes used by an earlier
+run.
 
 ## Frozen learner and candidates
 
@@ -65,6 +95,11 @@ other estimates the continuous cash active log edge. Every fold fits:
 
 1. the full sector-breadth model; and
 2. the existing price-only feature set as a core ablation.
+
+Both fits use the identical training rows on which the complete breadth vector
+is ready; the price-only ablation differs only by omitting the 36 incremental
+features. Paired ablation triggers are likewise permitted only on identical
+breadth-ready out-of-fold rows.
 
 The only permitted policy gates are frozen in advance:
 
@@ -102,10 +137,23 @@ If nothing passes, selection is null and no later period is opened.
 
 After development selection, the chosen policy is refit once using only labels
 matured by 2018-12-31 and frozen for 2019-2023. Intermediate validation cannot
-change the candidate. Promotion requires positive 10-bps active log edge
-overall, positive active edge in at least three of five calendar years,
-positive active edge in every negative-buy-and-hold year, and no failure of
-the predictive, cost, chronology, or no-leverage proofs.
+change the candidate. The same frozen policy must pass each of these gates at
+both 5 and 10 bps:
+
+- positive total active log edge;
+- positive active log edge in at least two of the three fixed validation
+  blocks `2019-2020`, `2021-2022`, and `2023`;
+- positive active log edge in at least three of the five calendar years;
+- positive active log edge in every calendar year in which the same-ledger
+  AAPL buy-and-hold return is negative;
+- Brier score strictly below the causal training-mean probability baseline
+  and expected-edge MAE strictly below the causal training-mean edge baseline;
+- strictly positive mean realized 10-bps edge and a win rate strictly above
+  50% at accepted cash-episode starts;
+- at least four accepted cash episodes and no more than 20% cash decision
+  rows; and
+- all cost binding, chronology, exact five-row block, binary exposure, and
+  no-leverage proofs true.
 
 Only after passing may the same specification be refit using labels matured by
 2023-12-31, hashed, committed, and evaluated once on fresh-start 2024, 2025,
