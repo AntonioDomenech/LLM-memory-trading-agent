@@ -84,9 +84,19 @@ def _market(stage: str, sessions: list[str], opens: list[float], closes=None) ->
     return {**body, "market_stage_manifest_sha256": canonical_sha256(body)}
 
 
-def _state(position: str, origin=None, fill=None, exit_session=None) -> dict:
+def _state(
+    position: str,
+    origin=None,
+    fill=None,
+    exit_session=None,
+    *,
+    episode_phase: str | None = None,
+) -> dict:
+    if episode_phase is None:
+        episode_phase = "INACTIVE" if origin is None else "ACTIVE"
     return {
         "position_at_decision_close": position,
+        "episode_phase": episode_phase,
         "episode_origin_decision_session": origin,
         "episode_fill_session": fill,
         "episode_exit_session": exit_session,
@@ -124,19 +134,31 @@ def _prediction_row(
     outputs = {
         "p50_e0": {
             "semantic": (
-                _state("CASH", decision, fill, exit_value)
+                _state(
+                    "LONG",
+                    decision,
+                    fill,
+                    exit_value,
+                    episode_phase="SCHEDULED",
+                )
                 if start_semantic
                 else _state("LONG")
             ),
             "ablation": (
-                _state("CASH", decision, fill, exit_value)
+                _state(
+                    "LONG",
+                    decision,
+                    fill,
+                    exit_value,
+                    episode_phase="SCHEDULED",
+                )
                 if start_ablation
                 else _state("LONG")
             ),
         }
     }
     body = {
-        "schema_version": "test-prediction-row-v1",
+        "schema_version": "test-prediction-row-v2",
         "sequence_number": 1,
         "decision_session": decision,
         "fill_session": fill,
@@ -161,7 +183,7 @@ def _prediction_row(
 
 def _prefix(rows: list[dict]) -> dict:
     body = {
-        "schema_version": "test-prediction-prefix-v1",
+        "schema_version": "test-prediction-prefix-v2",
         "candidate_sha256": _h("candidate"),
         "row_count": len(rows),
         "rows_sha256": canonical_sha256(rows),
@@ -169,6 +191,11 @@ def _prefix(rows: list[dict]) -> dict:
         "rows": rows,
     }
     return {**body, "prediction_prefix_sha256": canonical_sha256(body)}
+
+
+def _rehash_prediction_row(row: dict) -> None:
+    body = {key: value for key, value in row.items() if key != "prediction_row_sha256"}
+    row["prediction_row_sha256"] = canonical_sha256(body)
 
 
 def _label_ledger(rows: list[dict], market: dict, include: list[bool] | None = None) -> dict:
@@ -350,6 +377,16 @@ def test_t_plus_1_t_plus_21_two_leg_cost_and_roundtrip_replay() -> None:
 
     assert evidence["row"]["fill_session"] == evidence["sessions"][1]
     assert evidence["row"]["cash_exit_session"] == evidence["sessions"][21]
+    assert evidence["row"]["candidate_policy_output_states"]["p50_e0"][
+        "semantic"
+    ] == _state(
+        "LONG",
+        evidence["sessions"][0],
+        evidence["sessions"][1],
+        evidence["sessions"][21],
+        episode_phase="SCHEDULED",
+    )
+    assert ledger[0]["target_exposure"] == 1
     assert [row["target_exposure"] for row in ledger[1:21]] == [0] * 20
     assert ledger[21]["target_exposure"] == 1
     assert sum(row["strategy_position_changed"] for row in ledger) == 3
@@ -366,6 +403,118 @@ def test_t_plus_1_t_plus_21_two_leg_cost_and_roundtrip_replay() -> None:
     assert metrics["cash_days"] == 20
     assert metrics["completed_cash_episodes"] == 1
     assert _validate(evidence, receipt) == receipt["score_receipt_sha256"]
+
+
+def test_policy_state_rolls_scheduled_active_and_long_at_exact_exit_close() -> None:
+    sessions = _sessions("2005-01-03", 50)
+    market = _market(
+        "development", sessions, [100.0 + index for index in range(len(sessions))]
+    )
+    first = _prediction_row(
+        sessions=sessions,
+        decision_index=0,
+        start_semantic=True,
+    )
+    active_state = _state(
+        "CASH",
+        sessions[0],
+        sessions[1],
+        sessions[21],
+        episode_phase="ACTIVE",
+    )
+    at_fill = _prediction_row(
+        sessions=sessions,
+        decision_index=1,
+        start_semantic=False,
+    )
+    at_fill["sequence_number"] = 2
+    at_fill["effective_episode_actions"]["p50_e0"][
+        "semantic"
+    ] = "HOLD_EXISTING_CASH_EPISODE"
+    at_fill["candidate_policy_input_states"]["p50_e0"]["semantic"] = copy.deepcopy(
+        active_state
+    )
+    at_fill["candidate_policy_output_states"]["p50_e0"]["semantic"] = copy.deepcopy(
+        active_state
+    )
+    _rehash_prediction_row(at_fill)
+
+    at_exit = _prediction_row(
+        sessions=sessions,
+        decision_index=21,
+        start_semantic=False,
+    )
+    at_exit["sequence_number"] = 3
+    _rehash_prediction_row(at_exit)
+    rows = [first, at_fill, at_exit]
+    prefix = _prefix(rows)
+    labels = _label_ledger(rows, market)
+    receipt = build_score_receipt(
+        prediction_prefix=prefix,
+        expected_prediction_prefix_sha256=prefix["prediction_prefix_sha256"],
+        label_release_evidence=labels,
+        expected_label_release_ledger_sha256=labels[
+            "label_release_ledger_sha256"
+        ],
+        market_stage=market,
+        expected_market_stage_manifest_sha256=market[
+            "market_stage_manifest_sha256"
+        ],
+        selected_candidate_id="p50_e0",
+        selected_variant="semantic",
+        cost_bps=10,
+        stage="development",
+        score_cutoff_session=sessions[-1],
+        terminal_convention="adjusted_open",
+    )
+
+    assert first["candidate_policy_output_states"]["p50_e0"]["semantic"][
+        "episode_phase"
+    ] == "SCHEDULED"
+    assert first["candidate_policy_output_states"]["p50_e0"]["semantic"][
+        "position_at_decision_close"
+    ] == "LONG"
+    assert at_fill["candidate_policy_input_states"]["p50_e0"]["semantic"][
+        "episode_phase"
+    ] == "ACTIVE"
+    assert at_exit["candidate_policy_input_states"]["p50_e0"]["semantic"] == _state(
+        "LONG"
+    )
+    assert receipt["ledger"][0]["target_exposure"] == 1
+    assert receipt["ledger"][1]["target_exposure"] == 0
+    assert receipt["ledger"][21]["target_exposure"] == 1
+    assert receipt["metrics"]["cash_episodes"] == 1
+
+    forged_rows = copy.deepcopy(rows)
+    forged_rows[2]["candidate_policy_input_states"]["p50_e0"][
+        "semantic"
+    ] = active_state
+    _rehash_prediction_row(forged_rows[2])
+    forged_prefix = _prefix(forged_rows)
+    with pytest.raises(
+        SecFilingGemmaScoringError,
+        match="Policy input state does not match the continuous episode path",
+    ):
+        build_score_receipt(
+            prediction_prefix=forged_prefix,
+            expected_prediction_prefix_sha256=forged_prefix[
+                "prediction_prefix_sha256"
+            ],
+            label_release_evidence=labels,
+            expected_label_release_ledger_sha256=labels[
+                "label_release_ledger_sha256"
+            ],
+            market_stage=market,
+            expected_market_stage_manifest_sha256=market[
+                "market_stage_manifest_sha256"
+            ],
+            selected_candidate_id="p50_e0",
+            selected_variant="semantic",
+            cost_bps=10,
+            stage="development",
+            score_cutoff_session=sessions[-1],
+            terminal_convention="adjusted_open",
+        )
 
 
 def test_five_and_ten_bps_charge_both_episode_legs() -> None:

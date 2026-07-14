@@ -123,7 +123,7 @@ def _audit(evidence: dict[str, object], **overrides) -> dict[str, object]:
 
 def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> None:
     assert SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION == (
-        "aapl-sec-gemma-source-identity-audit-v8"
+        "aapl-sec-gemma-source-identity-audit-v9"
     )
     assert tuple(CANONICAL_SOURCE_ROLE_PATHS) == REQUIRED_SOURCE_HASHES
     assert UNRESOLVED_SOURCE_ROLES == EXPECTED_UNRESOLVED_ROLES
@@ -154,6 +154,9 @@ def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> Non
     )
     assert CANONICAL_SOURCE_ROLE_PATHS["learner_prediction"] == (
         "agent_benchmark/sec_filing_gemma_learner_prediction.py"
+    )
+    assert CANONICAL_SOURCE_ROLE_PATHS["policy_replay"] == (
+        "agent_benchmark/sec_filing_gemma_policy_replay.py"
     )
     assert {
         role: CANONICAL_SOURCE_ROLE_PATHS[role]
@@ -490,10 +493,11 @@ def test_unresolved_role_cannot_invent_a_path_or_supply_bytes(evidence) -> None:
         _audit(evidence, source_bytes_by_role=payloads)
 
 
-def test_one_byte_source_substitution_fails_candidate_pin(evidence) -> None:
+@pytest.mark.parametrize("role", ["calendar", "policy_replay"])
+def test_one_byte_source_substitution_fails_candidate_pin(evidence, role: str) -> None:
     payloads = dict(evidence["payloads"])
-    payloads["calendar"] = payloads["calendar"] + b"\n"
-    with pytest.raises(SecFilingGemmaSourceIdentityError, match="calendar.*candidate"):
+    payloads[role] = payloads[role] + b"\n"
+    with pytest.raises(SecFilingGemmaSourceIdentityError, match=rf"{role}.*candidate"):
         _audit(evidence, source_bytes_by_role=payloads)
 
 

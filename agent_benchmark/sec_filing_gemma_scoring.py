@@ -62,6 +62,13 @@ _PERIODS_BY_STAGE: Final[dict[str, tuple[str, ...]]] = {
     "intermediate": tuple(str(year) for year in range(2019, 2024)),
     "final": ("2024", "2025", "2026_ytd"),
 }
+_POLICY_STATE_KEYS: Final[set[str]] = {
+    "position_at_decision_close",
+    "episode_phase",
+    "episode_origin_decision_session",
+    "episode_fill_session",
+    "episode_exit_session",
+}
 
 
 class SecFilingGemmaScoringError(SecFilingGemmaContractError):
@@ -357,6 +364,50 @@ def _policy_path_item(
     return candidates[variant]
 
 
+def _expected_policy_state(
+    episode: Mapping[str, str] | None, *, decision_session: str
+) -> dict[str, str | None]:
+    if episode is None:
+        return {
+            "position_at_decision_close": "LONG",
+            "episode_phase": "INACTIVE",
+            "episode_origin_decision_session": None,
+            "episode_fill_session": None,
+            "episode_exit_session": None,
+        }
+    if decision_session < episode["fill_session"]:
+        position = "LONG"
+        phase = "SCHEDULED"
+    elif decision_session < episode["exit_session"]:
+        position = "CASH"
+        phase = "ACTIVE"
+    else:
+        raise SecFilingGemmaScoringError(
+            "Completed episode was not cleared before policy-state replay"
+        )
+    return {
+        "position_at_decision_close": position,
+        "episode_phase": phase,
+        "episode_origin_decision_session": episode["origin_decision_session"],
+        "episode_fill_session": episode["fill_session"],
+        "episode_exit_session": episode["exit_session"],
+    }
+
+
+def _require_exact_policy_state(
+    value: Mapping[str, Any],
+    *,
+    expected: Mapping[str, Any],
+    location: str,
+) -> None:
+    state = _mapping(value, location)
+    _keys(state, _POLICY_STATE_KEYS, location)
+    if dict(state) != dict(expected):
+        raise SecFilingGemmaScoringError(
+            f"{location} does not match the continuous episode path"
+        )
+
+
 def _validated_prediction_prefix(
     value: Mapping[str, Any],
     *,
@@ -388,7 +439,7 @@ def _validated_prediction_prefix(
     rows: list[dict[str, Any]] = []
     episodes: list[dict[str, str]] = []
     prior_decision: str | None = None
-    active: dict[str, str] | None = None
+    episode: dict[str, str] | None = None
     for index, raw in enumerate(rows_value):
         row = _mapping(raw, f"prediction rows[{index}]")
         row_hash = _sha256(row.get("prediction_row_sha256"), "prediction row hash")
@@ -443,8 +494,11 @@ def _validated_prediction_prefix(
             raise SecFilingGemmaScoringError(
                 "Prediction claims a mature t+21 outcome outside market rows"
             )
-        if active is not None and decision >= active["exit_session"]:
-            active = None
+        if episode is not None and decision >= episode["exit_session"]:
+            # The t+21 buy filled at this session's open.  At the later filing
+            # decision close, the strategy is already LONG and the old episode
+            # cannot block a new t+1 schedule.
+            episode = None
         action = _policy_path_item(
             row, candidate_id, variant, "effective_episode_actions"
         )
@@ -458,44 +512,47 @@ def _validated_prediction_prefix(
         )
         if not isinstance(input_state, Mapping) or not isinstance(output_state, Mapping):
             raise SecFilingGemmaScoringError("Policy states must be mappings")
-        expected_input_position = "CASH" if active is not None else "LONG"
-        if input_state.get("position_at_decision_close") != expected_input_position:
-            raise SecFilingGemmaScoringError(
-                "Policy input state does not match the continuous episode path"
-            )
+        expected_input_state = _expected_policy_state(
+            episode, decision_session=decision
+        )
+        _require_exact_policy_state(
+            input_state,
+            expected=expected_input_state,
+            location="Policy input state",
+        )
         if action == "START_CASH_EPISODE":
-            if active is not None:
-                raise SecFilingGemmaScoringError("An active episode was extended")
-            active = {
+            if episode is not None:
+                raise SecFilingGemmaScoringError("An existing episode was extended")
+            episode = {
                 "origin_decision_session": decision,
                 "fill_session": fill,
                 "exit_session": exit_session,
                 "prediction_row_sha256": row_hash,
             }
-            episodes.append(dict(active))
+            episodes.append(dict(episode))
+        elif action == "KEEP_SCHEDULED_CASH_EPISODE":
+            if expected_input_state["episode_phase"] != "SCHEDULED":
+                raise SecFilingGemmaScoringError(
+                    "Scheduled hold lacks a scheduled episode"
+                )
         elif action == "HOLD_EXISTING_CASH_EPISODE":
-            if active is None:
+            if expected_input_state["episode_phase"] != "ACTIVE":
                 raise SecFilingGemmaScoringError("Cash hold lacks an active episode")
         elif action == "STAY_LONG":
-            if active is not None:
-                raise SecFilingGemmaScoringError("LONG action truncates an active episode")
+            if episode is not None:
+                raise SecFilingGemmaScoringError(
+                    "LONG action truncates an existing episode"
+                )
         else:
             raise SecFilingGemmaScoringError("Unknown effective episode action")
-        expected_output_position = "CASH" if active is not None else "LONG"
-        if output_state.get("position_at_decision_close") != expected_output_position:
-            raise SecFilingGemmaScoringError(
-                "Policy output state does not match the continuous episode path"
-            )
-        if active is not None:
-            if (
-                output_state.get("episode_origin_decision_session")
-                != active["origin_decision_session"]
-                or output_state.get("episode_fill_session") != active["fill_session"]
-                or output_state.get("episode_exit_session") != active["exit_session"]
-            ):
-                raise SecFilingGemmaScoringError(
-                    "Policy output state changed an episode's frozen dates"
-                )
+        expected_output_state = _expected_policy_state(
+            episode, decision_session=decision
+        )
+        _require_exact_policy_state(
+            output_state,
+            expected=expected_output_state,
+            location="Policy output state",
+        )
         rows.append(dict(row))
     if prefix.get("tip_sha256") is not None and prefix["tip_sha256"] != rows[-1][
         "prediction_row_sha256"

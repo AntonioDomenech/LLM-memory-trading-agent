@@ -34,17 +34,19 @@ from agent_benchmark.sec_filing_gemma_contract import (
     STAGE_WINDOWS,
     SecFilingGemmaContractError,
     build_contract_manifest,
+    canonical_development_policy_session_calendar,
     canonical_session_calendar,
     canonical_sha256,
+    development_policy_session_calendar_sha256,
     session_calendar_sha256,
 )
 
 
 PREDICTION_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-pre-label-prediction-row-v2"
+    "aapl-sec-gemma-pre-label-prediction-row-v3"
 )
 PREDICTION_PREFIX_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-pre-label-prediction-prefix-v2"
+    "aapl-sec-gemma-pre-label-prediction-prefix-v3"
 )
 PRELABEL_SEAL_ENTRY_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-pre-label-seal-entry-v1"
@@ -102,7 +104,7 @@ _EVENT_BINDING_KEYS = {
     "fold_id",
 }
 
-# Prediction evidence v2 deliberately binds the causal feature identities
+# Prediction evidence v3 deliberately binds the causal feature identities
 # emitted by ``sec_filing_gemma_features``.  ``extraction_identity_sha256`` is
 # always present, including when semantic extraction is unavailable;
 # ``market_feature_row_sha256`` identifies the independent market-only row;
@@ -119,10 +121,16 @@ _PREDICTION_SPEC_KEYS = _EVENT_BINDING_KEYS | {
 }
 _POLICY_STATE_KEYS = {
     "position_at_decision_close",
+    "episode_phase",
     "episode_origin_decision_session",
     "episode_fill_session",
     "episode_exit_session",
 }
+_POLICY_EPISODE_PHASES: Final[tuple[str, str, str]] = (
+    "INACTIVE",
+    "SCHEDULED",
+    "ACTIVE",
+)
 _PREDICTION_ROW_KEYS = {
     "schema_version",
     "sequence_number",
@@ -359,8 +367,12 @@ def _decode_float_hex(value: Any, location: str, *, probability: bool = False) -
 def _canonical_sessions(
     session_dates: Sequence[str], expected_calendar_sessions_sha256: str
 ) -> tuple[tuple[str, ...], str]:
-    sessions = canonical_session_calendar(session_dates)
-    observed = session_calendar_sha256(sessions)
+    try:
+        sessions = canonical_session_calendar(session_dates)
+        observed = session_calendar_sha256(sessions)
+    except SecFilingGemmaContractError:
+        sessions = canonical_development_policy_session_calendar(session_dates)
+        observed = development_policy_session_calendar_sha256(sessions)
     expected = _sha256(
         expected_calendar_sessions_sha256, "expected_calendar_sessions_sha256"
     )
@@ -573,7 +585,7 @@ def _prediction_genesis(
 ) -> str:
     return canonical_sha256(
         {
-            "domain": "aapl-sec-gemma-prediction-genesis-v2",
+            "domain": "aapl-sec-gemma-prediction-genesis-v3",
             "contract_sha256": contract_hash,
             "candidate_sha256": candidate_hash,
             "corpus_universe_sha256": universe_hash,
@@ -589,6 +601,7 @@ def _prediction_genesis(
 def _inactive_state() -> dict[str, str | None]:
     return {
         "position_at_decision_close": "LONG",
+        "episode_phase": "INACTIVE",
         "episode_origin_decision_session": None,
         "episode_fill_session": None,
         "episode_exit_session": None,
@@ -602,11 +615,14 @@ def _initial_policy_states() -> dict[str, dict[str, dict[str, str | None]]]:
     }
 
 
-def _active_state(
+def _scheduled_state(
     decision_session: str, sessions: Sequence[str]
 ) -> dict[str, str | None]:
     return {
-        "position_at_decision_close": "CASH",
+        # The signal is accepted only after this close.  The strategy remains
+        # LONG here and becomes CASH at the following session's open.
+        "position_at_decision_close": "LONG",
+        "episode_phase": "SCHEDULED",
         "episode_origin_decision_session": decision_session,
         "episode_fill_session": _session_offset(decision_session, 1, sessions),
         "episode_exit_session": _session_offset(
@@ -621,16 +637,24 @@ def _normalize_policy_state(
     state = _expect_mapping(value, location)
     _expect_keys(state, _POLICY_STATE_KEYS, location)
     position = state["position_at_decision_close"]
+    phase = state["episode_phase"]
     origin = state["episode_origin_decision_session"]
     fill = state["episode_fill_session"]
     exit_session = state["episode_exit_session"]
-    if position == "LONG":
+    if phase not in _POLICY_EPISODE_PHASES:
+        raise SecFilingGemmaContractError(f"{location} has an invalid episode phase")
+    if phase == "INACTIVE":
+        if position != "LONG":
+            raise SecFilingGemmaContractError(
+                f"{location} inactive state must be LONG at decision close"
+            )
         if any(item is not None for item in (origin, fill, exit_session)):
             raise SecFilingGemmaContractError(
-                f"{location} LONG state cannot retain a cash episode"
+                f"{location} inactive state cannot retain a cash episode"
             )
         return _inactive_state()
-    if position != "CASH" or any(
+    expected_position = "LONG" if phase == "SCHEDULED" else "CASH"
+    if position != expected_position or any(
         not isinstance(item, str) for item in (origin, fill, exit_session)
     ):
         raise SecFilingGemmaContractError(f"{location} is not a canonical policy state")
@@ -643,7 +667,8 @@ def _normalize_policy_state(
     if exit_date != _session_offset(origin_date, LABEL_MATURITY_OFFSET, sessions):
         raise SecFilingGemmaContractError(f"{location} cash exit is not t+21")
     return {
-        "position_at_decision_close": "CASH",
+        "position_at_decision_close": expected_position,
+        "episode_phase": phase,
         "episode_origin_decision_session": origin_date,
         "episode_fill_session": fill_date,
         "episode_exit_session": exit_date,
@@ -681,12 +706,23 @@ def _roll_policy_states(
         rolled[candidate_id] = {}
         for variant in MODEL_VARIANTS:
             state = normalized[candidate_id][variant]
-            if (
-                state["position_at_decision_close"] == "CASH"
-                and decision_session < state["episode_exit_session"]
-            ):
-                rolled[candidate_id][variant] = copy.deepcopy(state)
+            if state["episode_phase"] == "INACTIVE":
+                rolled[candidate_id][variant] = _inactive_state()
+            elif decision_session < state["episode_fill_session"]:
+                # This can occur when two accepted filings share a decision
+                # session.  The first sell is still merely scheduled.
+                scheduled = copy.deepcopy(state)
+                scheduled["position_at_decision_close"] = "LONG"
+                scheduled["episode_phase"] = "SCHEDULED"
+                rolled[candidate_id][variant] = scheduled
+            elif decision_session < state["episode_exit_session"]:
+                active = copy.deepcopy(state)
+                active["position_at_decision_close"] = "CASH"
+                active["episode_phase"] = "ACTIVE"
+                rolled[candidate_id][variant] = active
             else:
+                # The t+21 buy occurs at this session's open, so a filing
+                # decided after this exact close sees the strategy LONG.
                 rolled[candidate_id][variant] = _inactive_state()
     return rolled
 
@@ -759,14 +795,17 @@ def _available_policy_transition(
         for variant in MODEL_VARIANTS:
             state = inputs[candidate_id][variant]
             signal = signals[candidate_id][variant]
-            if state["position_at_decision_close"] == "CASH":
+            if state["episode_phase"] == "SCHEDULED":
+                actions[candidate_id][variant] = "KEEP_SCHEDULED_CASH_EPISODE"
+                outputs[candidate_id][variant] = copy.deepcopy(state)
+            elif state["episode_phase"] == "ACTIVE":
                 # A new signal is diagnostic only.  The original exit is copied
                 # byte-for-byte, so no filing can extend an active episode.
                 actions[candidate_id][variant] = "HOLD_EXISTING_CASH_EPISODE"
                 outputs[candidate_id][variant] = copy.deepcopy(state)
             elif signal == "CASH":
                 actions[candidate_id][variant] = "START_CASH_EPISODE"
-                outputs[candidate_id][variant] = _active_state(
+                outputs[candidate_id][variant] = _scheduled_state(
                     decision_session, sessions
                 )
             else:
@@ -783,8 +822,8 @@ def _unavailable_policy_transition(
 ]:
     # Unavailable rows make no probability or gate claim and cannot start an
     # episode.  Their effective policy action is nevertheless explicit for
-    # every path: an inactive path stays LONG, while an already-open episode
-    # remains CASH until its original immutable exit.
+    # every path: an inactive path stays LONG, a scheduled sell stays LONG
+    # until t+1, and an active episode remains CASH until its immutable exit.
     inputs = _normalize_policy_states(
         input_states, sessions=sessions, location="candidate_policy_input_states"
     )
@@ -795,7 +834,9 @@ def _unavailable_policy_transition(
         outputs[candidate_id] = {}
         for variant in MODEL_VARIANTS:
             state = inputs[candidate_id][variant]
-            if state["position_at_decision_close"] == "CASH":
+            if state["episode_phase"] == "SCHEDULED":
+                actions[candidate_id][variant] = "KEEP_SCHEDULED_CASH_EPISODE"
+            elif state["episode_phase"] == "ACTIVE":
                 actions[candidate_id][variant] = "HOLD_EXISTING_CASH_EPISODE"
             else:
                 actions[candidate_id][variant] = "STAY_LONG"
@@ -1333,6 +1374,7 @@ def validate_prediction_prefix(
                 allowed={
                     "STAY_LONG",
                     "START_CASH_EPISODE",
+                    "KEEP_SCHEDULED_CASH_EPISODE",
                     "HOLD_EXISTING_CASH_EPISODE",
                 },
             )
@@ -1375,7 +1417,11 @@ def validate_prediction_prefix(
             observed_actions = _normalize_signal_or_action_map(
                 row["effective_episode_actions"],
                 location="effective_episode_actions",
-                allowed={"STAY_LONG", "HOLD_EXISTING_CASH_EPISODE"},
+                allowed={
+                    "STAY_LONG",
+                    "KEEP_SCHEDULED_CASH_EPISODE",
+                    "HOLD_EXISTING_CASH_EPISODE",
+                },
             )
             if observed_actions != expected_actions:
                 raise SecFilingGemmaContractError(
@@ -1397,7 +1443,7 @@ def validate_prediction_prefix(
         )
         if observed_outputs != expected_outputs:
             raise SecFilingGemmaContractError(
-                "Policy output states changed or extended an active episode"
+                "Policy output states changed or extended an existing episode"
             )
         if row["candidate_policy_output_states_sha256"] != canonical_sha256(
             expected_outputs

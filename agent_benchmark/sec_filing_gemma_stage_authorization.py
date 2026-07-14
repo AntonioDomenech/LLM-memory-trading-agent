@@ -28,6 +28,7 @@ from typing import Any, Final
 
 from agent_benchmark.sec_filing_gemma_contract import (
     BRIER_TARGET_COST_BPS,
+    CANDIDATE_IDS,
     CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
     DEVELOPMENT_FOLD_SPECS,
@@ -169,6 +170,9 @@ DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-oof-prediction-plan-v1"
+)
+DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-policy-replay-plan-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
@@ -1544,6 +1548,99 @@ _DEVELOPMENT_OOF_PREDICTION_PLAN_KEYS: Final[frozenset[str]] = frozenset(
         "production_permitted",
         "development_oof_prediction_plan_sha256",
     }
+)
+_DEVELOPMENT_POLICY_REPLAY_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "contract_sha256",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_store_state_bytes_sha256",
+        "start_store_state_sha256",
+        "start_current_tip_anchor_bytes_sha256",
+        "start_current_tip_anchor_sha256",
+        "start_current_tip_revision",
+        "start_consumed_request_count",
+        "source_development_oof_prediction_plan_sha256",
+        "source_development_oof_prediction_projection_sha256",
+        "source_development_oof_prediction_batch_sha256",
+        "source_raw_prediction_rows_sha256",
+        "source_raw_prediction_tip_sha256",
+        "source_raw_prediction_row_count",
+        "policy_replay_input_count",
+        "policy_replay_input_specs",
+        "policy_replay_input_specs_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+        "candidate_count",
+        "candidate_ids",
+        "candidate_threshold_specs",
+        "candidate_threshold_specs_sha256",
+        "model_variant_count",
+        "model_variant_ids",
+        "candidate_gate_comparison_rule",
+        "cash_episode_sessions",
+        "cash_episode_rule",
+        "unavailable_prediction_rule",
+        "policy_replay_order_rule",
+        "source_development_oof_prediction_batch_access_permitted",
+        "raw_prediction_components_access_permitted",
+        "threshold_evaluation_permitted",
+        "policy_state_transition_permitted",
+        "compact_policy_replay_output_permitted",
+        "numeric_prediction_permitted",
+        "learner_state_access_permitted",
+        "source_feature_batch_access_permitted",
+        "source_label_batch_access_permitted",
+        "label_access_permitted",
+        "outcome_access_permitted",
+        "post_decision_market_data_access_permitted",
+        "post_2018_data_access_permitted",
+        "deferred_training_view_access_permitted",
+        "deferred_training_view_state_access_permitted",
+        "learner_fit_permitted",
+        "learner_refit_permitted",
+        "learner_state_update_permitted",
+        "online_learning_permitted",
+        "candidate_selection_permitted",
+        "scoring_permitted",
+        "prediction_sealing_permitted",
+        "policy_replay_sealing_permitted",
+        "label_release_permitted",
+        "holdout_access_permitted",
+        "model_transport_access_permitted",
+        "network_access_permitted",
+        "raw_prediction_mutation_permitted",
+        "row_drop_permitted",
+        "row_reordering_permitted",
+        "policy_retry_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+        "development_policy_replay_plan_sha256",
+    }
+)
+_DEVELOPMENT_POLICY_REPLAY_MODEL_VARIANT_IDS: Final[tuple[str, ...]] = (
+    "semantic",
+    "ablation",
+)
+_DEVELOPMENT_POLICY_REPLAY_GATE_COMPARISON_RULE: Final[str] = (
+    "probability_gte_and_expected_edge_gte"
+)
+_DEVELOPMENT_POLICY_REPLAY_CASH_EPISODE_RULE: Final[str] = (
+    "accepted_after_close_fill_t_plus_1_exit_t_plus_21_fixed_20_session_"
+    "cash_episode_never_extend_scheduled_or_active_episode"
+)
+_DEVELOPMENT_POLICY_REPLAY_UNAVAILABLE_RULE: Final[str] = (
+    "unavailable_prediction_starts_no_new_cash_episode_"
+    "existing_episode_keeps_original_exit"
+)
+_DEVELOPMENT_POLICY_REPLAY_ORDER_RULE: Final[str] = (
+    "source_raw_prediction_ordinal_ascending_exactly_once"
 )
 _DEVELOPMENT_OOF_PREDICTION_UNAVAILABLE_REASONS: Final[frozenset[str]] = (
     frozenset(
@@ -11526,6 +11623,250 @@ def _expected_development_oof_prediction_capabilities() -> dict[str, bool]:
     }
 
 
+def _expected_development_policy_replay_capabilities() -> dict[str, bool]:
+    """Return the exact threshold/policy-only Phase A authority boundary."""
+
+    return {
+        "source_development_oof_prediction_batch_access_permitted": True,
+        "raw_prediction_components_access_permitted": True,
+        "threshold_evaluation_permitted": True,
+        "policy_state_transition_permitted": True,
+        "compact_policy_replay_output_permitted": True,
+        "numeric_prediction_permitted": False,
+        "learner_state_access_permitted": False,
+        "source_feature_batch_access_permitted": False,
+        "source_label_batch_access_permitted": False,
+        "label_access_permitted": False,
+        "outcome_access_permitted": False,
+        "post_decision_market_data_access_permitted": False,
+        "post_2018_data_access_permitted": False,
+        "deferred_training_view_access_permitted": False,
+        "deferred_training_view_state_access_permitted": False,
+        "learner_fit_permitted": False,
+        "learner_refit_permitted": False,
+        "learner_state_update_permitted": False,
+        "online_learning_permitted": False,
+        "candidate_selection_permitted": False,
+        "scoring_permitted": False,
+        "prediction_sealing_permitted": False,
+        "policy_replay_sealing_permitted": False,
+        "label_release_permitted": False,
+        "holdout_access_permitted": False,
+        "model_transport_access_permitted": False,
+        "network_access_permitted": False,
+        "raw_prediction_mutation_permitted": False,
+        "row_drop_permitted": False,
+        "row_reordering_permitted": False,
+        "policy_retry_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+
+
+def _development_policy_replay_candidate_threshold_specs() -> list[dict[str, Any]]:
+    manifest = build_contract_manifest()
+    predictor = _mapping(
+        manifest.get("predictor"),
+        "development policy replay contract predictor",
+    )
+    raw_grid = predictor.get("candidate_grid")
+    if type(raw_grid) is not list or len(raw_grid) != len(CANDIDATE_IDS):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay contract candidate grid changed"
+        )
+    result: list[dict[str, Any]] = []
+    for ordinal, (raw, candidate_id) in enumerate(
+        zip(raw_grid, CANDIDATE_IDS, strict=True),
+        start=1,
+    ):
+        candidate = _mapping(
+            raw,
+            f"development policy replay contract candidate {ordinal}",
+        )
+        if set(candidate) != {
+            "candidate_id",
+            "probability_gate",
+            "expected_edge_gate",
+        } or candidate.get("candidate_id") != candidate_id:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy replay candidate identity or order changed"
+            )
+        probability_gate = candidate["probability_gate"]
+        expected_edge_gate = candidate["expected_edge_gate"]
+        if (
+            type(probability_gate) not in {int, float}
+            or type(expected_edge_gate) not in {int, float}
+            or not math.isfinite(float(probability_gate))
+            or not math.isfinite(float(expected_edge_gate))
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy replay candidate gates must be finite numbers"
+            )
+        body = {
+            "candidate_ordinal": ordinal,
+            "candidate_id": candidate_id,
+            "probability_gate_hex": float(probability_gate).hex(),
+            "expected_edge_gate_hex": float(expected_edge_gate).hex(),
+        }
+        result.append(
+            {
+                **body,
+                "candidate_threshold_spec_sha256": canonical_sha256(body),
+            }
+        )
+    if predictor.get("candidate_gate_comparison") != (
+        _DEVELOPMENT_POLICY_REPLAY_GATE_COMPARISON_RULE
+    ) or predictor.get("cash_episode_sessions") != HORIZON_SESSIONS:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay contract threshold or episode rule changed"
+        )
+    return result
+
+
+def _validated_development_policy_replay_input_specs(
+    raw: Any,
+) -> list[dict[str, Any]]:
+    if type(raw) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay input specs must be an exact list"
+        )
+    supplied = _plain(raw, "development policy replay input specs")
+    if type(supplied) is not list or not supplied:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay input specs cannot be empty"
+        )
+    expected_keys = frozenset(
+        {
+            "schema_version",
+            "input_ordinal",
+            "source_raw_prediction_row_sha256",
+            "source_feature_row_sha256",
+            "event_binding_sha256",
+            "decision_session",
+            "accession_number",
+            "fold_id",
+            "prediction_fold_context_sha256",
+            "semantic_learner_state_sha256",
+            "ablation_learner_state_sha256",
+            "prediction_status",
+            "unavailable_reason",
+            "numerical_components_sha256",
+            "policy_replay_input_spec_sha256",
+        }
+    )
+    fold_windows = {
+        fold_id: (first, last)
+        for fold_id, _train_cutoff, first, last in DEVELOPMENT_FOLD_SPECS
+    }
+    result: list[dict[str, Any]] = []
+    raw_row_hashes: set[str] = set()
+    feature_row_hashes: set[str] = set()
+    event_hashes: set[str] = set()
+    sessions: set[str] = set()
+    accessions: set[str] = set()
+    prior_session: str | None = None
+    for ordinal, raw_spec in enumerate(supplied, start=1):
+        spec = _mapping(
+            raw_spec,
+            f"development policy replay input {ordinal}",
+        )
+        _expect_keys(
+            spec,
+            expected_keys,
+            f"development policy replay input {ordinal}",
+        )
+        if (
+            spec["schema_version"]
+            != "aapl-sec-gemma-development-policy-replay-input-spec-v1"
+            or _strict_int(
+                spec["input_ordinal"],
+                f"development policy replay input {ordinal} ordinal",
+                minimum=1,
+            )
+            != ordinal
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy replay input schema or order changed"
+            )
+        for field in (
+            "source_raw_prediction_row_sha256",
+            "source_feature_row_sha256",
+            "event_binding_sha256",
+            "prediction_fold_context_sha256",
+            "semantic_learner_state_sha256",
+            "ablation_learner_state_sha256",
+            "numerical_components_sha256",
+        ):
+            _sha256(
+                spec[field],
+                f"development policy replay input {ordinal} {field}",
+            )
+        session = _validated_development_oof_iso_date(
+            spec["decision_session"],
+            f"development policy replay input {ordinal} decision session",
+        )
+        fold_id = spec["fold_id"]
+        window = fold_windows.get(fold_id)
+        accession = spec["accession_number"]
+        if (
+            window is None
+            or not window[0] <= session <= window[1]
+            or prior_session is not None
+            and session <= prior_session
+            or type(accession) is not str
+            or _AAPL_ACCESSION_RE.fullmatch(accession) is None
+            or spec["semantic_learner_state_sha256"]
+            == spec["ablation_learner_state_sha256"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy replay input crossed its frozen chronology, fold, or state pair"
+            )
+        status = spec["prediction_status"]
+        if status == "available_pre_label":
+            if spec["unavailable_reason"] is not None:
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Available development policy replay input has an unavailable reason"
+                )
+        elif status == "unavailable_pre_label":
+            if spec["unavailable_reason"] not in (
+                _DEVELOPMENT_OOF_PREDICTION_UNAVAILABLE_REASONS
+            ):
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Unavailable development policy replay input changed its reason"
+                )
+        else:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy replay input status changed"
+            )
+        _self_hash(
+            spec,
+            "policy_replay_input_spec_sha256",
+            f"development policy replay input {ordinal}",
+        )
+        raw_row_hashes.add(spec["source_raw_prediction_row_sha256"])
+        feature_row_hashes.add(spec["source_feature_row_sha256"])
+        event_hashes.add(spec["event_binding_sha256"])
+        sessions.add(session)
+        accessions.add(accession)
+        prior_session = session
+        result.append(spec)
+    if not all(
+        len(values) == len(result)
+        for values in (
+            raw_row_hashes,
+            feature_row_hashes,
+            event_hashes,
+            sessions,
+            accessions,
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay inputs duplicate a raw row, feature row, event, session, or accession"
+        )
+    return result
+
+
 def _validated_development_oof_prediction_fold_model_specs(
     raw: Any,
     *,
@@ -12192,6 +12533,285 @@ def validate_development_oof_prediction_plan(
     if not hmac.compare_digest(observed, expected):
         raise SecFilingGemmaStageAuthorizationError(
             "Development OOF prediction plan is not externally pinned"
+        )
+    return observed
+
+
+def build_development_policy_replay_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    authenticated_store_state_bytes_sha256: str,
+    source_development_oof_prediction_plan: Mapping[str, Any],
+    source_development_oof_prediction_projection_sha256: str,
+    source_development_oof_prediction_batch_sha256: str,
+    source_raw_prediction_rows_sha256: str,
+    source_raw_prediction_tip_sha256: str,
+    source_raw_prediction_row_count: int,
+    policy_replay_input_specs: Any,
+    independent_current_tip_anchor: Mapping[str, Any],
+    independent_current_tip_anchor_bytes_sha256: str,
+) -> dict[str, Any]:
+    """Authorize only deterministic development threshold and policy replay."""
+
+    state, ledger = _validated_store_snapshot(authenticated_store_snapshot)
+    current_tip = validate_reveal_store_current_tip_anchor(
+        state,
+        independent_current_tip_anchor,
+    )
+    state_bytes_hash = _sha256(
+        authenticated_store_state_bytes_sha256,
+        "development policy replay authenticated state bytes hash",
+    )
+    tip_bytes_hash = _sha256(
+        independent_current_tip_anchor_bytes_sha256,
+        "development policy replay current-tip bytes hash",
+    )
+    expected_state_bytes_hash = hashlib.sha256(
+        _encoded_store_snapshot(state)
+    ).hexdigest()
+    expected_tip_bytes_hash = hashlib.sha256(
+        _encoded_store_snapshot(current_tip)
+    ).hexdigest()
+    if (
+        not hmac.compare_digest(state_bytes_hash, expected_state_bytes_hash)
+        or not hmac.compare_digest(tip_bytes_hash, expected_tip_bytes_hash)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay byte pins crossed their parsed state or tip"
+        )
+
+    consumed_count = _strict_int(
+        ledger["chain"]["consumed_request_count"],
+        "development policy replay consumed request count",
+    )
+    tip_consumed_count = _strict_int(
+        current_tip["consumed_request_count"],
+        "development policy replay current-tip consumed request count",
+    )
+    if consumed_count != 0 or tip_consumed_count != 0:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay requires the untouched zero-consumption store"
+        )
+
+    root_scope_hash = _sha256(
+        development_root_scope_sha256,
+        "development policy replay root scope hash",
+    )
+    source_plan = _mapping(
+        source_development_oof_prediction_plan,
+        "development policy replay source prediction plan",
+    )
+    source_plan_hash = _sha256(
+        source_plan.get("development_oof_prediction_plan_sha256"),
+        "development policy replay source prediction plan hash",
+    )
+    validate_development_oof_prediction_plan(
+        source_plan,
+        expected_development_oof_prediction_plan_sha256=source_plan_hash,
+    )
+    if (
+        source_plan["development_root_scope_sha256"] != root_scope_hash
+        or source_plan["start_consumed_request_count"] != 0
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay source prediction plan crossed its root or store phase"
+        )
+
+    input_specs = _validated_development_policy_replay_input_specs(
+        policy_replay_input_specs
+    )
+    raw_row_count = _strict_int(
+        source_raw_prediction_row_count,
+        "development policy replay source raw prediction row count",
+        minimum=1,
+    )
+    if raw_row_count != len(input_specs):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay input population differs from its raw prediction population"
+        )
+    candidate_specs = _development_policy_replay_candidate_threshold_specs()
+    capabilities = _expected_development_policy_replay_capabilities()
+    body = {
+        "schema_version": DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "plan_kind": "request_free_development_policy_replay",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": root_scope_hash,
+        "start_store_state_bytes_sha256": state_bytes_hash,
+        "start_store_state_sha256": state["state_sha256"],
+        "start_current_tip_anchor_bytes_sha256": tip_bytes_hash,
+        "start_current_tip_anchor_sha256": current_tip["tip_anchor_sha256"],
+        "start_current_tip_revision": current_tip["revision"],
+        "start_consumed_request_count": consumed_count,
+        "source_development_oof_prediction_plan_sha256": source_plan_hash,
+        "source_development_oof_prediction_projection_sha256": _sha256(
+            source_development_oof_prediction_projection_sha256,
+            "development policy replay source prediction projection hash",
+        ),
+        "source_development_oof_prediction_batch_sha256": _sha256(
+            source_development_oof_prediction_batch_sha256,
+            "development policy replay source prediction batch hash",
+        ),
+        "source_raw_prediction_rows_sha256": _sha256(
+            source_raw_prediction_rows_sha256,
+            "development policy replay source raw prediction rows hash",
+        ),
+        "source_raw_prediction_tip_sha256": _sha256(
+            source_raw_prediction_tip_sha256,
+            "development policy replay source raw prediction tip hash",
+        ),
+        "source_raw_prediction_row_count": raw_row_count,
+        "policy_replay_input_count": len(input_specs),
+        "policy_replay_input_specs": input_specs,
+        "policy_replay_input_specs_sha256": canonical_sha256(input_specs),
+        "candidate_sha256": source_plan["candidate_sha256"],
+        "corpus_universe_sha256": source_plan["corpus_universe_sha256"],
+        "calendar_sessions_sha256": source_plan["calendar_sessions_sha256"],
+        "development_cutoff_session": source_plan[
+            "development_cutoff_session"
+        ],
+        "candidate_count": len(CANDIDATE_IDS),
+        "candidate_ids": list(CANDIDATE_IDS),
+        "candidate_threshold_specs": candidate_specs,
+        "candidate_threshold_specs_sha256": canonical_sha256(candidate_specs),
+        "model_variant_count": len(
+            _DEVELOPMENT_POLICY_REPLAY_MODEL_VARIANT_IDS
+        ),
+        "model_variant_ids": list(
+            _DEVELOPMENT_POLICY_REPLAY_MODEL_VARIANT_IDS
+        ),
+        "candidate_gate_comparison_rule": (
+            _DEVELOPMENT_POLICY_REPLAY_GATE_COMPARISON_RULE
+        ),
+        "cash_episode_sessions": HORIZON_SESSIONS,
+        "cash_episode_rule": _DEVELOPMENT_POLICY_REPLAY_CASH_EPISODE_RULE,
+        "unavailable_prediction_rule": (
+            _DEVELOPMENT_POLICY_REPLAY_UNAVAILABLE_RULE
+        ),
+        "policy_replay_order_rule": _DEVELOPMENT_POLICY_REPLAY_ORDER_RULE,
+        **capabilities,
+    }
+    return {
+        **body,
+        "development_policy_replay_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_policy_replay_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_development_policy_replay_plan_sha256: str,
+) -> str:
+    """Validate one exact Phase A threshold/policy-only replay authority."""
+
+    value = _mapping(plan, "development policy replay plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_POLICY_REPLAY_PLAN_KEYS,
+        "development policy replay plan",
+    )
+    input_specs = _validated_development_policy_replay_input_specs(
+        value["policy_replay_input_specs"]
+    )
+    candidate_specs = _development_policy_replay_candidate_threshold_specs()
+    capabilities = _expected_development_policy_replay_capabilities()
+    if any(type(value[field]) is not bool for field in capabilities):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay capabilities must be exact booleans"
+        )
+    for field in (
+        "contract_sha256",
+        "development_root_scope_sha256",
+        "start_store_state_bytes_sha256",
+        "start_store_state_sha256",
+        "start_current_tip_anchor_bytes_sha256",
+        "start_current_tip_anchor_sha256",
+        "source_development_oof_prediction_plan_sha256",
+        "source_development_oof_prediction_projection_sha256",
+        "source_development_oof_prediction_batch_sha256",
+        "source_raw_prediction_rows_sha256",
+        "source_raw_prediction_tip_sha256",
+        "policy_replay_input_specs_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "candidate_threshold_specs_sha256",
+    ):
+        _sha256(value[field], f"development policy replay {field}")
+    integer_expectations = {
+        "start_consumed_request_count": 0,
+        "source_raw_prediction_row_count": len(input_specs),
+        "policy_replay_input_count": len(input_specs),
+        "candidate_count": len(CANDIDATE_IDS),
+        "model_variant_count": len(
+            _DEVELOPMENT_POLICY_REPLAY_MODEL_VARIANT_IDS
+        ),
+        "cash_episode_sessions": HORIZON_SESSIONS,
+    }
+    _strict_int(
+        value["start_current_tip_revision"],
+        "development policy replay start current-tip revision",
+    )
+    for field, expected in integer_expectations.items():
+        if (
+            _strict_int(value[field], f"development policy replay {field}")
+            != expected
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development policy replay count or episode boundary changed"
+            )
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["contract_sha256"]
+        != canonical_sha256(build_contract_manifest())
+        or value["plan_kind"]
+        != "request_free_development_policy_replay"
+        or value["artifact_stage"] != "development"
+        or value["development_cutoff_session"]
+        != STAGE_WINDOWS["development"][1]
+        or type(value["candidate_ids"]) is not list
+        or value["candidate_ids"] != list(CANDIDATE_IDS)
+        or type(value["candidate_threshold_specs"]) is not list
+        or value["candidate_threshold_specs"] != candidate_specs
+        or value["candidate_threshold_specs_sha256"]
+        != canonical_sha256(candidate_specs)
+        or type(value["model_variant_ids"]) is not list
+        or value["model_variant_ids"]
+        != list(_DEVELOPMENT_POLICY_REPLAY_MODEL_VARIANT_IDS)
+        or value["policy_replay_input_specs_sha256"]
+        != canonical_sha256(input_specs)
+        or value["candidate_gate_comparison_rule"]
+        != _DEVELOPMENT_POLICY_REPLAY_GATE_COMPARISON_RULE
+        or value["cash_episode_rule"]
+        != _DEVELOPMENT_POLICY_REPLAY_CASH_EPISODE_RULE
+        or value["unavailable_prediction_rule"]
+        != _DEVELOPMENT_POLICY_REPLAY_UNAVAILABLE_RULE
+        or value["policy_replay_order_rule"]
+        != _DEVELOPMENT_POLICY_REPLAY_ORDER_RULE
+        or any(
+            value[field] is not expected
+            for field, expected in capabilities.items()
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay identity, order, episode, or capability boundary changed"
+        )
+    observed = _self_hash(
+        value,
+        "development_policy_replay_plan_sha256",
+        "development policy replay plan",
+    )
+    expected = _sha256(
+        expected_development_policy_replay_plan_sha256,
+        "expected development policy replay plan hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development policy replay plan is not externally pinned"
         )
     return observed
 
@@ -13406,6 +14026,7 @@ __all__ = [
     "DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
     "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
@@ -13449,6 +14070,7 @@ __all__ = [
     "build_development_label_assembly_plan",
     "build_development_oof_learner_fit_plan",
     "build_development_oof_prediction_plan",
+    "build_development_policy_replay_plan",
     "build_development_training_membership_assembly_plan",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
@@ -13477,6 +14099,7 @@ __all__ = [
     "validate_development_label_assembly_plan",
     "validate_development_oof_learner_fit_plan",
     "validate_development_oof_prediction_plan",
+    "validate_development_policy_replay_plan",
     "validate_development_training_membership_assembly_plan",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",

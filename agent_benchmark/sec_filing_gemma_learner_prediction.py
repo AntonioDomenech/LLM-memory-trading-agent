@@ -2560,6 +2560,33 @@ def _validated_prediction_batch_structure(raw: Any) -> dict[str, Any]:
     return batch
 
 
+def validate_owned_development_oof_prediction_batch_structure(
+    batch: Mapping[str, Any],
+    *,
+    expected_prediction_batch_sha256: str,
+) -> str:
+    """Validate and externally pin a raw OOF batch without predicting again.
+
+    This deliberately narrower validator is for downstream deterministic
+    consumers such as threshold/policy replay.  It checks the complete exact
+    JSON shape, row chain, chronology, statuses, canonical numeric components,
+    capability flags, and caller-supplied batch pin, but it never reconstructs
+    a learner or invokes a prediction boundary.
+    """
+
+    value = _validated_prediction_batch_structure(batch)
+    observed = value["prediction_batch_sha256"]
+    expected = _sha256(
+        expected_prediction_batch_sha256,
+        "expected owned development OOF prediction-batch hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaLearnerPredictionError(
+            "Development OOF prediction batch is not externally pinned"
+        )
+    return observed
+
+
 def validate_owned_development_oof_prediction_batch(
     batch: Mapping[str, Any],
     *,
@@ -2762,5 +2789,6 @@ __all__ = [
     "derive_development_oof_prediction_fold_model_bundle",
     "derive_development_oof_prediction_fold_model_specs",
     "derive_development_oof_prediction_input_specs",
+    "validate_owned_development_oof_prediction_batch_structure",
     "validate_owned_development_oof_prediction_batch",
 ]

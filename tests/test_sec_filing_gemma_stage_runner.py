@@ -39,6 +39,7 @@ from agent_benchmark.sec_filing_gemma_stage_runner import (
     run_owned_development_model_batch,
     run_owned_development_oof_learner_fit_batch,
     run_owned_development_oof_prediction_batch,
+    run_owned_development_policy_replay_batch,
     run_owned_development_sec_root,
     run_owned_development_training_membership_batch,
     run_owned_stage_model_batch,
@@ -48,6 +49,9 @@ from agent_benchmark.sec_filing_gemma_learner_fit import (
 )
 from agent_benchmark.sec_filing_gemma_learner_prediction import (
     OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION,
+)
+from agent_benchmark.sec_filing_gemma_policy_replay import (
+    OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_training_membership import (
     OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
@@ -665,6 +669,88 @@ def _rehash_development_oof_prediction_projection(
     return projection
 
 
+def _development_policy_replay_projection(
+    *, scope_sha256: str = "9" * 64
+) -> dict[str, Any]:
+    input_specs = [{"input_ordinal": "POLICY-INPUT-SPECS"}]
+    source = {
+        "schema_version": "test-owned-oof-prediction-batch-v1",
+        "development_root_scope_sha256": scope_sha256,
+        "development_oof_prediction_plan_sha256": "1" * 64,
+        "prediction_batch_sha256": "2" * 64,
+        "raw_prediction_rows_sha256": "3" * 64,
+        "raw_prediction_tip_sha256": "4" * 64,
+        "prediction_event_count": 1,
+        "raw_prediction_rows": [{"raw_prediction_row_sha256": "4" * 64}],
+        "contract_sha256": "a" * 64,
+        "candidate_sha256": "b" * 64,
+        "corpus_universe_sha256": "c" * 64,
+        "calendar_sessions_sha256": "d" * 64,
+        "development_cutoff_session": "2018-12-31",
+        "model_variant_count": 2,
+        "model_variant_ids": ["semantic", "ablation"],
+    }
+    plan = {
+        "development_policy_replay_plan_sha256": "6" * 64,
+        "development_root_scope_sha256": scope_sha256,
+        "source_development_oof_prediction_plan_sha256": "1" * 64,
+        "source_development_oof_prediction_projection_sha256": "7" * 64,
+        "source_development_oof_prediction_batch_sha256": "2" * 64,
+        "source_raw_prediction_rows_sha256": "3" * 64,
+        "source_raw_prediction_tip_sha256": "4" * 64,
+        "source_raw_prediction_row_count": 1,
+        "policy_replay_input_count": 1,
+        "policy_replay_input_specs": input_specs,
+        "policy_replay_input_specs_sha256": canonical_sha256(input_specs),
+        "contract_sha256": "a" * 64,
+        "candidate_sha256": "b" * 64,
+        "corpus_universe_sha256": "c" * 64,
+        "calendar_sessions_sha256": "d" * 64,
+        "development_cutoff_session": "2018-12-31",
+        "candidate_count": 4,
+        "candidate_ids": ["p50_e0", "p55_e0", "p50_e25", "p55_e25"],
+        "model_variant_count": 2,
+        "model_variant_ids": ["semantic", "ablation"],
+        "candidate_gate_comparison_rule": (
+            "probability_gte_and_expected_edge_gte"
+        ),
+        "cash_episode_rule": (
+            "accepted_after_close_fill_t_plus_1_exit_t_plus_21_fixed_20_session_"
+            "cash_episode_never_extend_scheduled_or_active_episode"
+        ),
+        "unavailable_prediction_rule": (
+            "unavailable_prediction_starts_no_new_cash_episode_"
+            "existing_episode_keeps_original_exit"
+        ),
+        "input_order_rule": (
+            "source_raw_prediction_ordinal_ascending_exactly_once"
+        ),
+    }
+    body = {
+        "schema_version": (
+            OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION
+        ),
+        "development_policy_replay_plan": plan,
+        "source_development_oof_prediction_batch": source,
+    }
+    return {
+        **body,
+        "policy_replay_projection_sha256": canonical_sha256(body),
+    }
+
+
+def _rehash_development_policy_replay_projection(
+    projection: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        key: projection[key]
+        for key in projection
+        if key != "policy_replay_projection_sha256"
+    }
+    projection["policy_replay_projection_sha256"] = canonical_sha256(body)
+    return projection
+
+
 def _component_plan() -> dict[str, Any]:
     return {
         "documents": [
@@ -1023,6 +1109,7 @@ def test_public_runner_signature_exposes_no_effect_authority() -> None:
         "run_owned_development_label_batch",
         "run_owned_development_oof_learner_fit_batch",
         "run_owned_development_oof_prediction_batch",
+        "run_owned_development_policy_replay_batch",
         "run_owned_development_training_membership_batch",
         "run_owned_development_market_batch",
         "run_owned_development_model_batch",
@@ -1155,7 +1242,10 @@ def test_feature_runner_consumes_only_compact_causal_projection_and_is_non_autho
     projection = _development_feature_projection(plan)
     loader_calls: list[str] = []
 
-    def load_projection(*, development_root_scope_sha256: str) -> dict[str, Any]:
+    def load_projection(
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
         loader_calls.append(development_root_scope_sha256)
         return copy.deepcopy(projection)
 
@@ -1387,7 +1477,10 @@ def test_label_runner_consumes_only_owned_compact_projection(
     projection = _development_label_projection(label_plan, source_batch)
     loader_calls: list[str] = []
 
-    def load_projection(*, development_root_scope_sha256: str) -> dict[str, Any]:
+    def load_projection(
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
         loader_calls.append(development_root_scope_sha256)
         return copy.deepcopy(projection)
 
@@ -2048,6 +2141,369 @@ def test_oof_prediction_runner_rejects_crossed_projection_before_prediction(
 
     checksum = _development_oof_prediction_projection(scope_sha256=scope)
     checksum["prediction_projection_sha256"] = "0" * 64
+    rejected(checksum, "checksum changed")
+
+
+def test_policy_replay_runner_uses_one_exact_projection_and_rebuild_validates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signature = inspect.signature(run_owned_development_policy_replay_batch)
+    assert tuple(signature.parameters) == (
+        "reveal_store",
+        "development_root_scope_sha256",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+    projection = _development_policy_replay_projection(scope_sha256=scope)
+    assert set(projection) == {
+        "schema_version",
+        "development_policy_replay_plan",
+        "source_development_oof_prediction_batch",
+        "policy_replay_projection_sha256",
+    }
+    assert (
+        projection["schema_version"]
+        == OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION
+    )
+    assert projection["policy_replay_projection_sha256"] == canonical_sha256(
+        {
+            key: projection[key]
+            for key in projection
+            if key != "policy_replay_projection_sha256"
+        }
+    )
+    loader_calls: list[str] = []
+
+    def load_projection(
+        owned_store: SecFilingGemmaRevealStore,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        assert owned_store is store
+        loader_calls.append(development_root_scope_sha256)
+        if len(loader_calls) != 1:
+            raise AssertionError("Policy replay projection was loaded more than once")
+        return copy.deepcopy(projection)
+
+    monkeypatch.setattr(
+        SecFilingGemmaRevealStore,
+        "_load_owned_development_policy_replay_projection",
+        load_projection,
+    )
+
+    def forbidden_loader(_owned_store: SecFilingGemmaRevealStore, **_kwargs: Any) -> None:
+        raise AssertionError("Policy replay runner requested another store projection")
+
+    for loader_name in (
+        "_load_owned_development_oof_prediction_projection",
+        "_load_owned_development_oof_learner_fit_projection",
+        "_load_owned_development_training_membership_projection",
+        "_load_owned_development_feature_inputs",
+        "_load_owned_development_label_projection",
+    ):
+        monkeypatch.setattr(
+            SecFilingGemmaRevealStore,
+            loader_name,
+            forbidden_loader,
+        )
+
+    plan_calls: list[dict[str, Any]] = []
+    source_calls: list[dict[str, Any]] = []
+    derived_calls: list[dict[str, Any]] = []
+
+    def validate_plan(
+        plan: dict[str, Any],
+        *,
+        expected_development_policy_replay_plan_sha256: str,
+    ) -> str:
+        plan_calls.append(copy.deepcopy(plan))
+        assert expected_development_policy_replay_plan_sha256 == "6" * 64
+        return expected_development_policy_replay_plan_sha256
+
+    def validate_source(
+        source: dict[str, Any],
+        *,
+        expected_prediction_batch_sha256: str,
+    ) -> str:
+        source_calls.append(copy.deepcopy(source))
+        assert expected_prediction_batch_sha256 == "2" * 64
+        return expected_prediction_batch_sha256
+
+    def derive_specs(
+        source: dict[str, Any],
+        *,
+        expected_source_prediction_batch_sha256: str,
+    ) -> list[dict[str, Any]]:
+        derived_calls.append(copy.deepcopy(source))
+        assert expected_source_prediction_batch_sha256 == "2" * 64
+        return copy.deepcopy(
+            projection["development_policy_replay_plan"][
+                "policy_replay_input_specs"
+            ]
+        )
+
+    monkeypatch.setattr(
+        runner_module, "validate_development_policy_replay_plan", validate_plan
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_oof_prediction_batch_structure",
+        validate_source,
+    )
+    monkeypatch.setattr(
+        runner_module, "derive_development_policy_replay_input_specs", derive_specs
+    )
+
+    built_batch = {
+        "schema_version": "test-owned-development-policy-replay-batch-v1",
+        "policy_replay_batch_sha256": "f" * 64,
+        "labels_included": False,
+        "outcomes_included": False,
+        "market_prices_included": False,
+        "model_transport_authorized": False,
+        "network_access_authorized": False,
+        "learner_fit_authorized": False,
+        "numeric_prediction_authorized": False,
+        "threshold_comparison_rule": (
+            "probability_gte_and_expected_edge_gte"
+        ),
+        "cash_episode_rule": (
+            "accepted_after_close_fill_t_plus_1_exit_t_plus_21_fixed_20_session_"
+            "cash_episode_never_extend_scheduled_or_active_episode"
+        ),
+        "unavailable_prediction_rule": (
+            "unavailable_prediction_starts_no_new_cash_episode_"
+            "existing_episode_keeps_original_exit"
+        ),
+        "input_order_rule": (
+            "source_raw_prediction_ordinal_ascending_exactly_once"
+        ),
+    }
+    build_calls: list[dict[str, Any]] = []
+    rebuild_validation_calls: list[dict[str, Any]] = []
+
+    def build_batch(**kwargs: Any) -> dict[str, Any]:
+        build_calls.append(copy.deepcopy(kwargs))
+        return built_batch
+
+    def validate_batch(batch: dict[str, Any], **kwargs: Any) -> str:
+        assert batch is built_batch
+        rebuild_validation_calls.append(copy.deepcopy(kwargs))
+        return batch["policy_replay_batch_sha256"]
+
+    monkeypatch.setattr(
+        runner_module, "build_owned_development_policy_replay_batch", build_batch
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_policy_replay_batch",
+        validate_batch,
+    )
+
+    result = run_owned_development_policy_replay_batch(
+        reveal_store=store,
+        development_root_scope_sha256=scope,
+    )
+    assert loader_calls == [scope]
+    assert len(plan_calls) == len(source_calls) == len(derived_calls) == 1
+    assert len(build_calls) == len(rebuild_validation_calls) == 1
+    assert set(build_calls[0]) == {
+        "source_prediction_batch",
+        "expected_source_prediction_batch_sha256",
+        "expected_development_policy_replay_plan_sha256",
+        "expected_source_prediction_projection_sha256",
+    }
+    assert build_calls[0]["expected_source_prediction_batch_sha256"] == "2" * 64
+    assert (
+        build_calls[0]["expected_development_policy_replay_plan_sha256"]
+        == "6" * 64
+    )
+    assert (
+        build_calls[0]["expected_source_prediction_projection_sha256"]
+        == "7" * 64
+    )
+    assert set(rebuild_validation_calls[0]) == {
+        "source_prediction_batch",
+        "expected_source_prediction_batch_sha256",
+        "expected_development_policy_replay_plan_sha256",
+        "expected_source_prediction_projection_sha256",
+        "expected_policy_replay_batch_sha256",
+    }
+    assert result == built_batch
+    assert result is not built_batch
+    result["mutated_by_caller"] = True
+    assert "mutated_by_caller" not in built_batch
+    assert "mutated_by_caller" not in projection
+
+    serialized_projection = json.dumps(projection, sort_keys=True)
+    for forbidden in (
+        "labels",
+        "outcomes",
+        "market_prices",
+        "learner_states",
+        "training_feature_matrices",
+        "adjusted_open",
+        "adjusted_close",
+    ):
+        assert forbidden not in serialized_projection
+    source = inspect.getsource(run_owned_development_policy_replay_batch)
+    for forbidden in (
+        ".fit(",
+        ".predict(",
+        "call_ollama",
+        "network",
+        "transport",
+        "label",
+        "outcome",
+        "market",
+    ):
+        assert forbidden not in source
+
+    store._load_owned_development_policy_replay_projection = (
+        lambda **_kwargs: copy.deepcopy(projection)
+    )
+    with pytest.raises(TypeError, match="must not shadow"):
+        run_owned_development_policy_replay_batch(
+            reveal_store=store,
+            development_root_scope_sha256=scope,
+        )
+
+
+def test_policy_replay_runner_rejects_every_crossing_before_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(tmp_path)
+    scope = "9" * 64
+    input_specs = [{"input_ordinal": "POLICY-INPUT-SPECS"}]
+
+    def validate_plan(
+        _plan: dict[str, Any],
+        *,
+        expected_development_policy_replay_plan_sha256: str,
+    ) -> str:
+        return expected_development_policy_replay_plan_sha256
+
+    def validate_source(
+        _source: dict[str, Any],
+        *,
+        expected_prediction_batch_sha256: str,
+    ) -> str:
+        return expected_prediction_batch_sha256
+
+    monkeypatch.setattr(
+        runner_module, "validate_development_policy_replay_plan", validate_plan
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "validate_owned_development_oof_prediction_batch_structure",
+        validate_source,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "derive_development_policy_replay_input_specs",
+        lambda _source, **_kwargs: copy.deepcopy(input_specs),
+    )
+
+    def forbidden_builder(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("Crossed policy projection reached replay arithmetic")
+
+    monkeypatch.setattr(
+        runner_module,
+        "build_owned_development_policy_replay_batch",
+        forbidden_builder,
+    )
+
+    def rejected(projection: dict[str, Any], match: str) -> None:
+        calls = 0
+
+        def load_once(
+            owned_store: SecFilingGemmaRevealStore,
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            nonlocal calls
+            assert owned_store is store
+            calls += 1
+            if calls > 1:
+                raise AssertionError("Invalid projection triggered a duplicate load")
+            return copy.deepcopy(projection)
+
+        monkeypatch.setattr(
+            SecFilingGemmaRevealStore,
+            "_load_owned_development_policy_replay_projection",
+            load_once,
+        )
+        with pytest.raises(SecFilingGemmaStageRunnerError, match=match):
+            run_owned_development_policy_replay_batch(
+                reveal_store=store,
+                development_root_scope_sha256=scope,
+            )
+        assert calls == 1
+
+    extra = _development_policy_replay_projection(scope_sha256=scope)
+    extra["source_feature_batch"] = {}
+    rejected(extra, "not exact")
+
+    schema = _development_policy_replay_projection(scope_sha256=scope)
+    schema["schema_version"] = "changed-schema"
+    _rehash_development_policy_replay_projection(schema)
+    rejected(schema, "schema changed")
+
+    mutations: list[tuple[str, str, Any]] = [
+        ("plan", "development_root_scope_sha256", "0" * 64),
+        ("source", "development_root_scope_sha256", "0" * 64),
+        ("source", "development_oof_prediction_plan_sha256", "0" * 64),
+        ("source", "prediction_batch_sha256", "0" * 64),
+        ("source", "raw_prediction_rows_sha256", "0" * 64),
+        ("source", "raw_prediction_tip_sha256", "0" * 64),
+        ("source", "prediction_event_count", 2),
+        ("plan", "contract_sha256", "0" * 64),
+        ("plan", "candidate_sha256", "0" * 64),
+        ("plan", "corpus_universe_sha256", "0" * 64),
+        ("plan", "calendar_sessions_sha256", "0" * 64),
+        ("plan", "development_cutoff_session", "2017-12-29"),
+        ("source", "model_variant_count", 3),
+        ("source", "model_variant_ids", ["semantic", "changed"]),
+    ]
+    for container, field, replacement in mutations:
+        crossed = _development_policy_replay_projection(scope_sha256=scope)
+        key = (
+            "development_policy_replay_plan"
+            if container == "plan"
+            else "source_development_oof_prediction_batch"
+        )
+        crossed[key][field] = replacement
+        _rehash_development_policy_replay_projection(crossed)
+        rejected(crossed, "crossed its ancestry")
+
+    crossed_count = _development_policy_replay_projection(scope_sha256=scope)
+    crossed_count["development_policy_replay_plan"][
+        "source_raw_prediction_row_count"
+    ] = 2
+    _rehash_development_policy_replay_projection(crossed_count)
+    rejected(crossed_count, "crossed its ancestry")
+
+    crossed_specs = _development_policy_replay_projection(scope_sha256=scope)
+    crossed_specs["development_policy_replay_plan"][
+        "policy_replay_input_specs"
+    ] = [{"input_ordinal": "CHANGED"}]
+    crossed_specs["development_policy_replay_plan"][
+        "policy_replay_input_specs_sha256"
+    ] = canonical_sha256(
+        crossed_specs["development_policy_replay_plan"][
+            "policy_replay_input_specs"
+        ]
+    )
+    _rehash_development_policy_replay_projection(crossed_specs)
+    rejected(crossed_specs, "crossed its ancestry")
+
+    checksum = _development_policy_replay_projection(scope_sha256=scope)
+    checksum["policy_replay_projection_sha256"] = "0" * 64
     rejected(checksum, "checksum changed")
 
 

@@ -62,6 +62,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION,
+    DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
@@ -99,6 +100,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_label_assembly_plan,
     build_development_oof_learner_fit_plan,
     build_development_oof_prediction_plan,
+    build_development_policy_replay_plan,
     build_development_training_membership_assembly_plan,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
@@ -126,6 +128,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_label_assembly_plan,
     validate_development_oof_learner_fit_plan,
     validate_development_oof_prediction_plan,
+    validate_development_policy_replay_plan,
     validate_development_training_membership_assembly_plan,
     validate_development_root_carry_in_reader_receipt,
     validate_development_model_execution_abort,
@@ -2753,6 +2756,121 @@ def _build_development_oof_prediction_plan_for_test(
         prediction_input_specs=input_specs,
         independent_current_tip_anchor=reader_tip,
     )
+
+
+def _development_policy_replay_input_specs(
+    prediction_plan: dict,
+) -> list[dict]:
+    fold_specs = {
+        item["fold_id"]: item
+        for item in prediction_plan["prediction_fold_model_specs"]
+    }
+    result: list[dict] = []
+    for ordinal, prediction_input in enumerate(
+        prediction_plan["prediction_input_specs"], start=1
+    ):
+        fold = fold_specs[prediction_input["fold_id"]]
+        body = {
+            "schema_version": (
+                "aapl-sec-gemma-development-policy-replay-input-spec-v1"
+            ),
+            "input_ordinal": ordinal,
+            "source_raw_prediction_row_sha256": _h(
+                f"policy replay raw row {ordinal}"
+            ),
+            "source_feature_row_sha256": prediction_input[
+                "source_feature_row_sha256"
+            ],
+            "event_binding_sha256": prediction_input[
+                "event_binding_sha256"
+            ],
+            "decision_session": prediction_input["decision_session"],
+            "accession_number": prediction_input["accession_number"],
+            "fold_id": prediction_input["fold_id"],
+            "prediction_fold_context_sha256": fold[
+                "prediction_fold_context_sha256"
+            ],
+            "semantic_learner_state_sha256": fold[
+                "semantic_learner_state_sha256"
+            ],
+            "ablation_learner_state_sha256": fold[
+                "ablation_learner_state_sha256"
+            ],
+            "prediction_status": (
+                "available_pre_label"
+                if prediction_input["prediction_available"]
+                else "unavailable_pre_label"
+            ),
+            "unavailable_reason": prediction_input["unavailable_reason"],
+            "numerical_components_sha256": _h(
+                f"policy replay numerical components {ordinal}"
+            ),
+        }
+        result.append(
+            {
+                **body,
+                "policy_replay_input_spec_sha256": canonical_sha256(body),
+            }
+        )
+    return result
+
+
+def _development_policy_replay_plan_fixture() -> tuple[
+    dict, dict, dict, list[dict], dict
+]:
+    state, reader_tip, _fit_plan, _fold_specs, _prediction_specs, prediction_plan = (
+        _development_oof_prediction_plan_fixture()
+    )
+    replay_specs = _development_policy_replay_input_specs(prediction_plan)
+    encoded_state = (
+        json.dumps(
+            state,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    encoded_tip = (
+        json.dumps(
+            reader_tip,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    plan = build_development_policy_replay_plan(
+        state,
+        development_root_scope_sha256=prediction_plan[
+            "development_root_scope_sha256"
+        ],
+        authenticated_store_state_bytes_sha256=hashlib.sha256(
+            encoded_state
+        ).hexdigest(),
+        source_development_oof_prediction_plan=prediction_plan,
+        source_development_oof_prediction_projection_sha256=_h(
+            "policy replay source prediction projection"
+        ),
+        source_development_oof_prediction_batch_sha256=_h(
+            "policy replay source prediction batch"
+        ),
+        source_raw_prediction_rows_sha256=_h(
+            "policy replay source raw rows"
+        ),
+        source_raw_prediction_tip_sha256=_h(
+            "policy replay source raw tip"
+        ),
+        source_raw_prediction_row_count=len(replay_specs),
+        policy_replay_input_specs=replay_specs,
+        independent_current_tip_anchor=reader_tip,
+        independent_current_tip_anchor_bytes_sha256=hashlib.sha256(
+            encoded_tip
+        ).hexdigest(),
+    )
+    return state, reader_tip, prediction_plan, replay_specs, plan
 
 
 def _development_market_fixture() -> tuple[dict, dict, dict, dict, dict]:
@@ -6999,5 +7117,288 @@ def test_development_oof_prediction_plan_capabilities_types_and_pins_fail_closed
             DictSubclass(plan),
             expected_development_oof_prediction_plan_sha256=plan[
                 "development_oof_prediction_plan_sha256"
+            ],
+        )
+
+
+def test_development_policy_replay_plan_is_exact_private_and_deterministic() -> None:
+    state, reader_tip, prediction_plan, replay_specs, plan = (
+        _development_policy_replay_plan_fixture()
+    )
+    state_before = copy.deepcopy(state)
+    tip_before = copy.deepcopy(reader_tip)
+    allowed = {
+        "source_development_oof_prediction_batch_access_permitted",
+        "raw_prediction_components_access_permitted",
+        "threshold_evaluation_permitted",
+        "policy_state_transition_permitted",
+        "compact_policy_replay_output_permitted",
+    }
+    denied = {
+        "numeric_prediction_permitted",
+        "learner_state_access_permitted",
+        "source_feature_batch_access_permitted",
+        "source_label_batch_access_permitted",
+        "label_access_permitted",
+        "outcome_access_permitted",
+        "post_decision_market_data_access_permitted",
+        "post_2018_data_access_permitted",
+        "deferred_training_view_access_permitted",
+        "deferred_training_view_state_access_permitted",
+        "learner_fit_permitted",
+        "learner_refit_permitted",
+        "learner_state_update_permitted",
+        "online_learning_permitted",
+        "candidate_selection_permitted",
+        "scoring_permitted",
+        "prediction_sealing_permitted",
+        "policy_replay_sealing_permitted",
+        "label_release_permitted",
+        "holdout_access_permitted",
+        "model_transport_access_permitted",
+        "network_access_permitted",
+        "raw_prediction_mutation_permitted",
+        "row_drop_permitted",
+        "row_reordering_permitted",
+        "policy_retry_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+    }
+    identity = {
+        "schema_version",
+        "contract_version",
+        "contract_sha256",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_store_state_bytes_sha256",
+        "start_store_state_sha256",
+        "start_current_tip_anchor_bytes_sha256",
+        "start_current_tip_anchor_sha256",
+        "start_current_tip_revision",
+        "start_consumed_request_count",
+        "source_development_oof_prediction_plan_sha256",
+        "source_development_oof_prediction_projection_sha256",
+        "source_development_oof_prediction_batch_sha256",
+        "source_raw_prediction_rows_sha256",
+        "source_raw_prediction_tip_sha256",
+        "source_raw_prediction_row_count",
+        "policy_replay_input_count",
+        "policy_replay_input_specs",
+        "policy_replay_input_specs_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+        "candidate_count",
+        "candidate_ids",
+        "candidate_threshold_specs",
+        "candidate_threshold_specs_sha256",
+        "model_variant_count",
+        "model_variant_ids",
+        "candidate_gate_comparison_rule",
+        "cash_episode_sessions",
+        "cash_episode_rule",
+        "unavailable_prediction_rule",
+        "policy_replay_order_rule",
+        "development_policy_replay_plan_sha256",
+    }
+    assert set(plan) == identity | allowed | denied
+    assert plan["schema_version"] == DEVELOPMENT_POLICY_REPLAY_PLAN_SCHEMA_VERSION
+    assert plan["start_store_state_sha256"] == state["state_sha256"]
+    assert plan["start_current_tip_anchor_sha256"] == reader_tip[
+        "tip_anchor_sha256"
+    ]
+    assert plan["start_current_tip_revision"] == reader_tip["revision"]
+    assert plan["start_consumed_request_count"] == 0
+    assert plan["source_development_oof_prediction_plan_sha256"] == (
+        prediction_plan["development_oof_prediction_plan_sha256"]
+    )
+    assert plan["source_raw_prediction_row_count"] == len(replay_specs)
+    assert plan["policy_replay_input_count"] == len(replay_specs)
+    assert plan["policy_replay_input_specs"] == replay_specs
+    assert plan["candidate_ids"] == [
+        "p50_e0",
+        "p55_e0",
+        "p50_e25",
+        "p55_e25",
+    ]
+    assert [
+        spec["probability_gate_hex"]
+        for spec in plan["candidate_threshold_specs"]
+    ] == [(0.50).hex(), (0.55).hex(), (0.50).hex(), (0.55).hex()]
+    assert [
+        spec["expected_edge_gate_hex"]
+        for spec in plan["candidate_threshold_specs"]
+    ] == [(0.0).hex(), (0.0).hex(), (0.0025).hex(), (0.0025).hex()]
+    assert plan["model_variant_ids"] == ["semantic", "ablation"]
+    assert plan["candidate_gate_comparison_rule"] == (
+        "probability_gte_and_expected_edge_gte"
+    )
+    assert plan["cash_episode_sessions"] == 20
+    assert "never_extend" in plan["cash_episode_rule"]
+    assert "starts_no_new_cash_episode" in plan["unavailable_prediction_rule"]
+    for field in allowed:
+        assert plan[field] is True
+    for field in denied:
+        assert plan[field] is False
+    encoded = json.dumps(plan, sort_keys=True, separators=(",", ":"))
+    for forbidden in (
+        '"source_development_oof_prediction_plan":',
+        '"source_label_batch":',
+        '"labels":',
+        '"outcomes":',
+        '"prices":',
+        "intermediate_frozen_through_2018",
+        "2019-01-01",
+        "2023-12-31",
+    ):
+        assert forbidden not in encoded
+    assert validate_development_policy_replay_plan(
+        plan,
+        expected_development_policy_replay_plan_sha256=plan[
+            "development_policy_replay_plan_sha256"
+        ],
+    ) == plan["development_policy_replay_plan_sha256"]
+    assert state == state_before
+    assert reader_tip == tip_before
+
+
+def test_development_policy_replay_plan_rejects_crossed_bytes_and_consumed_store() -> None:
+    state, reader_tip, prediction_plan, replay_specs, _plan = (
+        _development_policy_replay_plan_fixture()
+    )
+    encoded_tip = (
+        json.dumps(reader_tip, indent=2, sort_keys=True, ensure_ascii=True)
+        + "\n"
+    ).encode("utf-8")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="byte pins crossed",
+    ):
+        build_development_policy_replay_plan(
+            state,
+            development_root_scope_sha256=prediction_plan[
+                "development_root_scope_sha256"
+            ],
+            authenticated_store_state_bytes_sha256=_h("crossed state bytes"),
+            source_development_oof_prediction_plan=prediction_plan,
+            source_development_oof_prediction_projection_sha256=_h(
+                "policy replay source prediction projection"
+            ),
+            source_development_oof_prediction_batch_sha256=_h(
+                "policy replay source prediction batch"
+            ),
+            source_raw_prediction_rows_sha256=_h(
+                "policy replay source raw rows"
+            ),
+            source_raw_prediction_tip_sha256=_h(
+                "policy replay source raw tip"
+            ),
+            source_raw_prediction_row_count=len(replay_specs),
+            policy_replay_input_specs=replay_specs,
+            independent_current_tip_anchor=reader_tip,
+            independent_current_tip_anchor_bytes_sha256=hashlib.sha256(
+                encoded_tip
+            ).hexdigest(),
+        )
+
+    consumed_state, _pin, _entry, _grant, consumed_tip = _grant_context(1)
+    encoded_state = (
+        json.dumps(consumed_state, indent=2, sort_keys=True, ensure_ascii=True)
+        + "\n"
+    ).encode("utf-8")
+    encoded_consumed_tip = (
+        json.dumps(consumed_tip, indent=2, sort_keys=True, ensure_ascii=True)
+        + "\n"
+    ).encode("utf-8")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="zero-consumption",
+    ):
+        build_development_policy_replay_plan(
+            consumed_state,
+            development_root_scope_sha256=prediction_plan[
+                "development_root_scope_sha256"
+            ],
+            authenticated_store_state_bytes_sha256=hashlib.sha256(
+                encoded_state
+            ).hexdigest(),
+            source_development_oof_prediction_plan=prediction_plan,
+            source_development_oof_prediction_projection_sha256=_h(
+                "policy replay source prediction projection"
+            ),
+            source_development_oof_prediction_batch_sha256=_h(
+                "policy replay source prediction batch"
+            ),
+            source_raw_prediction_rows_sha256=_h(
+                "policy replay source raw rows"
+            ),
+            source_raw_prediction_tip_sha256=_h(
+                "policy replay source raw tip"
+            ),
+            source_raw_prediction_row_count=len(replay_specs),
+            policy_replay_input_specs=replay_specs,
+            independent_current_tip_anchor=consumed_tip,
+            independent_current_tip_anchor_bytes_sha256=hashlib.sha256(
+                encoded_consumed_tip
+            ).hexdigest(),
+        )
+
+
+def test_development_policy_replay_plan_tampering_fails_closed() -> None:
+    _state, _tip, _prediction_plan, _replay_specs, plan = (
+        _development_policy_replay_plan_fixture()
+    )
+    for field, replacement in (
+        ("threshold_evaluation_permitted", False),
+        ("label_access_permitted", True),
+        ("scoring_permitted", True),
+        ("learner_refit_permitted", True),
+        ("deferred_training_view_access_permitted", True),
+        ("post_2018_data_access_permitted", True),
+        ("network_access_permitted", True),
+        ("production_permitted", True),
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = replacement
+        _rehash(changed, "development_policy_replay_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_policy_replay_plan(
+                changed,
+                expected_development_policy_replay_plan_sha256=changed[
+                    "development_policy_replay_plan_sha256"
+                ],
+            )
+
+    reordered = copy.deepcopy(plan)
+    reordered["candidate_ids"].reverse()
+    _rehash(reordered, "development_policy_replay_plan_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        validate_development_policy_replay_plan(
+            reordered,
+            expected_development_policy_replay_plan_sha256=reordered[
+                "development_policy_replay_plan_sha256"
+            ],
+        )
+
+    crossed_input = copy.deepcopy(plan)
+    crossed_input["policy_replay_input_specs"][0][
+        "decision_session"
+    ] = "2019-01-02"
+    _rehash(
+        crossed_input["policy_replay_input_specs"][0],
+        "policy_replay_input_spec_sha256",
+    )
+    crossed_input["policy_replay_input_specs_sha256"] = canonical_sha256(
+        crossed_input["policy_replay_input_specs"]
+    )
+    _rehash(crossed_input, "development_policy_replay_plan_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        validate_development_policy_replay_plan(
+            crossed_input,
+            expected_development_policy_replay_plan_sha256=crossed_input[
+                "development_policy_replay_plan_sha256"
             ],
         )

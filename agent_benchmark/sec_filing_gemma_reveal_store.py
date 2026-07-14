@@ -109,10 +109,17 @@ from agent_benchmark.sec_filing_gemma_learner_fit import (
 from agent_benchmark.sec_filing_gemma_learner_prediction import (
     OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION,
     SecFilingGemmaLearnerPredictionError,
+    build_owned_development_oof_prediction_batch,
     derive_development_oof_prediction_feature_batch,
     derive_development_oof_prediction_fold_model_bundle,
     derive_development_oof_prediction_fold_model_specs,
     derive_development_oof_prediction_input_specs,
+    validate_owned_development_oof_prediction_batch,
+)
+from agent_benchmark.sec_filing_gemma_policy_replay import (
+    OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaPolicyReplayError,
+    derive_development_policy_replay_input_specs,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     MARKET_SYMBOLS,
@@ -158,6 +165,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     authenticate_reveal_store_trusted_stage_content_pin,
     build_development_oof_learner_fit_plan,
     build_development_oof_prediction_plan,
+    build_development_policy_replay_plan,
     build_development_label_assembly_plan,
     build_development_training_membership_assembly_plan,
     build_development_model_execution_abort,
@@ -190,6 +198,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_label_assembly_plan,
     validate_development_oof_learner_fit_plan,
     validate_development_oof_prediction_plan,
+    validate_development_policy_replay_plan,
     validate_development_training_membership_assembly_plan,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
@@ -8489,6 +8498,378 @@ class SecFilingGemmaRevealStore:
         return {
             **detached,
             "prediction_projection_sha256": canonical_sha256(detached),
+        }
+
+    def _load_owned_development_policy_replay_projection(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project the exact raw OOF batch under threshold/policy-only authority."""
+
+        with SecFilingGemmaRevealStore._locked(self):
+            return SecFilingGemmaRevealStore._load_owned_development_policy_replay_projection_locked(
+                self,
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+
+    def _load_owned_development_policy_replay_projection_locked(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Build one label-free policy-replay projection under the held lock."""
+
+        scope_hash = _sha256(
+            development_root_scope_sha256,
+            "owned development policy replay projection root scope hash",
+        )
+        tracked_anchor = _load_tracked_anchor(self.repository_root)
+        current, current_tip, state_bytes, tip_bytes = (
+            self._read_state_and_tip_locked(tracked_anchor)
+        )
+
+        raw_prediction_projection = (
+            self._load_owned_development_oof_prediction_projection_locked(
+                development_root_scope_sha256=scope_hash,
+            )
+        )
+        prediction_projection = _exact_builtin_json_copy(
+            raw_prediction_projection,
+            "owned development policy replay source prediction projection",
+        )
+        expected_prediction_projection_keys = {
+            "schema_version",
+            "development_oof_prediction_plan",
+            "prediction_fold_model_bundle",
+            "prediction_feature_batch",
+            "prediction_projection_sha256",
+        }
+        if (
+            type(prediction_projection) is not dict
+            or set(prediction_projection) != expected_prediction_projection_keys
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development policy replay source prediction projection is not exact"
+            )
+        prediction_projection_body = {
+            key: prediction_projection[key]
+            for key in prediction_projection
+            if key != "prediction_projection_sha256"
+        }
+        prediction_plan = prediction_projection.get(
+            "development_oof_prediction_plan"
+        )
+        fold_model_bundle = prediction_projection.get(
+            "prediction_fold_model_bundle"
+        )
+        prediction_feature_batch = prediction_projection.get(
+            "prediction_feature_batch"
+        )
+        if (
+            prediction_projection["schema_version"]
+            != OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION
+            or prediction_projection["prediction_projection_sha256"]
+            != canonical_sha256(prediction_projection_body)
+            or type(prediction_plan) is not dict
+            or type(fold_model_bundle) is not dict
+            or type(prediction_feature_batch) is not dict
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development policy replay source prediction projection changed identity"
+            )
+
+        try:
+            prediction_plan_hash = prediction_plan[
+                "development_oof_prediction_plan_sha256"
+            ]
+            validate_development_oof_prediction_plan(
+                prediction_plan,
+                expected_development_oof_prediction_plan_sha256=(
+                    prediction_plan_hash
+                ),
+            )
+            prediction_batch = build_owned_development_oof_prediction_batch(
+                development_oof_prediction_plan=prediction_plan,
+                expected_development_oof_prediction_plan_sha256=(
+                    prediction_plan_hash
+                ),
+                prediction_feature_batch=prediction_feature_batch,
+                expected_prediction_feature_batch_sha256=(
+                    prediction_feature_batch[
+                        "prediction_feature_batch_sha256"
+                    ]
+                ),
+                prediction_fold_model_bundle=fold_model_bundle,
+                expected_prediction_fold_model_bundle_sha256=(
+                    fold_model_bundle[
+                        "prediction_fold_model_bundle_sha256"
+                    ]
+                ),
+            )
+            prediction_batch_hash = prediction_batch[
+                "prediction_batch_sha256"
+            ]
+            validate_owned_development_oof_prediction_batch(
+                prediction_batch,
+                development_oof_prediction_plan=prediction_plan,
+                expected_development_oof_prediction_plan_sha256=(
+                    prediction_plan_hash
+                ),
+                prediction_feature_batch=prediction_feature_batch,
+                expected_prediction_feature_batch_sha256=(
+                    prediction_feature_batch[
+                        "prediction_feature_batch_sha256"
+                    ]
+                ),
+                prediction_fold_model_bundle=fold_model_bundle,
+                expected_prediction_fold_model_bundle_sha256=(
+                    fold_model_bundle[
+                        "prediction_fold_model_bundle_sha256"
+                    ]
+                ),
+                expected_prediction_batch_sha256=prediction_batch_hash,
+            )
+            policy_replay_input_specs = (
+                derive_development_policy_replay_input_specs(
+                    prediction_batch,
+                    expected_source_prediction_batch_sha256=(
+                        prediction_batch_hash
+                    ),
+                )
+            )
+            policy_replay_plan = build_development_policy_replay_plan(
+                current,
+                development_root_scope_sha256=scope_hash,
+                authenticated_store_state_bytes_sha256=(
+                    hashlib.sha256(state_bytes).hexdigest()
+                ),
+                source_development_oof_prediction_plan=prediction_plan,
+                source_development_oof_prediction_projection_sha256=(
+                    prediction_projection["prediction_projection_sha256"]
+                ),
+                source_development_oof_prediction_batch_sha256=(
+                    prediction_batch_hash
+                ),
+                source_raw_prediction_rows_sha256=prediction_batch[
+                    "raw_prediction_rows_sha256"
+                ],
+                source_raw_prediction_tip_sha256=prediction_batch[
+                    "raw_prediction_tip_sha256"
+                ],
+                source_raw_prediction_row_count=prediction_batch[
+                    "prediction_event_count"
+                ],
+                policy_replay_input_specs=policy_replay_input_specs,
+                independent_current_tip_anchor=current_tip,
+                independent_current_tip_anchor_bytes_sha256=(
+                    hashlib.sha256(tip_bytes).hexdigest()
+                ),
+            )
+            validate_development_policy_replay_plan(
+                policy_replay_plan,
+                expected_development_policy_replay_plan_sha256=(
+                    policy_replay_plan[
+                        "development_policy_replay_plan_sha256"
+                    ]
+                ),
+            )
+        except SecFilingGemmaRevealStoreError:
+            raise
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaContractError,
+            SecFilingGemmaLearnerPredictionError,
+            SecFilingGemmaPolicyReplayError,
+            SecFilingGemmaStageAuthorizationError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development policy replay sources failed exact replay"
+            ) from exc
+
+        lineage_matches = (
+            policy_replay_plan.get("development_root_scope_sha256")
+            == scope_hash
+            == prediction_plan.get("development_root_scope_sha256")
+            == prediction_batch.get("development_root_scope_sha256")
+            and policy_replay_plan.get("start_store_state_bytes_sha256")
+            == hashlib.sha256(state_bytes).hexdigest()
+            and policy_replay_plan.get("start_store_state_sha256")
+            == current.get("state_sha256")
+            and policy_replay_plan.get(
+                "start_current_tip_anchor_bytes_sha256"
+            )
+            == hashlib.sha256(tip_bytes).hexdigest()
+            and policy_replay_plan.get("start_current_tip_anchor_sha256")
+            == current_tip.get("tip_anchor_sha256")
+            and policy_replay_plan.get("start_current_tip_revision")
+            == current_tip.get("revision")
+            and policy_replay_plan.get("start_consumed_request_count") == 0
+            == current_tip.get("consumed_request_count")
+            and policy_replay_plan.get(
+                "source_development_oof_prediction_plan_sha256"
+            )
+            == prediction_plan.get("development_oof_prediction_plan_sha256")
+            == prediction_batch.get("development_oof_prediction_plan_sha256")
+            and policy_replay_plan.get(
+                "source_development_oof_prediction_projection_sha256"
+            )
+            == prediction_projection.get("prediction_projection_sha256")
+            and policy_replay_plan.get(
+                "source_development_oof_prediction_batch_sha256"
+            )
+            == prediction_batch.get("prediction_batch_sha256")
+            and policy_replay_plan.get("source_raw_prediction_rows_sha256")
+            == prediction_batch.get("raw_prediction_rows_sha256")
+            and policy_replay_plan.get("source_raw_prediction_tip_sha256")
+            == prediction_batch.get("raw_prediction_tip_sha256")
+            and policy_replay_plan.get("source_raw_prediction_row_count")
+            == prediction_batch.get("prediction_event_count")
+            == len(policy_replay_input_specs)
+            and policy_replay_plan.get("policy_replay_input_count")
+            == len(policy_replay_input_specs)
+            and policy_replay_plan.get("policy_replay_input_specs")
+            == policy_replay_input_specs
+            and policy_replay_plan.get("policy_replay_input_specs_sha256")
+            == canonical_sha256(policy_replay_input_specs)
+            and policy_replay_plan.get("model_variant_ids")
+            == ["semantic", "ablation"]
+            == prediction_batch.get("model_variant_ids")
+            and policy_replay_plan.get("model_variant_count") == 2
+            == prediction_batch.get("model_variant_count")
+        )
+        for field in (
+            "contract_sha256",
+            "candidate_sha256",
+            "corpus_universe_sha256",
+            "calendar_sessions_sha256",
+            "development_cutoff_session",
+        ):
+            lineage_matches = lineage_matches and (
+                policy_replay_plan.get(field)
+                == prediction_plan.get(field)
+                == prediction_batch.get(field)
+            )
+        if not lineage_matches:
+            raise SecFilingGemmaRevealStoreError(
+                "Development policy replay crossed its owned prediction ancestry"
+            )
+
+        body = {
+            "schema_version": (
+                OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION
+            ),
+            "development_policy_replay_plan": copy.deepcopy(
+                policy_replay_plan
+            ),
+            "source_development_oof_prediction_batch": copy.deepcopy(
+                prediction_batch
+            ),
+        }
+        detached = _exact_builtin_json_copy(
+            body,
+            "owned development policy replay projection",
+        )
+        if type(detached) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development policy replay projection is not exact JSON"
+            )
+        forbidden_projection_keys = {
+            "source_feature_batch",
+            "prediction_feature_batch",
+            "source_label_batch",
+            "labels",
+            "label_rows",
+            "label_evidence_rows",
+            "maturity_audit_rows",
+            "outcomes",
+            "outcome_rows",
+            "market_outcomes",
+            "training_set_membership",
+            "semantic_training_features_hex",
+            "ablation_training_features_hex",
+            "training_binary_targets",
+            "training_edge_targets_hex",
+            "learner_fit_views",
+            "learner_fit_records",
+            "learner_states",
+            "fold_models",
+            "prediction_fold_model_bundle",
+            "deferred_training_views",
+            "adjusted_open_path",
+            "adjusted_open",
+            "adjusted_open_hex",
+            "adjusted_close",
+            "adjusted_close_hex",
+            "open_hex",
+            "close_hex",
+            "prices",
+            "price_rows",
+            "market_rows",
+            "observations",
+            "market_observations",
+            "market_prices",
+            "policy_prefix",
+            "raw_to_policy_bindings",
+            "scores",
+            "ranking",
+            "seal_receipt",
+        }
+        forbidden_projection_strings = {
+            "intermediate_frozen_through_2018",
+            "2019-01-01",
+            "2023-12-31",
+            "fold_6",
+            "view_6",
+            "SOURCE-FEATURE-BATCH-MUST-NOT-ESCAPE",
+            "SOURCE-LABEL-BATCH-MUST-NOT-ESCAPE",
+            "LABELS-MUST-NOT-ESCAPE",
+            "PRICES-MUST-NOT-ESCAPE",
+            "VIEW6-MUST-NOT-ESCAPE",
+        }
+        stack: list[Any] = [detached]
+        while stack:
+            value = stack.pop()
+            if type(value) is dict:
+                if forbidden_projection_keys.intersection(value):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned development policy replay projection exposed a private source"
+                    )
+                stack.extend(value.values())
+            elif type(value) is list:
+                stack.extend(value)
+            elif type(value) is str:
+                post_development_date = (
+                    re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)
+                    is not None
+                    and value > "2018-12-31"
+                )
+                if value in forbidden_projection_strings or post_development_date:
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned development policy replay projection exposed a forbidden window or private value"
+                    )
+
+        (
+            closure_current,
+            closure_tip,
+            closure_state_bytes,
+            closure_tip_bytes,
+        ) = self._read_state_and_tip_locked(tracked_anchor)
+        if (
+            closure_state_bytes != state_bytes
+            or closure_tip_bytes != tip_bytes
+            or closure_current != current
+            or closure_tip != current_tip
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development policy replay authorization ancestry changed during projection"
+            )
+        return {
+            **detached,
+            "policy_replay_projection_sha256": canonical_sha256(detached),
         }
 
     def _record_owned_development_model_reader_output(

@@ -82,6 +82,19 @@ MAX_SENTENCES: Final[int] = 72
 MAX_SENTENCE_CHARACTERS: Final[int] = 220
 HORIZON_SESSIONS: Final[int] = 20
 LABEL_MATURITY_OFFSET: Final[int] = HORIZON_SESSIONS + 1
+DEVELOPMENT_POLICY_CALENDAR_CUTOFF_SESSION: Final[str] = "2018-12-31"
+_DEVELOPMENT_POLICY_CALENDAR_CUTOFF_INDEX: Final[int] = (
+    AUTHORITATIVE_SESSION_DATES.index(
+        DEVELOPMENT_POLICY_CALENDAR_CUTOFF_SESSION
+    )
+)
+DEVELOPMENT_POLICY_SESSION_DATES: Final[tuple[str, ...]] = (
+    AUTHORITATIVE_SESSION_DATES[
+        : _DEVELOPMENT_POLICY_CALENDAR_CUTOFF_INDEX
+        + LABEL_MATURITY_OFFSET
+        + 1
+    ]
+)
 ACTIVE_EDGE_TOLERANCE: Final[float] = 1e-12
 BRIER_TARGET_COST_BPS: Final[int] = 10
 MARKET_HISTORY_START: Final[str] = AUTHORITATIVE_MARKET_CALENDAR_START.isoformat()
@@ -139,6 +152,7 @@ REQUIRED_SOURCE_HASHES: Final[tuple[str, ...]] = (
     "market_source_bytes",
     "no_leverage",
     "package_init",
+    "policy_replay",
     "preprocessor",
     "prediction_evidence",
     "reveal_registry",
@@ -1778,6 +1792,25 @@ def canonical_session_calendar(session_dates: Sequence[str]) -> tuple[str, ...]:
 
 def session_calendar_sha256(session_dates: Sequence[str]) -> str:
     return canonical_sha256(list(canonical_session_calendar(session_dates)))
+
+
+def canonical_development_policy_session_calendar(
+    session_dates: Sequence[str],
+) -> tuple[str, ...]:
+    canonical = _canonical_session_sequence(session_dates)
+    if canonical != DEVELOPMENT_POLICY_SESSION_DATES:
+        raise SecFilingGemmaContractError(
+            "Session calendar is not the exact development policy schedule"
+        )
+    return canonical
+
+
+def development_policy_session_calendar_sha256(
+    session_dates: Sequence[str],
+) -> str:
+    return canonical_sha256(
+        list(canonical_development_policy_session_calendar(session_dates))
+    )
 
 
 def canonical_market_session_calendar(
@@ -3593,6 +3626,8 @@ __all__ = [
     "CONTRACT_VERSION",
     "DIMENSION_NAMES",
     "DEVELOPMENT_FOLD_SPECS",
+    "DEVELOPMENT_POLICY_CALENDAR_CUTOFF_SESSION",
+    "DEVELOPMENT_POLICY_SESSION_DATES",
     "EXTRACTOR_REQUEST_VERSION",
     "EXTRACTOR_SCHEMA_VERSION",
     "FLAG_NAMES",
@@ -3623,6 +3658,7 @@ __all__ = [
     "build_redacted_input_manifest",
     "build_stage_content_manifest",
     "canonical_session_calendar",
+    "canonical_development_policy_session_calendar",
     "canonical_market_session_calendar",
     "canonical_sha256",
     "validate_candidate_manifest",
@@ -3643,4 +3679,5 @@ __all__ = [
     "validate_training_rows",
     "market_session_calendar_sha256",
     "session_calendar_sha256",
+    "development_policy_session_calendar_sha256",
 ]

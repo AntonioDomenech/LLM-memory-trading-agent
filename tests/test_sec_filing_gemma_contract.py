@@ -15,6 +15,7 @@ from agent_benchmark.sec_filing_gemma_contract import (
     CALENDAR_SOURCE_URLS,
     CANONICAL_IDENTITY_LEXICON,
     CANONICAL_IDENTITY_LEXICON_SHA256,
+    DEVELOPMENT_POLICY_SESSION_DATES,
     DIMENSION_NAMES,
     EXTRACTOR_REQUEST_VERSION,
     EXTRACTOR_SCHEMA_VERSION,
@@ -34,7 +35,9 @@ from agent_benchmark.sec_filing_gemma_contract import (
     build_extractor_model_payload,
     build_redacted_input_manifest,
     build_stage_content_manifest,
+    canonical_development_policy_session_calendar,
     canonical_sha256,
+    development_policy_session_calendar_sha256,
     session_calendar_sha256,
     validate_candidate_manifest,
     validate_calendar_extension_manifest,
@@ -565,6 +568,7 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     assert "stage_access" in REQUIRED_SOURCE_HASHES
     assert "training_membership" in REQUIRED_SOURCE_HASHES
     assert "learner_prediction" in REQUIRED_SOURCE_HASHES
+    assert "policy_replay" in REQUIRED_SOURCE_HASHES
     assert {
         "cftc_cot_policy",
         "content_normalizer",
@@ -724,10 +728,11 @@ def test_candidate_binds_model_runtime_universe_lexicon_and_source_closure() -> 
         _candidate(universe, identity_lexicon_sha256=_hash("9"))
 
 
-def test_candidate_rejects_missing_transitive_source_hash() -> None:
+@pytest.mark.parametrize("missing_role", ["ledger", "policy_replay"])
+def test_candidate_rejects_missing_transitive_source_hash(missing_role: str) -> None:
     universe = _universe()
     sources = _sources()
-    sources.pop("ledger")
+    sources.pop(missing_role)
     with pytest.raises(SecFilingGemmaContractError, match="source_hashes"):
         build_candidate_manifest(
             model_digest=_hash("d"),
@@ -1653,6 +1658,25 @@ def test_calendar_source_evidence_binds_exact_official_bytes_and_external_pin() 
                 "calendar_source_evidence_sha256"
             ],
         )
+
+
+def test_development_policy_calendar_is_exactly_bounded_at_latest_exit() -> None:
+    sessions = list(DEVELOPMENT_POLICY_SESSION_DATES)
+    cutoff_index = EXPECTED_SESSIONS.index("2018-12-31")
+    assert sessions == list(EXPECTED_SESSIONS[: cutoff_index + 22])
+    assert sessions[-1] == EXPECTED_SESSIONS[cutoff_index + 21] == "2019-01-31"
+    assert canonical_development_policy_session_calendar(sessions) == tuple(
+        sessions
+    )
+    assert development_policy_session_calendar_sha256(sessions) == canonical_sha256(
+        sessions
+    )
+    with pytest.raises(SecFilingGemmaContractError, match="development policy"):
+        canonical_development_policy_session_calendar(
+            [*sessions, EXPECTED_SESSIONS[cutoff_index + 22]]
+        )
+    with pytest.raises(SecFilingGemmaContractError, match="development policy"):
+        canonical_development_policy_session_calendar(sessions[:-1])
 
 
 def test_contract_module_imports_only_effect_free_modules() -> None:

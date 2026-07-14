@@ -433,11 +433,11 @@ def test_earlier_prefix_hash_has_no_future_event_or_fold_context(evidence) -> No
     assert finals[0]["prediction_prefix_sha256"] != finals[1]["prediction_prefix_sha256"]
 
 
-def test_v2_feature_identity_binding_is_explicit_and_legacy_binding_fails(
+def test_v3_feature_identity_and_scheduled_state_are_explicit_and_legacy_fails(
     evidence,
 ) -> None:
-    assert PREDICTION_ROW_SCHEMA_VERSION.endswith("-v2")
-    assert PREDICTION_PREFIX_SCHEMA_VERSION.endswith("-v2")
+    assert PREDICTION_ROW_SCHEMA_VERSION.endswith("-v3")
+    assert PREDICTION_PREFIX_SCHEMA_VERSION.endswith("-v3")
     assert evidence["prefix"]["schema_version"] == PREDICTION_PREFIX_SCHEMA_VERSION
     assert all(
         row["schema_version"] == PREDICTION_ROW_SCHEMA_VERSION
@@ -472,7 +472,7 @@ def test_v2_feature_identity_binding_is_explicit_and_legacy_binding_fails(
 
     legacy_prefix = copy.deepcopy(evidence["prefix"])
     legacy_prefix["schema_version"] = (
-        "aapl-sec-gemma-pre-label-prediction-prefix-v1"
+        "aapl-sec-gemma-pre-label-prediction-prefix-v2"
     )
     with pytest.raises(SecFilingGemmaContractError, match="schema_version"):
         validate_prediction_prefix(
@@ -598,9 +598,28 @@ def test_all_candidate_variant_states_and_active_episode_cannot_extend(evidence)
                 first["effective_episode_actions"][candidate_id][variant]
                 == "START_CASH_EPISODE"
             )
+            assert first["candidate_policy_input_states"][candidate_id][variant] == {
+                "position_at_decision_close": "LONG",
+                "episode_phase": "INACTIVE",
+                "episode_origin_decision_session": None,
+                "episode_fill_session": None,
+                "episode_exit_session": None,
+            }
+            assert first["candidate_policy_output_states"][candidate_id][variant][
+                "position_at_decision_close"
+            ] == "LONG"
+            assert first["candidate_policy_output_states"][candidate_id][variant][
+                "episode_phase"
+            ] == "SCHEDULED"
             first_exit = first["candidate_policy_output_states"][candidate_id][
                 variant
             ]["episode_exit_session"]
+            assert second["candidate_policy_input_states"][candidate_id][variant][
+                "position_at_decision_close"
+            ] == "CASH"
+            assert second["candidate_policy_input_states"][candidate_id][variant][
+                "episode_phase"
+            ] == "ACTIVE"
             assert (
                 second["effective_episode_actions"][candidate_id][variant]
                 == "HOLD_EXISTING_CASH_EPISODE"
@@ -641,8 +660,99 @@ def test_all_candidate_variant_states_and_active_episode_cannot_extend(evidence)
         extended["rows"][1]["candidate_policy_output_states"]
     )
     _refresh_prefix_container(extended)
-    with pytest.raises(SecFilingGemmaContractError, match="extended an active episode"):
+    with pytest.raises(SecFilingGemmaContractError, match="extended an existing episode"):
         validate_prediction_prefix(extended, **evidence["validation_kwargs"])
+
+
+def test_policy_state_is_scheduled_then_active_and_long_at_exact_exit_close(
+    evidence,
+) -> None:
+    origin = "2005-03-01"
+    fill = _next_session(origin)
+    exit_session = _next_session(origin, LABEL_MATURITY_OFFSET)
+    events = [
+        _event("0000320193-05-000061", origin, salt="timing-origin"),
+        _event("0000320193-05-000062", origin, salt="timing-same-close"),
+        _event("0000320193-05-000063", fill, salt="timing-fill"),
+        _event("0000320193-05-000064", exit_session, salt="timing-exit"),
+    ]
+    specs = [
+        _available(
+            events[0],
+            semantic_probability=0.9,
+            semantic_edge=0.1,
+            ablation_probability=0.9,
+            ablation_edge=0.1,
+        ),
+        *[
+            _available(
+                event,
+                semantic_probability=0.1,
+                semantic_edge=-0.1,
+                ablation_probability=0.1,
+                ablation_edge=-0.1,
+            )
+            for event in events[1:]
+        ],
+    ]
+    prefix = build_prediction_ledger(
+        specs,
+        session_dates=EXPECTED_SESSIONS,
+        expected_calendar_sessions_sha256=evidence["calendar_hash"],
+        candidate_sha256=evidence["candidate_hash"],
+        corpus_universe_sha256=evidence["universe_hash"],
+        expected_event_bindings=events,
+        fold_contexts=evidence["fold_contexts"],
+    )
+    validate_prediction_prefix(
+        prefix,
+        session_dates=EXPECTED_SESSIONS,
+        expected_calendar_sessions_sha256=evidence["calendar_hash"],
+        expected_candidate_sha256=evidence["candidate_hash"],
+        expected_corpus_universe_sha256=evidence["universe_hash"],
+        expected_event_bindings=events,
+    )
+
+    scheduled, still_scheduled, active, exact_exit = prefix["rows"]
+    for candidate_id in CANDIDATE_IDS:
+        for variant in MODEL_VARIANTS:
+            assert scheduled["candidate_policy_output_states"][candidate_id][variant][
+                "position_at_decision_close"
+            ] == "LONG"
+            assert scheduled["candidate_policy_output_states"][candidate_id][variant][
+                "episode_phase"
+            ] == "SCHEDULED"
+            assert still_scheduled["candidate_policy_input_states"][candidate_id][
+                variant
+            ]["position_at_decision_close"] == "LONG"
+            assert still_scheduled["candidate_policy_input_states"][candidate_id][
+                variant
+            ]["episode_phase"] == "SCHEDULED"
+            assert (
+                still_scheduled["effective_episode_actions"][candidate_id][variant]
+                == "KEEP_SCHEDULED_CASH_EPISODE"
+            )
+            assert active["candidate_policy_input_states"][candidate_id][variant][
+                "position_at_decision_close"
+            ] == "CASH"
+            assert active["candidate_policy_input_states"][candidate_id][variant][
+                "episode_phase"
+            ] == "ACTIVE"
+            assert (
+                active["effective_episode_actions"][candidate_id][variant]
+                == "HOLD_EXISTING_CASH_EPISODE"
+            )
+            assert exact_exit["candidate_policy_input_states"][candidate_id][variant] == {
+                "position_at_decision_close": "LONG",
+                "episode_phase": "INACTIVE",
+                "episode_origin_decision_session": None,
+                "episode_fill_session": None,
+                "episode_exit_session": None,
+            }
+            assert (
+                exact_exit["effective_episode_actions"][candidate_id][variant]
+                == "STAY_LONG"
+            )
 
 
 def test_unavailable_row_has_no_probability_or_gate_claims_but_is_sealed_and_labeled(
@@ -752,11 +862,11 @@ def test_unavailable_event_has_exact_mixed_per_candidate_effective_actions(
             input_state = row["candidate_policy_input_states"][candidate_id][variant]
             output_state = row["candidate_policy_output_states"][candidate_id][variant]
             positions.add(input_state["position_at_decision_close"])
-            expected_action = (
-                "HOLD_EXISTING_CASH_EPISODE"
-                if input_state["position_at_decision_close"] == "CASH"
-                else "STAY_LONG"
-            )
+            expected_action = {
+                "INACTIVE": "STAY_LONG",
+                "SCHEDULED": "KEEP_SCHEDULED_CASH_EPISODE",
+                "ACTIVE": "HOLD_EXISTING_CASH_EPISODE",
+            }[input_state["episode_phase"]]
             assert row["effective_episode_actions"][candidate_id][variant] == expected_action
             assert output_state == input_state
     assert positions == {"LONG", "CASH"}

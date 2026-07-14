@@ -621,10 +621,12 @@ At the current implementation checkpoint:
 - the prediction artifact sealer now persists exact pre-label prefix bytes
   through an append-only external-pin compare-and-swap receipt rather than
   accepting caller-supplied checksum strings;
-- prediction evidence v2 binds the always-present extraction identity, the
+- prediction evidence v3 binds the always-present extraction identity, the
   independent market-feature-row identity, and a causal market-prefix-chain
   identity even when a prediction is unavailable; each fixed fold also binds
-  its exact training row and positive-label counts;
+  its exact training row and positive-label counts. Policy state now explicitly
+  distinguishes an inactive LONG position, a LONG position with a CASH sale
+  scheduled for the next open, and an active CASH episode;
 - an artifact seal proves exact structural ancestry only; the authoritative
   stage verifier must additionally replay the full prediction-prefix semantics
   against the same bytes and all candidate, calendar, event, and market pins;
@@ -1051,6 +1053,30 @@ state's training count, positive count, membership hash, feature schema, and
 maximum label-maturity session match the claimed fold; the ablation shares the
 first 42 market/calendar inputs and zeros only the twelve filing-derived values.
 
+The completed development policy-replay checkpoint first reconstructs that raw
+batch under the separately validated OOF-prediction plan, then creates one exact
+threshold-and-transition-only plan. No additional numerical prediction is
+authorized after the policy plan exists. The replay maps every raw prediction
+row one-to-one into all four frozen candidate paths for both the semantic and
+ablation variants, preserving the numerical `float.hex` values exactly. A
+threshold match uses the declared `>=` probability-and-edge conjunction; an
+unavailable filing cannot start a CASH episode, and no later filing can extend
+an episode that is scheduled or active. The position remains LONG at the signal
+close, changes at the next adjusted open, and returns to LONG at the fixed t+21
+open.
+
+The policy plan has no label, return, price, score, ranking, refit, holdout,
+additional model-prediction, or network authority. Its scheduling calendar is
+an exact development-only prefix ending on 2019-01-31, the latest t+21 exit
+needed for a 2018-12-31 decision. Consequently, a 2025 calendar extension or
+closure cannot rewrite a development policy row. Those early-2019 dates are
+fill/exit schedule metadata only; no post-2018 feature, price, or outcome value
+enters the policy artifact. The runner accepts one exact store-owned four-key
+projection, rejects instance-shadowed store methods, and binds the authenticated
+store state, source prediction plan/projection/batch, raw-row chain, candidate
+grid, and source-code identity. Passing this checkpoint proves owned
+chronological actions, not that the strategy is profitable.
+
 The completed learner-fit checkpoint passes the full local repository suite
 with `1719` tests passed and `13` skipped in `3169.05` seconds (`52:49`), with
 an independently measured wall time of `3169.771` seconds. This remains below
@@ -1065,9 +1091,20 @@ This also remains below the frozen one-hour approach-test ceiling. The suite is
 local-only and makes no paid API call; passing this checkpoint verifies the
 chronological prediction boundary, not trading outperformance.
 
-The next implementation milestone is development-only threshold replay and
-candidate ranking from these raw OOF values, followed by the separately
-authorized frozen-through-2018 refit and the continuous no-leverage ledger. Those later
+The completed development policy-replay checkpoint passes the full local
+repository suite with `1814` tests passed and `13` skipped in `3264.71` seconds
+(`54:24`), with an independently measured wall time of `3265.502` seconds.
+This remains below the same one-hour ceiling. The suite is local-only and makes
+no paid API, Ollama, market-download, or holdout-scoring call; passing this
+checkpoint verifies exact chronological policy replay and its trust boundaries,
+not trading outperformance.
+
+The next implementation milestone is durable external-pin CAS sealing of every
+cumulative development policy prefix before any outcome access, followed by
+development-only scoring and deterministic candidate ranking. A zero-pass
+result must remain a valid `no winner` diagnostic and block all later reveals.
+Only a passing winner can proceed to the separately authorized
+frozen-through-2018 refit and the continuous no-leverage ledger. Those later
 components must remove caller-supplied market snapshots from every authorizing
 path, parse
 official calendar semantics, chain every artifact from genesis, and bind the

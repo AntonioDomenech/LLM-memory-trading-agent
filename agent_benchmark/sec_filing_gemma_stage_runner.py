@@ -114,6 +114,7 @@ from .sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     _sec_component_plan_from_bundle,
+    validate_development_policy_replay_plan,
     validate_development_oof_prediction_plan,
     validate_development_oof_learner_fit_plan,
     validate_development_training_membership_assembly_plan,
@@ -132,7 +133,15 @@ from .sec_filing_gemma_learner_prediction import (
     build_owned_development_oof_prediction_batch,
     derive_development_oof_prediction_fold_model_specs,
     derive_development_oof_prediction_input_specs,
+    validate_owned_development_oof_prediction_batch_structure,
     validate_owned_development_oof_prediction_batch,
+)
+from .sec_filing_gemma_policy_replay import (
+    OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaPolicyReplayError,
+    build_owned_development_policy_replay_batch,
+    derive_development_policy_replay_input_specs,
+    validate_owned_development_policy_replay_batch,
 )
 from .sec_filing_gemma_training_membership import (
     OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
@@ -215,6 +224,16 @@ _OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_KEYS: Final[frozenset[str]] = (
             "prediction_fold_model_bundle",
             "prediction_feature_batch",
             "prediction_projection_sha256",
+        }
+    )
+)
+_OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "development_policy_replay_plan",
+            "source_development_oof_prediction_batch",
+            "policy_replay_projection_sha256",
         }
     )
 )
@@ -4215,6 +4234,225 @@ def run_owned_development_oof_prediction_batch(
     return batch
 
 
+def _validated_owned_development_policy_replay_projection(
+    loaded: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Require the exact four-key store-owned policy-replay projection."""
+
+    if type(loaded) is not dict or set(loaded) != set(
+        _OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_KEYS
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection is not exact"
+        )
+    if (
+        loaded["schema_version"]
+        != OWNED_DEVELOPMENT_POLICY_REPLAY_PROJECTION_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection schema changed"
+        )
+    plan = loaded["development_policy_replay_plan"]
+    source = loaded["source_development_oof_prediction_batch"]
+    if (
+        type(plan) is not dict
+        or type(source) is not dict
+        or not _is_bare_sha256(
+            plan.get("development_policy_replay_plan_sha256")
+        )
+        or not _is_bare_sha256(source.get("prediction_batch_sha256"))
+        or not _is_bare_sha256(
+            plan.get("source_development_oof_prediction_projection_sha256")
+        )
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay sources are unavailable"
+        )
+    try:
+        validated_plan_hash = validate_development_policy_replay_plan(
+            plan,
+            expected_development_policy_replay_plan_sha256=plan[
+                "development_policy_replay_plan_sha256"
+            ],
+        )
+        validated_source_hash = (
+            validate_owned_development_oof_prediction_batch_structure(
+                source,
+                expected_prediction_batch_sha256=source[
+                    "prediction_batch_sha256"
+                ],
+            )
+        )
+        input_specs = derive_development_policy_replay_input_specs(
+            source,
+            expected_source_prediction_batch_sha256=source[
+                "prediction_batch_sha256"
+            ],
+        )
+        input_specs_hash = canonical_sha256(input_specs)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection failed exact validation"
+        ) from None
+
+    crossed = (
+        validated_plan_hash
+        != plan["development_policy_replay_plan_sha256"]
+        or validated_source_hash != source["prediction_batch_sha256"]
+        or plan.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or source.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or plan.get("source_development_oof_prediction_plan_sha256")
+        != source.get("development_oof_prediction_plan_sha256")
+        or plan.get("source_development_oof_prediction_batch_sha256")
+        != source.get("prediction_batch_sha256")
+        or plan.get("source_raw_prediction_rows_sha256")
+        != source.get("raw_prediction_rows_sha256")
+        or plan.get("source_raw_prediction_tip_sha256")
+        != source.get("raw_prediction_tip_sha256")
+        or plan.get("source_raw_prediction_row_count")
+        != source.get("prediction_event_count")
+        or plan.get("source_raw_prediction_row_count")
+        != len(source.get("raw_prediction_rows", []))
+        or plan.get("policy_replay_input_count") != len(input_specs)
+        or plan.get("policy_replay_input_count")
+        != source.get("prediction_event_count")
+        or plan.get("policy_replay_input_specs") != input_specs
+        or plan.get("policy_replay_input_specs_sha256") != input_specs_hash
+        or plan.get("model_variant_count")
+        != source.get("model_variant_count")
+        or plan.get("model_variant_ids") != source.get("model_variant_ids")
+    )
+    for field in (
+        "contract_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+    ):
+        crossed = crossed or plan.get(field) != source.get(field)
+    if crossed:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection crossed its ancestry"
+        )
+
+    projection_hash = loaded["policy_replay_projection_sha256"]
+    if not _is_bare_sha256(projection_hash):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection checksum is invalid"
+        )
+    body = {
+        key: loaded[key]
+        for key in loaded
+        if key != "policy_replay_projection_sha256"
+    }
+    try:
+        calculated = canonical_sha256(body)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection is not canonical JSON"
+        ) from None
+    if calculated != projection_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection checksum changed"
+        )
+    return copy.deepcopy(loaded)
+
+
+def run_owned_development_policy_replay_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Replay frozen thresholds and policy state from one owned projection."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    shadowed_store_attributes = set(vars(reveal_store)).intersection(
+        vars(SecFilingGemmaRevealStore)
+    )
+    if shadowed_store_attributes:
+        raise TypeError(
+            "reveal_store must not shadow the owned reveal-store implementation"
+        )
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development policy replay scope must be a bare lowercase SHA-256"
+        )
+    try:
+        policy_projection_loader = (
+            SecFilingGemmaRevealStore._load_owned_development_policy_replay_projection
+        )
+        loaded = policy_projection_loader(
+            reveal_store,
+            development_root_scope_sha256=development_root_scope_sha256,
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay projection could not be loaded"
+        ) from None
+    projection = _validated_owned_development_policy_replay_projection(
+        loaded,
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    plan = projection["development_policy_replay_plan"]
+    source = projection["source_development_oof_prediction_batch"]
+    try:
+        batch = build_owned_development_policy_replay_batch(
+            source_prediction_batch=source,
+            expected_source_prediction_batch_sha256=source[
+                "prediction_batch_sha256"
+            ],
+            expected_development_policy_replay_plan_sha256=plan[
+                "development_policy_replay_plan_sha256"
+            ],
+            expected_source_prediction_projection_sha256=plan[
+                "source_development_oof_prediction_projection_sha256"
+            ],
+        )
+        if (
+            batch["threshold_comparison_rule"]
+            != plan["candidate_gate_comparison_rule"]
+            or batch["cash_episode_rule"] != plan["cash_episode_rule"]
+            or batch["unavailable_prediction_rule"]
+            != plan["unavailable_prediction_rule"]
+            or batch["input_order_rule"] != plan["input_order_rule"]
+        ):
+            raise SecFilingGemmaPolicyReplayError(
+                "Policy replay semantics crossed the authorized plan"
+            )
+        validate_owned_development_policy_replay_batch(
+            batch,
+            source_prediction_batch=source,
+            expected_source_prediction_batch_sha256=source[
+                "prediction_batch_sha256"
+            ],
+            expected_development_policy_replay_plan_sha256=plan[
+                "development_policy_replay_plan_sha256"
+            ],
+            expected_source_prediction_projection_sha256=plan[
+                "source_development_oof_prediction_projection_sha256"
+            ],
+            expected_policy_replay_batch_sha256=batch[
+                "policy_replay_batch_sha256"
+            ],
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        SecFilingGemmaLearnerPredictionError,
+        SecFilingGemmaPolicyReplayError,
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development policy replay batch failed exact deterministic rebuild"
+        ) from None
+    return copy.deepcopy(batch)
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
@@ -4222,6 +4460,7 @@ __all__ = [
     "run_owned_development_label_batch",
     "run_owned_development_oof_learner_fit_batch",
     "run_owned_development_oof_prediction_batch",
+    "run_owned_development_policy_replay_batch",
     "run_owned_development_training_membership_batch",
     "run_owned_development_market_batch",
     "run_owned_development_model_batch",
