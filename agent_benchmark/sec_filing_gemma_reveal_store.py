@@ -102,7 +102,17 @@ from agent_benchmark.sec_filing_gemma_training_membership import (
 from agent_benchmark.sec_filing_gemma_learner_fit import (
     OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION,
     SecFilingGemmaLearnerFitError,
+    build_owned_development_oof_learner_fit_batch,
     derive_development_oof_learner_fit_input_specs,
+    validate_owned_development_oof_learner_fit_batch,
+)
+from agent_benchmark.sec_filing_gemma_learner_prediction import (
+    OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaLearnerPredictionError,
+    derive_development_oof_prediction_feature_batch,
+    derive_development_oof_prediction_fold_model_bundle,
+    derive_development_oof_prediction_fold_model_specs,
+    derive_development_oof_prediction_input_specs,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     MARKET_SYMBOLS,
@@ -147,6 +157,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
     build_development_oof_learner_fit_plan,
+    build_development_oof_prediction_plan,
     build_development_label_assembly_plan,
     build_development_training_membership_assembly_plan,
     build_development_model_execution_abort,
@@ -178,6 +189,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_feature_assembly_plan,
     validate_development_label_assembly_plan,
     validate_development_oof_learner_fit_plan,
+    validate_development_oof_prediction_plan,
     validate_development_training_membership_assembly_plan,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
@@ -8058,6 +8070,425 @@ class SecFilingGemmaRevealStore:
         return {
             **detached,
             "learner_fit_projection_sha256": canonical_sha256(detached),
+        }
+
+    def _load_owned_development_oof_prediction_projection(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project only the frozen OOF states and their causal feature rows."""
+
+        with self._locked():
+            return self._load_owned_development_oof_prediction_projection_locked(
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+
+    def _load_owned_development_oof_prediction_projection_locked(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project OOF prediction inputs while the caller holds the store lock."""
+
+        scope_hash = _sha256(
+            development_root_scope_sha256,
+            "owned development OOF prediction projection root scope hash",
+        )
+        tracked_anchor = _load_tracked_anchor(self.repository_root)
+        current, current_tip, state_bytes, tip_bytes = (
+            self._read_state_and_tip_locked(tracked_anchor)
+        )
+
+        raw_membership_projection = (
+            self._load_owned_development_training_membership_projection_locked(
+                development_root_scope_sha256=scope_hash,
+            )
+        )
+        membership_projection = _exact_builtin_json_copy(
+            raw_membership_projection,
+            "owned development OOF prediction source membership projection",
+        )
+        if type(membership_projection) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF prediction source membership projection is not exact"
+            )
+        membership_batch = (
+            self._build_owned_development_training_membership_batch_from_projection_locked(
+                training_membership_projection=membership_projection,
+            )
+        )
+        membership_plan = membership_projection.get(
+            "training_membership_assembly_plan"
+        )
+        source_feature_batch = membership_projection.get("source_feature_batch")
+
+        try:
+            if (
+                type(membership_plan) is not dict
+                or type(source_feature_batch) is not dict
+            ):
+                raise SecFilingGemmaRevealStoreError(
+                    "Development OOF prediction membership sources are not exact objects"
+                )
+            fit_input_specs = derive_development_oof_learner_fit_input_specs(
+                membership_batch
+            )
+            learner_fit_plan = build_development_oof_learner_fit_plan(
+                current,
+                development_root_scope_sha256=scope_hash,
+                source_training_membership_assembly_plan=membership_plan,
+                source_training_membership_projection_sha256=(
+                    membership_projection["membership_projection_sha256"]
+                ),
+                source_training_membership_batch_sha256=membership_batch[
+                    "training_membership_batch_sha256"
+                ],
+                fit_input_specs=fit_input_specs,
+                independent_current_tip_anchor=current_tip,
+            )
+            validate_development_oof_learner_fit_plan(
+                learner_fit_plan,
+                expected_development_oof_learner_fit_plan_sha256=learner_fit_plan[
+                    "development_oof_learner_fit_plan_sha256"
+                ],
+            )
+            learner_fit_projection_body = {
+                "schema_version": (
+                    OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_SCHEMA_VERSION
+                ),
+                "development_oof_learner_fit_plan": copy.deepcopy(
+                    learner_fit_plan
+                ),
+                "source_training_membership_batch": copy.deepcopy(
+                    membership_batch
+                ),
+            }
+            learner_fit_projection_sha256 = canonical_sha256(
+                learner_fit_projection_body
+            )
+            learner_fit_batch = build_owned_development_oof_learner_fit_batch(
+                development_oof_learner_fit_plan=learner_fit_plan,
+                expected_development_oof_learner_fit_plan_sha256=learner_fit_plan[
+                    "development_oof_learner_fit_plan_sha256"
+                ],
+                source_training_membership_batch=membership_batch,
+                expected_source_training_membership_batch_sha256=membership_batch[
+                    "training_membership_batch_sha256"
+                ],
+            )
+            validate_owned_development_oof_learner_fit_batch(
+                learner_fit_batch,
+                development_oof_learner_fit_plan=learner_fit_plan,
+                expected_development_oof_learner_fit_plan_sha256=learner_fit_plan[
+                    "development_oof_learner_fit_plan_sha256"
+                ],
+                source_training_membership_batch=membership_batch,
+                expected_source_training_membership_batch_sha256=membership_batch[
+                    "training_membership_batch_sha256"
+                ],
+                expected_learner_fit_batch_sha256=learner_fit_batch[
+                    "learner_fit_batch_sha256"
+                ],
+            )
+
+            prediction_fold_model_bundle = (
+                derive_development_oof_prediction_fold_model_bundle(
+                    learner_fit_batch
+                )
+            )
+            prediction_feature_batch = (
+                derive_development_oof_prediction_feature_batch(
+                    source_feature_batch
+                )
+            )
+            prediction_fold_model_specs = (
+                derive_development_oof_prediction_fold_model_specs(
+                    prediction_fold_model_bundle
+                )
+            )
+            prediction_input_specs = (
+                derive_development_oof_prediction_input_specs(
+                    prediction_feature_batch
+                )
+            )
+            prediction_plan = build_development_oof_prediction_plan(
+                current,
+                development_root_scope_sha256=scope_hash,
+                source_development_oof_learner_fit_plan=learner_fit_plan,
+                source_development_oof_learner_fit_projection_sha256=(
+                    learner_fit_projection_sha256
+                ),
+                source_development_oof_learner_fit_batch_sha256=(
+                    learner_fit_batch["learner_fit_batch_sha256"]
+                ),
+                prediction_fold_model_bundle_sha256=(
+                    prediction_fold_model_bundle[
+                        "prediction_fold_model_bundle_sha256"
+                    ]
+                ),
+                prediction_fold_model_specs=prediction_fold_model_specs,
+                source_feature_batch_sha256=source_feature_batch[
+                    "feature_batch_sha256"
+                ],
+                prediction_feature_batch_sha256=prediction_feature_batch[
+                    "prediction_feature_batch_sha256"
+                ],
+                prediction_input_specs=prediction_input_specs,
+                independent_current_tip_anchor=current_tip,
+            )
+            validate_development_oof_prediction_plan(
+                prediction_plan,
+                expected_development_oof_prediction_plan_sha256=prediction_plan[
+                    "development_oof_prediction_plan_sha256"
+                ],
+            )
+        except SecFilingGemmaRevealStoreError:
+            raise
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaContractError,
+            SecFilingGemmaLearnerFitError,
+            SecFilingGemmaLearnerPredictionError,
+            SecFilingGemmaStageAuthorizationError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF prediction sources failed exact replay"
+            ) from exc
+
+        fit_plan_hash = learner_fit_plan.get(
+            "development_oof_learner_fit_plan_sha256"
+        )
+        fit_batch_hash = learner_fit_batch.get("learner_fit_batch_sha256")
+        feature_batch_hash = source_feature_batch.get("feature_batch_sha256")
+        fold_bundle_hash = prediction_fold_model_bundle.get(
+            "prediction_fold_model_bundle_sha256"
+        )
+        prediction_feature_hash = prediction_feature_batch.get(
+            "prediction_feature_batch_sha256"
+        )
+        lineage_matches = (
+            prediction_plan.get("development_root_scope_sha256") == scope_hash
+            == learner_fit_plan.get("development_root_scope_sha256")
+            == learner_fit_batch.get("development_root_scope_sha256")
+            == source_feature_batch.get("development_root_scope_sha256")
+            and prediction_plan.get("start_consumed_request_count") == 0
+            == learner_fit_plan.get("start_consumed_request_count")
+            and prediction_plan.get(
+                "source_development_oof_learner_fit_plan_sha256"
+            )
+            == fit_plan_hash
+            and prediction_plan.get(
+                "source_development_oof_learner_fit_projection_sha256"
+            )
+            == learner_fit_projection_sha256
+            and prediction_plan.get(
+                "source_development_oof_learner_fit_batch_sha256"
+            )
+            == fit_batch_hash
+            == prediction_fold_model_bundle.get(
+                "source_learner_fit_batch_sha256"
+            )
+            and prediction_plan.get("prediction_fold_model_bundle_sha256")
+            == fold_bundle_hash
+            and prediction_plan.get("source_feature_batch_sha256")
+            == feature_batch_hash
+            == prediction_feature_batch.get("source_feature_batch_sha256")
+            and prediction_plan.get("prediction_feature_batch_sha256")
+            == prediction_feature_hash
+            and prediction_plan.get("prediction_fold_model_specs")
+            == prediction_fold_model_specs
+            and prediction_plan.get("prediction_fold_model_specs_sha256")
+            == canonical_sha256(prediction_fold_model_specs)
+            and prediction_plan.get("prediction_input_specs")
+            == prediction_input_specs
+            and prediction_plan.get("prediction_input_specs_sha256")
+            == canonical_sha256(prediction_input_specs)
+        )
+        for field in (
+            "contract_sha256",
+            "candidate_sha256",
+            "corpus_universe_sha256",
+        ):
+            lineage_matches = lineage_matches and (
+                prediction_plan.get(field)
+                == learner_fit_plan.get(field)
+                == learner_fit_batch.get(field)
+                == prediction_fold_model_bundle.get(field)
+                == prediction_feature_batch.get(field)
+            )
+        lineage_matches = lineage_matches and (
+            prediction_plan.get("candidate_sha256")
+            == source_feature_batch.get("candidate_sha256")
+            and prediction_plan.get("corpus_universe_sha256")
+            == source_feature_batch.get("corpus_universe_sha256")
+        )
+        for field in (
+            "calendar_sessions_sha256",
+            "development_cutoff_session",
+        ):
+            lineage_matches = lineage_matches and (
+                prediction_plan.get(field)
+                == learner_fit_plan.get(field)
+                == learner_fit_batch.get(field)
+                == prediction_fold_model_bundle.get(field)
+            )
+        source_feature_plan_hash = source_feature_batch.get(
+            "feature_assembly_plan_sha256"
+        )
+        lineage_matches = lineage_matches and (
+            membership_plan.get("source_feature_assembly_plan_sha256")
+            == membership_batch.get("source_feature_assembly_plan_sha256")
+            == source_feature_plan_hash
+            == prediction_plan.get("source_feature_assembly_plan_sha256")
+        )
+        authorized_fold_ids = [
+            "fold_1",
+            "fold_2",
+            "fold_3",
+            "fold_4",
+            "fold_5",
+        ]
+        available_input_count = sum(
+            item.get("prediction_available") is True
+            for item in prediction_input_specs
+            if type(item) is dict
+        )
+        unavailable_input_count = sum(
+            item.get("prediction_available") is False
+            for item in prediction_input_specs
+            if type(item) is dict
+        )
+        lineage_matches = lineage_matches and (
+            prediction_plan.get("source_training_membership_assembly_plan_sha256")
+            == learner_fit_plan.get(
+                "source_training_membership_assembly_plan_sha256"
+            )
+            == membership_batch.get("training_membership_assembly_plan_sha256")
+            and prediction_plan.get("source_training_membership_projection_sha256")
+            == learner_fit_plan.get(
+                "source_training_membership_projection_sha256"
+            )
+            == membership_projection.get("membership_projection_sha256")
+            and prediction_plan.get("source_training_membership_batch_sha256")
+            == learner_fit_plan.get("source_training_membership_batch_sha256")
+            == membership_batch.get("training_membership_batch_sha256")
+            and prediction_plan.get("source_event_count")
+            == source_feature_batch.get("event_count")
+            == prediction_feature_batch.get("source_event_count")
+            and prediction_plan.get("authorized_fold_count") == 5
+            == prediction_plan.get("prediction_fold_model_count")
+            == prediction_fold_model_bundle.get("fold_model_count")
+            == prediction_feature_batch.get("prediction_fold_count")
+            == len(prediction_fold_model_specs)
+            and prediction_plan.get("authorized_fold_ids")
+            == authorized_fold_ids
+            == prediction_fold_model_bundle.get("fold_ids")
+            == prediction_feature_batch.get("prediction_fold_ids")
+            and prediction_plan.get("model_variant_count") == 2
+            == prediction_fold_model_bundle.get("model_variant_count")
+            and prediction_plan.get("model_variant_ids")
+            == ["semantic", "ablation"]
+            == prediction_fold_model_bundle.get("model_variant_ids")
+            and prediction_plan.get("learner_state_count") == 10
+            and prediction_plan.get("learner_model_type")
+            == prediction_fold_model_bundle.get("learner_model_type")
+            and prediction_plan.get("learner_state_schema_version")
+            == prediction_fold_model_bundle.get("learner_state_schema_version")
+            and prediction_plan.get("learner_config_sha256")
+            == learner_fit_plan.get("learner_config_sha256")
+            and prediction_plan.get("feature_schema_sha256")
+            == prediction_fold_model_bundle.get("feature_schema_sha256")
+            == prediction_feature_batch.get("feature_schema_sha256")
+            and prediction_plan.get("prediction_input_count")
+            == prediction_feature_batch.get("prediction_event_count")
+            == len(prediction_input_specs)
+            and prediction_plan.get("available_prediction_input_count")
+            == available_input_count
+            and prediction_plan.get("unavailable_prediction_input_count")
+            == unavailable_input_count
+            and available_input_count + unavailable_input_count
+            == len(prediction_input_specs)
+        )
+        if not lineage_matches:
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF prediction crossed its owned ancestry"
+            )
+
+        body = {
+            "schema_version": (
+                OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION
+            ),
+            "development_oof_prediction_plan": copy.deepcopy(prediction_plan),
+            "prediction_fold_model_bundle": copy.deepcopy(
+                prediction_fold_model_bundle
+            ),
+            "prediction_feature_batch": copy.deepcopy(prediction_feature_batch),
+        }
+        detached = _exact_builtin_json_copy(
+            body,
+            "owned development OOF prediction projection",
+        )
+        if type(detached) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development OOF prediction projection is not exact JSON"
+            )
+        forbidden_projection_keys = {
+            "source_development_oof_learner_fit_plan",
+            "source_training_membership_assembly_plan",
+            "source_training_membership_batch",
+            "training_set_membership",
+            "semantic_training_features_hex",
+            "ablation_training_features_hex",
+            "training_binary_targets",
+            "training_edge_targets_hex",
+            "source_feature_batch",
+            "source_label_batch",
+            "learner_fit_views",
+            "learner_fit_records",
+            "deferred_training_views",
+        }
+        forbidden_projection_strings = {
+            "intermediate_frozen_through_2018",
+            "2019-01-01",
+            "2023-12-31",
+        }
+        stack: list[Any] = [detached]
+        while stack:
+            value = stack.pop()
+            if type(value) is dict:
+                if forbidden_projection_keys.intersection(value):
+                    raise SecFilingGemmaRevealStoreError(
+                        "Owned development OOF prediction projection exposed a private source"
+                    )
+                stack.extend(value.values())
+            elif type(value) is list:
+                stack.extend(value)
+            elif type(value) is str and value in forbidden_projection_strings:
+                raise SecFilingGemmaRevealStoreError(
+                    "Owned development OOF prediction projection exposed a deferred window"
+                )
+        (
+            closure_current,
+            closure_tip,
+            closure_state_bytes,
+            closure_tip_bytes,
+        ) = self._read_state_and_tip_locked(tracked_anchor)
+        if (
+            closure_state_bytes != state_bytes
+            or closure_tip_bytes != tip_bytes
+            or closure_current != current
+            or closure_tip != current_tip
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development OOF prediction authorization ancestry changed during projection"
+            )
+        return {
+            **detached,
+            "prediction_projection_sha256": canonical_sha256(detached),
         }
 
     def _record_owned_development_model_reader_output(

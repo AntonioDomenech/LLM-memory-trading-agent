@@ -974,13 +974,16 @@ orders membership from chronology and feature availability without consulting
 target values, retains the same ordered rows and targets for semantic and
 ablation variants, and emits canonical matrices, binary/edge targets, learner
 contexts, and fit-metadata templates while still denying fitting, prediction,
-holdout, ledger mutation, promotion, and production use. No owned
-prediction or ledger assembler exists yet. A fourth store-owned projection now
+holdout, ledger mutation, promotion, and production use. A fourth store-owned projection now
 rebuilds and fully validates that membership artifact under the same lock,
 authorizes only `fold_1` through `fold_5`, and passes exactly ten fit inputs to
 the deterministic learner boundary. The frozen-through-2018 view remains
-explicitly deferred until a development winner has been selected. The ledger
-source role is the sole unresolved source role.
+explicitly deferred until a development winner has been selected. A fifth
+store-owned projection reconstructs those ten states and only the 2005-2018
+feature rows assigned to their five chronological OOF windows. It emits no
+membership rows, matrices, targets, deferred-view state, post-2018 feature,
+threshold, action, policy state, or outcome. The ledger source role is the sole
+unresolved source role.
 
 The completed feature-only checkpoint is deliberately non-authorizing. Under one
 store lock it replays terminal non-aborted same-root SEC, market, and development
@@ -1029,6 +1032,25 @@ deferred sixth view. Fit failure is terminal: there is no retry, row drop,
 rebalance, solver change, feature selection, prediction, or candidate selection
 inside this boundary. All ten fits share one frozen 60-second cap.
 
+The completed development OOF prediction checkpoint pairs each filing with only
+its current compact feature row and its own fold's semantic/ablation state pair.
+Every usable event makes exactly two deterministic numerical predictions; an
+unavailable event emits one explicit reason and makes zero prediction calls.
+The emitted values are only cash-win probability and expected active log edge
+for the semantic and ablation variants. No threshold is evaluated and no
+LONG/CASH action, candidate rank, policy transition, score, seal, label, or
+ledger row is created. Validation is deliberately non-predicting, so it cannot
+silently double the authorized call count.
+
+Each raw prediction row binds the current event, causal market/extraction
+identities, exact feature input, fold cutoff and label-maturity context, and both
+learner-state hashes. The row chain deliberately excludes the full plan, future
+feature-batch hash, and later fold states, so changing a later event or state
+cannot rewrite an earlier raw row. Compact validation also proves that each
+state's training count, positive count, membership hash, feature schema, and
+maximum label-maturity session match the claimed fold; the ablation shares the
+first 42 market/calendar inputs and zeros only the twelve filing-derived values.
+
 The completed learner-fit checkpoint passes the full local repository suite
 with `1719` tests passed and `13` skipped in `3169.05` seconds (`52:49`), with
 an independently measured wall time of `3169.771` seconds. This remains below
@@ -1036,9 +1058,16 @@ the frozen one-hour approach-test ceiling. The added membership and learner-fit
 tests are synthetic and make no network, Ollama, prediction, or
 production-store call.
 
-The next implementation milestone is owned development prediction from the ten
-OOF states, followed by development ranking, the separately authorized
-frozen-through-2018 refit, and the continuous no-leverage ledger. Those later
+The completed development OOF prediction checkpoint passes the full local
+repository suite with `1757` tests passed and `13` skipped in `3221.36` seconds
+(`53:41`), with an independently measured wall time of `3222.130` seconds.
+This also remains below the frozen one-hour approach-test ceiling. The suite is
+local-only and makes no paid API call; passing this checkpoint verifies the
+chronological prediction boundary, not trading outperformance.
+
+The next implementation milestone is development-only threshold replay and
+candidate ranking from these raw OOF values, followed by the separately
+authorized frozen-through-2018 refit and the continuous no-leverage ledger. Those later
 components must remove caller-supplied market snapshots from every authorizing
 path, parse
 official calendar semantics, chain every artifact from genesis, and bind the

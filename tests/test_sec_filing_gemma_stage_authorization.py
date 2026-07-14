@@ -15,6 +15,7 @@ import agent_benchmark.sec_filing_gemma_stage_verifier as verifier_module
 from agent_benchmark.sec_filing_gemma_contract import (
     CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
+    DEVELOPMENT_FOLD_SPECS,
     REQUIRED_SOURCE_HASHES,
     REQUIRED_STAGE_VERIFIER_CHECKS,
     build_candidate_manifest,
@@ -60,6 +61,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION,
+    DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
@@ -96,6 +98,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_feature_assembly_plan,
     build_development_label_assembly_plan,
     build_development_oof_learner_fit_plan,
+    build_development_oof_prediction_plan,
     build_development_training_membership_assembly_plan,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
@@ -122,6 +125,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_feature_assembly_plan,
     validate_development_label_assembly_plan,
     validate_development_oof_learner_fit_plan,
+    validate_development_oof_prediction_plan,
     validate_development_training_membership_assembly_plan,
     validate_development_root_carry_in_reader_receipt,
     validate_development_model_execution_abort,
@@ -2160,6 +2164,175 @@ _DEVELOPMENT_OOF_DENIED_CAPABILITIES = (
     "production_permitted",
 )
 
+_DEVELOPMENT_OOF_PREDICTION_PLAN_KEYS = {
+    "schema_version",
+    "contract_version",
+    "contract_sha256",
+    "plan_kind",
+    "artifact_stage",
+    "development_root_scope_sha256",
+    "start_consumed_request_count",
+    "source_development_oof_learner_fit_plan_sha256",
+    "source_development_oof_learner_fit_projection_sha256",
+    "source_development_oof_learner_fit_batch_sha256",
+    "source_training_membership_assembly_plan_sha256",
+    "source_training_membership_projection_sha256",
+    "source_training_membership_batch_sha256",
+    "source_feature_assembly_plan_sha256",
+    "source_feature_batch_sha256",
+    "prediction_feature_batch_sha256",
+    "candidate_sha256",
+    "corpus_universe_sha256",
+    "calendar_sessions_sha256",
+    "development_cutoff_session",
+    "source_event_count",
+    "authorized_fold_count",
+    "authorized_fold_ids",
+    "prediction_fold_model_count",
+    "prediction_fold_model_bundle_sha256",
+    "prediction_fold_model_specs",
+    "prediction_fold_model_specs_sha256",
+    "model_variant_count",
+    "model_variant_ids",
+    "learner_state_count",
+    "learner_model_type",
+    "learner_state_schema_version",
+    "learner_config_sha256",
+    "feature_schema_sha256",
+    "prediction_input_count",
+    "available_prediction_input_count",
+    "unavailable_prediction_input_count",
+    "prediction_input_specs",
+    "prediction_input_specs_sha256",
+    "prediction_population_rule",
+    "prediction_input_order_rule",
+    "fold_state_usage_rule",
+    "maximum_prediction_calls",
+    "maximum_prediction_seconds",
+    "canonical_prediction_fold_model_bundle_required",
+    "canonical_prediction_feature_batch_required",
+    "authorized_learner_state_access_permitted",
+    "authorized_prediction_feature_row_access_permitted",
+    "learner_state_deserialization_permitted",
+    "deterministic_numeric_prediction_permitted",
+    "raw_prediction_component_output_permitted",
+    "unavailable_prediction_output_permitted",
+    "compact_prediction_audit_output_permitted",
+    "source_development_oof_learner_fit_batch_access_permitted",
+    "source_training_membership_batch_access_permitted",
+    "training_membership_rows_access_permitted",
+    "training_feature_matrices_access_permitted",
+    "training_target_vectors_access_permitted",
+    "source_feature_batch_access_permitted",
+    "source_label_batch_access_permitted",
+    "label_access_permitted",
+    "outcome_access_permitted",
+    "post_decision_market_data_access_permitted",
+    "post_2018_data_access_permitted",
+    "deferred_training_view_access_permitted",
+    "deferred_training_view_state_access_permitted",
+    "learner_fit_permitted",
+    "learner_state_update_permitted",
+    "online_learning_permitted",
+    "feature_mutation_permitted",
+    "row_drop_permitted",
+    "row_reordering_permitted",
+    "prediction_retry_permitted",
+    "model_transport_access_permitted",
+    "network_access_permitted",
+    "threshold_action_access_permitted",
+    "candidate_selection_permitted",
+    "policy_state_transition_permitted",
+    "prediction_sealing_permitted",
+    "label_release_permitted",
+    "holdout_access_permitted",
+    "ledger_mutation_permitted",
+    "stage_promotion_permitted",
+    "production_permitted",
+    "development_oof_prediction_plan_sha256",
+}
+
+_DEVELOPMENT_OOF_PREDICTION_FOLD_MODEL_SPEC_KEYS = {
+    "fold_ordinal",
+    "fold_id",
+    "prediction_window_first_date",
+    "prediction_window_last_date",
+    "source_learner_fit_view_sha256",
+    "prediction_fold_context_sha256",
+    "semantic_fit_record_sha256",
+    "semantic_learner_state_sha256",
+    "ablation_fit_record_sha256",
+    "ablation_learner_state_sha256",
+    "feature_schema_sha256",
+    "prediction_fold_model_sha256",
+    "prediction_fold_model_spec_sha256",
+}
+
+_DEVELOPMENT_OOF_PREDICTION_INPUT_SPEC_KEYS = {
+    "prediction_ordinal",
+    "source_event_ordinal",
+    "fold_ordinal",
+    "fold_id",
+    "decision_session",
+    "accession_number",
+    "source_feature_row_sha256",
+    "event_binding_sha256",
+    "prediction_available",
+    "unavailable_reason",
+    "semantic_feature_schema_sha256",
+    "semantic_feature_values_sha256",
+    "ablation_feature_schema_sha256",
+    "ablation_feature_values_sha256",
+    "prediction_feature_input_sha256",
+    "prediction_input_spec_sha256",
+}
+
+_DEVELOPMENT_OOF_PREDICTION_ALLOWED_CAPABILITIES = (
+    "canonical_prediction_fold_model_bundle_required",
+    "canonical_prediction_feature_batch_required",
+    "authorized_learner_state_access_permitted",
+    "authorized_prediction_feature_row_access_permitted",
+    "learner_state_deserialization_permitted",
+    "deterministic_numeric_prediction_permitted",
+    "raw_prediction_component_output_permitted",
+    "unavailable_prediction_output_permitted",
+    "compact_prediction_audit_output_permitted",
+)
+
+_DEVELOPMENT_OOF_PREDICTION_DENIED_CAPABILITIES = (
+    "source_development_oof_learner_fit_batch_access_permitted",
+    "source_training_membership_batch_access_permitted",
+    "training_membership_rows_access_permitted",
+    "training_feature_matrices_access_permitted",
+    "training_target_vectors_access_permitted",
+    "source_feature_batch_access_permitted",
+    "source_label_batch_access_permitted",
+    "label_access_permitted",
+    "outcome_access_permitted",
+    "post_decision_market_data_access_permitted",
+    "post_2018_data_access_permitted",
+    "deferred_training_view_access_permitted",
+    "deferred_training_view_state_access_permitted",
+    "learner_fit_permitted",
+    "learner_state_update_permitted",
+    "online_learning_permitted",
+    "feature_mutation_permitted",
+    "row_drop_permitted",
+    "row_reordering_permitted",
+    "prediction_retry_permitted",
+    "model_transport_access_permitted",
+    "network_access_permitted",
+    "threshold_action_access_permitted",
+    "candidate_selection_permitted",
+    "policy_state_transition_permitted",
+    "prediction_sealing_permitted",
+    "label_release_permitted",
+    "holdout_access_permitted",
+    "ledger_mutation_permitted",
+    "stage_promotion_permitted",
+    "production_permitted",
+)
+
 
 def _assert_model_market_bindings(value: dict, tip: dict, scope_hash: str) -> None:
     market_claim = tip["development_market_execution_claims"][scope_hash]
@@ -2400,6 +2573,186 @@ def _development_oof_learner_fit_plan_fixture() -> tuple[
         independent_current_tip_anchor=reader_tip,
     )
     return state, reader_tip, membership_plan, fit_specs, plan
+
+
+def _development_oof_prediction_fold_model_specs(
+    source_fit_plan: dict,
+) -> list[dict]:
+    specs: list[dict] = []
+    feature_schema_sha256 = source_fit_plan["learner_fit_input_specs"][0][
+        "feature_schema_sha256"
+    ]
+    for fold_ordinal, (fold_id, _cutoff, first, last) in enumerate(
+        DEVELOPMENT_FOLD_SPECS,
+        start=1,
+    ):
+        semantic_fit = source_fit_plan["learner_fit_input_specs"][
+            2 * (fold_ordinal - 1)
+        ]
+        body = {
+            "fold_ordinal": fold_ordinal,
+            "fold_id": fold_id,
+            "prediction_window_first_date": first,
+            "prediction_window_last_date": last,
+            "source_learner_fit_view_sha256": semantic_fit[
+                "source_training_view_sha256"
+            ],
+            "prediction_fold_context_sha256": _h(
+                f"OOF prediction fold context {fold_id}"
+            ),
+            "semantic_fit_record_sha256": _h(
+                f"OOF semantic fit record {fold_id}"
+            ),
+            "semantic_learner_state_sha256": _h(
+                f"OOF semantic learner state {fold_id}"
+            ),
+            "ablation_fit_record_sha256": _h(
+                f"OOF ablation fit record {fold_id}"
+            ),
+            "ablation_learner_state_sha256": _h(
+                f"OOF ablation learner state {fold_id}"
+            ),
+            "feature_schema_sha256": feature_schema_sha256,
+            "prediction_fold_model_sha256": _h(
+                f"OOF prediction fold model {fold_id}"
+            ),
+        }
+        specs.append(
+            {
+                **body,
+                "prediction_fold_model_spec_sha256": canonical_sha256(body),
+            }
+        )
+    return specs
+
+
+def _development_oof_prediction_fold_for_session(
+    session: str,
+) -> tuple[int, str]:
+    for fold_ordinal, (fold_id, _cutoff, first, last) in enumerate(
+        DEVELOPMENT_FOLD_SPECS,
+        start=1,
+    ):
+        if first <= session <= last:
+            return fold_ordinal, fold_id
+    raise AssertionError(session)
+
+
+def _development_oof_prediction_input_specs(
+    source_fit_plan: dict,
+) -> list[dict]:
+    feature_plan = source_fit_plan[
+        "source_training_membership_assembly_plan"
+    ]["source_label_assembly_plan"]["source_feature_assembly_plan"]
+    feature_schema_sha256 = source_fit_plan["learner_fit_input_specs"][0][
+        "feature_schema_sha256"
+    ]
+    events = [
+        event
+        for event in feature_plan["event_plan"]
+        if any(
+            first <= event["availability_session"] <= last
+            for _fold_id, _cutoff, first, last in DEVELOPMENT_FOLD_SPECS
+        )
+    ]
+    unavailable_reasons = (
+        None,
+        "missing_required_market_features",
+        "missing_required_extraction_features",
+        "missing_required_market_and_extraction_features",
+    )
+    specs: list[dict] = []
+    for prediction_ordinal, event in enumerate(events, start=1):
+        fold_ordinal, fold_id = _development_oof_prediction_fold_for_session(
+            event["availability_session"]
+        )
+        reason = unavailable_reasons[(prediction_ordinal - 1) % 4]
+        available = reason is None
+        body = {
+            "prediction_ordinal": prediction_ordinal,
+            "source_event_ordinal": event["event_ordinal"],
+            "fold_ordinal": fold_ordinal,
+            "fold_id": fold_id,
+            "decision_session": event["availability_session"],
+            "accession_number": event["accession_number"],
+            "source_feature_row_sha256": _h(
+                f"OOF source feature row {event['accession_number']}"
+            ),
+            "event_binding_sha256": _h(
+                f"OOF prediction event binding {event['accession_number']}"
+            ),
+            "prediction_available": available,
+            "unavailable_reason": reason,
+            "semantic_feature_schema_sha256": feature_schema_sha256,
+            "semantic_feature_values_sha256": (
+                _h(f"OOF semantic feature values {event['accession_number']}")
+                if available
+                else None
+            ),
+            "ablation_feature_schema_sha256": feature_schema_sha256,
+            "ablation_feature_values_sha256": (
+                _h(f"OOF ablation feature values {event['accession_number']}")
+                if available
+                else None
+            ),
+            "prediction_feature_input_sha256": _h(
+                f"OOF compact prediction input {event['accession_number']}"
+            ),
+        }
+        specs.append(
+            {**body, "prediction_input_spec_sha256": canonical_sha256(body)}
+        )
+    return specs
+
+
+def _development_oof_prediction_plan_fixture() -> tuple[
+    dict, dict, dict, list[dict], list[dict], dict
+]:
+    state, reader_tip, _membership_plan, _fit_specs, source_fit_plan = (
+        _development_oof_learner_fit_plan_fixture()
+    )
+    fold_specs = _development_oof_prediction_fold_model_specs(source_fit_plan)
+    input_specs = _development_oof_prediction_input_specs(source_fit_plan)
+    plan = _build_development_oof_prediction_plan_for_test(
+        state,
+        reader_tip,
+        source_fit_plan,
+        fold_specs,
+        input_specs,
+    )
+    return state, reader_tip, source_fit_plan, fold_specs, input_specs, plan
+
+
+def _build_development_oof_prediction_plan_for_test(
+    state: dict,
+    reader_tip: dict,
+    source_fit_plan: dict,
+    fold_specs: list[dict],
+    input_specs: list[dict],
+) -> dict:
+    return build_development_oof_prediction_plan(
+        state,
+        development_root_scope_sha256=source_fit_plan[
+            "development_root_scope_sha256"
+        ],
+        source_development_oof_learner_fit_plan=source_fit_plan,
+        source_development_oof_learner_fit_projection_sha256=_h(
+            "OOF learner-fit projection"
+        ),
+        source_development_oof_learner_fit_batch_sha256=_h(
+            "OOF learner-fit batch"
+        ),
+        prediction_fold_model_bundle_sha256=_h(
+            "OOF prediction fold-model bundle"
+        ),
+        prediction_fold_model_specs=fold_specs,
+        source_feature_batch_sha256=_h("OOF source feature batch"),
+        prediction_feature_batch_sha256=_h(
+            "OOF compact prediction feature batch"
+        ),
+        prediction_input_specs=input_specs,
+        independent_current_tip_anchor=reader_tip,
+    )
 
 
 def _development_market_fixture() -> tuple[dict, dict, dict, dict, dict]:
@@ -6334,5 +6687,317 @@ def test_development_oof_learner_fit_plan_checksum_and_exact_mapping_fail_closed
             DictSubclass(plan),
             expected_development_oof_learner_fit_plan_sha256=plan[
                 "development_oof_learner_fit_plan_sha256"
+            ],
+        )
+
+
+def test_development_oof_prediction_plan_is_exact_private_and_deterministic() -> None:
+    state, reader_tip, source_fit_plan, fold_specs, input_specs, plan = (
+        _development_oof_prediction_plan_fixture()
+    )
+    state_before = copy.deepcopy(state)
+    tip_before = copy.deepcopy(reader_tip)
+
+    assert set(plan) == _DEVELOPMENT_OOF_PREDICTION_PLAN_KEYS
+    assert plan["schema_version"] == DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION
+    assert plan["contract_version"] == CONTRACT_VERSION
+    assert plan["contract_sha256"] == canonical_sha256(build_contract_manifest())
+    assert plan["plan_kind"] == "request_free_development_oof_prediction"
+    assert plan["artifact_stage"] == "development"
+    assert "source_development_oof_learner_fit_plan" not in plan
+    assert plan["source_development_oof_learner_fit_plan_sha256"] == (
+        source_fit_plan["development_oof_learner_fit_plan_sha256"]
+    )
+    assert plan["source_event_count"] == 76
+    assert plan["authorized_fold_count"] == 5
+    assert plan["authorized_fold_ids"] == [
+        "fold_1",
+        "fold_2",
+        "fold_3",
+        "fold_4",
+        "fold_5",
+    ]
+    assert plan["prediction_fold_model_count"] == 5
+    assert plan["learner_state_count"] == 10
+    assert plan["model_variant_ids"] == ["semantic", "ablation"]
+    assert plan["prediction_input_count"] == 56
+    assert plan["available_prediction_input_count"] == 14
+    assert plan["unavailable_prediction_input_count"] == 42
+    assert plan["maximum_prediction_calls"] == 28
+    assert plan["maximum_prediction_seconds"] == 60
+    assert plan["prediction_fold_model_specs"] == fold_specs
+    assert plan["prediction_input_specs"] == input_specs
+    assert all(
+        "2005-01-01" <= spec["decision_session"] <= "2018-12-31"
+        for spec in plan["prediction_input_specs"]
+    )
+    compact_json = json.dumps(plan, sort_keys=True)
+    assert "intermediate_frozen_through_2018" not in compact_json
+    assert "2019-" not in compact_json
+    for field in _DEVELOPMENT_OOF_PREDICTION_ALLOWED_CAPABILITIES:
+        assert plan[field] is True
+    for field in _DEVELOPMENT_OOF_PREDICTION_DENIED_CAPABILITIES:
+        assert plan[field] is False
+    for ordinal, spec in enumerate(plan["prediction_fold_model_specs"], start=1):
+        assert set(spec) == _DEVELOPMENT_OOF_PREDICTION_FOLD_MODEL_SPEC_KEYS
+        assert spec["fold_ordinal"] == ordinal
+    for ordinal, spec in enumerate(plan["prediction_input_specs"], start=1):
+        assert set(spec) == _DEVELOPMENT_OOF_PREDICTION_INPUT_SPEC_KEYS
+        assert spec["prediction_ordinal"] == ordinal
+
+    assert validate_development_oof_prediction_plan(
+        plan,
+        expected_development_oof_prediction_plan_sha256=plan[
+            "development_oof_prediction_plan_sha256"
+        ],
+    ) == plan["development_oof_prediction_plan_sha256"]
+    assert _build_development_oof_prediction_plan_for_test(
+        state,
+        reader_tip,
+        source_fit_plan,
+        fold_specs,
+        input_specs,
+    ) == plan
+    assert state == state_before
+    assert reader_tip == tip_before
+
+
+def test_development_oof_prediction_plan_rebuilds_source_and_exact_population() -> None:
+    state, reader_tip, source_fit_plan, fold_specs, input_specs, _plan = (
+        _development_oof_prediction_plan_fixture()
+    )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="omit or add",
+    ):
+        _build_development_oof_prediction_plan_for_test(
+            state,
+            reader_tip,
+            source_fit_plan,
+            fold_specs,
+            input_specs[:-1],
+        )
+
+    changed_source = copy.deepcopy(source_fit_plan)
+    changed_source["development_oof_learner_fit_plan_sha256"] = _h(
+        "forged source fit plan"
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="self-hash is inconsistent",
+    ):
+        _build_development_oof_prediction_plan_for_test(
+            state,
+            reader_tip,
+            changed_source,
+            fold_specs,
+            input_specs,
+        )
+
+    changed_tip = copy.deepcopy(reader_tip)
+    changed_tip["development_model_reader_receipts"] = {}
+    _rehash(changed_tip, "tip_anchor_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        _build_development_oof_prediction_plan_for_test(
+            state,
+            changed_tip,
+            source_fit_plan,
+            fold_specs,
+            input_specs,
+        )
+
+
+def test_development_oof_prediction_plan_rejects_fold_and_state_tampering() -> None:
+    _state, _reader_tip, _source_fit_plan, _fold_specs, _input_specs, plan = (
+        _development_oof_prediction_plan_fixture()
+    )
+
+    changed_plans: list[dict] = []
+
+    reordered = copy.deepcopy(plan)
+    reordered["prediction_fold_model_specs"].reverse()
+    changed_plans.append(reordered)
+
+    view6 = copy.deepcopy(plan)
+    view6_spec = view6["prediction_fold_model_specs"][-1]
+    view6_spec["fold_id"] = "intermediate_frozen_through_2018"
+    _rehash(view6_spec, "prediction_fold_model_spec_sha256")
+    changed_plans.append(view6)
+
+    duplicate_state = copy.deepcopy(plan)
+    duplicate_state_spec = duplicate_state["prediction_fold_model_specs"][1]
+    duplicate_state_spec["semantic_learner_state_sha256"] = duplicate_state[
+        "prediction_fold_model_specs"
+    ][0]["semantic_learner_state_sha256"]
+    _rehash(duplicate_state_spec, "prediction_fold_model_spec_sha256")
+    changed_plans.append(duplicate_state)
+
+    crossed_schema = copy.deepcopy(plan)
+    crossed_schema_spec = crossed_schema["prediction_fold_model_specs"][1]
+    crossed_schema_spec["feature_schema_sha256"] = _h(
+        "crossed prediction feature schema"
+    )
+    _rehash(crossed_schema_spec, "prediction_fold_model_spec_sha256")
+    changed_plans.append(crossed_schema)
+
+    for changed in changed_plans:
+        changed["prediction_fold_model_specs_sha256"] = canonical_sha256(
+            changed["prediction_fold_model_specs"]
+        )
+        _rehash(changed, "development_oof_prediction_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_oof_prediction_plan(
+                changed,
+                expected_development_oof_prediction_plan_sha256=changed[
+                    "development_oof_prediction_plan_sha256"
+                ],
+            )
+
+
+def test_development_oof_prediction_plan_rejects_input_chronology_and_null_tampering() -> None:
+    _state, _reader_tip, _source_fit_plan, _fold_specs, _input_specs, plan = (
+        _development_oof_prediction_plan_fixture()
+    )
+
+    changed_plans: list[dict] = []
+
+    reordered = copy.deepcopy(plan)
+    reordered["prediction_input_specs"][:2] = reversed(
+        reordered["prediction_input_specs"][:2]
+    )
+    changed_plans.append(reordered)
+
+    duplicated_decision = copy.deepcopy(plan)
+    duplicate_spec = duplicated_decision["prediction_input_specs"][1]
+    first_spec = duplicated_decision["prediction_input_specs"][0]
+    duplicate_spec["decision_session"] = first_spec["decision_session"]
+    duplicate_spec["accession_number"] = first_spec["accession_number"]
+    _rehash(duplicate_spec, "prediction_input_spec_sha256")
+    changed_plans.append(duplicated_decision)
+
+    pre_2005 = copy.deepcopy(plan)
+    pre_2005_spec = pre_2005["prediction_input_specs"][0]
+    pre_2005_spec["decision_session"] = "2004-12-31"
+    _rehash(pre_2005_spec, "prediction_input_spec_sha256")
+    changed_plans.append(pre_2005)
+
+    unavailable_vector = copy.deepcopy(plan)
+    unavailable_spec = unavailable_vector["prediction_input_specs"][1]
+    assert unavailable_spec["prediction_available"] is False
+    unavailable_spec["semantic_feature_values_sha256"] = _h(
+        "forbidden unavailable vector"
+    )
+    _rehash(unavailable_spec, "prediction_input_spec_sha256")
+    changed_plans.append(unavailable_vector)
+
+    available_reason = copy.deepcopy(plan)
+    available_spec = available_reason["prediction_input_specs"][0]
+    assert available_spec["prediction_available"] is True
+    available_spec["unavailable_reason"] = "missing_required_market_features"
+    _rehash(available_spec, "prediction_input_spec_sha256")
+    changed_plans.append(available_reason)
+
+    for changed in changed_plans:
+        changed["prediction_input_specs_sha256"] = canonical_sha256(
+            changed["prediction_input_specs"]
+        )
+        _rehash(changed, "development_oof_prediction_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_oof_prediction_plan(
+                changed,
+                expected_development_oof_prediction_plan_sha256=changed[
+                    "development_oof_prediction_plan_sha256"
+                ],
+            )
+
+
+def test_development_oof_prediction_plan_capabilities_types_and_pins_fail_closed() -> None:
+    _state, _reader_tip, _source_fit_plan, _fold_specs, _input_specs, plan = (
+        _development_oof_prediction_plan_fixture()
+    )
+    for field, replacement in (
+        *((field, False) for field in _DEVELOPMENT_OOF_PREDICTION_ALLOWED_CAPABILITIES),
+        *((field, True) for field in _DEVELOPMENT_OOF_PREDICTION_DENIED_CAPABILITIES),
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = replacement
+        _rehash(changed, "development_oof_prediction_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_oof_prediction_plan(
+                changed,
+                expected_development_oof_prediction_plan_sha256=changed[
+                    "development_oof_prediction_plan_sha256"
+                ],
+            )
+
+    for field in (
+        "source_event_count",
+        "authorized_fold_count",
+        "prediction_fold_model_count",
+        "learner_state_count",
+        "prediction_input_count",
+        "maximum_prediction_calls",
+        "maximum_prediction_seconds",
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = True
+        _rehash(changed, "development_oof_prediction_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_oof_prediction_plan(
+                changed,
+                expected_development_oof_prediction_plan_sha256=changed[
+                    "development_oof_prediction_plan_sha256"
+                ],
+            )
+
+    extra = copy.deepcopy(plan)
+    extra["unexpected"] = False
+    _rehash(extra, "development_oof_prediction_plan_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError, match="keys changed"):
+        validate_development_oof_prediction_plan(
+            extra,
+            expected_development_oof_prediction_plan_sha256=extra[
+                "development_oof_prediction_plan_sha256"
+            ],
+        )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not externally pinned",
+    ):
+        validate_development_oof_prediction_plan(
+            plan,
+            expected_development_oof_prediction_plan_sha256=_h(
+                "other OOF prediction plan"
+            ),
+        )
+
+    inconsistent = copy.deepcopy(plan)
+    inconsistent["development_oof_prediction_plan_sha256"] = _h(
+        "inconsistent OOF prediction plan"
+    )
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="self-hash is inconsistent",
+    ):
+        validate_development_oof_prediction_plan(
+            inconsistent,
+            expected_development_oof_prediction_plan_sha256=inconsistent[
+                "development_oof_prediction_plan_sha256"
+            ],
+        )
+
+    class DictSubclass(dict):
+        pass
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="exact built-in dict",
+    ):
+        validate_development_oof_prediction_plan(
+            DictSubclass(plan),
+            expected_development_oof_prediction_plan_sha256=plan[
+                "development_oof_prediction_plan_sha256"
             ],
         )

@@ -167,6 +167,9 @@ DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
 DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-oof-learner-fit-plan-v1"
 )
+DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-oof-prediction-plan-v1"
+)
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
 )
@@ -1414,6 +1417,155 @@ _DEVELOPMENT_OOF_FIT_ORDER_RULE: Final[str] = (
     "view_ordinal_ascending_then_semantic_then_ablation_exactly_once"
 )
 _DEVELOPMENT_OOF_MAXIMUM_FIT_SECONDS: Final[int] = 60
+_DEVELOPMENT_OOF_PREDICTION_FOLD_MODEL_SPEC_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "fold_ordinal",
+            "fold_id",
+            "prediction_window_first_date",
+            "prediction_window_last_date",
+            "source_learner_fit_view_sha256",
+            "prediction_fold_context_sha256",
+            "semantic_fit_record_sha256",
+            "semantic_learner_state_sha256",
+            "ablation_fit_record_sha256",
+            "ablation_learner_state_sha256",
+            "feature_schema_sha256",
+            "prediction_fold_model_sha256",
+            "prediction_fold_model_spec_sha256",
+        }
+    )
+)
+_DEVELOPMENT_OOF_PREDICTION_INPUT_SPEC_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "prediction_ordinal",
+        "source_event_ordinal",
+        "fold_ordinal",
+        "fold_id",
+        "decision_session",
+        "accession_number",
+        "source_feature_row_sha256",
+        "event_binding_sha256",
+        "prediction_available",
+        "unavailable_reason",
+        "semantic_feature_schema_sha256",
+        "semantic_feature_values_sha256",
+        "ablation_feature_schema_sha256",
+        "ablation_feature_values_sha256",
+        "prediction_feature_input_sha256",
+        "prediction_input_spec_sha256",
+    }
+)
+_DEVELOPMENT_OOF_PREDICTION_PLAN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "contract_sha256",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_consumed_request_count",
+        "source_development_oof_learner_fit_plan_sha256",
+        "source_development_oof_learner_fit_projection_sha256",
+        "source_development_oof_learner_fit_batch_sha256",
+        "source_training_membership_assembly_plan_sha256",
+        "source_training_membership_projection_sha256",
+        "source_training_membership_batch_sha256",
+        "source_feature_assembly_plan_sha256",
+        "source_feature_batch_sha256",
+        "prediction_feature_batch_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+        "source_event_count",
+        "authorized_fold_count",
+        "authorized_fold_ids",
+        "prediction_fold_model_count",
+        "prediction_fold_model_bundle_sha256",
+        "prediction_fold_model_specs",
+        "prediction_fold_model_specs_sha256",
+        "model_variant_count",
+        "model_variant_ids",
+        "learner_state_count",
+        "learner_model_type",
+        "learner_state_schema_version",
+        "learner_config_sha256",
+        "feature_schema_sha256",
+        "prediction_input_count",
+        "available_prediction_input_count",
+        "unavailable_prediction_input_count",
+        "prediction_input_specs",
+        "prediction_input_specs_sha256",
+        "prediction_population_rule",
+        "prediction_input_order_rule",
+        "fold_state_usage_rule",
+        "maximum_prediction_calls",
+        "maximum_prediction_seconds",
+        "canonical_prediction_fold_model_bundle_required",
+        "canonical_prediction_feature_batch_required",
+        "authorized_learner_state_access_permitted",
+        "authorized_prediction_feature_row_access_permitted",
+        "learner_state_deserialization_permitted",
+        "deterministic_numeric_prediction_permitted",
+        "raw_prediction_component_output_permitted",
+        "unavailable_prediction_output_permitted",
+        "compact_prediction_audit_output_permitted",
+        "source_development_oof_learner_fit_batch_access_permitted",
+        "source_training_membership_batch_access_permitted",
+        "training_membership_rows_access_permitted",
+        "training_feature_matrices_access_permitted",
+        "training_target_vectors_access_permitted",
+        "source_feature_batch_access_permitted",
+        "source_label_batch_access_permitted",
+        "label_access_permitted",
+        "outcome_access_permitted",
+        "post_decision_market_data_access_permitted",
+        "post_2018_data_access_permitted",
+        "deferred_training_view_access_permitted",
+        "deferred_training_view_state_access_permitted",
+        "learner_fit_permitted",
+        "learner_state_update_permitted",
+        "online_learning_permitted",
+        "feature_mutation_permitted",
+        "row_drop_permitted",
+        "row_reordering_permitted",
+        "prediction_retry_permitted",
+        "model_transport_access_permitted",
+        "network_access_permitted",
+        "threshold_action_access_permitted",
+        "candidate_selection_permitted",
+        "policy_state_transition_permitted",
+        "prediction_sealing_permitted",
+        "label_release_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+        "development_oof_prediction_plan_sha256",
+    }
+)
+_DEVELOPMENT_OOF_PREDICTION_UNAVAILABLE_REASONS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "missing_required_market_features",
+            "missing_required_extraction_features",
+            "missing_required_market_and_extraction_features",
+        }
+    )
+)
+_DEVELOPMENT_OOF_PREDICTION_POPULATION_RULE: Final[str] = (
+    "all_and_only_source_feature_events_in_frozen_2005_2018_fold_windows_"
+    "in_source_order"
+)
+_DEVELOPMENT_OOF_PREDICTION_INPUT_ORDER_RULE: Final[str] = (
+    "prediction_ordinal_and_source_event_ordinal_ascending_with_unique_"
+    "strictly_increasing_decision_sessions"
+)
+_DEVELOPMENT_OOF_PREDICTION_FOLD_STATE_USAGE_RULE: Final[str] = (
+    "exact_current_fold_semantic_then_ablation_states_no_cross_fold_or_state_update"
+)
+_DEVELOPMENT_OOF_MAXIMUM_PREDICTION_SECONDS: Final[int] = 60
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -11329,6 +11481,721 @@ def validate_development_oof_learner_fit_plan(
     return observed
 
 
+def _expected_development_oof_prediction_capabilities() -> dict[str, bool]:
+    return {
+        "canonical_prediction_fold_model_bundle_required": True,
+        "canonical_prediction_feature_batch_required": True,
+        "authorized_learner_state_access_permitted": True,
+        "authorized_prediction_feature_row_access_permitted": True,
+        "learner_state_deserialization_permitted": True,
+        "deterministic_numeric_prediction_permitted": True,
+        "raw_prediction_component_output_permitted": True,
+        "unavailable_prediction_output_permitted": True,
+        "compact_prediction_audit_output_permitted": True,
+        "source_development_oof_learner_fit_batch_access_permitted": False,
+        "source_training_membership_batch_access_permitted": False,
+        "training_membership_rows_access_permitted": False,
+        "training_feature_matrices_access_permitted": False,
+        "training_target_vectors_access_permitted": False,
+        "source_feature_batch_access_permitted": False,
+        "source_label_batch_access_permitted": False,
+        "label_access_permitted": False,
+        "outcome_access_permitted": False,
+        "post_decision_market_data_access_permitted": False,
+        "post_2018_data_access_permitted": False,
+        "deferred_training_view_access_permitted": False,
+        "deferred_training_view_state_access_permitted": False,
+        "learner_fit_permitted": False,
+        "learner_state_update_permitted": False,
+        "online_learning_permitted": False,
+        "feature_mutation_permitted": False,
+        "row_drop_permitted": False,
+        "row_reordering_permitted": False,
+        "prediction_retry_permitted": False,
+        "model_transport_access_permitted": False,
+        "network_access_permitted": False,
+        "threshold_action_access_permitted": False,
+        "candidate_selection_permitted": False,
+        "policy_state_transition_permitted": False,
+        "prediction_sealing_permitted": False,
+        "label_release_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+
+
+def _validated_development_oof_prediction_fold_model_specs(
+    raw: Any,
+    *,
+    source_fit_plan: Mapping[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    if type(raw) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction fold-model specs must be an exact list"
+        )
+    supplied = _plain(raw, "development OOF prediction fold-model specs")
+    if type(supplied) is not list or len(supplied) != len(DEVELOPMENT_FOLD_SPECS):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction fold-model count changed"
+        )
+    fit_specs: list[dict[str, Any]] | None = None
+    if source_fit_plan is not None:
+        raw_fit_specs = source_fit_plan["learner_fit_input_specs"]
+        if (
+            type(raw_fit_specs) is not list
+            or len(raw_fit_specs) != 2 * len(DEVELOPMENT_FOLD_SPECS)
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction source fit-state count changed"
+            )
+        fit_specs = raw_fit_specs
+        feature_schema_sha256 = _sha256(
+            fit_specs[0]["feature_schema_sha256"],
+            "development OOF prediction feature schema hash",
+        )
+        if any(
+            spec.get("feature_schema_sha256") != feature_schema_sha256
+            for spec in fit_specs
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction source fit feature schemas differ"
+            )
+    else:
+        first_spec = _mapping(
+            supplied[0], "development OOF prediction first fold model"
+        )
+        feature_schema_sha256 = _sha256(
+            first_spec.get("feature_schema_sha256"),
+            "development OOF prediction feature schema hash",
+        )
+
+    result: list[dict[str, Any]] = []
+    state_hashes: set[str] = set()
+    fit_record_hashes: set[str] = set()
+    fit_view_hashes: set[str] = set()
+    fold_model_hashes: set[str] = set()
+    for ordinal, (raw_spec, frozen_fold) in enumerate(
+        zip(supplied, DEVELOPMENT_FOLD_SPECS, strict=True),
+        start=1,
+    ):
+        spec = _mapping(raw_spec, f"development OOF prediction fold model {ordinal}")
+        _expect_keys(
+            spec,
+            _DEVELOPMENT_OOF_PREDICTION_FOLD_MODEL_SPEC_KEYS,
+            f"development OOF prediction fold model {ordinal}",
+        )
+        fold_id, _train_cutoff, first, last = frozen_fold
+        semantic_fit_spec = (
+            fit_specs[2 * (ordinal - 1)] if fit_specs is not None else None
+        )
+        ablation_fit_spec = (
+            fit_specs[2 * (ordinal - 1) + 1]
+            if fit_specs is not None
+            else None
+        )
+        for field in (
+            "source_learner_fit_view_sha256",
+            "prediction_fold_context_sha256",
+            "semantic_fit_record_sha256",
+            "semantic_learner_state_sha256",
+            "ablation_fit_record_sha256",
+            "ablation_learner_state_sha256",
+            "feature_schema_sha256",
+            "prediction_fold_model_sha256",
+        ):
+            _sha256(
+                spec[field],
+                f"development OOF prediction fold model {ordinal} {field}",
+            )
+        _validated_development_oof_iso_date(
+            spec["prediction_window_first_date"],
+            f"development OOF prediction fold model {ordinal} first date",
+        )
+        _validated_development_oof_iso_date(
+            spec["prediction_window_last_date"],
+            f"development OOF prediction fold model {ordinal} last date",
+        )
+        if (
+            _strict_int(
+                spec["fold_ordinal"],
+                f"development OOF prediction fold model {ordinal} ordinal",
+                minimum=1,
+            )
+            != ordinal
+            or spec["fold_id"] != fold_id
+            or spec["prediction_window_first_date"] != first
+            or spec["prediction_window_last_date"] != last
+            or (
+                semantic_fit_spec is not None
+                and semantic_fit_spec.get("training_view_id") != fold_id
+            )
+            or (
+                semantic_fit_spec is not None
+                and semantic_fit_spec.get("head_variant") != "semantic"
+            )
+            or (
+                ablation_fit_spec is not None
+                and ablation_fit_spec.get("training_view_id") != fold_id
+            )
+            or (
+                ablation_fit_spec is not None
+                and ablation_fit_spec.get("head_variant") != "ablation"
+            )
+            or spec["feature_schema_sha256"] != feature_schema_sha256
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction fold model crossed its frozen fold, "
+                "variant order, window, or feature schema"
+            )
+        if (
+            spec["semantic_learner_state_sha256"]
+            == spec["ablation_learner_state_sha256"]
+            or spec["semantic_fit_record_sha256"]
+            == spec["ablation_fit_record_sha256"]
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction semantic and ablation states must remain distinct"
+            )
+        _self_hash(
+            spec,
+            "prediction_fold_model_spec_sha256",
+            f"development OOF prediction fold model {ordinal}",
+        )
+        state_hashes.update(
+            (
+                spec["semantic_learner_state_sha256"],
+                spec["ablation_learner_state_sha256"],
+            )
+        )
+        fit_record_hashes.update(
+            (
+                spec["semantic_fit_record_sha256"],
+                spec["ablation_fit_record_sha256"],
+            )
+        )
+        fit_view_hashes.add(spec["source_learner_fit_view_sha256"])
+        fold_model_hashes.add(spec["prediction_fold_model_sha256"])
+        result.append(spec)
+    if (
+        len(state_hashes) != 2 * len(DEVELOPMENT_FOLD_SPECS)
+        or len(fit_record_hashes) != 2 * len(DEVELOPMENT_FOLD_SPECS)
+        or len(fit_view_hashes) != len(DEVELOPMENT_FOLD_SPECS)
+        or len(fold_model_hashes) != len(DEVELOPMENT_FOLD_SPECS)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction fold models duplicate a fit view, record, state, or bundle"
+        )
+    return result, feature_schema_sha256
+
+
+def _development_oof_prediction_fold_for_session(
+    session: str,
+) -> tuple[int, tuple[str, str, str, str]] | None:
+    for ordinal, fold in enumerate(DEVELOPMENT_FOLD_SPECS, start=1):
+        if fold[2] <= session <= fold[3]:
+            return ordinal, fold
+    return None
+
+
+def _validated_development_oof_prediction_input_specs(
+    raw: Any,
+    *,
+    source_feature_events: list[dict[str, Any]] | None = None,
+    feature_schema_sha256: str,
+) -> list[dict[str, Any]]:
+    if type(raw) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction input specs must be an exact list"
+        )
+    supplied = _plain(raw, "development OOF prediction input specs")
+    if type(supplied) is not list:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction input specs must remain a list"
+        )
+    expected_events = None
+    if source_feature_events is not None:
+        expected_events = [
+            event
+            for event in source_feature_events
+            if _development_oof_prediction_fold_for_session(
+                event["availability_session"]
+            )
+            is not None
+        ]
+    if (
+        not supplied
+        or expected_events is not None
+        and len(supplied) != len(expected_events)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction inputs omit or add a frozen 2005-2018 event"
+        )
+
+    result: list[dict[str, Any]] = []
+    decision_sessions: set[str] = set()
+    accessions: set[str] = set()
+    feature_row_hashes: set[str] = set()
+    event_binding_hashes: set[str] = set()
+    prediction_feature_hashes: set[str] = set()
+    previous_decision: str | None = None
+    previous_source_event_ordinal: int | None = None
+    for prediction_ordinal, raw_spec in enumerate(supplied, start=1):
+        event = (
+            expected_events[prediction_ordinal - 1]
+            if expected_events is not None
+            else None
+        )
+        spec = _mapping(
+            raw_spec,
+            f"development OOF prediction input {prediction_ordinal}",
+        )
+        _expect_keys(
+            spec,
+            _DEVELOPMENT_OOF_PREDICTION_INPUT_SPEC_KEYS,
+            f"development OOF prediction input {prediction_ordinal}",
+        )
+        decision = _validated_development_oof_iso_date(
+            spec["decision_session"],
+            f"development OOF prediction input {prediction_ordinal} decision",
+        )
+        fold_match = _development_oof_prediction_fold_for_session(decision)
+        if fold_match is None:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction input lies outside 2005-2018"
+            )
+        fold_ordinal, frozen_fold = fold_match
+        fold_id = frozen_fold[0]
+        source_event_ordinal = _strict_int(
+            spec["source_event_ordinal"],
+            f"development OOF prediction input {prediction_ordinal} source event ordinal",
+            minimum=1,
+        )
+        if (
+            _strict_int(
+                spec["prediction_ordinal"],
+                f"development OOF prediction input {prediction_ordinal} ordinal",
+                minimum=1,
+            )
+            != prediction_ordinal
+            or (
+                event is not None
+                and source_event_ordinal != event["event_ordinal"]
+            )
+            or _strict_int(
+                spec["fold_ordinal"],
+                f"development OOF prediction input {prediction_ordinal} fold ordinal",
+                minimum=1,
+            )
+            != fold_ordinal
+            or spec["fold_id"] != fold_id
+            or (
+                event is not None
+                and decision != event["availability_session"]
+            )
+            or (
+                event is not None
+                and spec["accession_number"] != event["accession_number"]
+            )
+            or _AAPL_ACCESSION_RE.fullmatch(spec["accession_number"] or "") is None
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction input crossed its source event, fold, or chronology"
+            )
+        if (
+            previous_source_event_ordinal is not None
+            and source_event_ordinal <= previous_source_event_ordinal
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction source event ordinals must be unique and strictly increasing"
+            )
+        previous_source_event_ordinal = source_event_ordinal
+        if (
+            previous_decision is not None
+            and decision <= previous_decision
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction decision sessions must be unique and strictly increasing"
+            )
+        previous_decision = decision
+        if decision in decision_sessions or spec["accession_number"] in accessions:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction decision session or accession is duplicated"
+            )
+        decision_sessions.add(decision)
+        accessions.add(spec["accession_number"])
+
+        for field in (
+            "source_feature_row_sha256",
+            "event_binding_sha256",
+            "semantic_feature_schema_sha256",
+            "ablation_feature_schema_sha256",
+            "prediction_feature_input_sha256",
+        ):
+            _sha256(
+                spec[field],
+                f"development OOF prediction input {prediction_ordinal} {field}",
+            )
+        if (
+            spec["semantic_feature_schema_sha256"] != feature_schema_sha256
+            or spec["ablation_feature_schema_sha256"] != feature_schema_sha256
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction input feature schema crossed its fold states"
+            )
+        if type(spec["prediction_available"]) is not bool:
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction availability must be an exact boolean"
+            )
+        semantic_values_hash = spec["semantic_feature_values_sha256"]
+        ablation_values_hash = spec["ablation_feature_values_sha256"]
+        if spec["prediction_available"]:
+            if spec["unavailable_reason"] is not None:
+                raise SecFilingGemmaStageAuthorizationError(
+                    "Available development OOF prediction input has an unavailable reason"
+                )
+            _sha256(
+                semantic_values_hash,
+                f"development OOF prediction input {prediction_ordinal} semantic values hash",
+            )
+            _sha256(
+                ablation_values_hash,
+                f"development OOF prediction input {prediction_ordinal} ablation values hash",
+            )
+        elif (
+            spec["unavailable_reason"]
+            not in _DEVELOPMENT_OOF_PREDICTION_UNAVAILABLE_REASONS
+            or semantic_values_hash is not None
+            or ablation_values_hash is not None
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Unavailable development OOF prediction input changed its frozen reason or exposed a vector hash"
+            )
+        _self_hash(
+            spec,
+            "prediction_input_spec_sha256",
+            f"development OOF prediction input {prediction_ordinal}",
+        )
+        feature_row_hashes.add(spec["source_feature_row_sha256"])
+        event_binding_hashes.add(spec["event_binding_sha256"])
+        prediction_feature_hashes.add(spec["prediction_feature_input_sha256"])
+        result.append(spec)
+    if (
+        len(feature_row_hashes) != len(result)
+        or len(event_binding_hashes) != len(result)
+        or len(prediction_feature_hashes) != len(result)
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction inputs duplicate a feature row, event binding, or compact input"
+        )
+    return result
+
+
+def build_development_oof_prediction_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    source_development_oof_learner_fit_plan: Mapping[str, Any],
+    source_development_oof_learner_fit_projection_sha256: str,
+    source_development_oof_learner_fit_batch_sha256: str,
+    prediction_fold_model_bundle_sha256: str,
+    prediction_fold_model_specs: Any,
+    source_feature_batch_sha256: str,
+    prediction_feature_batch_sha256: str,
+    prediction_input_specs: Any,
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authorize only causal numeric OOF inference from five frozen state pairs."""
+
+    root_scope_hash = _sha256(
+        development_root_scope_sha256,
+        "development OOF prediction root scope hash",
+    )
+    source_fit_plan = _mapping(
+        source_development_oof_learner_fit_plan,
+        "development OOF prediction source learner-fit plan",
+    )
+    source_fit_plan_hash = _sha256(
+        source_fit_plan.get("development_oof_learner_fit_plan_sha256"),
+        "development OOF prediction source learner-fit plan hash",
+    )
+    validate_development_oof_learner_fit_plan(
+        source_fit_plan,
+        expected_development_oof_learner_fit_plan_sha256=source_fit_plan_hash,
+    )
+    membership_plan = _mapping(
+        source_fit_plan["source_training_membership_assembly_plan"],
+        "development OOF prediction source membership plan",
+    )
+    rebuilt_fit_plan = build_development_oof_learner_fit_plan(
+        authenticated_store_snapshot,
+        development_root_scope_sha256=root_scope_hash,
+        source_training_membership_assembly_plan=membership_plan,
+        source_training_membership_projection_sha256=source_fit_plan[
+            "source_training_membership_projection_sha256"
+        ],
+        source_training_membership_batch_sha256=source_fit_plan[
+            "source_training_membership_batch_sha256"
+        ],
+        fit_input_specs=source_fit_plan["learner_fit_input_specs"],
+        independent_current_tip_anchor=independent_current_tip_anchor,
+    )
+    if source_fit_plan != rebuilt_fit_plan:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction source learner-fit plan differs from the terminal store replay"
+        )
+    label_plan = _mapping(
+        membership_plan["source_label_assembly_plan"],
+        "development OOF prediction source label plan",
+    )
+    feature_plan = _mapping(
+        label_plan["source_feature_assembly_plan"],
+        "development OOF prediction source feature plan",
+    )
+    source_feature_events = _validated_development_feature_event_plan(
+        feature_plan["event_plan"]
+    )
+    fold_specs, feature_schema_sha256 = (
+        _validated_development_oof_prediction_fold_model_specs(
+            prediction_fold_model_specs,
+            source_fit_plan=source_fit_plan,
+        )
+    )
+    input_specs = _validated_development_oof_prediction_input_specs(
+        prediction_input_specs,
+        source_feature_events=source_feature_events,
+        feature_schema_sha256=feature_schema_sha256,
+    )
+    available_count = sum(
+        1 for spec in input_specs if spec["prediction_available"]
+    )
+    unavailable_count = len(input_specs) - available_count
+    capabilities = _expected_development_oof_prediction_capabilities()
+    body = {
+        "schema_version": DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": canonical_sha256(build_contract_manifest()),
+        "plan_kind": "request_free_development_oof_prediction",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": root_scope_hash,
+        "start_consumed_request_count": source_fit_plan[
+            "start_consumed_request_count"
+        ],
+        "source_development_oof_learner_fit_plan_sha256": source_fit_plan_hash,
+        "source_development_oof_learner_fit_projection_sha256": _sha256(
+            source_development_oof_learner_fit_projection_sha256,
+            "development OOF prediction source learner-fit projection hash",
+        ),
+        "source_development_oof_learner_fit_batch_sha256": _sha256(
+            source_development_oof_learner_fit_batch_sha256,
+            "development OOF prediction source learner-fit batch hash",
+        ),
+        "source_training_membership_assembly_plan_sha256": source_fit_plan[
+            "source_training_membership_assembly_plan_sha256"
+        ],
+        "source_training_membership_projection_sha256": source_fit_plan[
+            "source_training_membership_projection_sha256"
+        ],
+        "source_training_membership_batch_sha256": source_fit_plan[
+            "source_training_membership_batch_sha256"
+        ],
+        "source_feature_assembly_plan_sha256": feature_plan[
+            "feature_assembly_plan_sha256"
+        ],
+        "source_feature_batch_sha256": _sha256(
+            source_feature_batch_sha256,
+            "development OOF prediction source feature batch hash",
+        ),
+        "prediction_feature_batch_sha256": _sha256(
+            prediction_feature_batch_sha256,
+            "development OOF prediction compact feature batch hash",
+        ),
+        "candidate_sha256": source_fit_plan["candidate_sha256"],
+        "corpus_universe_sha256": source_fit_plan["corpus_universe_sha256"],
+        "calendar_sessions_sha256": source_fit_plan["calendar_sessions_sha256"],
+        "development_cutoff_session": source_fit_plan[
+            "development_cutoff_session"
+        ],
+        "source_event_count": len(source_feature_events),
+        "authorized_fold_count": len(DEVELOPMENT_FOLD_SPECS),
+        "authorized_fold_ids": [fold[0] for fold in DEVELOPMENT_FOLD_SPECS],
+        "prediction_fold_model_count": len(fold_specs),
+        "prediction_fold_model_bundle_sha256": _sha256(
+            prediction_fold_model_bundle_sha256,
+            "development OOF prediction fold-model bundle hash",
+        ),
+        "prediction_fold_model_specs": fold_specs,
+        "prediction_fold_model_specs_sha256": canonical_sha256(fold_specs),
+        "model_variant_count": len(_DEVELOPMENT_OOF_MODEL_VARIANT_IDS),
+        "model_variant_ids": list(_DEVELOPMENT_OOF_MODEL_VARIANT_IDS),
+        "learner_state_count": 2 * len(DEVELOPMENT_FOLD_SPECS),
+        "learner_model_type": LEARNER_MODEL_TYPE,
+        "learner_state_schema_version": LEARNER_STATE_SCHEMA_VERSION,
+        "learner_config_sha256": source_fit_plan["learner_config_sha256"],
+        "feature_schema_sha256": feature_schema_sha256,
+        "prediction_input_count": len(input_specs),
+        "available_prediction_input_count": available_count,
+        "unavailable_prediction_input_count": unavailable_count,
+        "prediction_input_specs": input_specs,
+        "prediction_input_specs_sha256": canonical_sha256(input_specs),
+        "prediction_population_rule": (
+            _DEVELOPMENT_OOF_PREDICTION_POPULATION_RULE
+        ),
+        "prediction_input_order_rule": (
+            _DEVELOPMENT_OOF_PREDICTION_INPUT_ORDER_RULE
+        ),
+        "fold_state_usage_rule": (
+            _DEVELOPMENT_OOF_PREDICTION_FOLD_STATE_USAGE_RULE
+        ),
+        "maximum_prediction_calls": 2 * available_count,
+        "maximum_prediction_seconds": (
+            _DEVELOPMENT_OOF_MAXIMUM_PREDICTION_SECONDS
+        ),
+        **capabilities,
+    }
+    return {
+        **body,
+        "development_oof_prediction_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_oof_prediction_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_development_oof_prediction_plan_sha256: str,
+) -> str:
+    """Validate the exact feature-only, state-frozen development OOF authority."""
+
+    value = _mapping(plan, "development OOF prediction plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_OOF_PREDICTION_PLAN_KEYS,
+        "development OOF prediction plan",
+    )
+    _sha256(
+        value["source_development_oof_learner_fit_plan_sha256"],
+        "development OOF prediction source learner-fit plan hash",
+    )
+    fold_specs, feature_schema_sha256 = (
+        _validated_development_oof_prediction_fold_model_specs(
+            value["prediction_fold_model_specs"],
+        )
+    )
+    input_specs = _validated_development_oof_prediction_input_specs(
+        value["prediction_input_specs"],
+        feature_schema_sha256=feature_schema_sha256,
+    )
+    capabilities = _expected_development_oof_prediction_capabilities()
+    if any(type(value[field]) is not bool for field in capabilities):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction capabilities must be exact booleans"
+        )
+    integer_fields = {
+        "start_consumed_request_count": 0,
+        "authorized_fold_count": len(DEVELOPMENT_FOLD_SPECS),
+        "prediction_fold_model_count": len(fold_specs),
+        "model_variant_count": len(_DEVELOPMENT_OOF_MODEL_VARIANT_IDS),
+        "learner_state_count": 2 * len(DEVELOPMENT_FOLD_SPECS),
+        "learner_state_schema_version": LEARNER_STATE_SCHEMA_VERSION,
+        "prediction_input_count": len(input_specs),
+        "available_prediction_input_count": sum(
+            1 for spec in input_specs if spec["prediction_available"]
+        ),
+        "unavailable_prediction_input_count": sum(
+            1 for spec in input_specs if not spec["prediction_available"]
+        ),
+        "maximum_prediction_calls": 2
+        * sum(1 for spec in input_specs if spec["prediction_available"]),
+        "maximum_prediction_seconds": (
+            _DEVELOPMENT_OOF_MAXIMUM_PREDICTION_SECONDS
+        ),
+    }
+    _strict_int(
+        value["source_event_count"],
+        "development OOF prediction source_event_count",
+        minimum=len(input_specs),
+    )
+    for field, expected_value in integer_fields.items():
+        if (
+            _strict_int(value[field], f"development OOF prediction {field}")
+            != expected_value
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development OOF prediction count or runtime boundary changed"
+            )
+    for field in (
+        "contract_sha256",
+        "development_root_scope_sha256",
+        "source_development_oof_learner_fit_projection_sha256",
+        "source_development_oof_learner_fit_batch_sha256",
+        "source_training_membership_assembly_plan_sha256",
+        "source_training_membership_projection_sha256",
+        "source_training_membership_batch_sha256",
+        "source_feature_assembly_plan_sha256",
+        "source_feature_batch_sha256",
+        "prediction_feature_batch_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "prediction_fold_model_bundle_sha256",
+        "prediction_fold_model_specs_sha256",
+        "learner_config_sha256",
+        "feature_schema_sha256",
+        "prediction_input_specs_sha256",
+    ):
+        _sha256(value[field], f"development OOF prediction {field}")
+    expected_fold_ids = [fold[0] for fold in DEVELOPMENT_FOLD_SPECS]
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["contract_sha256"] != canonical_sha256(build_contract_manifest())
+        or value["plan_kind"] != "request_free_development_oof_prediction"
+        or value["artifact_stage"] != "development"
+        or value["development_cutoff_session"]
+        != STAGE_WINDOWS["development"][1]
+        or type(value["authorized_fold_ids"]) is not list
+        or value["authorized_fold_ids"] != expected_fold_ids
+        or value["prediction_fold_model_specs_sha256"]
+        != canonical_sha256(fold_specs)
+        or type(value["model_variant_ids"]) is not list
+        or value["model_variant_ids"]
+        != list(_DEVELOPMENT_OOF_MODEL_VARIANT_IDS)
+        or value["learner_model_type"] != LEARNER_MODEL_TYPE
+        or value["feature_schema_sha256"] != feature_schema_sha256
+        or value["prediction_input_specs_sha256"]
+        != canonical_sha256(input_specs)
+        or value["prediction_population_rule"]
+        != _DEVELOPMENT_OOF_PREDICTION_POPULATION_RULE
+        or value["prediction_input_order_rule"]
+        != _DEVELOPMENT_OOF_PREDICTION_INPUT_ORDER_RULE
+        or value["fold_state_usage_rule"]
+        != _DEVELOPMENT_OOF_PREDICTION_FOLD_STATE_USAGE_RULE
+        or any(
+            value[field] is not expected
+            for field, expected in capabilities.items()
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction identity, population, order, or capability boundary changed"
+        )
+    observed = _self_hash(
+        value,
+        "development_oof_prediction_plan_sha256",
+        "development OOF prediction plan",
+    )
+    expected = _sha256(
+        expected_development_oof_prediction_plan_sha256,
+        "expected development OOF prediction plan hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development OOF prediction plan is not externally pinned"
+        )
+    return observed
+
+
 def _reconstruct_development_content_manifest_from_root(
     development_sec_execution_claim: Mapping[str, Any],
     development_sec_reader_receipt: Mapping[str, Any],
@@ -12538,6 +13405,7 @@ __all__ = [
     "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_OOF_LEARNER_FIT_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_OOF_PREDICTION_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
     "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
@@ -12580,6 +13448,7 @@ __all__ = [
     "build_development_feature_assembly_plan",
     "build_development_label_assembly_plan",
     "build_development_oof_learner_fit_plan",
+    "build_development_oof_prediction_plan",
     "build_development_training_membership_assembly_plan",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
@@ -12607,6 +13476,7 @@ __all__ = [
     "validate_development_feature_assembly_plan",
     "validate_development_label_assembly_plan",
     "validate_development_oof_learner_fit_plan",
+    "validate_development_oof_prediction_plan",
     "validate_development_training_membership_assembly_plan",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",

@@ -328,8 +328,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "detached SEC catalogue and document bytes replay within the current "
         "envelope; the request-free development path now also owns preprocessing, "
         "extraction, causal market prefixes, feature proofs, and the mature-label "
-        "projection plus fixed training membership and five-view OOF learner fits, "
-        "but the detached envelope does not yet chain those projections, the "
+        "projection plus fixed training membership, five-view OOF learner fits, "
+        "and their feature-only raw numeric OOF predictions, but the detached "
+        "envelope does not yet chain those projections, the "
         "prelabel ledger, or the full seal "
         "chain; parent lineage "
         "is bound to the prior consumed entry and grant, but that does not replace "
@@ -346,8 +347,10 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "fixed training views admit only labels matured by their respective frozen "
         "cutoffs and are assembled through an owned reader without target-based "
         "membership filtering; the five development OOF views now fit through an "
-        "owned deterministic reader, while prediction and the post-selection "
-        "frozen-through-2018 refit are not yet owned"
+        "owned deterministic reader and those ten frozen states now produce raw "
+        "numeric OOF components through an owned feature-only reader; threshold "
+        "actions, candidate ranking, and the post-selection frozen-through-2018 "
+        "refit are not yet owned"
     ),
     "market_source_byte_reconciliation": (
         "the fixed provider responses now replay through a store-attested market "
@@ -355,8 +358,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "assembler loads only reader-bound causal prefixes; this detached stage "
         "verifier still accepts caller-supplied market snapshots, and the owned "
         "development label projection now extends into owned fixed training "
-        "membership and the five fixed OOF learner fits, but not into prediction "
-        "or later-stage assembly"
+        "membership, the five fixed OOF learner fits, and feature-only raw numeric "
+        "OOF prediction, but not into threshold actions, ranking, or later-stage "
+        "assembly"
     ),
     "model_attempt_replay": (
         "exact attempt bytes replay, but the independently expected payload is "
@@ -364,9 +368,10 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
     ),
     "prediction_replay": (
         "policy-prefix transitions and learner arithmetic replay; the request-free "
-        "development path now owns event bindings, training matrices, and the ten "
-        "fixed OOF learner states, but this prediction replay does not yet consume "
-        "those states through that owned boundary"
+        "development path now owns event bindings, training matrices, the ten "
+        "fixed OOF learner states, and deterministic raw component inference from "
+        "each causal fold pair; this policy replay does not yet consume those raw "
+        "outputs through owned thresholds and state transitions"
     ),
     "prerequisite_evidence_identity": (
         "the directly invoked verifier replays raw catalogue and content bytes but "
@@ -374,9 +379,9 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "prelabel-ledger, and full seal-chain proofs; the request-free feature and "
         "label projections bind their upstream preprocessing, model extraction, "
         "causal market evidence, and mature outcomes, while the downstream membership "
-        "projection binds both sources; learner and later downstream readers are not "
-        "yet grant-bound beyond the five-view OOF fit; prediction and later readers "
-        "remain unowned"
+        "projection binds both sources; the five-view OOF fits and raw numeric OOF "
+        "prediction are owned but not grant-bound into the detached verifier; "
+        "threshold, ranking, refit, and later readers remain unowned"
     ),
     "runtime_budget": (
         "stage-specific measurements are internally reconciled but the owned "
@@ -392,10 +397,12 @@ _BLOCKING_GAPS: Final[dict[str, str]] = {
         "the owned runner now claims the exact current grant before the SEC batch and "
         "the store rehashes its durable actual bytes; model, carry-in, and development "
         "market reads plus request-free development feature and mature-label assembly "
-        "plus fixed training-membership assembly and the ten deterministic OOF fits "
-        "are owned and cross-bound, but prediction, post-selection refit, ledger, "
-        "and stage-evidence readers are not yet forced through the same "
-        "authenticated lineage"
+        "plus fixed training-membership assembly, the ten deterministic OOF fits, "
+        "and their feature-only raw numeric predictions are owned and cross-bound; "
+        "those predictions are not yet grant-bound into this detached verifier, "
+        "and threshold actions, ranking, post-selection refit, ledger, and "
+        "stage-evidence readers are not yet forced through the same authenticated "
+        "lineage"
     ),
     "zero_cost": (
         "loopback and zero-cost receipt fields replay, but independent network "

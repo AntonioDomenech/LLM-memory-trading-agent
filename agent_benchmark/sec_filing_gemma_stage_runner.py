@@ -114,6 +114,7 @@ from .sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     _sec_component_plan_from_bundle,
+    validate_development_oof_prediction_plan,
     validate_development_oof_learner_fit_plan,
     validate_development_training_membership_assembly_plan,
     validate_development_label_assembly_plan,
@@ -124,6 +125,14 @@ from .sec_filing_gemma_learner_fit import (
     SecFilingGemmaLearnerFitError,
     build_owned_development_oof_learner_fit_batch,
     validate_owned_development_oof_learner_fit_batch,
+)
+from .sec_filing_gemma_learner_prediction import (
+    OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaLearnerPredictionError,
+    build_owned_development_oof_prediction_batch,
+    derive_development_oof_prediction_fold_model_specs,
+    derive_development_oof_prediction_input_specs,
+    validate_owned_development_oof_prediction_batch,
 )
 from .sec_filing_gemma_training_membership import (
     OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
@@ -195,6 +204,17 @@ _OWNED_DEVELOPMENT_OOF_LEARNER_FIT_PROJECTION_KEYS: Final[frozenset[str]] = (
             "development_oof_learner_fit_plan",
             "source_training_membership_batch",
             "learner_fit_projection_sha256",
+        }
+    )
+)
+_OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "development_oof_prediction_plan",
+            "prediction_fold_model_bundle",
+            "prediction_feature_batch",
+            "prediction_projection_sha256",
         }
     )
 )
@@ -4006,12 +4026,202 @@ def run_owned_development_oof_learner_fit_batch(
     return batch
 
 
+def _validated_owned_development_oof_prediction_projection(
+    loaded: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Require the exact five-key store-owned raw-prediction projection."""
+
+    if type(loaded) is not dict or set(loaded) != set(
+        _OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_KEYS
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection is not exact"
+        )
+    if (
+        loaded["schema_version"]
+        != OWNED_DEVELOPMENT_OOF_PREDICTION_PROJECTION_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection schema changed"
+        )
+    plan = loaded["development_oof_prediction_plan"]
+    fold_models = loaded["prediction_fold_model_bundle"]
+    features = loaded["prediction_feature_batch"]
+    if (
+        type(plan) is not dict
+        or type(fold_models) is not dict
+        or type(features) is not dict
+        or not _is_bare_sha256(
+            plan.get("development_oof_prediction_plan_sha256")
+        )
+        or not _is_bare_sha256(
+            fold_models.get("prediction_fold_model_bundle_sha256")
+        )
+        or not _is_bare_sha256(
+            features.get("prediction_feature_batch_sha256")
+        )
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction sources are unavailable"
+        )
+    try:
+        validated_plan_hash = validate_development_oof_prediction_plan(
+            plan,
+            expected_development_oof_prediction_plan_sha256=plan[
+                "development_oof_prediction_plan_sha256"
+            ],
+        )
+        fold_model_specs = derive_development_oof_prediction_fold_model_specs(
+            fold_models
+        )
+        prediction_input_specs = derive_development_oof_prediction_input_specs(
+            features
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection failed exact validation"
+        ) from None
+    crossed = (
+        validated_plan_hash
+        != plan["development_oof_prediction_plan_sha256"]
+        or plan.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or plan.get("prediction_fold_model_bundle_sha256")
+        != fold_models.get("prediction_fold_model_bundle_sha256")
+        or plan.get("prediction_feature_batch_sha256")
+        != features.get("prediction_feature_batch_sha256")
+        or plan.get("source_development_oof_learner_fit_batch_sha256")
+        != fold_models.get("source_learner_fit_batch_sha256")
+        or plan.get("source_feature_batch_sha256")
+        != features.get("source_feature_batch_sha256")
+        or plan.get("prediction_fold_model_specs") != fold_model_specs
+        or plan.get("prediction_fold_model_specs_sha256")
+        != canonical_sha256(fold_model_specs)
+        or plan.get("prediction_input_specs") != prediction_input_specs
+        or plan.get("prediction_input_specs_sha256")
+        != canonical_sha256(prediction_input_specs)
+        or plan.get("prediction_fold_model_count")
+        != fold_models.get("fold_model_count")
+        or plan.get("prediction_input_count")
+        != features.get("prediction_event_count")
+    )
+    for field in (
+        "contract_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+    ):
+        crossed = crossed or not (
+            plan.get(field) == fold_models.get(field) == features.get(field)
+        )
+    for field in ("calendar_sessions_sha256", "development_cutoff_session"):
+        crossed = crossed or plan.get(field) != fold_models.get(field)
+    if crossed:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection crossed its ancestry"
+        )
+    projection_hash = loaded["prediction_projection_sha256"]
+    if not _is_bare_sha256(projection_hash):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection checksum is invalid"
+        )
+    body = {
+        key: loaded[key]
+        for key in loaded
+        if key != "prediction_projection_sha256"
+    }
+    try:
+        calculated = canonical_sha256(body)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection is not canonical JSON"
+        ) from None
+    if calculated != projection_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection checksum changed"
+        )
+    return copy.deepcopy(loaded)
+
+
+def run_owned_development_oof_prediction_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Predict raw OOF components from one compact store-owned projection."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development OOF prediction scope must be a bare lowercase SHA-256"
+        )
+    try:
+        loaded = reveal_store._load_owned_development_oof_prediction_projection(
+            development_root_scope_sha256=development_root_scope_sha256
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction projection could not be loaded"
+        ) from None
+    projection = _validated_owned_development_oof_prediction_projection(
+        loaded,
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    plan = projection["development_oof_prediction_plan"]
+    fold_models = projection["prediction_fold_model_bundle"]
+    features = projection["prediction_feature_batch"]
+    try:
+        batch = build_owned_development_oof_prediction_batch(
+            development_oof_prediction_plan=plan,
+            expected_development_oof_prediction_plan_sha256=plan[
+                "development_oof_prediction_plan_sha256"
+            ],
+            prediction_feature_batch=features,
+            expected_prediction_feature_batch_sha256=features[
+                "prediction_feature_batch_sha256"
+            ],
+            prediction_fold_model_bundle=fold_models,
+            expected_prediction_fold_model_bundle_sha256=fold_models[
+                "prediction_fold_model_bundle_sha256"
+            ],
+        )
+        validate_owned_development_oof_prediction_batch(
+            batch,
+            development_oof_prediction_plan=plan,
+            expected_development_oof_prediction_plan_sha256=plan[
+                "development_oof_prediction_plan_sha256"
+            ],
+            prediction_feature_batch=features,
+            expected_prediction_feature_batch_sha256=features[
+                "prediction_feature_batch_sha256"
+            ],
+            prediction_fold_model_bundle=fold_models,
+            expected_prediction_fold_model_bundle_sha256=fold_models[
+                "prediction_fold_model_bundle_sha256"
+            ],
+            expected_prediction_batch_sha256=batch["prediction_batch_sha256"],
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        SecFilingGemmaLearnerPredictionError,
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development OOF prediction batch failed exact owned validation"
+        ) from None
+    return batch
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
     "run_owned_development_feature_batch",
     "run_owned_development_label_batch",
     "run_owned_development_oof_learner_fit_batch",
+    "run_owned_development_oof_prediction_batch",
     "run_owned_development_training_membership_batch",
     "run_owned_development_market_batch",
     "run_owned_development_model_batch",

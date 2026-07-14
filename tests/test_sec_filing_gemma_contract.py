@@ -564,6 +564,7 @@ def test_contract_is_deterministic_and_freezes_the_real_goal() -> None:
     assert "market_acquirer" in REQUIRED_SOURCE_HASHES
     assert "stage_access" in REQUIRED_SOURCE_HASHES
     assert "training_membership" in REQUIRED_SOURCE_HASHES
+    assert "learner_prediction" in REQUIRED_SOURCE_HASHES
     assert {
         "cftc_cot_policy",
         "content_normalizer",

@@ -123,7 +123,7 @@ def _audit(evidence: dict[str, object], **overrides) -> dict[str, object]:
 
 def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> None:
     assert SOURCE_IDENTITY_RECEIPT_SCHEMA_VERSION == (
-        "aapl-sec-gemma-source-identity-audit-v7"
+        "aapl-sec-gemma-source-identity-audit-v8"
     )
     assert tuple(CANONICAL_SOURCE_ROLE_PATHS) == REQUIRED_SOURCE_HASHES
     assert UNRESOLVED_SOURCE_ROLES == EXPECTED_UNRESOLVED_ROLES
@@ -151,6 +151,9 @@ def test_frozen_role_mapping_covers_every_role_without_resolved_aliases() -> Non
     )
     assert CANONICAL_SOURCE_ROLE_PATHS["learner_fit"] == (
         "agent_benchmark/sec_filing_gemma_learner_fit.py"
+    )
+    assert CANONICAL_SOURCE_ROLE_PATHS["learner_prediction"] == (
+        "agent_benchmark/sec_filing_gemma_learner_prediction.py"
     )
     assert {
         role: CANONICAL_SOURCE_ROLE_PATHS[role]
