@@ -114,8 +114,15 @@ from .sec_filing_gemma_stage_authorization import (
     OWNED_SEC_RAW_BATCH_MAX_BYTES,
     SEC_STAGE_DOCUMENT_BATCH_COMPONENT_ID,
     _sec_component_plan_from_bundle,
+    validate_development_training_membership_assembly_plan,
     validate_development_label_assembly_plan,
     validate_development_feature_assembly_plan,
+)
+from .sec_filing_gemma_training_membership import (
+    OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
+    SecFilingGemmaTrainingMembershipError,
+    build_owned_development_training_membership_batch,
+    validate_owned_development_training_membership_batch,
 )
 from .sec_point_in_time import validate_sec_user_agent
 
@@ -162,6 +169,17 @@ _OWNED_DEVELOPMENT_LABEL_PROJECTION_KEYS: Final[frozenset[str]] = frozenset(
         "label_evidence_rows",
         "label_projection_sha256",
     }
+)
+_OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "schema_version",
+            "training_membership_assembly_plan",
+            "source_feature_batch",
+            "source_label_batch",
+            "membership_projection_sha256",
+        }
+    )
 )
 
 
@@ -3635,11 +3653,193 @@ def run_owned_development_label_batch(
     return batch
 
 
+def _validated_owned_development_training_membership_projection(
+    loaded: Any,
+    *,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Require the exact five-key store-owned membership projection."""
+
+    if type(loaded) is not dict or set(loaded) != set(
+        _OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_KEYS
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection is not exact"
+        )
+    if (
+        loaded["schema_version"]
+        != OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection schema changed"
+        )
+    plan = loaded["training_membership_assembly_plan"]
+    if type(plan) is not dict or not _is_bare_sha256(
+        plan.get("training_membership_assembly_plan_sha256")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership assembly plan is unavailable"
+        )
+    try:
+        validated_plan_hash = (
+            validate_development_training_membership_assembly_plan(
+                plan,
+                expected_training_membership_assembly_plan_sha256=plan[
+                    "training_membership_assembly_plan_sha256"
+                ],
+            )
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership assembly plan failed exact validation"
+        ) from None
+    if (
+        validated_plan_hash
+        != plan["training_membership_assembly_plan_sha256"]
+        or plan.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection crossed its root scope"
+        )
+    feature_batch = loaded["source_feature_batch"]
+    label_batch = loaded["source_label_batch"]
+    label_plan = plan.get("source_label_assembly_plan")
+    if (
+        type(feature_batch) is not dict
+        or type(label_batch) is not dict
+        or type(label_plan) is not dict
+        or not _is_bare_sha256(feature_batch.get("feature_batch_sha256"))
+        or not _is_bare_sha256(label_batch.get("label_batch_sha256"))
+        or feature_batch.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or label_batch.get("development_root_scope_sha256")
+        != development_root_scope_sha256
+        or feature_batch.get("feature_assembly_plan_sha256")
+        != plan.get("source_feature_assembly_plan_sha256")
+        or label_batch.get("source_feature_assembly_plan_sha256")
+        != plan.get("source_feature_assembly_plan_sha256")
+        or label_batch.get("label_assembly_plan_sha256")
+        != plan.get("source_label_assembly_plan_sha256")
+        or label_batch.get("source_feature_batch_sha256")
+        != feature_batch.get("feature_batch_sha256")
+        or feature_batch.get("candidate_sha256")
+        != plan.get("candidate_sha256")
+        or label_batch.get("candidate_sha256")
+        != plan.get("candidate_sha256")
+        or feature_batch.get("corpus_universe_sha256")
+        != plan.get("corpus_universe_sha256")
+        or label_batch.get("corpus_universe_sha256")
+        != plan.get("corpus_universe_sha256")
+        or type(feature_batch.get("event_count")) is not int
+        or feature_batch.get("event_count") != plan.get("event_count")
+        or type(label_batch.get("event_count")) is not int
+        or label_batch.get("event_count") != plan.get("event_count")
+        or type(label_batch.get("matured_label_count")) is not int
+        or label_batch.get("matured_label_count")
+        != plan.get("matured_event_count")
+        or type(label_batch.get("unmatured_event_count")) is not int
+        or label_batch.get("unmatured_event_count")
+        != plan.get("unmatured_event_count")
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership sources crossed their plan"
+        )
+    projection_hash = loaded["membership_projection_sha256"]
+    if not _is_bare_sha256(projection_hash):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection checksum is invalid"
+        )
+    body = {
+        key: loaded[key]
+        for key in loaded
+        if key != "membership_projection_sha256"
+    }
+    try:
+        calculated = canonical_sha256(body)
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection is not canonical JSON"
+        ) from None
+    if calculated != projection_hash:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection checksum changed"
+        )
+    return copy.deepcopy(loaded)
+
+
+def run_owned_development_training_membership_batch(
+    *,
+    reveal_store: SecFilingGemmaRevealStore,
+    development_root_scope_sha256: str,
+) -> dict[str, Any]:
+    """Build all non-fitting development training views from one owned projection."""
+
+    if type(reveal_store) is not SecFilingGemmaRevealStore:
+        raise TypeError("reveal_store must be the owned reveal-store implementation")
+    if not _is_bare_sha256(development_root_scope_sha256):
+        raise SecFilingGemmaStageRunnerError(
+            "Development training membership scope must be a bare lowercase SHA-256"
+        )
+    try:
+        loaded = (
+            reveal_store._load_owned_development_training_membership_projection(
+                development_root_scope_sha256=development_root_scope_sha256
+            )
+        )
+    except Exception:
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership projection could not be loaded"
+        ) from None
+    projection = _validated_owned_development_training_membership_projection(
+        loaded,
+        development_root_scope_sha256=development_root_scope_sha256,
+    )
+    plan = projection["training_membership_assembly_plan"]
+    feature_batch = projection["source_feature_batch"]
+    label_batch = projection["source_label_batch"]
+    try:
+        batch = build_owned_development_training_membership_batch(
+            membership_assembly_plan=plan,
+            source_feature_batch=feature_batch,
+            source_label_batch=label_batch,
+        )
+        validate_owned_development_training_membership_batch(
+            batch,
+            membership_assembly_plan=plan,
+            expected_membership_assembly_plan_sha256=plan[
+                "training_membership_assembly_plan_sha256"
+            ],
+            source_feature_batch=feature_batch,
+            expected_source_feature_batch_sha256=feature_batch[
+                "feature_batch_sha256"
+            ],
+            source_label_batch=label_batch,
+            expected_source_label_batch_sha256=label_batch[
+                "label_batch_sha256"
+            ],
+            expected_training_membership_batch_sha256=batch[
+                "training_membership_batch_sha256"
+            ],
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        SecFilingGemmaTrainingMembershipError,
+    ):
+        raise SecFilingGemmaStageRunnerError(
+            "Owned development training membership batch failed exact causal replay"
+        ) from None
+    return batch
+
+
 __all__ = [
     "SecFilingGemmaStageRunnerError",
     "run_authorized_sec_stage",
     "run_owned_development_feature_batch",
     "run_owned_development_label_batch",
+    "run_owned_development_training_membership_batch",
     "run_owned_development_market_batch",
     "run_owned_development_model_batch",
     "run_owned_development_sec_root",

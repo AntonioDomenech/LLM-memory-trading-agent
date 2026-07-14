@@ -83,13 +83,18 @@ from agent_benchmark.sec_filing_gemma_features import (
     OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION,
     SecFilingGemmaFeatureError,
     build_owned_development_feature_batch,
+    build_owned_development_label_batch,
     build_sec_filing_gemma_feature_row,
     build_twenty_session_label_evidence,
     build_validated_extraction_event_proof,
     build_validated_market_prefix_proof,
     build_validated_universe_event_proof,
     validate_owned_development_feature_batch,
+    validate_owned_development_label_batch,
     validate_twenty_session_label_evidence,
+)
+from agent_benchmark.sec_filing_gemma_training_membership import (
+    OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION,
 )
 from agent_benchmark.sec_filing_gemma_market_evidence import (
     MARKET_SYMBOLS,
@@ -134,6 +139,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     SecFilingGemmaStageAuthorizationError,
     authenticate_reveal_store_trusted_stage_content_pin,
     build_development_label_assembly_plan,
+    build_development_training_membership_assembly_plan,
     build_development_model_execution_abort,
     build_development_model_execution_claim,
     build_development_model_reader_receipt,
@@ -162,6 +168,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_root_carry_in_reader_receipt,
     validate_development_feature_assembly_plan,
     validate_development_label_assembly_plan,
+    validate_development_training_membership_assembly_plan,
     validate_reveal_store_current_tip_anchor,
     validate_reveal_store_current_tip_anchor_structure,
     validate_reveal_store_current_tip_anchor_transition,
@@ -7117,6 +7124,18 @@ class SecFilingGemmaRevealStore:
         """Derive only development labels matured by the frozen cutoff."""
 
         with self._locked():
+            return self._load_owned_development_label_projection_locked(
+                development_root_scope_sha256=development_root_scope_sha256,
+            )
+
+    def _load_owned_development_label_projection_locked(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Derive development labels while the caller holds the store lock."""
+
+        def project_locked() -> dict[str, Any]:
             scope_hash = _sha256(
                 development_root_scope_sha256,
                 "owned development label projection root scope hash",
@@ -7429,6 +7448,273 @@ class SecFilingGemmaRevealStore:
                 **detached,
                 "label_projection_sha256": canonical_sha256(detached),
             }
+
+        return project_locked()
+
+    def _build_owned_development_label_batch_from_projection_locked(
+        self,
+        *,
+        label_projection: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Rebuild the exact compact label batch from one locked projection."""
+
+        if type(label_projection) is not dict or set(label_projection) != {
+            "schema_version",
+            "label_assembly_plan",
+            "source_feature_batch",
+            "maturity_audit_rows",
+            "label_evidence_rows",
+            "label_projection_sha256",
+        }:
+            raise SecFilingGemmaRevealStoreError(
+                "Development membership source label projection is not exact"
+            )
+        projection = _exact_builtin_json_copy(
+            label_projection,
+            "development membership source label projection",
+        )
+        if type(projection) is not dict:  # pragma: no cover - guaranteed above
+            raise SecFilingGemmaRevealStoreError(
+                "Development membership source label projection is not an object"
+            )
+        projection_hash = projection["label_projection_sha256"]
+        projection_body = {
+            key: projection[key]
+            for key in projection
+            if key != "label_projection_sha256"
+        }
+        if (
+            projection["schema_version"]
+            != OWNED_DEVELOPMENT_LABEL_PROJECTION_SCHEMA_VERSION
+            or not _same_digest(
+                _sha256(
+                    projection_hash,
+                    "development membership source label projection hash",
+                ),
+                canonical_sha256(projection_body),
+            )
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development membership source label projection checksum changed"
+            )
+        label_plan = projection["label_assembly_plan"]
+        source_feature_batch = projection["source_feature_batch"]
+        try:
+            if type(label_plan) is not dict or type(source_feature_batch) is not dict:
+                raise SecFilingGemmaFeatureError(
+                    "Development membership source plans and batches must be objects"
+                )
+            validate_development_label_assembly_plan(
+                label_plan,
+                expected_label_assembly_plan_sha256=label_plan[
+                    "label_assembly_plan_sha256"
+                ],
+            )
+            batch = build_owned_development_label_batch(
+                label_assembly_plan=label_plan,
+                source_feature_batch=source_feature_batch,
+                maturity_audit_rows=projection["maturity_audit_rows"],
+                label_evidence_rows=projection["label_evidence_rows"],
+            )
+            validate_owned_development_label_batch(
+                batch,
+                label_assembly_plan=label_plan,
+                expected_label_assembly_plan_sha256=label_plan[
+                    "label_assembly_plan_sha256"
+                ],
+                source_feature_batch=source_feature_batch,
+                expected_source_feature_batch_sha256=source_feature_batch[
+                    "feature_batch_sha256"
+                ],
+                expected_label_batch_sha256=batch["label_batch_sha256"],
+            )
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaContractError,
+            SecFilingGemmaFeatureError,
+            SecFilingGemmaStageAuthorizationError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development membership source label batch failed exact replay"
+            ) from exc
+        return batch
+
+    def _load_owned_development_training_membership_projection(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project the exact safe sources for development training membership."""
+
+        with self._locked():
+            return (
+                self._load_owned_development_training_membership_projection_locked(
+                    development_root_scope_sha256=development_root_scope_sha256,
+                )
+            )
+
+    def _load_owned_development_training_membership_projection_locked(
+        self,
+        *,
+        development_root_scope_sha256: str,
+    ) -> dict[str, Any]:
+        """Project membership sources while the caller holds the store lock."""
+
+        scope_hash = _sha256(
+            development_root_scope_sha256,
+            "owned development training membership projection root scope hash",
+        )
+        raw_label_projection = (
+            self._load_owned_development_label_projection_locked(
+                development_root_scope_sha256=scope_hash,
+            )
+        )
+        label_projection = _exact_builtin_json_copy(
+            raw_label_projection,
+            "owned development training membership source label projection",
+        )
+        if type(label_projection) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Development training membership source label projection is not exact"
+            )
+        source_label_batch = (
+            self._build_owned_development_label_batch_from_projection_locked(
+                label_projection=label_projection,
+            )
+        )
+        label_plan = label_projection["label_assembly_plan"]
+        source_feature_batch = label_projection["source_feature_batch"]
+
+        tracked_anchor = _load_tracked_anchor(self.repository_root)
+        current, current_tip, state_bytes, tip_bytes = (
+            self._read_state_and_tip_locked(tracked_anchor)
+        )
+        try:
+            training_membership_plan = (
+                build_development_training_membership_assembly_plan(
+                    current,
+                    development_root_scope_sha256=scope_hash,
+                    source_label_assembly_plan=label_plan,
+                    independent_current_tip_anchor=current_tip,
+                )
+            )
+            validate_development_training_membership_assembly_plan(
+                training_membership_plan,
+                expected_training_membership_assembly_plan_sha256=(
+                    training_membership_plan[
+                        "training_membership_assembly_plan_sha256"
+                    ]
+                ),
+            )
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            SecFilingGemmaStageAuthorizationError,
+        ) as exc:
+            raise SecFilingGemmaRevealStoreError(
+                "Development training membership assembly plan failed exact store replay"
+            ) from exc
+
+        source_feature_plan = label_plan.get("source_feature_assembly_plan")
+        lineage_matches = (
+            type(training_membership_plan) is dict
+            and type(label_plan) is dict
+            and type(source_feature_plan) is dict
+            and type(source_feature_batch) is dict
+            and type(source_label_batch) is dict
+            and training_membership_plan.get("development_root_scope_sha256")
+            == scope_hash
+            and training_membership_plan.get("start_consumed_request_count") == 0
+            and training_membership_plan.get("source_label_assembly_plan")
+            == label_plan
+            and training_membership_plan.get(
+                "source_label_assembly_plan_sha256"
+            )
+            == label_plan.get("label_assembly_plan_sha256")
+            and training_membership_plan.get(
+                "source_feature_assembly_plan_sha256"
+            )
+            == source_feature_plan.get("feature_assembly_plan_sha256")
+            and training_membership_plan.get("candidate_sha256")
+            == source_feature_plan.get("candidate_sha256")
+            == source_feature_batch.get("candidate_sha256")
+            == source_label_batch.get("candidate_sha256")
+            and training_membership_plan.get("corpus_universe_sha256")
+            == source_feature_plan.get("corpus_universe_sha256")
+            == source_feature_batch.get("corpus_universe_sha256")
+            == source_label_batch.get("corpus_universe_sha256")
+            and source_feature_batch.get("development_root_scope_sha256")
+            == scope_hash
+            and source_label_batch.get("development_root_scope_sha256")
+            == scope_hash
+            and source_feature_batch.get("feature_assembly_plan_sha256")
+            == source_feature_plan.get("feature_assembly_plan_sha256")
+            == label_plan.get("source_feature_assembly_plan_sha256")
+            == source_label_batch.get("source_feature_assembly_plan_sha256")
+            and source_label_batch.get("source_feature_batch_sha256")
+            == source_feature_batch.get("feature_batch_sha256")
+            and source_label_batch.get("label_assembly_plan_sha256")
+            == label_plan.get("label_assembly_plan_sha256")
+            and training_membership_plan.get("development_cutoff_session")
+            == label_plan.get("development_cutoff_session")
+            == source_label_batch.get("development_cutoff_session")
+            and training_membership_plan.get("event_count")
+            == label_plan.get("event_count")
+            == source_feature_batch.get("event_count")
+            == source_label_batch.get("event_count")
+            and training_membership_plan.get("matured_event_count")
+            == label_plan.get("matured_event_count")
+            == source_label_batch.get("matured_label_count")
+            and training_membership_plan.get("unmatured_event_count")
+            == label_plan.get("unmatured_event_count")
+            == source_label_batch.get("unmatured_event_count")
+        )
+        if not lineage_matches:
+            raise SecFilingGemmaRevealStoreError(
+                "Development training membership crossed its feature or label ancestry"
+            )
+
+        body = {
+            "schema_version": (
+                OWNED_DEVELOPMENT_TRAINING_MEMBERSHIP_PROJECTION_SCHEMA_VERSION
+            ),
+            "training_membership_assembly_plan": copy.deepcopy(
+                training_membership_plan
+            ),
+            "source_feature_batch": copy.deepcopy(source_feature_batch),
+            "source_label_batch": copy.deepcopy(source_label_batch),
+        }
+        detached = _exact_builtin_json_copy(
+            body,
+            "owned development training membership projection",
+        )
+        if type(detached) is not dict:
+            raise SecFilingGemmaRevealStoreError(
+                "Owned development training membership projection is not exact JSON"
+            )
+        (
+            closure_current,
+            closure_tip,
+            closure_state_bytes,
+            closure_tip_bytes,
+        ) = self._read_state_and_tip_locked(tracked_anchor)
+        if (
+            closure_state_bytes != state_bytes
+            or closure_tip_bytes != tip_bytes
+            or closure_current != current
+            or closure_tip != current_tip
+        ):
+            raise SecFilingGemmaRevealStoreError(
+                "Development training membership authorization ancestry changed during projection"
+            )
+        return {
+            **detached,
+            "membership_projection_sha256": canonical_sha256(detached),
+        }
 
     def _record_owned_development_model_reader_output(
         self,

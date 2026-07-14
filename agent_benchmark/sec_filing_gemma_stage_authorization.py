@@ -24,8 +24,10 @@ import re
 from typing import Any, Final
 
 from agent_benchmark.sec_filing_gemma_contract import (
+    BRIER_TARGET_COST_BPS,
     CANONICAL_IDENTITY_LEXICON_SHA256,
     CONTRACT_VERSION,
+    DEVELOPMENT_FOLD_SPECS,
     HORIZON_SESSIONS,
     LABEL_MATURITY_OFFSET,
     MAX_INPUT_BYTES,
@@ -149,6 +151,9 @@ DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
 )
 DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-development-label-assembly-plan-v1"
+)
+DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-development-training-membership-assembly-plan-v1"
 )
 REVEAL_STORE_CURRENT_TIP_ANCHOR_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-reveal-store-current-tip-anchor-v10"
@@ -1157,10 +1162,125 @@ _DEVELOPMENT_LABEL_MATURITY_ITEM_KEYS: Final[frozenset[str]] = frozenset(
         "matured_by_development_cutoff",
     }
 )
+_DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_KEYS: Final[
+    frozenset[str]
+] = frozenset(
+    {
+        "schema_version",
+        "contract_version",
+        "plan_kind",
+        "artifact_stage",
+        "development_root_scope_sha256",
+        "start_consumed_request_count",
+        "source_label_assembly_plan",
+        "source_label_assembly_plan_sha256",
+        "source_feature_assembly_plan_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "development_cutoff_session",
+        "label_horizon_sessions",
+        "label_entry_session_offset",
+        "label_maturity_session_offset",
+        "event_count",
+        "matured_event_count",
+        "unmatured_event_count",
+        "membership_view_count",
+        "membership_view_specs",
+        "membership_view_specs_sha256",
+        "model_variant_count",
+        "model_variant_specs",
+        "model_variant_specs_sha256",
+        "membership_maturity_rule",
+        "feature_eligibility_rule",
+        "membership_order_rule",
+        "shared_variant_support_rule",
+        "target_cost_bps",
+        "binary_target_field",
+        "binary_target_encoding",
+        "edge_target_field",
+        "minimum_training_row_count",
+        "both_binary_classes_required",
+        "semantic_ablation_feature_matrices_must_differ",
+        "canonical_source_feature_rows_required",
+        "canonical_source_label_rows_required",
+        "source_feature_rows_access_permitted",
+        "source_label_rows_access_permitted",
+        "development_outcome_values_access_permitted",
+        "development_outcome_derivation_permitted",
+        "training_membership_access_permitted",
+        "training_membership_rows_output_permitted",
+        "training_feature_matrices_output_permitted",
+        "training_target_vectors_output_permitted",
+        "outcome_based_membership_filtering_permitted",
+        "row_rebalancing_permitted",
+        "post_cutoff_market_access_permitted",
+        "raw_market_output_permitted",
+        "compact_adjusted_open_paths_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+        "training_membership_assembly_plan_sha256",
+    }
+)
+_DEVELOPMENT_TRAINING_MEMBERSHIP_VIEW_SPEC_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "view_ordinal",
+            "training_view_id",
+            "view_kind",
+            "training_source_stage",
+            "prediction_stage",
+            "train_label_maturity_through",
+            "prediction_window_first_date",
+            "prediction_window_last_date",
+            "state_updates_inside_prediction_window",
+        }
+    )
+)
+_DEVELOPMENT_TRAINING_MEMBERSHIP_VARIANT_SPEC_KEYS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "variant_ordinal",
+            "variant_id",
+            "feature_names_field",
+            "feature_values_field",
+        }
+    )
+)
 _DEVELOPMENT_LABEL_ENTRY_SESSION_OFFSET: Final[int] = 1
 _DEVELOPMENT_LABEL_MATURITY_RULE: Final[str] = (
     "t_plus_21_session_lte_development_cutoff_inclusive"
 )
+_DEVELOPMENT_TRAINING_MEMBERSHIP_MATURITY_RULE: Final[str] = (
+    "source_label_matured_by_development_cutoff_true_and_"
+    "label_maturity_session_lte_train_cutoff_and_"
+    "strictly_precedes_prediction_window_first_date"
+)
+_DEVELOPMENT_TRAINING_FEATURE_ELIGIBILITY_RULE: Final[str] = (
+    "include_iff_fit_eligible_and_prediction_available_are_exact_true"
+)
+_DEVELOPMENT_TRAINING_MEMBERSHIP_ORDER_RULE: Final[str] = (
+    "source_feature_event_plan_order_filtered_without_reordering"
+)
+_DEVELOPMENT_TRAINING_SHARED_VARIANT_SUPPORT_RULE: Final[str] = (
+    "semantic_and_ablation_use_identical_ordered_membership_and_target_vectors"
+)
+_DEVELOPMENT_TRAINING_BINARY_TARGET_FIELD: Final[str] = (
+    "cash_beats_long_10bps"
+)
+_DEVELOPMENT_TRAINING_BINARY_TARGET_ENCODING: Final[str] = (
+    "false_to_0_true_to_1"
+)
+_DEVELOPMENT_TRAINING_EDGE_TARGET_FIELD: Final[str] = (
+    "cash_active_log_edge_10bps_hex"
+)
+_DEVELOPMENT_TRAINING_MINIMUM_ROW_COUNT: Final[int] = 2
 _CURRENT_TIP_ANCHOR_KEYS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -10028,6 +10148,479 @@ def validate_development_label_assembly_plan(
     return observed
 
 
+def _expected_development_training_membership_view_specs() -> list[dict[str, Any]]:
+    specs = [
+        {
+            "view_ordinal": ordinal,
+            "training_view_id": fold_id,
+            "view_kind": "development_out_of_fold",
+            "training_source_stage": "development",
+            "prediction_stage": "development",
+            "train_label_maturity_through": train_through,
+            "prediction_window_first_date": test_first,
+            "prediction_window_last_date": test_last,
+            "state_updates_inside_prediction_window": False,
+        }
+        for ordinal, (fold_id, train_through, test_first, test_last) in enumerate(
+            DEVELOPMENT_FOLD_SPECS,
+            start=1,
+        )
+    ]
+    specs.append(
+        {
+            "view_ordinal": len(specs) + 1,
+            "training_view_id": "intermediate_frozen_through_2018",
+            "view_kind": "intermediate_frozen_refit",
+            "training_source_stage": "development",
+            "prediction_stage": "intermediate",
+            "train_label_maturity_through": STAGE_WINDOWS["development"][1],
+            "prediction_window_first_date": STAGE_WINDOWS["intermediate"][0],
+            "prediction_window_last_date": STAGE_WINDOWS["intermediate"][1],
+            "state_updates_inside_prediction_window": False,
+        }
+    )
+    return specs
+
+
+def _validated_development_training_membership_view_specs(
+    raw: Any,
+) -> list[dict[str, Any]]:
+    expected = _expected_development_training_membership_view_specs()
+    if type(raw) is not list or len(raw) != len(expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership view count changed"
+        )
+    observed: list[dict[str, Any]] = []
+    for ordinal, (raw_item, expected_item) in enumerate(
+        zip(raw, expected, strict=True),
+        start=1,
+    ):
+        item = _mapping(
+            raw_item,
+            f"development training-membership view {ordinal}",
+        )
+        _expect_keys(
+            item,
+            _DEVELOPMENT_TRAINING_MEMBERSHIP_VIEW_SPEC_KEYS,
+            f"development training-membership view {ordinal}",
+        )
+        if (
+            _strict_int(
+                item["view_ordinal"],
+                f"development training-membership view {ordinal} ordinal",
+                minimum=1,
+            )
+            != ordinal
+            or type(item["state_updates_inside_prediction_window"]) is not bool
+            or item != expected_item
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development training-membership view differs from the frozen contract"
+            )
+        observed.append(item)
+    return observed
+
+
+def _expected_development_training_membership_variant_specs() -> list[dict[str, Any]]:
+    return [
+        {
+            "variant_ordinal": 1,
+            "variant_id": "semantic",
+            "feature_names_field": "semantic_feature_names",
+            "feature_values_field": "semantic_feature_values_hex",
+        },
+        {
+            "variant_ordinal": 2,
+            "variant_id": "ablation",
+            "feature_names_field": "ablation_feature_names",
+            "feature_values_field": "ablation_feature_values_hex",
+        },
+    ]
+
+
+def _validated_development_training_membership_variant_specs(
+    raw: Any,
+) -> list[dict[str, Any]]:
+    expected = _expected_development_training_membership_variant_specs()
+    if type(raw) is not list or len(raw) != len(expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership variant count changed"
+        )
+    observed: list[dict[str, Any]] = []
+    for ordinal, (raw_item, expected_item) in enumerate(
+        zip(raw, expected, strict=True),
+        start=1,
+    ):
+        item = _mapping(
+            raw_item,
+            f"development training-membership variant {ordinal}",
+        )
+        _expect_keys(
+            item,
+            _DEVELOPMENT_TRAINING_MEMBERSHIP_VARIANT_SPEC_KEYS,
+            f"development training-membership variant {ordinal}",
+        )
+        if (
+            _strict_int(
+                item["variant_ordinal"],
+                f"development training-membership variant {ordinal} ordinal",
+                minimum=1,
+            )
+            != ordinal
+            or item != expected_item
+        ):
+            raise SecFilingGemmaStageAuthorizationError(
+                "Development training-membership variant differs from the frozen contract"
+            )
+        observed.append(item)
+    return observed
+
+
+def _expected_development_training_membership_capabilities() -> dict[str, bool]:
+    return {
+        "canonical_source_feature_rows_required": True,
+        "canonical_source_label_rows_required": True,
+        "source_feature_rows_access_permitted": True,
+        "source_label_rows_access_permitted": True,
+        "development_outcome_values_access_permitted": True,
+        "development_outcome_derivation_permitted": False,
+        "training_membership_access_permitted": True,
+        "training_membership_rows_output_permitted": True,
+        "training_feature_matrices_output_permitted": True,
+        "training_target_vectors_output_permitted": True,
+        "outcome_based_membership_filtering_permitted": False,
+        "row_rebalancing_permitted": False,
+        "post_cutoff_market_access_permitted": False,
+        "raw_market_output_permitted": False,
+        "compact_adjusted_open_paths_output_permitted": False,
+        "normalized_filing_text_output_permitted": False,
+        "model_transport_envelope_output_permitted": False,
+        "learner_fit_permitted": False,
+        "prediction_access_permitted": False,
+        "holdout_access_permitted": False,
+        "ledger_mutation_permitted": False,
+        "stage_promotion_permitted": False,
+        "production_permitted": False,
+    }
+
+
+def build_development_training_membership_assembly_plan(
+    authenticated_store_snapshot: Mapping[str, Any],
+    *,
+    development_root_scope_sha256: str,
+    source_label_assembly_plan: Mapping[str, Any],
+    independent_current_tip_anchor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authorize only deterministic membership assembly from owned development rows."""
+
+    supplied_label_plan = _mapping(
+        source_label_assembly_plan,
+        "development training-membership source label assembly plan",
+    )
+    supplied_label_hash = _sha256(
+        supplied_label_plan.get("label_assembly_plan_sha256"),
+        "development training-membership source label assembly plan hash",
+    )
+    validate_development_label_assembly_plan(
+        supplied_label_plan,
+        expected_label_assembly_plan_sha256=supplied_label_hash,
+    )
+    supplied_feature_plan = _mapping(
+        supplied_label_plan["source_feature_assembly_plan"],
+        "development training-membership source feature assembly plan",
+    )
+    supplied_feature_hash = _sha256(
+        supplied_label_plan["source_feature_assembly_plan_sha256"],
+        "development training-membership source feature assembly plan hash",
+    )
+    validate_development_feature_assembly_plan(
+        supplied_feature_plan,
+        expected_feature_assembly_plan_sha256=supplied_feature_hash,
+    )
+    rebuilt_label_plan = build_development_label_assembly_plan(
+        authenticated_store_snapshot,
+        development_root_scope_sha256=development_root_scope_sha256,
+        source_feature_assembly_plan=supplied_feature_plan,
+        independent_current_tip_anchor=independent_current_tip_anchor,
+    )
+    if supplied_label_plan != rebuilt_label_plan:
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership source label plan differs from "
+            "the terminal store replay"
+        )
+
+    view_specs = _expected_development_training_membership_view_specs()
+    variant_specs = _expected_development_training_membership_variant_specs()
+    body = {
+        "schema_version": (
+            DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "plan_kind": "request_free_development_training_membership_assembly",
+        "artifact_stage": "development",
+        "development_root_scope_sha256": supplied_label_plan[
+            "development_root_scope_sha256"
+        ],
+        "start_consumed_request_count": supplied_label_plan[
+            "start_consumed_request_count"
+        ],
+        "source_label_assembly_plan": supplied_label_plan,
+        "source_label_assembly_plan_sha256": supplied_label_hash,
+        "source_feature_assembly_plan_sha256": supplied_feature_hash,
+        "candidate_sha256": supplied_feature_plan["candidate_sha256"],
+        "corpus_universe_sha256": supplied_feature_plan[
+            "corpus_universe_sha256"
+        ],
+        "calendar_sessions_sha256": supplied_label_plan[
+            "calendar_sessions_sha256"
+        ],
+        "development_cutoff_session": supplied_label_plan[
+            "development_cutoff_session"
+        ],
+        "label_horizon_sessions": supplied_label_plan[
+            "label_horizon_sessions"
+        ],
+        "label_entry_session_offset": supplied_label_plan[
+            "label_entry_session_offset"
+        ],
+        "label_maturity_session_offset": supplied_label_plan[
+            "label_maturity_session_offset"
+        ],
+        "event_count": supplied_label_plan["event_count"],
+        "matured_event_count": supplied_label_plan["matured_event_count"],
+        "unmatured_event_count": supplied_label_plan["unmatured_event_count"],
+        "membership_view_count": len(view_specs),
+        "membership_view_specs": view_specs,
+        "membership_view_specs_sha256": canonical_sha256(view_specs),
+        "model_variant_count": len(variant_specs),
+        "model_variant_specs": variant_specs,
+        "model_variant_specs_sha256": canonical_sha256(variant_specs),
+        "membership_maturity_rule": (
+            _DEVELOPMENT_TRAINING_MEMBERSHIP_MATURITY_RULE
+        ),
+        "feature_eligibility_rule": (
+            _DEVELOPMENT_TRAINING_FEATURE_ELIGIBILITY_RULE
+        ),
+        "membership_order_rule": _DEVELOPMENT_TRAINING_MEMBERSHIP_ORDER_RULE,
+        "shared_variant_support_rule": (
+            _DEVELOPMENT_TRAINING_SHARED_VARIANT_SUPPORT_RULE
+        ),
+        "target_cost_bps": BRIER_TARGET_COST_BPS,
+        "binary_target_field": _DEVELOPMENT_TRAINING_BINARY_TARGET_FIELD,
+        "binary_target_encoding": _DEVELOPMENT_TRAINING_BINARY_TARGET_ENCODING,
+        "edge_target_field": _DEVELOPMENT_TRAINING_EDGE_TARGET_FIELD,
+        "minimum_training_row_count": _DEVELOPMENT_TRAINING_MINIMUM_ROW_COUNT,
+        "both_binary_classes_required": True,
+        "semantic_ablation_feature_matrices_must_differ": True,
+        **_expected_development_training_membership_capabilities(),
+    }
+    return {
+        **body,
+        "training_membership_assembly_plan_sha256": canonical_sha256(body),
+    }
+
+
+def validate_development_training_membership_assembly_plan(
+    plan: Mapping[str, Any],
+    *,
+    expected_training_membership_assembly_plan_sha256: str,
+) -> str:
+    """Validate the exact non-fitting membership authority and frozen views."""
+
+    value = _mapping(plan, "development training-membership assembly plan")
+    _expect_keys(
+        value,
+        _DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_KEYS,
+        "development training-membership assembly plan",
+    )
+    source_label_plan = _mapping(
+        value["source_label_assembly_plan"],
+        "development training-membership source label assembly plan",
+    )
+    source_label_hash = _sha256(
+        value["source_label_assembly_plan_sha256"],
+        "development training-membership source label assembly plan hash",
+    )
+    validate_development_label_assembly_plan(
+        source_label_plan,
+        expected_label_assembly_plan_sha256=source_label_hash,
+    )
+    source_feature_plan = _mapping(
+        source_label_plan["source_feature_assembly_plan"],
+        "development training-membership source feature assembly plan",
+    )
+    source_feature_hash = _sha256(
+        value["source_feature_assembly_plan_sha256"],
+        "development training-membership source feature assembly plan hash",
+    )
+    validate_development_feature_assembly_plan(
+        source_feature_plan,
+        expected_feature_assembly_plan_sha256=source_feature_hash,
+    )
+    view_specs = _validated_development_training_membership_view_specs(
+        value["membership_view_specs"]
+    )
+    variant_specs = _validated_development_training_membership_variant_specs(
+        value["model_variant_specs"]
+    )
+    capabilities = _expected_development_training_membership_capabilities()
+    if any(type(value[field]) is not bool for field in capabilities):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership capabilities must be exact booleans"
+        )
+    label_horizon_sessions = _strict_int(
+        value["label_horizon_sessions"],
+        "development training-membership label horizon sessions",
+        minimum=1,
+    )
+    label_entry_session_offset = _strict_int(
+        value["label_entry_session_offset"],
+        "development training-membership label entry session offset",
+        minimum=1,
+    )
+    label_maturity_session_offset = _strict_int(
+        value["label_maturity_session_offset"],
+        "development training-membership label maturity session offset",
+        minimum=1,
+    )
+    if (
+        value["schema_version"]
+        != DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION
+        or value["contract_version"] != CONTRACT_VERSION
+        or value["plan_kind"]
+        != "request_free_development_training_membership_assembly"
+        or value["artifact_stage"] != "development"
+        or value["development_root_scope_sha256"]
+        != source_label_plan["development_root_scope_sha256"]
+        or value["source_label_assembly_plan_sha256"]
+        != source_label_plan["label_assembly_plan_sha256"]
+        or value["source_feature_assembly_plan_sha256"]
+        != source_label_plan["source_feature_assembly_plan_sha256"]
+        or value["candidate_sha256"] != source_feature_plan["candidate_sha256"]
+        or value["corpus_universe_sha256"]
+        != source_feature_plan["corpus_universe_sha256"]
+        or value["calendar_sessions_sha256"]
+        != source_label_plan["calendar_sessions_sha256"]
+        or value["development_cutoff_session"]
+        != source_label_plan["development_cutoff_session"]
+        or label_horizon_sessions != source_label_plan["label_horizon_sessions"]
+        or label_horizon_sessions != HORIZON_SESSIONS
+        or label_entry_session_offset
+        != source_label_plan["label_entry_session_offset"]
+        or label_entry_session_offset != _DEVELOPMENT_LABEL_ENTRY_SESSION_OFFSET
+        or label_maturity_session_offset
+        != source_label_plan["label_maturity_session_offset"]
+        or label_maturity_session_offset != LABEL_MATURITY_OFFSET
+        or value["membership_maturity_rule"]
+        != _DEVELOPMENT_TRAINING_MEMBERSHIP_MATURITY_RULE
+        or value["feature_eligibility_rule"]
+        != _DEVELOPMENT_TRAINING_FEATURE_ELIGIBILITY_RULE
+        or value["membership_order_rule"]
+        != _DEVELOPMENT_TRAINING_MEMBERSHIP_ORDER_RULE
+        or value["shared_variant_support_rule"]
+        != _DEVELOPMENT_TRAINING_SHARED_VARIANT_SUPPORT_RULE
+        or value["binary_target_field"]
+        != _DEVELOPMENT_TRAINING_BINARY_TARGET_FIELD
+        or value["binary_target_encoding"]
+        != _DEVELOPMENT_TRAINING_BINARY_TARGET_ENCODING
+        or value["edge_target_field"] != _DEVELOPMENT_TRAINING_EDGE_TARGET_FIELD
+        or type(value["both_binary_classes_required"]) is not bool
+        or value["both_binary_classes_required"] is not True
+        or type(value["semantic_ablation_feature_matrices_must_differ"])
+        is not bool
+        or value["semantic_ablation_feature_matrices_must_differ"] is not True
+        or any(
+            value[field] is not expected
+            for field, expected in capabilities.items()
+        )
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership semantics or capability boundary changed"
+        )
+
+    start_count = _strict_int(
+        value["start_consumed_request_count"],
+        "development training-membership start consumed-request count",
+    )
+    event_count = _strict_int(
+        value["event_count"],
+        "development training-membership event count",
+        minimum=1,
+    )
+    matured_count = _strict_int(
+        value["matured_event_count"],
+        "development training-membership matured event count",
+    )
+    unmatured_count = _strict_int(
+        value["unmatured_event_count"],
+        "development training-membership unmatured event count",
+    )
+    view_count = _strict_int(
+        value["membership_view_count"],
+        "development training-membership view count",
+        minimum=1,
+    )
+    variant_count = _strict_int(
+        value["model_variant_count"],
+        "development training-membership variant count",
+        minimum=1,
+    )
+    target_cost_bps = _strict_int(
+        value["target_cost_bps"],
+        "development training-membership target cost bps",
+        minimum=1,
+    )
+    minimum_training_row_count = _strict_int(
+        value["minimum_training_row_count"],
+        "development training-membership minimum training row count",
+        minimum=2,
+    )
+    for field in (
+        "development_root_scope_sha256",
+        "candidate_sha256",
+        "corpus_universe_sha256",
+        "calendar_sessions_sha256",
+        "membership_view_specs_sha256",
+        "model_variant_specs_sha256",
+    ):
+        _sha256(value[field], f"development training-membership {field}")
+    if (
+        start_count != 0
+        or start_count != source_label_plan["start_consumed_request_count"]
+        or event_count != source_label_plan["event_count"]
+        or matured_count != source_label_plan["matured_event_count"]
+        or unmatured_count != source_label_plan["unmatured_event_count"]
+        or matured_count + unmatured_count != event_count
+        or view_count != len(view_specs)
+        or view_count != len(DEVELOPMENT_FOLD_SPECS) + 1
+        or value["membership_view_specs_sha256"]
+        != canonical_sha256(view_specs)
+        or variant_count != len(variant_specs)
+        or variant_count != 2
+        or value["model_variant_specs_sha256"]
+        != canonical_sha256(variant_specs)
+        or target_cost_bps != BRIER_TARGET_COST_BPS
+        or minimum_training_row_count != _DEVELOPMENT_TRAINING_MINIMUM_ROW_COUNT
+    ):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership counts, hashes, or frozen targets changed"
+        )
+    observed = _self_hash(
+        value,
+        "training_membership_assembly_plan_sha256",
+        "development training-membership assembly plan",
+    )
+    expected = _sha256(
+        expected_training_membership_assembly_plan_sha256,
+        "expected development training-membership assembly plan hash",
+    )
+    if not hmac.compare_digest(observed, expected):
+        raise SecFilingGemmaStageAuthorizationError(
+            "Development training-membership assembly plan is not externally pinned"
+        )
+    return observed
+
+
 def _reconstruct_development_content_manifest_from_root(
     development_sec_execution_claim: Mapping[str, Any],
     development_sec_reader_receipt: Mapping[str, Any],
@@ -11236,6 +11829,7 @@ __all__ = [
     "DEVELOPMENT_CONTENT_ROOT_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION",
+    "DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_BATCH_COMPONENT_ID",
     "DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION",
     "DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION",
@@ -11276,6 +11870,7 @@ __all__ = [
     "build_development_market_reader_receipt",
     "build_development_feature_assembly_plan",
     "build_development_label_assembly_plan",
+    "build_development_training_membership_assembly_plan",
     "build_development_sec_execution_abort",
     "build_development_sec_execution_claim",
     "build_development_sec_reader_receipt",
@@ -11301,6 +11896,7 @@ __all__ = [
     "validate_development_market_reader_receipt",
     "validate_development_feature_assembly_plan",
     "validate_development_label_assembly_plan",
+    "validate_development_training_membership_assembly_plan",
     "validate_development_root_carry_in_reader_receipt",
     "validate_development_model_execution_abort",
     "validate_development_model_execution_claim",

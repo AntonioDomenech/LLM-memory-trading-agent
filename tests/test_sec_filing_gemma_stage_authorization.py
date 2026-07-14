@@ -52,6 +52,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     CONSUMPTION_LEDGER_SCHEMA_VERSION,
     DEVELOPMENT_FEATURE_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_LABEL_ASSEMBLY_PLAN_SCHEMA_VERSION,
+    DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_ABORT_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_EXECUTION_CLAIM_SCHEMA_VERSION,
     DEVELOPMENT_MARKET_READER_RECEIPT_SCHEMA_VERSION,
@@ -86,6 +87,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     build_development_market_reader_receipt,
     build_development_feature_assembly_plan,
     build_development_label_assembly_plan,
+    build_development_training_membership_assembly_plan,
     build_development_sec_execution_abort,
     build_development_sec_execution_claim,
     build_development_sec_reader_receipt,
@@ -110,6 +112,7 @@ from agent_benchmark.sec_filing_gemma_stage_authorization import (
     validate_development_market_reader_receipt,
     validate_development_feature_assembly_plan,
     validate_development_label_assembly_plan,
+    validate_development_training_membership_assembly_plan,
     validate_development_root_carry_in_reader_receipt,
     validate_development_model_execution_abort,
     validate_development_model_execution_claim,
@@ -1963,6 +1966,69 @@ _DEVELOPMENT_LABEL_ASSEMBLY_PLAN_KEYS = {
     "label_assembly_plan_sha256",
 }
 
+_DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_KEYS = {
+    "schema_version",
+    "contract_version",
+    "plan_kind",
+    "artifact_stage",
+    "development_root_scope_sha256",
+    "start_consumed_request_count",
+    "source_label_assembly_plan",
+    "source_label_assembly_plan_sha256",
+    "source_feature_assembly_plan_sha256",
+    "candidate_sha256",
+    "corpus_universe_sha256",
+    "calendar_sessions_sha256",
+    "development_cutoff_session",
+    "label_horizon_sessions",
+    "label_entry_session_offset",
+    "label_maturity_session_offset",
+    "event_count",
+    "matured_event_count",
+    "unmatured_event_count",
+    "membership_view_count",
+    "membership_view_specs",
+    "membership_view_specs_sha256",
+    "model_variant_count",
+    "model_variant_specs",
+    "model_variant_specs_sha256",
+    "membership_maturity_rule",
+    "feature_eligibility_rule",
+    "membership_order_rule",
+    "shared_variant_support_rule",
+    "target_cost_bps",
+    "binary_target_field",
+    "binary_target_encoding",
+    "edge_target_field",
+    "minimum_training_row_count",
+    "both_binary_classes_required",
+    "semantic_ablation_feature_matrices_must_differ",
+    "canonical_source_feature_rows_required",
+    "canonical_source_label_rows_required",
+    "source_feature_rows_access_permitted",
+    "source_label_rows_access_permitted",
+    "development_outcome_values_access_permitted",
+    "development_outcome_derivation_permitted",
+    "training_membership_access_permitted",
+    "training_membership_rows_output_permitted",
+    "training_feature_matrices_output_permitted",
+    "training_target_vectors_output_permitted",
+    "outcome_based_membership_filtering_permitted",
+    "row_rebalancing_permitted",
+    "post_cutoff_market_access_permitted",
+    "raw_market_output_permitted",
+    "compact_adjusted_open_paths_output_permitted",
+    "normalized_filing_text_output_permitted",
+    "model_transport_envelope_output_permitted",
+    "learner_fit_permitted",
+    "prediction_access_permitted",
+    "holdout_access_permitted",
+    "ledger_mutation_permitted",
+    "stage_promotion_permitted",
+    "production_permitted",
+    "training_membership_assembly_plan_sha256",
+}
+
 
 def _assert_model_market_bindings(value: dict, tip: dict, scope_hash: str) -> None:
     market_claim = tip["development_market_execution_claims"][scope_hash]
@@ -2111,6 +2177,23 @@ def _development_label_assembly_plan_fixture() -> tuple[dict, dict, dict, dict]:
         independent_current_tip_anchor=reader_tip,
     )
     return state, reader_tip, feature_plan, label_plan
+
+
+def _development_training_membership_assembly_plan_fixture() -> tuple[
+    dict, dict, dict, dict
+]:
+    state, reader_tip, _feature_plan, label_plan = (
+        _development_label_assembly_plan_fixture()
+    )
+    membership_plan = build_development_training_membership_assembly_plan(
+        state,
+        development_root_scope_sha256=label_plan[
+            "development_root_scope_sha256"
+        ],
+        source_label_assembly_plan=label_plan,
+        independent_current_tip_anchor=reader_tip,
+    )
+    return state, reader_tip, label_plan, membership_plan
 
 
 def _development_market_fixture() -> tuple[dict, dict, dict, dict, dict]:
@@ -5204,4 +5287,367 @@ def test_development_label_assembly_plan_validation_fails_closed() -> None:
         validate_development_label_assembly_plan(
             plan,
             expected_label_assembly_plan_sha256=_h("other label plan"),
+        )
+
+
+def test_development_training_membership_plan_is_exact_narrow_and_deterministic() -> None:
+    state, reader_tip, label_plan, plan = (
+        _development_training_membership_assembly_plan_fixture()
+    )
+    state_before = copy.deepcopy(state)
+    tip_before = copy.deepcopy(reader_tip)
+    feature_plan = label_plan["source_feature_assembly_plan"]
+
+    assert set(plan) == _DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_KEYS
+    assert (
+        plan["schema_version"]
+        == DEVELOPMENT_TRAINING_MEMBERSHIP_ASSEMBLY_PLAN_SCHEMA_VERSION
+    )
+    assert (
+        plan["plan_kind"]
+        == "request_free_development_training_membership_assembly"
+    )
+    assert plan["artifact_stage"] == "development"
+    assert plan["development_root_scope_sha256"] == label_plan[
+        "development_root_scope_sha256"
+    ]
+    assert plan["source_label_assembly_plan"] == label_plan
+    assert plan["source_label_assembly_plan_sha256"] == label_plan[
+        "label_assembly_plan_sha256"
+    ]
+    assert plan["source_feature_assembly_plan_sha256"] == feature_plan[
+        "feature_assembly_plan_sha256"
+    ]
+    assert plan["candidate_sha256"] == feature_plan["candidate_sha256"]
+    assert plan["corpus_universe_sha256"] == feature_plan[
+        "corpus_universe_sha256"
+    ]
+    assert plan["event_count"] == label_plan["event_count"]
+    assert plan["matured_event_count"] == label_plan["matured_event_count"]
+    assert plan["unmatured_event_count"] == label_plan["unmatured_event_count"]
+
+    expected_views = [
+        {
+            "view_ordinal": 1,
+            "training_view_id": "fold_1",
+            "view_kind": "development_out_of_fold",
+            "training_source_stage": "development",
+            "prediction_stage": "development",
+            "train_label_maturity_through": "2004-12-31",
+            "prediction_window_first_date": "2005-01-03",
+            "prediction_window_last_date": "2007-12-31",
+            "state_updates_inside_prediction_window": False,
+        },
+        {
+            "view_ordinal": 2,
+            "training_view_id": "fold_2",
+            "view_kind": "development_out_of_fold",
+            "training_source_stage": "development",
+            "prediction_stage": "development",
+            "train_label_maturity_through": "2007-12-31",
+            "prediction_window_first_date": "2008-01-02",
+            "prediction_window_last_date": "2010-12-31",
+            "state_updates_inside_prediction_window": False,
+        },
+        {
+            "view_ordinal": 3,
+            "training_view_id": "fold_3",
+            "view_kind": "development_out_of_fold",
+            "training_source_stage": "development",
+            "prediction_stage": "development",
+            "train_label_maturity_through": "2010-12-31",
+            "prediction_window_first_date": "2011-01-03",
+            "prediction_window_last_date": "2013-12-31",
+            "state_updates_inside_prediction_window": False,
+        },
+        {
+            "view_ordinal": 4,
+            "training_view_id": "fold_4",
+            "view_kind": "development_out_of_fold",
+            "training_source_stage": "development",
+            "prediction_stage": "development",
+            "train_label_maturity_through": "2013-12-31",
+            "prediction_window_first_date": "2014-01-02",
+            "prediction_window_last_date": "2016-12-30",
+            "state_updates_inside_prediction_window": False,
+        },
+        {
+            "view_ordinal": 5,
+            "training_view_id": "fold_5",
+            "view_kind": "development_out_of_fold",
+            "training_source_stage": "development",
+            "prediction_stage": "development",
+            "train_label_maturity_through": "2016-12-30",
+            "prediction_window_first_date": "2017-01-03",
+            "prediction_window_last_date": "2018-12-31",
+            "state_updates_inside_prediction_window": False,
+        },
+        {
+            "view_ordinal": 6,
+            "training_view_id": "intermediate_frozen_through_2018",
+            "view_kind": "intermediate_frozen_refit",
+            "training_source_stage": "development",
+            "prediction_stage": "intermediate",
+            "train_label_maturity_through": "2018-12-31",
+            "prediction_window_first_date": "2019-01-01",
+            "prediction_window_last_date": "2023-12-31",
+            "state_updates_inside_prediction_window": False,
+        },
+    ]
+    assert plan["membership_view_count"] == 6
+    assert plan["membership_view_specs"] == expected_views
+    assert plan["membership_view_specs_sha256"] == canonical_sha256(
+        expected_views
+    )
+    expected_variants = [
+        {
+            "variant_ordinal": 1,
+            "variant_id": "semantic",
+            "feature_names_field": "semantic_feature_names",
+            "feature_values_field": "semantic_feature_values_hex",
+        },
+        {
+            "variant_ordinal": 2,
+            "variant_id": "ablation",
+            "feature_names_field": "ablation_feature_names",
+            "feature_values_field": "ablation_feature_values_hex",
+        },
+    ]
+    assert plan["model_variant_count"] == 2
+    assert plan["model_variant_specs"] == expected_variants
+    assert plan["model_variant_specs_sha256"] == canonical_sha256(
+        expected_variants
+    )
+    assert plan["target_cost_bps"] == 10
+    assert plan["binary_target_field"] == "cash_beats_long_10bps"
+    assert plan["binary_target_encoding"] == "false_to_0_true_to_1"
+    assert plan["edge_target_field"] == "cash_active_log_edge_10bps_hex"
+    assert plan["minimum_training_row_count"] == 2
+    assert plan["both_binary_classes_required"] is True
+    assert plan["semantic_ablation_feature_matrices_must_differ"] is True
+
+    for field in (
+        "canonical_source_feature_rows_required",
+        "canonical_source_label_rows_required",
+        "source_feature_rows_access_permitted",
+        "source_label_rows_access_permitted",
+        "development_outcome_values_access_permitted",
+        "training_membership_access_permitted",
+        "training_membership_rows_output_permitted",
+        "training_feature_matrices_output_permitted",
+        "training_target_vectors_output_permitted",
+    ):
+        assert plan[field] is True
+    for field in (
+        "development_outcome_derivation_permitted",
+        "outcome_based_membership_filtering_permitted",
+        "row_rebalancing_permitted",
+        "post_cutoff_market_access_permitted",
+        "raw_market_output_permitted",
+        "compact_adjusted_open_paths_output_permitted",
+        "normalized_filing_text_output_permitted",
+        "model_transport_envelope_output_permitted",
+        "learner_fit_permitted",
+        "prediction_access_permitted",
+        "holdout_access_permitted",
+        "ledger_mutation_permitted",
+        "stage_promotion_permitted",
+        "production_permitted",
+    ):
+        assert plan[field] is False
+    assert validate_development_training_membership_assembly_plan(
+        plan,
+        expected_training_membership_assembly_plan_sha256=plan[
+            "training_membership_assembly_plan_sha256"
+        ],
+    ) == plan["training_membership_assembly_plan_sha256"]
+    assert build_development_training_membership_assembly_plan(
+        state,
+        development_root_scope_sha256=plan["development_root_scope_sha256"],
+        source_label_assembly_plan=label_plan,
+        independent_current_tip_anchor=reader_tip,
+    ) == plan
+    assert state == state_before
+    assert reader_tip == tip_before
+
+
+def test_development_training_membership_plan_requires_exact_terminal_sources() -> None:
+    state, reader_tip, label_plan, _plan = (
+        _development_training_membership_assembly_plan_fixture()
+    )
+    changed = copy.deepcopy(label_plan)
+    changed_feature = changed["source_feature_assembly_plan"]
+    changed_feature["candidate_sha256"] = _h("different membership candidate")
+    _rehash(changed_feature, "feature_assembly_plan_sha256")
+    changed["source_feature_assembly_plan_sha256"] = changed_feature[
+        "feature_assembly_plan_sha256"
+    ]
+    _rehash(changed, "label_assembly_plan_sha256")
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="terminal store replay",
+    ):
+        build_development_training_membership_assembly_plan(
+            state,
+            development_root_scope_sha256=label_plan[
+                "development_root_scope_sha256"
+            ],
+            source_label_assembly_plan=changed,
+            independent_current_tip_anchor=reader_tip,
+        )
+
+
+def test_development_training_membership_plan_rejects_view_and_variant_tampering() -> None:
+    _state, _reader_tip, _label_plan, plan = (
+        _development_training_membership_assembly_plan_fixture()
+    )
+    changed_view = copy.deepcopy(plan)
+    changed_view["membership_view_specs"][0][
+        "train_label_maturity_through"
+    ] = "2005-01-03"
+    changed_view["membership_view_specs_sha256"] = canonical_sha256(
+        changed_view["membership_view_specs"]
+    )
+    _rehash(changed_view, "training_membership_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="frozen contract",
+    ):
+        validate_development_training_membership_assembly_plan(
+            changed_view,
+            expected_training_membership_assembly_plan_sha256=changed_view[
+                "training_membership_assembly_plan_sha256"
+            ],
+        )
+
+    reordered = copy.deepcopy(plan)
+    reordered["membership_view_specs"].reverse()
+    reordered["membership_view_specs_sha256"] = canonical_sha256(
+        reordered["membership_view_specs"]
+    )
+    _rehash(reordered, "training_membership_assembly_plan_sha256")
+    with pytest.raises(SecFilingGemmaStageAuthorizationError):
+        validate_development_training_membership_assembly_plan(
+            reordered,
+            expected_training_membership_assembly_plan_sha256=reordered[
+                "training_membership_assembly_plan_sha256"
+            ],
+        )
+
+    changed_variant = copy.deepcopy(plan)
+    changed_variant["model_variant_specs"][0][
+        "feature_values_field"
+    ] = "ablation_feature_values_hex"
+    changed_variant["model_variant_specs_sha256"] = canonical_sha256(
+        changed_variant["model_variant_specs"]
+    )
+    _rehash(changed_variant, "training_membership_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="variant differs",
+    ):
+        validate_development_training_membership_assembly_plan(
+            changed_variant,
+            expected_training_membership_assembly_plan_sha256=changed_variant[
+                "training_membership_assembly_plan_sha256"
+            ],
+        )
+
+
+def test_development_training_membership_plan_validation_fails_closed() -> None:
+    _state, _reader_tip, _label_plan, plan = (
+        _development_training_membership_assembly_plan_fixture()
+    )
+    for field, replacement in (
+        ("source_feature_rows_access_permitted", False),
+        ("development_outcome_values_access_permitted", False),
+        ("development_outcome_derivation_permitted", True),
+        ("outcome_based_membership_filtering_permitted", True),
+        ("row_rebalancing_permitted", True),
+        ("post_cutoff_market_access_permitted", True),
+        ("learner_fit_permitted", True),
+        ("prediction_access_permitted", True),
+        ("holdout_access_permitted", True),
+        ("production_permitted", True),
+        ("both_binary_classes_required", False),
+        ("semantic_ablation_feature_matrices_must_differ", False),
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = replacement
+        _rehash(changed, "training_membership_assembly_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_training_membership_assembly_plan(
+                changed,
+                expected_training_membership_assembly_plan_sha256=changed[
+                    "training_membership_assembly_plan_sha256"
+                ],
+            )
+
+    for field in (
+        "label_horizon_sessions",
+        "label_entry_session_offset",
+        "label_maturity_session_offset",
+        "event_count",
+        "matured_event_count",
+        "unmatured_event_count",
+        "membership_view_count",
+        "model_variant_count",
+        "target_cost_bps",
+        "minimum_training_row_count",
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = True
+        _rehash(changed, "training_membership_assembly_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_training_membership_assembly_plan(
+                changed,
+                expected_training_membership_assembly_plan_sha256=changed[
+                    "training_membership_assembly_plan_sha256"
+                ],
+            )
+
+    for field, replacement in (
+        ("membership_maturity_rule", "outcomes_choose_membership"),
+        ("feature_eligibility_rule", "semantic_only"),
+        ("membership_order_rule", "sort_by_outcome"),
+        ("shared_variant_support_rule", "variant_specific_support"),
+        ("binary_target_field", "cash_beats_long_5bps"),
+        ("binary_target_encoding", "true_to_0_false_to_1"),
+        ("edge_target_field", "cash_active_log_edge_5bps_hex"),
+    ):
+        changed = copy.deepcopy(plan)
+        changed[field] = replacement
+        _rehash(changed, "training_membership_assembly_plan_sha256")
+        with pytest.raises(SecFilingGemmaStageAuthorizationError):
+            validate_development_training_membership_assembly_plan(
+                changed,
+                expected_training_membership_assembly_plan_sha256=changed[
+                    "training_membership_assembly_plan_sha256"
+                ],
+            )
+
+    extra = copy.deepcopy(plan)
+    extra["unexpected"] = False
+    _rehash(extra, "training_membership_assembly_plan_sha256")
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="keys changed",
+    ):
+        validate_development_training_membership_assembly_plan(
+            extra,
+            expected_training_membership_assembly_plan_sha256=extra[
+                "training_membership_assembly_plan_sha256"
+            ],
+        )
+
+    with pytest.raises(
+        SecFilingGemmaStageAuthorizationError,
+        match="not externally pinned",
+    ):
+        validate_development_training_membership_assembly_plan(
+            plan,
+            expected_training_membership_assembly_plan_sha256=_h(
+                "other membership plan"
+            ),
         )
