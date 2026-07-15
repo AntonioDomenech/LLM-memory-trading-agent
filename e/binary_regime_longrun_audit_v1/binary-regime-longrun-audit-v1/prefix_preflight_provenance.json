@@ -1,0 +1,24 @@
+{
+  "bounded_first_date": "1999-03-10",
+  "bounded_last_date": "2023-12-29",
+  "bounded_result_sha256": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535",
+  "bounded_rows": 6244,
+  "expected_bounded_result_sha256": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535",
+  "network_access": false,
+  "physical_snapshot_has_later_rows": true,
+  "physical_snapshot_last_session": "2026-07-09",
+  "query": "SELECT\n  CAST(date AS DATE) AS date,\n  CAST(aapl_open AS DOUBLE) AS aapl_open,\n  CAST(aapl_close AS DOUBLE) AS aapl_close,\n  CAST(aapl_adj_close AS DOUBLE) AS aapl_adj_close,\n  CAST(spy_adj_close AS DOUBLE) AS spy_adj_close,\n  CAST(qqq_adj_close AS DOUBLE) AS qqq_adj_close\nFROM read_csv_auto(?, header = true)\nWHERE CAST(date AS DATE) <= CAST(? AS DATE)\nORDER BY CAST(date AS DATE)",
+  "query_parameters": [
+    "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\binary_regime_longrun_audit_v1\\authorized_inputs\\aapl_spy_qqq_through_2026_ytd.csv",
+    "2023-12-31"
+  ],
+  "rows_after_bound_returned": false,
+  "session_coverage": {
+    "date_sequence_sha256": "77098a2d35b6cee78ccb100514e599ee4ef6dac55738e7084b02d0e0dd0b63c1",
+    "first_session": "1999-03-10",
+    "last_session": "2023-12-29",
+    "observations": 6244
+  },
+  "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\binary_regime_longrun_audit_v1\\authorized_inputs\\aapl_spy_qqq_through_2026_ytd.csv",
+  "source_type": "physically_bounded_local_csv_duckdb_query"
+}

@@ -1,6 +1,6 @@
 # AAPL long/cash approach comparison
 
-Updated through the binary-regime union selector v1 validation rejection on
+Updated through the binary-regime selector v1 post-rejection long-run audit on
 2026-07-15.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
@@ -20,18 +20,28 @@ buy-and-hold at 5 bps per changing leg.
 | Weak-trend exhaustion v1 | 675-rule retrospective search | Won 16/24 years; +4.6839 pp mean annual excess | -3.5220 | +17.5368 | +1.5863 | +14.4778% | Strictly rejected; strongest lead, high selection-risk |
 | Sparse dual-trend exhaustion v1 | Sparse pre-2024 search | Won 11/24 years with many ties | -0.9844 | +5.0895 | 0.0000 | +3.8610% | Rejected; too inactive |
 | Hierarchical empirical-Bayes v1 | Genuine causal online learner | Broader 2000-2023 audit won 7 years; -0.2916 pp mean annual excess | -1.1820 | +8.7224 | +0.1518 | +7.1204% | Rejected; real 2025 edge but poor general reliability |
+| Binary-regime union selector v1 | Two-state causal selector over the fixed contextual-plus-weak-trend union; SPY/QQQ regime proxies | Rejected at 2019-2023 selector validation, but continuous 2005-2023 won 16/19 years at 5 bps and 14/19 at 10 bps | -3.4102 | +16.1942 | +1.9065 | +13.7815% | Strictly rejected on 2024; passed all 41 post-hoc long-run gates; strongest chronological long-run lead, but post-2023 learning changed no action |
 
-The contextual and weak-trend rules have more historical winning years than
-losing years and positive continuous 2024-2026 relative wealth. They are
-research leads under the relaxed long-run-average criterion, but neither is a
-reliable money-making proof: their parameters were chosen after extensive
-pre-2024 searching, and both still lost the already-revealed 2024 audit.
+The binary-regime selector is now the strongest chronological long-run lead.
+At 5 bps it beat AAPL in 18 of 22 reporting periods, passed all declared
+long-run robustness gates, and finished the 2024-2026-YTD window with 13.78%
+more wealth than AAPL. It still fails the main goal because it lost 2024 by
+3.41 percentage points. Its 21 new post-2023 lessons caused no threshold
+crossing and changed no trade, so the audit supports the already-learned fixed
+policy rather than useful continual learning.
+
+The contextual and weak-trend rules also have more historical winning years
+than losing years and positive continuous 2024-2026 relative wealth. All three
+remain research leads under the relaxed long-run-average criterion, not
+reliable money-making proof. The underlying expert family was selected after
+extensive historical research, and each lead still lost the already-revealed
+2024 audit.
 
 ## Chronological approaches that reached 2019-2023 selector validation
 
 | Approach | Model/information | 2019-2023 validation | Continuous 2005-2023 diagnostic | Later data opened? | Decision |
 |---|---|---|---|---|---|
-| Binary-regime union selector v1 | Two-state causal online selector using 20-session SPY/QQQ market regime over the fixed exhaustion union | Beat AAPL in 4/5 years; +7.78% relative wealth at 5 bps and +3.97% at 10 bps. Selector-minus-union improved in only 1/5 years and one veto supplied 85.20% of positive stress-cost veto benefit | +258.49% relative wealth at 5 bps and +212.59% at 10 bps; 16/19 and 14/19 positive years; 4/4 negative-AAPL years beaten | 2019-2023 only; no 2024+ | Strictly rejected; promising long-run union lead, but adaptive selector did not change any action |
+| Binary-regime union selector v1 | Two-state causal online selector using 20-session SPY/QQQ market regime over the fixed exhaustion union | Beat AAPL in 4/5 years; +7.78% relative wealth at 5 bps and +3.97% at 10 bps. Selector-minus-union improved in only 1/5 years and one veto supplied 85.20% of positive stress-cost veto benefit | +258.49% relative wealth at 5 bps and +212.59% at 10 bps; 16/19 and 14/19 positive years; 4/4 negative-AAPL years beaten | Yes, later on a separate immutable post-rejection audit branch | Validation rejection remains final; the later audit passed long-run robustness but failed the 2024 strict gate |
 
 ## Chronological development approaches that did not reach later periods
 
@@ -74,3 +84,4 @@ short behavior and are excluded from the eligible table.
 - `e/chronological_exhaustion_expert_v1/REJECTED.md`
 - `e/union_contextual_veto_v1/REJECTED.md`
 - `e/binary_regime_union_selector_v1/REJECTED.md`
+- `e/binary_regime_longrun_audit_v1/REJECTED.md`

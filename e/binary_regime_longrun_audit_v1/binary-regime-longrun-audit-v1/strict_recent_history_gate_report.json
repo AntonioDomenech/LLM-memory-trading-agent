@@ -1,0 +1,43 @@
+{
+  "evidence_classification": "repeated_historical_target_non_confirmatory",
+  "failures": [
+    "base_5bps_2024_active_log_edge_above_001",
+    "stress_10bps_2024_active_log_edge_above_001"
+  ],
+  "gate_inputs": {
+    "base_5bps_2024_active_log_edge_above_001": -0.026411838298386937,
+    "base_5bps_2025_active_log_edge_above_001": 0.13892562268272465,
+    "base_5bps_2026_ytd_active_log_edge_above_001": 0.016595627232943277,
+    "stress_10bps_2024_active_log_edge_above_001": -0.031411841215055816,
+    "stress_10bps_2025_active_log_edge_above_001": 0.1299256174327207,
+    "stress_10bps_2026_ytd_active_log_edge_above_001": 0.012595624899608178
+  },
+  "gates": {
+    "account_union_cooldown_applied_once_before_selector": true,
+    "all_policy_ledgers_unleveraged": true,
+    "all_policy_no_leverage_proofs": true,
+    "always_long_matches_same_ledger_aapl": true,
+    "base_5bps_2024_active_log_edge_above_001": false,
+    "base_5bps_2025_active_log_edge_above_001": true,
+    "base_5bps_2026_ytd_active_log_edge_above_001": true,
+    "causal_lesson_admission_exact": true,
+    "continuous_account_episode_identity": true,
+    "continuous_account_starts_once_in_2005": true,
+    "frozen_binary_regime_rule_exact": true,
+    "integrity_passed": true,
+    "one_shadow_lesson_per_continuous_union_opportunity": true,
+    "pure_union_filter_identity": true,
+    "reporting_episode_and_veto_edge_identity": true,
+    "same_action_stream_at_both_costs": true,
+    "selector_cash_subset_of_union": true,
+    "selector_state_replay_exact": true,
+    "shadow_maturity_and_label_formula_exact": true,
+    "stress_10bps_2024_active_log_edge_above_001": false,
+    "stress_10bps_2025_active_log_edge_above_001": true,
+    "stress_10bps_2026_ytd_active_log_edge_above_001": true,
+    "unresolved_tail_masked_after_cooldown": true
+  },
+  "passed": false,
+  "strict_recent_history_pass": false,
+  "ytd_label": "2026 YTD through 2026-07-09"
+}

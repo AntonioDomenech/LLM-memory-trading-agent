@@ -1,0 +1,130 @@
+{
+  "gate_report": {
+    "failures": [
+      "base_5bps_minimum_150_complete_cash_episodes",
+      "stress_10bps_minimum_150_complete_cash_episodes"
+    ],
+    "gate_inputs": {
+      "base_5bps": {
+        "aapl_max_drawdown": -0.6042174103778968,
+        "active_log_edge_after_five_largest_episodes": 0.770589698512725,
+        "active_log_edge_after_largest_period": 0.7750148133172515,
+        "all_period_gate_inputs_finite": true,
+        "beneficial_episode_rate": 0.6423357664233577,
+        "complete_cash_episode_count": 137,
+        "exact_reporting_period_inventory": true,
+        "largest_period_active_log_edge": 0.501719121772595,
+        "maximum_positive_episode_share": 0.06788619883717273,
+        "mean_episode_edge": 0.009319225803575578,
+        "median_episode_edge": 0.008546526824687308,
+        "negative_aapl_period_aggregate_active_log_edge": 0.8411435242798085,
+        "negative_aapl_periods": [
+          "2008",
+          "2015",
+          "2018",
+          "2022"
+        ],
+        "positive_period_count": 16,
+        "reporting_period_count": 19,
+        "selector_minus_fixed_union_active_log_edge": 0.11208423294928593,
+        "strategy_max_drawdown": -0.4299321567716672,
+        "total_active_log_edge": 1.2767339350898466,
+        "union_continuous_active_log_edge": 1.1646497021405606
+      },
+      "stress_10bps": {
+        "aapl_max_drawdown": -0.6042174103778968,
+        "active_log_edge_after_five_largest_episodes": 0.6385896215126677,
+        "active_log_edge_after_largest_period": 0.6610147468172023,
+        "all_period_gate_inputs_finite": true,
+        "beneficial_episode_rate": 0.6204379562043796,
+        "complete_cash_episode_count": 137,
+        "exact_reporting_period_inventory": true,
+        "largest_period_active_log_edge": 0.4787191083559182,
+        "maximum_positive_episode_share": 0.07009643617355654,
+        "mean_episode_edge": 0.008319225220241802,
+        "median_episode_edge": 0.007546526241353532,
+        "negative_aapl_period_aggregate_active_log_edge": 0.7841434910297832,
+        "negative_aapl_periods": [
+          "2008",
+          "2015",
+          "2018",
+          "2022"
+        ],
+        "positive_period_count": 14,
+        "reporting_period_count": 19,
+        "selector_minus_fixed_union_active_log_edge": 0.13508424636596406,
+        "strategy_max_drawdown": -0.43220787500133195,
+        "total_active_log_edge": 1.1397338551731204,
+        "union_continuous_active_log_edge": 1.0046496088071564
+      }
+    },
+    "gates": {
+      "account_union_cooldown_applied_once_before_selector": true,
+      "all_policy_ledgers_unleveraged": true,
+      "all_policy_no_leverage_proofs": true,
+      "always_long_matches_same_ledger_aapl": true,
+      "base_5bps_beneficial_episode_rate_at_least_50pct": true,
+      "base_5bps_max_drawdown_no_worse_than_aapl": true,
+      "base_5bps_minimum_12_strictly_positive_periods": true,
+      "base_5bps_minimum_150_complete_cash_episodes": false,
+      "base_5bps_no_episode_above_25pct_positive_edge": true,
+      "base_5bps_positive_after_subtracting_five_largest_episodes": true,
+      "base_5bps_positive_after_subtracting_largest_period": true,
+      "base_5bps_positive_mean_episode_edge": true,
+      "base_5bps_positive_median_episode_edge": true,
+      "base_5bps_positive_negative_aapl_period_aggregate": true,
+      "base_5bps_selector_minus_fixed_union_strictly_positive": true,
+      "base_5bps_total_active_log_edge_above_001": true,
+      "causal_lesson_admission_exact": true,
+      "continuous_account_episode_identity": true,
+      "continuous_account_starts_once_in_2005": true,
+      "frozen_binary_regime_rule_exact": true,
+      "integrity_passed": true,
+      "one_shadow_lesson_per_continuous_union_opportunity": true,
+      "pure_union_filter_identity": true,
+      "reporting_episode_and_veto_edge_identity": true,
+      "same_action_stream_at_both_costs": true,
+      "selector_cash_subset_of_union": true,
+      "selector_state_replay_exact": true,
+      "shadow_maturity_and_label_formula_exact": true,
+      "stress_10bps_beneficial_episode_rate_at_least_50pct": true,
+      "stress_10bps_max_drawdown_no_worse_than_aapl": true,
+      "stress_10bps_minimum_12_strictly_positive_periods": true,
+      "stress_10bps_minimum_150_complete_cash_episodes": false,
+      "stress_10bps_no_episode_above_25pct_positive_edge": true,
+      "stress_10bps_positive_after_subtracting_five_largest_episodes": true,
+      "stress_10bps_positive_after_subtracting_largest_period": true,
+      "stress_10bps_positive_mean_episode_edge": true,
+      "stress_10bps_positive_median_episode_edge": true,
+      "stress_10bps_positive_negative_aapl_period_aggregate": true,
+      "stress_10bps_selector_minus_fixed_union_strictly_positive": true,
+      "stress_10bps_total_active_log_edge_above_001": true,
+      "unresolved_tail_masked_after_cooldown": true
+    },
+    "passed": false,
+    "post_hoc_long_run_robustness_pass": false,
+    "post_hoc_non_confirmatory": true
+  },
+  "known_before_new_2024_2026_audit": true,
+  "plain_language_disclosure": "Before opening the new audit rows, almost every proposed robustness condition already passed; the 137 episodes were below the post-hoc minimum of 150 at both costs.",
+  "post_hoc_thresholds_selected_after_this_history_was_known": true,
+  "source_period": "2005 through 2023",
+  "summary": {
+    "base_5bps": {
+      "beneficial_episode_rate": 0.6423357664233577,
+      "beneficial_episode_rate_percent_rounded_1dp": 64.2,
+      "complete_cash_episode_count": 137,
+      "positive_period_count": 16,
+      "total_active_log_edge": 1.2767339350898466,
+      "total_active_log_edge_rounded_4dp": 1.2767
+    },
+    "stress_10bps": {
+      "beneficial_episode_rate": 0.6204379562043796,
+      "beneficial_episode_rate_percent_rounded_1dp": 62.0,
+      "complete_cash_episode_count": 137,
+      "positive_period_count": 14,
+      "total_active_log_edge": 1.1397338551731204,
+      "total_active_log_edge_rounded_4dp": 1.1397
+    }
+  }
+}

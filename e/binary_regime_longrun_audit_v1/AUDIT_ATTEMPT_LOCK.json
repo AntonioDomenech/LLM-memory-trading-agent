@@ -1,0 +1,13 @@
+{
+  "contract_version": "aapl-binary-regime-longrun-audit-v1",
+  "created_after_through_2023_checkpoint_replay": true,
+  "created_before_raw_blob_or_2024_value_read": true,
+  "git_commit": "9bab9e023563d7ccaa4586d59dab464c0297da49",
+  "one_run_no_retry": true,
+  "parent_manifest_sha256": "sha256:0354355ac460042f96663d1a45cf5e9a8cf4fe873ddf5cc87afefd9c4b5d81dc",
+  "persistent_after_success_or_failure": true,
+  "pre_2024_gate_status_sha256": "sha256:4ec4fa98ed0a7bd206963211ddbad91441258316a23eab81e9ce0f5a682692bc",
+  "run_id": "binary-regime-longrun-audit-v1",
+  "schema_version": "binary-regime-longrun-audit-attempt-v1",
+  "through_2023_bounded_result_sha256": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535"
+}
