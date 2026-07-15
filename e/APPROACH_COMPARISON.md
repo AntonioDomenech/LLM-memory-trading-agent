@@ -44,6 +44,12 @@ extensive historical research, and each lead still lost the already-revealed
 |---|---|---|---|---|---|
 | Binary-regime union selector v1 | Two-state causal online selector using 20-session SPY/QQQ market regime over the fixed exhaustion union | Beat AAPL in 4/5 years; +7.78% relative wealth at 5 bps and +3.97% at 10 bps. Selector-minus-union improved in only 1/5 years and one veto supplied 85.20% of positive stress-cost veto benefit | +258.49% relative wealth at 5 bps and +212.59% at 10 bps; 16/19 and 14/19 positive years; 4/4 negative-AAPL years beaten | Yes, later on a separate immutable post-rejection audit branch | Validation rejection remains final; the later audit passed long-run robustness but failed the 2024 strict gate |
 
+## Preregistered continuation awaiting its one-shot audit
+
+| Approach | Frozen model and learning | Known evidence through 2018 | Authorized next period | Current status |
+|---|---|---|---|---|
+| Causal contextual expert aggregation audit v2 | Exact rejected v2 online learner plus frozen-2018, global-only and lifetime-only controls; newly matured lessons continue causally | At 10 bps, +146.09% wealth versus AAPL, 9/14 positive years, 7/7 positive folds and all 3 negative-AAPL years beaten; learner still trailed fixed union by 0.071286 log edge | One locked 2019-2023 post-rejection continuation audit only; 2024+ remains closed | Contract preregistered; no 2019-2023 v2 score opened |
+
 ## Chronological development approaches that did not reach later periods
 
 | Approach | Model/information | Development result | Later data opened? | Decision |

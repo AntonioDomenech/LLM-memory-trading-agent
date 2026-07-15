@@ -85,6 +85,23 @@ not run confirmation manually unless the development
 bundle has passed its independent verifier and has been committed and pushed;
 the authorization layer also enforces this sequence.
 
+The v2 development result is now permanently rejected because the learner
+trailed its simpler fixed union at stress cost. A separate one-shot,
+post-rejection 2019-2023 continuation audit has been preregistered at
+`docs/aapl_causal_contextual_expert_aggregation_audit_v2.md`. It preserves the
+rejection, keeps 2024+ closed, and asks only whether the exact learner retains
+a broad long-run advantage over AAPL while continuing to learn causally from
+newly matured outcomes. Do not use the original confirmation command for this
+audit.
+
+After its audit implementation has been committed and pushed, its only
+authorized commands will be:
+
+```bash
+python -I -B agent_benchmark/contextual_expert_aggregation_audit_bootstrap.py stage audit
+python -I -B agent_benchmark/contextual_expert_aggregation_audit_bootstrap.py verify audit
+```
+
 ## Historical warehouse
 
 The 2000-2025 local warehouse uses DuckDB plus Parquet files under
