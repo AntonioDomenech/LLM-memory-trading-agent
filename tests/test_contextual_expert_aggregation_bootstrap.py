@@ -40,7 +40,9 @@ def clean_repo(tmp_path: Path) -> Path:
     _git(repo, "init", "--quiet")
     _git(repo, "config", "user.name", "Bootstrap Test")
     _git(repo, "config", "user.email", "bootstrap@example.invalid")
+    _write(repo / ".gitattributes", "*.py text eol=lf\n")
     _write(repo / ".gitignore", "__pycache__/\n*.py[cod]\n*.pyd\n*.so\n")
+    _write(repo / "requirements.txt", "pytest\n")
     _write(repo / "agent_benchmark/__init__.py", "\n")
     _write(
         repo / "agent_benchmark/contextual_expert_aggregation_bootstrap.py",
@@ -171,7 +173,12 @@ def test_dispatch_sanitizes_git_environment_and_restores_on_error(
         operation: str, stage: str
     ) -> tuple[Mapping[str, Any], int]:
         observed["index"] = os.environ.get("GIT_INDEX_FILE")
-        observed["config"] = os.environ.get("GIT_CONFIG_GLOBAL")
+        observed["config_global"] = os.environ.get("GIT_CONFIG_GLOBAL")
+        observed["config_system"] = os.environ.get("GIT_CONFIG_SYSTEM")
+        observed["config_count"] = os.environ.get("GIT_CONFIG_COUNT")
+        observed["autocrlf"] = os.environ.get("GIT_CONFIG_VALUE_2")
+        observed["fsmonitor"] = os.environ.get("GIT_CONFIG_VALUE_3")
+        observed["attributes_source"] = os.environ.get("GIT_ATTR_SOURCE")
         observed["optional_locks"] = os.environ.get("GIT_OPTIONAL_LOCKS")
         raise RuntimeError("synthetic dispatch failure")
 
@@ -179,7 +186,12 @@ def test_dispatch_sanitizes_git_environment_and_restores_on_error(
         _guard(clean_repo, dispatch=failing_dispatch)
     assert observed == {
         "index": None,
-        "config": None,
+        "config_global": os.devnull,
+        "config_system": os.devnull,
+        "config_count": "4",
+        "autocrlf": "true",
+        "fsmonitor": "false",
+        "attributes_source": "HEAD",
         "optional_locks": "0",
     }
     assert os.environ["GIT_INDEX_FILE"] == "foreign-index"
@@ -253,6 +265,127 @@ def test_modified_tracked_candidate_fails_closed(clean_repo: Path) -> None:
         "index_worktree_divergence",
         "agent_benchmark/model.py",
     )
+
+
+def test_git_normalized_crlf_worktree_bytes_are_recorded_but_allowed(
+    clean_repo: Path,
+) -> None:
+    path = clean_repo / "agent_benchmark/model.py"
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    payload, code = _guard(clean_repo)
+    assert code == 0
+    surface = payload["bootstrap_attestation"]["execution_surface"]
+    assert surface["index_worktree_divergences"] == 0
+    assert "agent_benchmark/model.py" in surface["line_ending_normalized_paths"]
+    identity = bootstrap._worktree_blob_identity(
+        clean_repo,
+        "agent_benchmark/model.py",
+        "sha1",
+    )
+    _object_id, raw_sha256, comparison_sha256, normalized = identity
+    assert normalized is True
+    assert raw_sha256 != comparison_sha256
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "content"),
+    (
+        (".gitattributes", "*.py -text\n"),
+        (".gitignore", "*.py\n"),
+        ("requirements.txt", "different-dependency\n"),
+    ),
+)
+def test_modified_control_file_fails_before_dispatch(
+    clean_repo: Path, relative_path: str, content: str
+) -> None:
+    calls: list[tuple[str, str]] = []
+    _write(clean_repo / relative_path, content)
+
+    def fake_dispatch(operation: str, stage: str) -> tuple[Mapping[str, Any], int]:
+        calls.append((operation, stage))
+        return {}, 0
+
+    with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
+        _guard(clean_repo, dispatch=fake_dispatch)
+    _assert_violation(exc, "index_worktree_divergence", relative_path)
+    assert calls == []
+
+
+def test_binary_candidate_requires_literal_bytes(clean_repo: Path) -> None:
+    relative = "agent_benchmark/native.dll"
+    path = clean_repo / relative
+    _write(path, b"binary\nbytes\n")
+    _git(clean_repo, "add", "-f", relative)
+    _git(clean_repo, "commit", "--quiet", "-m", "track native candidate")
+    _write(path, b"binary\r\nbytes\r\n")
+
+    with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
+        _guard(clean_repo)
+    _assert_violation(exc, "index_worktree_divergence", relative)
+
+
+def test_committed_dangerous_git_attribute_is_rejected(clean_repo: Path) -> None:
+    _write(clean_repo / ".gitattributes", "*.py text eol=lf filter=evil\n")
+    _git(clean_repo, "add", ".gitattributes")
+    _git(clean_repo, "commit", "--quiet", "-m", "unsafe attributes")
+
+    with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
+        _guard(clean_repo)
+    assert exc.value.code == "unsafe_git_attributes"
+    assert bootstrap._thaw(exc.value.details["occurrences"]) == [
+        {"path": ".gitattributes", "line": 1, "attribute": "filter"}
+    ]
+
+
+def test_dirty_attributes_cannot_invoke_or_trust_external_clean_filter(
+    clean_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "hostile-home"
+    home.mkdir()
+    marker = tmp_path / "filter-invoked.txt"
+    filter_script = tmp_path / "clean_filter.py"
+    _write(
+        filter_script,
+        "from pathlib import Path\n"
+        "import sys\n"
+        f"Path({str(marker)!r}).write_text('invoked', encoding='utf-8')\n"
+        "payload = sys.stdin.buffer.read().replace(b'VALUE = 2', b'VALUE = 1')\n"
+        "sys.stdout.buffer.write(payload)\n",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    filter_command = (
+        f'"{Path(sys.executable).as_posix()}" '
+        f'"{filter_script.as_posix()}"'
+    )
+    _git(clean_repo, "config", "--global", "filter.evil.clean", filter_command)
+    _git(clean_repo, "config", "--global", "filter.evil.required", "true")
+
+    _write(
+        clean_repo / ".gitattributes",
+        "*.py text eol=lf filter=evil\n",
+    )
+    relative = "agent_benchmark/model.py"
+    _write(clean_repo / relative, "VALUE = 2\n")
+    filtered_object = _git(
+        clean_repo,
+        "hash-object",
+        "--path",
+        relative,
+        "--",
+        relative,
+    )
+    assert filtered_object == _git(clean_repo, "rev-parse", f":{relative}")
+    assert marker.exists()
+    marker.unlink()
+
+    with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
+        _guard(clean_repo)
+    _assert_violation(exc, "index_worktree_divergence", ".gitattributes")
+    assert not marker.exists()
 
 
 def test_staged_candidate_divergent_from_head_fails_closed(clean_repo: Path) -> None:
@@ -402,6 +535,44 @@ def test_effective_local_git_control_file_fails_closed(
     with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
         _guard(clean_repo)
 
+    assert exc.value.code == "unsafe_local_git_controls"
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    (
+        ("core.fsmonitor", "external-fsmonitor-hook"),
+        ("include.path", "external-config"),
+    ),
+)
+def test_local_executable_or_included_git_config_fails_closed(
+    clean_repo: Path,
+    key: str,
+    value: str,
+) -> None:
+    _git(clean_repo, "config", key, value)
+    with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
+        _guard(clean_repo)
+    assert exc.value.code == "unsafe_local_git_controls"
+
+
+def test_worktree_config_include_is_rejected_from_the_common_config(
+    clean_repo: Path,
+    tmp_path: Path,
+) -> None:
+    external = tmp_path / "external.gitconfig"
+    _write(external, "[core]\n\tfsmonitor = external-hook\n")
+    _git(clean_repo, "config", "extensions.worktreeConfig", "true")
+    _git(
+        clean_repo,
+        "config",
+        "--worktree",
+        "include.path",
+        external.as_posix(),
+    )
+
+    with pytest.raises(bootstrap.BootstrapSecurityError) as exc:
+        _guard(clean_repo)
     assert exc.value.code == "unsafe_local_git_controls"
 
 

@@ -8,7 +8,9 @@ The only supported command shape is::
 This file intentionally imports only the Python standard library at module
 load time.  The repository root is not placed on ``sys.path`` and no
 ``agent_benchmark`` package is imported until the complete execution surface
-has been proved to match both ``HEAD`` and the index byte-for-byte.
+has been proved to match both ``HEAD`` and the index.  Python and frozen text
+control files permit only an internally implemented CRLF-to-LF equivalence;
+native and binary candidates require literal byte identity.
 """
 
 from __future__ import annotations
@@ -75,6 +77,18 @@ _BLOCKED_ROOT_IMPORTS = frozenset(
         "ui",
         "venv",
     }
+)
+_CONTROL_CANDIDATE_PATHS = (
+    Path(".gitattributes"),
+    Path(".gitignore"),
+    Path("requirements.txt"),
+)
+_CONTROL_CANDIDATE_RELATIVES = tuple(
+    path.as_posix() for path in _CONTROL_CANDIDATE_PATHS
+)
+_CRLF_EQUIVALENT_SUFFIXES = frozenset({".py", ".pyw"})
+_DANGEROUS_GIT_ATTRIBUTES = frozenset(
+    {"filter", "ident", "working-tree-encoding"}
 )
 _DISPATCH_TARGETS: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
@@ -397,6 +411,20 @@ def _git_environment() -> dict[str, str]:
     }
     environment.update(
         {
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_ATTR_SOURCE": "HEAD",
+            "GIT_CONFIG_COUNT": "4",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_KEY_0": "core.attributesFile",
+            "GIT_CONFIG_KEY_1": "core.excludesFile",
+            "GIT_CONFIG_KEY_2": "core.autocrlf",
+            "GIT_CONFIG_KEY_3": "core.fsmonitor",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_VALUE_0": os.devnull,
+            "GIT_CONFIG_VALUE_1": os.devnull,
+            "GIT_CONFIG_VALUE_2": "true",
+            "GIT_CONFIG_VALUE_3": "false",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
             "LC_ALL": "C",
@@ -534,7 +562,7 @@ def _validate_local_git_controls(
             "--local",
             "--null",
             "--get-regexp",
-            r"^(filter\..*\.(clean|process|required)|core\.(autocrlf|eol|safecrlf|excludesfile|attributesfile|sparsecheckout|sparsecheckoutcone))$",
+            r"^(filter\..*\.(clean|process|required)|core\.(autocrlf|eol|safecrlf|excludesfile|attributesfile|sparsecheckout|sparsecheckoutcone|fsmonitor)|include(if\..*)?\.path|extensions\.worktreeconfig)$",
         ),
         check=False,
     )
@@ -553,7 +581,7 @@ def _validate_local_git_controls(
     if config_entries:
         _fail(
             "unsafe_local_git_controls",
-            "local Git configuration changes clean, filter, exclude, or sparse semantics",
+            "local Git configuration changes filter, include, exclude, sparse, or executable monitor semantics",
             config_entries=config_entries,
         )
 
@@ -574,6 +602,101 @@ def _validate_local_git_controls(
             "object_alternates_effective_lines": 0,
             "dangerous_local_config_entries": 0,
             "replacement_refs": 0,
+            "external_config_files_disabled": True,
+            "external_attribute_files_disabled": True,
+            "worktree_attributes_replaced_by_head": True,
+            "command_scope_core_autocrlf": True,
+            "command_scope_core_fsmonitor": False,
+        }
+    )
+
+
+def _validate_head_git_attributes(
+    executable: Path,
+    repo_root: Path,
+) -> Mapping[str, Any]:
+    head = _parse_head_entries(
+        _run_git(executable, repo_root, ("ls-tree", "-r", "-z", "HEAD")).stdout
+    )
+    attribute_paths = tuple(
+        sorted(
+            relative
+            for relative in head
+            if relative == ".gitattributes" or relative.endswith("/.gitattributes")
+        )
+    )
+    records: list[Mapping[str, Any]] = []
+    dangerous: list[Mapping[str, Any]] = []
+    for relative in attribute_paths:
+        _mode, object_type, object_id = head[relative]
+        if object_type != "blob":
+            _fail(
+                "unsafe_git_attributes",
+                "a committed .gitattributes entry is not a blob",
+                path=relative,
+                object_type=object_type,
+            )
+        content = _run_git(
+            executable,
+            repo_root,
+            ("cat-file", "blob", object_id),
+        ).stdout
+        try:
+            text = content.decode("utf-8-sig", errors="strict")
+        except UnicodeError as exc:
+            _fail(
+                "unsafe_git_attributes",
+                "a committed .gitattributes file is not UTF-8 text",
+                path=relative,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        effective_lines = 0
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            effective_lines += 1
+            fields = stripped.split()
+            for field in fields[1:]:
+                attribute = field
+                if attribute.startswith(("-", "!")):
+                    attribute = attribute[1:]
+                attribute = attribute.split("=", 1)[0]
+                if attribute in _DANGEROUS_GIT_ATTRIBUTES:
+                    dangerous.append(
+                        {
+                            "path": relative,
+                            "line": line_number,
+                            "attribute": attribute,
+                        }
+                    )
+        records.append(
+            {
+                "path": relative,
+                "blob": object_id,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "effective_lines": effective_lines,
+            }
+        )
+    if dangerous:
+        _fail(
+            "unsafe_git_attributes",
+            "committed attributes may not select filters, ident expansion, or working-tree transcoding",
+            occurrences=dangerous,
+        )
+    canonical = json.dumps(
+        records,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return _freeze(
+        {
+            "source": "HEAD",
+            "attribute_file_count": len(attribute_paths),
+            "attribute_records_sha256": hashlib.sha256(canonical).hexdigest(),
+            "dangerous_attribute_occurrences": 0,
         }
     )
 
@@ -683,6 +806,8 @@ def _execution_surface(
             else:
                 package_roots.add(path)
 
+    candidates.update(repo_root / path for path in _CONTROL_CANDIDATE_PATHS)
+
     package_roots.add(agent_root)
     versioned_package_names = {
         relative.split("/", 1)[0]
@@ -714,8 +839,11 @@ def _execution_surface(
         if "/" not in relative or relative.startswith(package_prefixes):
             candidates.add(repo_root / Path(relative))
 
-    relative_candidates = tuple(
-        sorted(path.relative_to(repo_root).as_posix() for path in candidates)
+    discovered_relatives = {
+        path.relative_to(repo_root).as_posix() for path in candidates
+    }
+    relative_candidates = _CONTROL_CANDIDATE_RELATIVES + tuple(
+        sorted(discovered_relatives.difference(_CONTROL_CANDIDATE_RELATIVES))
     )
     relative_packages = tuple(
         sorted(path.relative_to(repo_root).as_posix() for path in package_roots)
@@ -806,16 +934,7 @@ def _parse_index_flags(raw: bytes) -> dict[str, str]:
     return flags
 
 
-def _git_blob_id(path: Path, algorithm: str) -> str:
-    try:
-        content = path.read_bytes()
-    except OSError as exc:
-        _fail(
-            "filesystem_inspection_failed",
-            "could not read an import candidate",
-            path=str(path),
-            error=f"{type(exc).__name__}: {exc}",
-        )
+def _git_blob_id(content: bytes, algorithm: str) -> str:
     if algorithm not in {"sha1", "sha256"}:
         _fail(
             "unsupported_git_object_format",
@@ -828,6 +947,44 @@ def _git_blob_id(path: Path, algorithm: str) -> str:
     return digest.hexdigest()
 
 
+def _worktree_blob_identity(
+    repo_root: Path, relative: str, algorithm: str
+) -> tuple[str, str, str, bool]:
+    path = repo_root / relative
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        _fail(
+            "filesystem_inspection_failed",
+            "could not read an import candidate",
+            path=str(path),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    raw_sha256 = hashlib.sha256(content).hexdigest()
+    crlf_equivalent = (
+        relative in _CONTROL_CANDIDATE_RELATIVES
+        or Path(relative).suffix.lower() in _CRLF_EQUIVALENT_SUFFIXES
+    )
+    comparison_content = content.replace(b"\r\n", b"\n") if crlf_equivalent else content
+    comparison_sha256 = hashlib.sha256(comparison_content).hexdigest()
+    return (
+        _git_blob_id(comparison_content, algorithm),
+        raw_sha256,
+        comparison_sha256,
+        comparison_content != content,
+    )
+
+
+def _raise_candidate_violations(violations: Mapping[str, Sequence[Any]]) -> None:
+    populated = {key: list(value) for key, value in violations.items() if value}
+    if populated:
+        _fail(
+            "unsafe_execution_surface",
+            "execution candidates must be tracked, unignored, and identical in HEAD, index, and worktree",
+            violations=populated,
+        )
+
+
 def _attest_candidates(
     executable: Path,
     repo_root: Path,
@@ -836,6 +993,12 @@ def _attest_candidates(
     object_format = _git_text(
         executable, repo_root, ("rev-parse", "--show-object-format")
     )
+    if object_format not in {"sha1", "sha256"}:
+        _fail(
+            "unsupported_git_object_format",
+            "only SHA-1 and SHA-256 Git repositories are supported",
+            object_format=object_format,
+        )
     index = _parse_index_entries(
         _run_git(executable, repo_root, ("ls-files", "--stage", "-z")).stdout
     )
@@ -869,9 +1032,10 @@ def _attest_candidates(
         for item in ignored_process.stdout.split(b"\0")
         if item
     )
+    ignored_set = frozenset(ignored)
 
     violations: dict[str, list[Any]] = {
-        "ignored": list(ignored),
+        "ignored": [],
         "untracked_or_index_missing": [],
         "head_missing": [],
         "unmerged": [],
@@ -881,15 +1045,19 @@ def _attest_candidates(
         "non_blob_head_entries": [],
     }
     records: list[Mapping[str, Any]] = []
-    for relative in candidates:
+    normalized_paths: list[str] = []
+
+    def attest_candidate(relative: str) -> None:
+        if relative in ignored_set:
+            violations["ignored"].append(relative)
         index_entry = index.get(relative)
         head_entry = head.get(relative)
         if index_entry is None:
             violations["untracked_or_index_missing"].append(relative)
-            continue
+            return
         if head_entry is None:
             violations["head_missing"].append(relative)
-            continue
+            return
         index_mode, index_object, index_stage = index_entry
         head_mode, head_type, head_object = head_entry
         if index_stage != 0:
@@ -905,8 +1073,20 @@ def _attest_candidates(
         if not os.path.lexists(worktree_path):
             violations.setdefault("worktree_missing", []).append(relative)
             worktree_object = None
+            worktree_raw_sha256 = None
+            worktree_comparison_sha256 = None
+            line_endings_normalized = False
         else:
-            worktree_object = _git_blob_id(worktree_path, object_format)
+            (
+                worktree_object,
+                worktree_raw_sha256,
+                worktree_comparison_sha256,
+                line_endings_normalized,
+            ) = _worktree_blob_identity(
+                repo_root, relative, object_format
+            )
+            if line_endings_normalized:
+                normalized_paths.append(relative)
             if worktree_object != index_object:
                 violations["index_worktree_divergence"].append(relative)
         records.append(
@@ -915,16 +1095,24 @@ def _attest_candidates(
                 "mode": index_mode,
                 "blob": index_object,
                 "worktree_blob": worktree_object,
+                "worktree_raw_sha256": worktree_raw_sha256,
+                "worktree_comparison_sha256": worktree_comparison_sha256,
+                "line_endings_normalized": line_endings_normalized,
             }
         )
 
-    violations = {key: value for key, value in violations.items() if value}
-    if violations:
-        _fail(
-            "unsafe_execution_surface",
-            "import candidates must be tracked, unignored, and identical in HEAD, index, and worktree",
-            violations=violations,
-        )
+    control_candidates = tuple(
+        relative for relative in candidates if relative in _CONTROL_CANDIDATE_RELATIVES
+    )
+    runtime_candidates = tuple(
+        relative for relative in candidates if relative not in _CONTROL_CANDIDATE_RELATIVES
+    )
+    for relative in control_candidates:
+        attest_candidate(relative)
+    _raise_candidate_violations(violations)
+    for relative in runtime_candidates:
+        attest_candidate(relative)
+    _raise_candidate_violations(violations)
 
     canonical_records = json.dumps(
         records,
@@ -942,6 +1130,8 @@ def _attest_candidates(
             "untracked_candidates": 0,
             "head_index_divergences": 0,
             "index_worktree_divergences": 0,
+            "line_ending_normalized_candidates": len(normalized_paths),
+            "line_ending_normalized_paths": tuple(normalized_paths),
         }
     )
 
@@ -994,9 +1184,10 @@ def _attest_preimport_environment(
         git_executable, root, ("rev-parse", "--verify", "HEAD^{tree}")
     )
     local_controls = _validate_local_git_controls(git_executable, root)
+    versioned_paths = _versioned_paths(git_executable, root)
     candidates, package_roots, blocked_root_imports = _execution_surface(
         root,
-        _versioned_paths(git_executable, root),
+        versioned_paths,
     )
     if _BOOTSTRAP_RELATIVE_PATH.as_posix() not in candidates:
         _fail(
@@ -1007,6 +1198,7 @@ def _attest_preimport_environment(
     candidate_evidence = _attest_candidates(
         git_executable, root, candidates
     )
+    head_git_attributes = _validate_head_git_attributes(git_executable, root)
 
     body = {
         "attestation_schema_version": ATTESTATION_SCHEMA_VERSION,
@@ -1020,6 +1212,7 @@ def _attest_preimport_environment(
         },
         "runtime": runtime,
         "local_git_controls": local_controls,
+        "head_git_attributes": head_git_attributes,
         "execution_surface": {
             "candidate_suffixes": IMPORT_CANDIDATE_SUFFIXES,
             "package_roots": package_roots,
@@ -1032,6 +1225,7 @@ def _attest_preimport_environment(
             "runtime_isolated_before_import": True,
             "cwd_is_repo_root": True,
             "local_git_controls_safe": True,
+            "head_git_attributes_safe": True,
             "all_import_candidates_head_index_worktree_equal": True,
             "no_import_candidate_ignored_or_untracked": True,
             "no_execution_surface_symlink_or_reparse": True,

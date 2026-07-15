@@ -168,6 +168,14 @@ FROZEN_DEPENDENCY_PATHS = (
     RUNNER_TEST_PATH,
     README_PATH,
 )
+_CRLF_EQUIVALENT_FROZEN_SUFFIXES = frozenset({".md", ".py", ".pyw"})
+_CRLF_EQUIVALENT_FROZEN_CONTROLS = frozenset(
+    {
+        ROOT_GIT_ATTRIBUTES_PATH.as_posix(),
+        ROOT_GIT_IGNORE_PATH.as_posix(),
+        REQUIREMENTS_PATH.as_posix(),
+    }
+)
 
 DEVELOPMENT_CHECKPOINT_FILENAME = "development_checkpoint_through_2018.json"
 DEVELOPMENT_GATE_REPORT_FILENAME = "development_gate_report.json"
@@ -927,26 +935,25 @@ def tracked_file_identity(
     expected_sha256: str | None = None,
     expected_git_blob: str | None = None,
     require_literal_local_bytes: bool = False,
+    allow_crlf_equivalent: bool = False,
 ) -> TrackedFileIdentity:
-    """Verify HEAD, index, and filtered working-file identity."""
+    """Verify HEAD, index, and explicit working-file byte identity."""
 
     root = _harden_path(repo_root, label="Repository root", require_exists=True)
     source = _harden_path(path, label="Tracked file", require_exists=True)
     try:
         relative = source.relative_to(root).as_posix()
+        if allow_crlf_equivalent and not _is_crlf_equivalent_frozen_dependency(
+            relative
+        ):
+            raise ContextualExpertAggregationExperimentError(
+                "CRLF equivalence is restricted to the explicit frozen text dependencies"
+            )
         _git_bytes(root, "ls-files", "--error-unmatch", "--", relative)
         committed = _git_bytes(root, "show", f"HEAD:{relative}")
         head_blob = _git_text(root, "rev-parse", f"HEAD:{relative}")
         index_line = _git_text(root, "ls-files", "--stage", "--", relative)
         index_blob = index_line.split(maxsplit=2)[1]
-        filtered_blob = _git_text(
-            root,
-            "hash-object",
-            "--path",
-            relative,
-            "--",
-            str(source),
-        )
         local = source.read_bytes()
     except (
         OSError,
@@ -961,14 +968,23 @@ def tracked_file_identity(
     if (
         _GIT_OBJECT_RE.fullmatch(head_blob) is None
         or head_blob != index_blob
-        or head_blob != filtered_blob
     ):
         raise ContextualExpertAggregationExperimentError(
-            "Required file differs between HEAD, index, and working tree"
+            "Required file differs between HEAD and the index"
         )
-    if require_literal_local_bytes and local != committed:
+    if require_literal_local_bytes:
+        local_matches = local == committed
+    elif allow_crlf_equivalent:
+        local_matches = local.replace(b"\r\n", b"\n") == committed
+    else:
+        local_matches = local == committed
+    if require_literal_local_bytes and not local_matches:
         raise ContextualExpertAggregationExperimentError(
             "Required binary input differs byte-for-byte from HEAD"
+        )
+    if not local_matches:
+        raise ContextualExpertAggregationExperimentError(
+            "Required working file differs from its permitted HEAD byte identity"
         )
     digest = sha256_bytes(committed)
     if expected_sha256 is not None and digest != _require_sha256(
@@ -999,6 +1015,14 @@ def _frozen_dependency_paths() -> tuple[Path, ...]:
             )
         normalized.append(value)
     return tuple(normalized)
+
+
+def _is_crlf_equivalent_frozen_dependency(relative: str) -> bool:
+    path = Path(relative)
+    return path in _frozen_dependency_paths() and (
+        relative in _CRLF_EQUIVALENT_FROZEN_CONTROLS
+        or path.suffix.lower() in _CRLF_EQUIVALENT_FROZEN_SUFFIXES
+    )
 
 
 def _git_metadata_identity(
@@ -1069,7 +1093,11 @@ def _tracked_dependency_identity(repo_root: Path) -> dict[str, dict[str, str]]:
     root = _harden_path(repo_root, label="Repository root", require_exists=True)
     result: dict[str, dict[str, str]] = {}
     for relative in _frozen_dependency_paths():
-        identity = tracked_file_identity(root, root / relative)
+        identity = tracked_file_identity(
+            root,
+            root / relative,
+            allow_crlf_equivalent=True,
+        )
         result[identity.path] = {
             "sha256": identity.sha256,
             "git_blob": identity.git_blob,
@@ -1098,6 +1126,34 @@ def _path_scoped_prelock_git_identity(repo_root: Path) -> dict[str, Any]:
     }
 
 
+def _content_aware_git_deltas(repo_root: Path) -> tuple[bytes, bytes, bytes]:
+    """Return worktree, index, and untracked paths without stat-only dirt."""
+
+    root = _harden_path(repo_root, label="Repository root", require_exists=True)
+    common = (
+        "--name-only",
+        "-z",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+    )
+    try:
+        worktree = _git_bytes(root, "diff", *common, "--")
+        index = _git_bytes(root, "diff", "--cached", *common, "--")
+        untracked = _git_bytes(
+            root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ContextualExpertAggregationExperimentError(
+            "Stage could not inspect content-aware Git deltas"
+        ) from exc
+    return worktree, index, untracked
+
+
 def clean_git_identity(
     repo_root: Path,
     *,
@@ -1107,15 +1163,8 @@ def clean_git_identity(
 
     root = _harden_path(repo_root, label="Repository root", require_exists=True)
     metadata = _git_metadata_identity(root, expected_branch=expected_branch)
-    try:
-        status = _git_text(
-            root, "status", "--porcelain=v1", "--untracked-files=all"
-        )
-    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as exc:
-        raise ContextualExpertAggregationExperimentError(
-            "Stage could not prove a clean worktree and index"
-        ) from exc
-    if status:
+    worktree_delta, index_delta, untracked = _content_aware_git_deltas(root)
+    if worktree_delta or index_delta or untracked:
         raise ContextualExpertAggregationExperimentError(
             "Stage requires a Git-visible clean worktree and index"
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -1875,6 +1876,11 @@ def test_tracked_identity_hashes_head_blob_and_rejects_literal_input_drift(
     path.write_bytes(b"line1\r\nline2\r\n")
     committed = b"line1\nline2\n"
     blob = "a" * 40
+    monkeypatch.setattr(
+        experiment,
+        "FROZEN_DEPENDENCY_PATHS",
+        (Path("dependency.py"),),
+    )
 
     def fake_bytes(root: Path, *args: str) -> bytes:
         if args[0] == "ls-files":
@@ -1888,19 +1894,117 @@ def test_tracked_identity_hashes_head_blob_and_rejects_literal_input_drift(
             return blob
         if args[:2] == ("ls-files", "--stage"):
             return f"100644 {blob} 0\tdependency.py"
-        if args[0] == "hash-object":
-            return blob
         raise AssertionError(args)
 
     monkeypatch.setattr(experiment, "_git_bytes", fake_bytes)
     monkeypatch.setattr(experiment, "_git_text", fake_text)
 
-    identity = experiment.tracked_file_identity(tmp_path, path)
+    identity = experiment.tracked_file_identity(
+        tmp_path,
+        path,
+        allow_crlf_equivalent=True,
+    )
     assert identity.sha256 == experiment.sha256_bytes(committed)
     assert identity.git_blob == blob
     with pytest.raises(Error, match="byte-for-byte"):
         experiment.tracked_file_identity(
-            tmp_path, path, require_literal_local_bytes=True
+            tmp_path,
+            path,
+            require_literal_local_bytes=True,
+            allow_crlf_equivalent=True,
+        )
+
+
+def test_frozen_dependency_crlf_identity_under_exact_bootstrap_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_benchmark import contextual_expert_aggregation_bootstrap as bootstrap
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Dependency Identity Test")
+    git("config", "user.email", "identity@example.invalid")
+    dependency = repo / "dependency.py"
+    dependency.write_bytes(b"line1\nline2\n")
+    git("add", "dependency.py")
+    git("commit", "--quiet", "-m", "baseline")
+    dependency.write_bytes(b"line1\r\nline2\r\n")
+    marker = tmp_path / "fsmonitor-invoked.txt"
+    hook = tmp_path / "fsmonitor.sh"
+    marker_shell_path = marker.as_posix().replace("'", "'\"'\"'")
+    hook.write_text(
+        "#!/bin/sh\n"
+        f"printf invoked > '{marker_shell_path}'\n"
+        "exit 0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    hook.chmod(0o755)
+    git("config", "core.fsmonitor", hook.as_posix())
+    git("diff", "--name-only")
+    assert marker.exists()
+    marker.unlink()
+    monkeypatch.setattr(
+        experiment,
+        "FROZEN_DEPENDENCY_PATHS",
+        (Path("dependency.py"),),
+    )
+    monkeypatch.setattr(
+        experiment,
+        "_git_metadata_identity",
+        lambda repo_root, expected_branch=None: {
+            "branch": "synthetic",
+            "commit": git("rev-parse", "HEAD"),
+        },
+    )
+
+    original_environment = dict(os.environ)
+    safe_environment = bootstrap._git_environment()
+    try:
+        os.environ.clear()
+        os.environ.update(safe_environment)
+        clean_identity = experiment.clean_git_identity(
+            repo,
+            expected_branch=None,
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environment)
+
+    committed = b"line1\nline2\n"
+    assert not marker.exists()
+    assert clean_identity["dirty"] is False
+    assert clean_identity["tracked_dependency_identity"] == {
+        "dependency.py": {
+            "sha256": experiment.sha256_bytes(committed),
+            "git_blob": git("rev-parse", "HEAD:dependency.py"),
+        }
+    }
+
+
+def test_crlf_equivalence_cannot_be_enabled_for_arbitrary_tracked_inputs(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "prices.csv"
+    path.write_bytes(b"date,value\r\n")
+    with pytest.raises(Error, match="explicit frozen text dependencies"):
+        experiment.tracked_file_identity(
+            tmp_path,
+            path,
+            allow_crlf_equivalent=True,
         )
 
 
@@ -2045,7 +2149,6 @@ def test_clean_git_identity_requires_upstream_and_hashes_code_and_tests(
         key = tuple(args)
         values = {
             ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
-            ("status", "--porcelain=v1", "--untracked-files=all"): "",
             ("symbolic-ref", "--quiet", "--short", "HEAD"): "test-branch",
             ("rev-parse", "HEAD"): commit,
             (
@@ -2066,6 +2169,11 @@ def test_clean_git_identity_requires_upstream_and_hashes_code_and_tests(
         )
 
     monkeypatch.setattr(experiment, "_git_text", fake_text)
+    monkeypatch.setattr(
+        experiment,
+        "_content_aware_git_deltas",
+        lambda root: (b"", b"", b""),
+    )
     monkeypatch.setattr(experiment, "tracked_file_identity", fake_identity)
     dependencies = (Path("model.py"), Path("test_model.py"))
     monkeypatch.setattr(experiment, "FROZEN_DEPENDENCY_PATHS", dependencies)
@@ -2111,9 +2219,6 @@ def test_clean_git_identity_rejects_dirty_wrong_branch_or_missing_upstream(
             raise subprocess.CalledProcessError(1, ["git", *args])
         values = {
             ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
-            ("status", "--porcelain=v1", "--untracked-files=all"): (
-                " M dirty.py" if failure == "dirty" else ""
-            ),
             ("symbolic-ref", "--quiet", "--short", "HEAD"): (
                 "wrong-branch"
                 if failure == "wrong_branch"
@@ -2132,6 +2237,15 @@ def test_clean_git_identity_rejects_dirty_wrong_branch_or_missing_upstream(
         return values[key]
 
     monkeypatch.setattr(experiment, "_git_text", fake_text)
+    monkeypatch.setattr(
+        experiment,
+        "_content_aware_git_deltas",
+        lambda root: (
+            (b"dirty.py\0", b"", b"")
+            if failure == "dirty"
+            else (b"", b"", b"")
+        ),
+    )
     monkeypatch.setattr(
         experiment, "FROZEN_DEPENDENCY_PATHS", (Path("model.py"),)
     )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from dataclasses import FrozenInstanceError, asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -314,30 +316,39 @@ def test_nul_safe_post_run_policy_allows_only_clean_commit_or_exact_output(
     )
     prefix = artifacts.OUTPUT_DIRECTORY_BY_STAGE["development"]
     exact = b"".join(
-        b"?? " + (prefix / name).as_posix().encode() + b"\0"
-        for name in names
+        (prefix / name).as_posix().encode() + b"\0" for name in names
     )
-    monkeypatch.setattr(verifier, "_git_bytes", lambda *args: exact)
+    monkeypatch.setattr(
+        experiment,
+        "_content_aware_git_deltas",
+        lambda *args: (b"", b"", exact),
+    )
     assert verifier._post_run_worktree_policy(
         tmp_path, stage="development"
     ) == "exact_generated_output_untracked_before_commit"
 
     monkeypatch.setattr(
-        verifier,
-        "_git_bytes",
-        lambda *args: exact + b"?? foreign file\nwith newline\0",
+        experiment,
+        "_content_aware_git_deltas",
+        lambda *args: (b"", b"", exact + b"foreign file\nwith newline\0"),
     )
     with pytest.raises(Error, match="not exactly"):
         verifier._post_run_worktree_policy(tmp_path, stage="development")
 
     monkeypatch.setattr(
-        verifier, "_git_bytes", lambda *args: b" M tracked.py\0"
+        experiment,
+        "_content_aware_git_deltas",
+        lambda *args: (b"tracked.py\0", b"", b""),
     )
     with pytest.raises(Error, match="tracked, staged"):
         verifier._post_run_worktree_policy(tmp_path, stage="development")
 
     seen: list[Path] = []
-    monkeypatch.setattr(verifier, "_git_bytes", lambda *args: b"")
+    monkeypatch.setattr(
+        experiment,
+        "_content_aware_git_deltas",
+        lambda *args: (b"", b"", b""),
+    )
     monkeypatch.setattr(
         experiment,
         "tracked_file_identity",
@@ -347,6 +358,56 @@ def test_nul_safe_post_run_policy_allows_only_clean_commit_or_exact_output(
         tmp_path, stage="development"
     ) == "clean_after_output_commit"
     assert len(seen) == len(names)
+
+
+def test_post_run_policy_uses_exact_bootstrap_crlf_environment(
+    tmp_path: Path,
+) -> None:
+    from agent_benchmark import contextual_expert_aggregation_bootstrap as bootstrap
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "--quiet")
+    git("config", "user.name", "Verifier Status Test")
+    git("config", "user.email", "verifier@example.invalid")
+    dependency = repo / "dependency.py"
+    dependency.write_bytes(b"line1\nline2\n")
+    git("add", "dependency.py")
+    git("commit", "--quiet", "-m", "baseline")
+    dependency.write_bytes(b"line1\r\nline2\r\n")
+    output = artifacts.OUTPUT_DIRECTORY_BY_STAGE["development"]
+    for name in (
+        *artifacts.DEVELOPMENT_PAYLOAD_NAMES,
+        "stage_manifest.json",
+        "checksums.json",
+    ):
+        destination = repo / output / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"synthetic\n")
+
+    original_environment = dict(os.environ)
+    safe_environment = bootstrap._git_environment()
+    try:
+        os.environ.clear()
+        os.environ.update(safe_environment)
+        policy = verifier._post_run_worktree_policy(
+            repo,
+            stage="development",
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environment)
+
+    assert policy == "exact_generated_output_untracked_before_commit"
 
 
 def test_manifest_git_identity_allows_only_the_exact_stage_output_delta(
@@ -411,6 +472,104 @@ def test_manifest_git_identity_allows_only_the_exact_stage_output_delta(
         verifier._validate_manifest_git_identity(
             tmp_path, identity, stage="development"
         )
+
+
+def test_manifest_descendant_delta_cannot_hide_foreign_gitlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_benchmark import contextual_expert_aggregation_bootstrap as bootstrap
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git_bytes(*args: str) -> bytes:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    git_bytes("init", "--quiet")
+    git_bytes("config", "user.name", "Gitlink Delta Test")
+    git_bytes("config", "user.email", "gitlink@example.invalid")
+    (repo / "baseline.txt").write_bytes(b"baseline\n")
+    git_bytes("add", "baseline.txt")
+    git_bytes("commit", "--quiet", "-m", "baseline")
+    baseline = git_bytes("rev-parse", "HEAD").decode().strip()
+
+    output = artifacts.OUTPUT_DIRECTORY_BY_STAGE["development"]
+    for name in (
+        *artifacts.DEVELOPMENT_PAYLOAD_NAMES,
+        "stage_manifest.json",
+        "checksums.json",
+    ):
+        destination = repo / output / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(
+            b"* -text\n" if name == ".gitattributes" else b"synthetic\n"
+        )
+    git_bytes("add", output.as_posix())
+    git_bytes(
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000",
+        baseline,
+        "vendor/foreign",
+    )
+    git_bytes("commit", "--quiet", "-m", "outputs plus foreign gitlink")
+    current_commit = git_bytes("rev-parse", "HEAD").decode().strip()
+    git_bytes("config", "diff.ignoreSubmodules", "all")
+    hidden = git_bytes(
+        "diff",
+        "--name-only",
+        "-z",
+        "--diff-filter=ACDMRTUXB",
+        f"{baseline}..{current_commit}",
+        "--",
+    )
+    assert b"vendor/foreign\0" not in hidden
+
+    identity = _git_identity()
+    identity["commit"] = baseline
+    identity["upstream_commit"] = baseline
+    current = {
+        key: value
+        for key, value in identity.items()
+        if key
+        not in {
+            "dirty",
+            "cleanliness_scope",
+            "tracked_dependency_identity",
+            "runtime_versions",
+        }
+    }
+    current["commit"] = current_commit
+    current["upstream_commit"] = current_commit
+    monkeypatch.setattr(experiment, "_git_metadata_identity", lambda root: current)
+    monkeypatch.setattr(experiment, "_tracked_dependency_identity", lambda root: {})
+    monkeypatch.setattr(
+        experiment,
+        "_runtime_versions",
+        lambda: identity["runtime_versions"],
+    )
+
+    original_environment = dict(os.environ)
+    safe_environment = bootstrap._git_environment()
+    try:
+        os.environ.clear()
+        os.environ.update(safe_environment)
+        with pytest.raises(Error, match="beyond the exact stage output"):
+            verifier._validate_manifest_git_identity(
+                repo,
+                identity,
+                stage="development",
+            )
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environment)
 
 
 def test_runtime_validation_rejects_boundary_and_noncanonical_phase(

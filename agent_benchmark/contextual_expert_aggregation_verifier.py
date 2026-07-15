@@ -352,6 +352,9 @@ def _validate_manifest_git_identity(
             "diff",
             "--name-only",
             "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=none",
             "--diff-filter=ACDMRTUXB",
             revision,
             "--",
@@ -364,6 +367,9 @@ def _validate_manifest_git_identity(
             "diff",
             "--name-only",
             "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=none",
             "--diff-filter=A",
             revision,
             "--",
@@ -410,14 +416,17 @@ def _post_run_worktree_policy(repo_root: Path, *, stage: str) -> str:
             "checksums.json",
         )
     }
-    raw = _git_bytes(
-        repo_root,
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-    )
-    if not raw:
+    try:
+        worktree_delta, index_delta, untracked = (
+            _experiment._content_aware_git_deltas(repo_root)
+        )
+    except _experiment.ContextualExpertAggregationExperimentError as exc:
+        raise _VerificationError("post-run Git delta inspection failed") from exc
+    if worktree_delta or index_delta:
+        raise _VerificationError(
+            "post-run worktree contains tracked, staged, or foreign dirt"
+        )
+    if not untracked:
         for encoded in sorted(expected_paths):
             relative = encoded.decode("utf-8")
             _experiment.tracked_file_identity(
@@ -426,19 +435,7 @@ def _post_run_worktree_policy(repo_root: Path, *, stage: str) -> str:
                 require_literal_local_bytes=True,
             )
         return "clean_after_output_commit"
-    if not raw.endswith(b"\0"):
-        raise _VerificationError("NUL-delimited Git status is truncated")
-    records = raw[:-1].split(b"\0")
-    observed: set[bytes] = set()
-    for record in records:
-        if len(record) < 4 or not record.startswith(b"?? "):
-            raise _VerificationError(
-                "post-run worktree contains tracked, staged, or foreign dirt"
-            )
-        path = record[3:]
-        if not path or path in observed:
-            raise _VerificationError("post-run Git status path is invalid")
-        observed.add(path)
+    observed = _nul_path_set(untracked, field="post-run untracked paths")
     if observed != expected_paths:
         raise _VerificationError(
             "untracked worktree is not exactly the generated stage output"
