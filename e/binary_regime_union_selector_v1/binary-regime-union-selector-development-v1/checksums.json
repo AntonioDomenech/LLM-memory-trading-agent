@@ -1,0 +1,20 @@
+{
+  ".gitattributes": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+  "development_base_5bps_ledgers.csv": "sha256:7c169d4150f87ccf6ec53cc9d5ac2acb78e3519eea9a571035b83ee4e06c885b",
+  "development_base_5bps_selector_episodes.csv": "sha256:ba34921da278f0b1c1fbab1737416c77f33672d9028203b55e8709b993266e31",
+  "development_base_5bps_union_episodes.csv": "sha256:80fdba63a18e841dba6e0dfe95fd232818249704593b5834b3044e0da0991d7c",
+  "development_base_5bps_veto_benefits.csv": "sha256:6b7ce0f668036858d2f9ead9b2a0e6a7f7a126eaf00d0843a1400e92f8e2dcce",
+  "development_checkpoint_through_2018.json": "sha256:30f8a38e0de2cee2238632ed8d73018c6679ab553810936691994d1c2e769143",
+  "development_cold_start_report.json": "sha256:07d0c0cb6586d8b2d62262397215ead858313cfa1c7b9d86a063bff163e37da8",
+  "development_forecast_through_2018.csv": "sha256:fe06d5e6355499c1cd5d9afa888ec535575f3b5cf41bf0880146efd217c5689f",
+  "development_gate_report.json": "sha256:6993106e44ecf18a6dc005e16ef2c4625e55a315c96b4c641eb4cc4d7992377c",
+  "development_metrics.json": "sha256:0cf638df14da9f6235448949a635e01ba3d60838c18fac9ba6512b40f16ce92f",
+  "development_prices_through_2018.csv": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+  "development_stress_10bps_ledgers.csv": "sha256:f00029fb74134bb41b0c2e12aa5770d177df2aa655b71071ad48fe7d74c1a902",
+  "development_stress_10bps_selector_episodes.csv": "sha256:1120e66be81dfb85732d69c0ef8d4ea177375f6fe6f2b7c5229b9507f11e40b0",
+  "development_stress_10bps_union_episodes.csv": "sha256:7e47ba91c2116c0ffab4cc1a9a47b23afce819b7c039e66894ad5d00769f2b13",
+  "development_stress_10bps_veto_benefits.csv": "sha256:334dc64a4be11e530e03e231adf99c3511b59b19d382b8cfcfb5ced3930c6015",
+  "input_provenance.json": "sha256:122ddeb1a90fa32666e9b7f49cccb10adc3b2de71b56ad0824f9b4f1e137a070",
+  "report.json": "sha256:87b65f9cd455f036d678ca0b88d379e4efef9a78afd367b30aa6137b4abad104",
+  "stage_manifest.json": "sha256:348891ec02f6631de959b01989aea968c7274ddddfcdf687c317496572ea0116"
+}

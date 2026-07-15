@@ -1,0 +1,105 @@
+{
+  "account_reset_count_after_inception": 0,
+  "account_start": "2005-01-01",
+  "account_trailing_cooldown_context": [
+    {
+      "account_union_cash_signal_before_tail_mask": false,
+      "decision_date": "2018-12-28",
+      "risk_on": false,
+      "selector_cash_prediction": false,
+      "union_candidate_signal": false
+    },
+    {
+      "account_union_cash_signal_before_tail_mask": false,
+      "decision_date": "2018-12-31",
+      "risk_on": false,
+      "selector_cash_prediction": false,
+      "union_candidate_signal": false
+    }
+  ],
+  "checkpoint_cutoff": "2018-12-31",
+  "contract_version": "aapl-binary-regime-union-selector-v1",
+  "last_observed_session": "2018-12-31",
+  "learning_mode": "causal_online",
+  "model_constants": {
+    "account_start": "2005-01-01",
+    "lesson_cost_bps_per_changing_leg": 10.0,
+    "lesson_start": "2000-01-01",
+    "minimum_effective_lessons": 12.0,
+    "negative_mean_threshold": -0.001,
+    "not_risk_on_structural_default": "CASH",
+    "per_lesson_discount_rho": 0.995,
+    "positive_mean_threshold": 0.001,
+    "risk_on_structural_default": "LONG"
+  },
+  "pending_shadow_opportunities": [],
+  "regime_feature_order": [
+    "spy_return_20",
+    "qqq_return_20",
+    "risk_on"
+  ],
+  "serialized_pending_shadow_lessons": {
+    "lessons": [],
+    "regime_order": [
+      "risk_on",
+      "not_risk_on"
+    ],
+    "schema_version": "binary-regime-union-selector-pending-v1"
+  },
+  "serialized_regime_states": {
+    "lesson_discount": 0.995,
+    "minimum_effective_lessons": 12.0,
+    "negative_mean_threshold": -0.001,
+    "positive_mean_threshold": 0.001,
+    "regime_feature_order": [
+      "spy_return_20",
+      "qqq_return_20",
+      "risk_on"
+    ],
+    "regime_order": [
+      "risk_on",
+      "not_risk_on"
+    ],
+    "schema_version": "binary-regime-union-selector-state-v1",
+    "states": {
+      "not_risk_on": {
+        "cash_selected": true,
+        "n_eff": 99.85825875082931,
+        "n_raw": 138,
+        "weighted_label_sum": 1.041611296025431,
+        "weighted_squared_label_sum": 0.11861882229574265
+      },
+      "risk_on": {
+        "cash_selected": false,
+        "n_eff": 23.55595141023973,
+        "n_raw": 25,
+        "weighted_label_sum": -0.09196724825200142,
+        "weighted_squared_label_sum": 0.013913917555305421
+      }
+    },
+    "structural_default_cash": {
+      "not_risk_on": true,
+      "risk_on": false
+    }
+  },
+  "sufficient_states": {
+    "not_risk_on": {
+      "cash_selected": true,
+      "mean": 0.010430897845159758,
+      "n_eff": 99.85825875082931,
+      "n_raw": 138,
+      "ready": true,
+      "weighted_label_sum": 1.041611296025431,
+      "weighted_squared_label_sum": 0.11861882229574265
+    },
+    "risk_on": {
+      "cash_selected": false,
+      "mean": -0.003904204362215802,
+      "n_eff": 23.55595141023973,
+      "n_raw": 25,
+      "ready": true,
+      "weighted_label_sum": -0.09196724825200142,
+      "weighted_squared_label_sum": 0.013913917555305421
+    }
+  }
+}

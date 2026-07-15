@@ -1,0 +1,33 @@
+{
+  "account_reset_count_after_inception": 0,
+  "account_selector_cash_count": 101,
+  "account_start": "2005-01-01",
+  "account_union_cash_count": 121,
+  "account_veto_count": 20,
+  "evidence_role": "causal_cold_start_training_diagnostic_only",
+  "final_replayed_states": {
+    "not_risk_on": {
+      "cash_selected": true,
+      "mean": 0.010430897845159758,
+      "n_eff": 99.85825875082931,
+      "n_raw": 138,
+      "weighted_label_sum": 1.041611296025431,
+      "weighted_squared_label_sum": 0.11861882229574265
+    },
+    "risk_on": {
+      "cash_selected": false,
+      "mean": -0.003904204362215802,
+      "n_eff": 23.55595141023973,
+      "n_raw": 25,
+      "weighted_label_sum": -0.09196724825200142,
+      "weighted_squared_label_sum": 0.013913917555305421
+    }
+  },
+  "initialized_from_empty_states": true,
+  "learning_mode": "causal_online",
+  "performance_is_holdout_evidence": false,
+  "regime_switch_counts": {
+    "not_risk_on": 0,
+    "risk_on": 0
+  }
+}

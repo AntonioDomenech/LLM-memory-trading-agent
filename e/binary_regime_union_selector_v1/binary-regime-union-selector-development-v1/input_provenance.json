@@ -1,0 +1,26 @@
+{
+  "bounded_first_date": "1999-03-10",
+  "bounded_last_date": "2018-12-31",
+  "bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+  "bounded_rows": 4986,
+  "expected_bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+  "network_access": false,
+  "physical_snapshot_has_later_rows": false,
+  "query": "SELECT\n  CAST(date AS DATE) AS date,\n  CAST(aapl_open AS DOUBLE) AS aapl_open,\n  CAST(aapl_close AS DOUBLE) AS aapl_close,\n  CAST(aapl_adj_close AS DOUBLE) AS aapl_adj_close,\n  CAST(spy_adj_close AS DOUBLE) AS spy_adj_close,\n  CAST(qqq_adj_close AS DOUBLE) AS qqq_adj_close\nFROM read_csv_auto(?, header = true)\nORDER BY CAST(date AS DATE)",
+  "query_parameters": [
+    "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\chronological_exhaustion_expert_v1\\authorized_inputs\\aapl_spy_qqq_through_2018.csv"
+  ],
+  "rows_after_bound_returned": false,
+  "session_coverage": {
+    "date_sequence_sha256": "3b8844f939269760624816e166ebf15705c27549aa89dd578ddb66bd50d87df9",
+    "first_session": "1999-03-10",
+    "last_session": "2018-12-31",
+    "observations": 4986
+  },
+  "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\chronological_exhaustion_expert_v1\\authorized_inputs\\aapl_spy_qqq_through_2018.csv",
+  "source_type": "physically_bounded_local_csv_duckdb_query",
+  "tracked_input": {
+    "path": "e/chronological_exhaustion_expert_v1/authorized_inputs/aapl_spy_qqq_through_2018.csv",
+    "sha256": "sha256:9e661722b9e474121654b348b44e646af6e5b2f94b1c613690113da2ad4ffdc1"
+  }
+}
