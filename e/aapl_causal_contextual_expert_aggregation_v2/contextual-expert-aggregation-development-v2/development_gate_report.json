@@ -1,0 +1,329 @@
+{
+  "best_fixed_comparator": {
+    "active_log_edge": 0.9718261388903187,
+    "learner_minus_comparator": -0.07128550512648013,
+    "name": "exact_union_cash"
+  },
+  "checks": {
+    "base_5bps.active_edge_gt_0_001": true,
+    "base_5bps.development_reporting_equals_full_account": true,
+    "base_5bps.edge_after_best_fold_positive": true,
+    "base_5bps.episode_mean_positive": true,
+    "base_5bps.episode_median_positive": true,
+    "base_5bps.episode_win_rate_at_least_55pct": true,
+    "base_5bps.episodes_at_least_30": true,
+    "base_5bps.full_account_episode_reconciled": true,
+    "base_5bps.negative_aapl_year_edge_positive": true,
+    "base_5bps.positive_episode_concentration_at_most_50pct": true,
+    "base_5bps.positive_folds_at_least_5": true,
+    "integrity.all_ledgers_unleveraged_exact": true,
+    "integrity.always_long_equals_benchmark_exact": true,
+    "integrity.authorized_price_and_parent_provenance_exact": true,
+    "integrity.binary_union_subset_actions_exact": true,
+    "integrity.causal_maturity_and_update_order_exact": true,
+    "integrity.checkpoint_pending_and_cooldown_exact": true,
+    "integrity.fixed_expert_and_union_prefix_exact": true,
+    "integrity.ledger_episode_and_xor_reconciliation_exact": true,
+    "integrity.one_lesson_per_opportunity_exact": true,
+    "integrity.same_actions_at_both_costs_exact": true,
+    "integrity.single_continuous_account_exact": true,
+    "integrity.state_probability_action_replay_exact": true,
+    "integrity.zero_network_news_llm_api_and_external_cost": true,
+    "stress_10bps.active_edge_gt_0_001": true,
+    "stress_10bps.development_reporting_equals_full_account": true,
+    "stress_10bps.edge_after_best_fold_positive": true,
+    "stress_10bps.episode_mean_positive": true,
+    "stress_10bps.episode_median_positive": true,
+    "stress_10bps.episode_win_rate_at_least_55pct": true,
+    "stress_10bps.episodes_at_least_30": true,
+    "stress_10bps.full_account_beats_best_fixed_by_gt_0_0001": false,
+    "stress_10bps.full_account_episode_reconciled": true,
+    "stress_10bps.negative_aapl_year_edge_positive": true,
+    "stress_10bps.positive_episode_concentration_at_most_50pct": true,
+    "stress_10bps.positive_folds_at_least_5": true
+  },
+  "failed_checks": [
+    "stress_10bps.full_account_beats_best_fixed_by_gt_0_0001"
+  ],
+  "fatal_integrity_rejection": false,
+  "fatal_reasons": [],
+  "fixed_comparator_differences": {
+    "base_5bps": {
+      "always_long": 1.0105406979305538,
+      "contextual_only": 0.017532134350631612,
+      "exact_union_cash": -0.08228551154315178,
+      "weak_trend_only": 0.16096548405676103
+    },
+    "stress_10bps": {
+      "always_long": 0.9005406337638385,
+      "contextual_only": 0.013532132017296528,
+      "exact_union_cash": -0.07128550512648013,
+      "weak_trend_only": 0.11296545605673991
+    }
+  },
+  "normal_economic_gates_evaluated": true,
+  "passed": false,
+  "passed_count": 35,
+  "policy_summaries": {
+    "base_5bps": {
+      "annual": {
+        "2005": {
+          "aapl_buy_hold_return": 1.188161312607804,
+          "entry_attributed_active_log_edge": 0.0063963650486083615,
+          "ledger_boundary_active_log_edge": 0.006396365048608356
+        },
+        "2006": {
+          "aapl_buy_hold_return": 0.18389524624856804,
+          "entry_attributed_active_log_edge": 0.03428792092465448,
+          "ledger_boundary_active_log_edge": 0.03428792092465347
+        },
+        "2007": {
+          "aapl_buy_hold_return": 1.3764136535457197,
+          "entry_attributed_active_log_edge": 0.021582276607096388,
+          "ledger_boundary_active_log_edge": 0.021582276607095125
+        },
+        "2008": {
+          "aapl_buy_hold_return": -0.5690727194400198,
+          "entry_attributed_active_log_edge": 0.48463703619402776,
+          "ledger_boundary_active_log_edge": 0.48463703619402654
+        },
+        "2009": {
+          "aapl_buy_hold_return": 1.4791216615641432,
+          "entry_attributed_active_log_edge": -0.009236411428710926,
+          "ledger_boundary_active_log_edge": -0.009236411428709552
+        },
+        "2010": {
+          "aapl_buy_hold_return": 0.5152725261934712,
+          "entry_attributed_active_log_edge": 0.04719899409056497,
+          "ledger_boundary_active_log_edge": 0.04719899409056608
+        },
+        "2011": {
+          "aapl_buy_hold_return": 0.24944974313190954,
+          "entry_attributed_active_log_edge": 0.0021483427019546113,
+          "ledger_boundary_active_log_edge": 0.00214834270195561
+        },
+        "2012": {
+          "aapl_buy_hold_return": 0.27645880413872925,
+          "entry_attributed_active_log_edge": 0.12995137382299676,
+          "ledger_boundary_active_log_edge": 0.1299513738229964
+        },
+        "2013": {
+          "aapl_buy_hold_return": 0.11274813002975284,
+          "entry_attributed_active_log_edge": 0.0025763443796783365,
+          "ledger_boundary_active_log_edge": 0.0025763443796771395
+        },
+        "2014": {
+          "aapl_buy_hold_return": 0.45507734936693844,
+          "entry_attributed_active_log_edge": 0.005834133014296307,
+          "ledger_boundary_active_log_edge": 0.005834133014296804
+        },
+        "2015": {
+          "aapl_buy_hold_return": -0.03533698684425613,
+          "entry_attributed_active_log_edge": 0.1127473251166552,
+          "ledger_boundary_active_log_edge": 0.11274732511665515
+        },
+        "2016": {
+          "aapl_buy_hold_return": 0.11433822554685799,
+          "entry_attributed_active_log_edge": 0.04976312316608641,
+          "ledger_boundary_active_log_edge": 0.049763123166085624
+        },
+        "2017": {
+          "aapl_buy_hold_return": 0.48531610435245043,
+          "entry_attributed_active_log_edge": -2.2524560388873004e-05,
+          "ledger_boundary_active_log_edge": -2.2524560390259197e-05
+        },
+        "2018": {
+          "aapl_buy_hold_return": -0.05635676755859099,
+          "entry_attributed_active_log_edge": 0.12267639885303404,
+          "ledger_boundary_active_log_edge": 0.12267639885303554
+        }
+      },
+      "edge_after_removing_best_fold": 0.5043213851294296,
+      "edge_after_removing_best_year": 0.525903661736526,
+      "entry_attributed_full_account_active_log_edge": 1.0105406979305538,
+      "episodes": {
+        "count": 110,
+        "mean": 0.009186733617550489,
+        "median": 0.009739658897042563,
+        "positive_concentration": 0.08644621586030062,
+        "positive_count": 71,
+        "positive_rate": 0.6454545454545455,
+        "sum": 1.0105406979305538,
+        "year_edges": {
+          "2005": 0.0063963650486083615,
+          "2006": 0.03428792092465448,
+          "2007": 0.021582276607096388,
+          "2008": 0.48463703619402776,
+          "2009": -0.009236411428710926,
+          "2010": 0.04719899409056497,
+          "2011": 0.0021483427019546113,
+          "2012": 0.12995137382299676,
+          "2013": 0.0025763443796783365,
+          "2014": 0.005834133014296307,
+          "2015": 0.1127473251166552,
+          "2016": 0.04976312316608641,
+          "2017": -2.2524560388873004e-05,
+          "2018": 0.12267639885303404
+        }
+      },
+      "fold_edges": {
+        "2005_2006": 0.04068428597326284,
+        "2007_2008": 0.5062193128011242,
+        "2009_2010": 0.037962582661854045,
+        "2011_2012": 0.13209971652495137,
+        "2013_2014": 0.008410477393974644,
+        "2015_2016": 0.1625104482827416,
+        "2017_2018": 0.12265387429264517
+      },
+      "full_account_active_log_edge": 1.0105406979305538,
+      "full_account_episode_reconciled": true,
+      "full_account_episode_reconciliation_error": -6.661338147750939e-16,
+      "negative_aapl_year_edge_sum": 0.720060760163717,
+      "negative_aapl_year_edges": {
+        "2008": 0.48463703619402776,
+        "2015": 0.1127473251166552,
+        "2018": 0.12267639885303404
+      },
+      "negative_aapl_years": [
+        2008,
+        2015,
+        2018
+      ],
+      "positive_fold_count": 7,
+      "positive_year_count": 12,
+      "reporting_active_log_edge": 1.0105406979305538,
+      "reporting_ledger_boundary_active_log_edge": 1.010540697930552
+    },
+    "stress_10bps": {
+      "annual": {
+        "2005": {
+          "aapl_buy_hold_return": 1.1870683249391707,
+          "entry_attributed_active_log_edge": -0.0006036390347280663,
+          "ledger_boundary_active_log_edge": -0.0006036390347277187
+        },
+        "2006": {
+          "aapl_buy_hold_return": 0.18389524624856846,
+          "entry_attributed_active_log_edge": 0.0292879180079856,
+          "ledger_boundary_active_log_edge": 0.029287918007984682
+        },
+        "2007": {
+          "aapl_buy_hold_return": 1.3764136535457165,
+          "entry_attributed_active_log_edge": 0.01758227427376128,
+          "ledger_boundary_active_log_edge": 0.01758227427376194
+        },
+        "2008": {
+          "aapl_buy_hold_return": -0.56907271944002,
+          "entry_attributed_active_log_edge": 0.46363702394401846,
+          "ledger_boundary_active_log_edge": 0.4636370239440188
+        },
+        "2009": {
+          "aapl_buy_hold_return": 1.4791216615641454,
+          "entry_attributed_active_log_edge": -0.010236412012044702,
+          "ledger_boundary_active_log_edge": -0.010236412012045823
+        },
+        "2010": {
+          "aapl_buy_hold_return": 0.5152725261934723,
+          "entry_attributed_active_log_edge": 0.03519898709055967,
+          "ledger_boundary_active_log_edge": 0.035198987090558624
+        },
+        "2011": {
+          "aapl_buy_hold_return": 0.249449743131909,
+          "entry_attributed_active_log_edge": -0.0068516625480493625,
+          "ledger_boundary_active_log_edge": -0.006851662548048448
+        },
+        "2012": {
+          "aapl_buy_hold_return": 0.2764588041387297,
+          "entry_attributed_active_log_edge": 0.12195136915632657,
+          "ledger_boundary_active_log_edge": 0.1219513691563263
+        },
+        "2013": {
+          "aapl_buy_hold_return": 0.11274813002975359,
+          "entry_attributed_active_log_edge": 0.0005763432130107863,
+          "ledger_boundary_active_log_edge": 0.0005763432130085186
+        },
+        "2014": {
+          "aapl_buy_hold_return": 0.4550773493669425,
+          "entry_attributed_active_log_edge": -0.0001658704857063454,
+          "ledger_boundary_active_log_edge": -0.00016587048570790636
+        },
+        "2015": {
+          "aapl_buy_hold_return": -0.03533698684425829,
+          "entry_attributed_active_log_edge": 0.09974731753331612,
+          "ledger_boundary_active_log_edge": 0.0997473175333175
+        },
+        "2016": {
+          "aapl_buy_hold_return": 0.1143382255468559,
+          "entry_attributed_active_log_edge": 0.044763120249417525,
+          "ledger_boundary_active_log_edge": 0.04476312024941728
+        },
+        "2017": {
+          "aapl_buy_hold_return": 0.48531610435244765,
+          "entry_attributed_active_log_edge": -0.0010225251437226482,
+          "ledger_boundary_active_log_edge": -0.0010225251437205056
+        },
+        "2018": {
+          "aapl_buy_hold_return": -0.05635676755859169,
+          "entry_attributed_active_log_edge": 0.10667638951969362,
+          "ledger_boundary_active_log_edge": 0.10667638951969619
+        }
+      },
+      "edge_after_removing_best_fold": 0.41932133554605877,
+      "edge_after_removing_best_year": 0.43690360981982007,
+      "entry_attributed_full_account_active_log_edge": 0.9005406337638385,
+      "episodes": {
+        "count": 110,
+        "mean": 0.008186733034216714,
+        "median": 0.008739658313708787,
+        "positive_concentration": 0.08934249116646704,
+        "positive_count": 68,
+        "positive_rate": 0.6181818181818182,
+        "sum": 0.9005406337638385,
+        "year_edges": {
+          "2005": -0.0006036390347280663,
+          "2006": 0.0292879180079856,
+          "2007": 0.01758227427376128,
+          "2008": 0.46363702394401846,
+          "2009": -0.010236412012044702,
+          "2010": 0.03519898709055967,
+          "2011": -0.0068516625480493625,
+          "2012": 0.12195136915632657,
+          "2013": 0.0005763432130107863,
+          "2014": -0.0001658704857063454,
+          "2015": 0.09974731753331612,
+          "2016": 0.044763120249417525,
+          "2017": -0.0010225251437226482,
+          "2018": 0.10667638951969362
+        }
+      },
+      "fold_edges": {
+        "2005_2006": 0.028684278973257534,
+        "2007_2008": 0.48121929821777976,
+        "2009_2010": 0.02496257507851497,
+        "2011_2012": 0.1150997066082772,
+        "2013_2014": 0.0004104727273044409,
+        "2015_2016": 0.14451043778273365,
+        "2017_2018": 0.10565386437597096
+      },
+      "full_account_active_log_edge": 0.9005406337638385,
+      "full_account_episode_reconciled": true,
+      "full_account_episode_reconciliation_error": 5.88418203051333e-15,
+      "negative_aapl_year_edge_sum": 0.6700607309970282,
+      "negative_aapl_year_edges": {
+        "2008": 0.46363702394401846,
+        "2015": 0.09974731753331612,
+        "2018": 0.10667638951969362
+      },
+      "negative_aapl_years": [
+        2008,
+        2015,
+        2018
+      ],
+      "positive_fold_count": 7,
+      "positive_year_count": 9,
+      "reporting_active_log_edge": 0.9005406337638385,
+      "reporting_ledger_boundary_active_log_edge": 0.9005406337638394
+    }
+  },
+  "stage": "development",
+  "total_count": 36
+}

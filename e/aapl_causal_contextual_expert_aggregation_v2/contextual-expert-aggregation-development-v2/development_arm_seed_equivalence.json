@@ -1,0 +1,64 @@
+{
+  "arm_order": [
+    "online_full",
+    "frozen_2018",
+    "global_only",
+    "lifetime_only"
+  ],
+  "by_cost": {
+    "base_5bps": {
+      "all_equal": true,
+      "arm_account_checkpoint_sha256": {
+        "frozen_2018": "sha256:f04ff8098162a7e9372348cdadacaaf02d9c189e5efc93017116d3b3c20591b6",
+        "global_only": "sha256:f61662f6dc97e253edad745944bd0f13486aa858965c8d57f533c9bf6ed35ce0",
+        "lifetime_only": "sha256:1493c65bb8a0dfe9734b92b0943dbca4aa266e91b72a4f0f7181188a83318f5d",
+        "online_full": "sha256:6e0f4bb414b324760dcf92a6826817e7607439948a8a244ce94bda7d0ead92bb"
+      },
+      "economic_state_sha256": "sha256:d9b97e8324471089c63086dd6e77a0a9c427218836aadd5da55990e3f9e9ea60"
+    },
+    "stress_10bps": {
+      "all_equal": true,
+      "arm_account_checkpoint_sha256": {
+        "frozen_2018": "sha256:6c360a606ba10eb91f5902c5e80c6d427acc8dcfe4a0cb40f77e322564337009",
+        "global_only": "sha256:9028ded42f3324a6713e0284bb655fc853b5b80455127b74eb237ad217807852",
+        "lifetime_only": "sha256:5e88e66d20a04d0c8796a3261d9108ab3ff3dd1a0e8605ccda53128ad4124163",
+        "online_full": "sha256:cd3cdfbfa6f49e042b348c5d05c8d5e8c78cb01ba72781fbc7ffa04bd40a6537"
+      },
+      "economic_state_sha256": "sha256:a8f5df34d7221f633a1d3564fd021551c6045a86513d0430eb780b9e89703b9e"
+    }
+  },
+  "cost_order": [
+    "base_5bps",
+    "stress_10bps"
+  ],
+  "economic_fields": [
+    "schema_version",
+    "cost_bps",
+    "inception_fill_date",
+    "inception_count",
+    "last_session_date",
+    "last_reference_price",
+    "last_trade_fill_date",
+    "cash",
+    "shares",
+    "held_target",
+    "previous_requested_target",
+    "pending_decision_date",
+    "pending_target_exposure",
+    "last_equity",
+    "running_peak",
+    "cumulative_active_log_edge",
+    "ledger_row_count",
+    "open_cash_entry_decision_date",
+    "open_cash_entry_fill_date",
+    "open_cash_entry_reference_price",
+    "open_cash_fill_observations"
+  ],
+  "excluded_identity_fields": [
+    "ledger_tip_sha256",
+    "policy_name"
+  ],
+  "proof_sha256": "sha256:13cfde52c7c3b065ae9b7564a9bb597a0c4066a814ac9a908a9d0ff4cf614cc1",
+  "seed_equivalence_schema_version": 1,
+  "seed_target_source_policy": "online_full"
+}

@@ -1,0 +1,30 @@
+{
+  "checks": {
+    "all_ledgers_unleveraged_exact": true,
+    "always_long_equals_benchmark_exact": true,
+    "authorized_price_and_parent_provenance_exact": true,
+    "binary_union_subset_actions_exact": true,
+    "causal_maturity_and_update_order_exact": true,
+    "checkpoint_pending_and_cooldown_exact": true,
+    "fixed_expert_and_union_prefix_exact": true,
+    "ledger_episode_and_xor_reconciliation_exact": true,
+    "one_lesson_per_opportunity_exact": true,
+    "same_actions_at_both_costs_exact": true,
+    "single_continuous_account_exact": true,
+    "state_probability_action_replay_exact": true,
+    "zero_network_news_llm_api_and_external_cost": true
+  },
+  "integrity_evidence_schema_version": 2,
+  "integrity_evidence_sha256": "sha256:be770915e3fbbb451d52c224e1c57886c48080b7f55b0bf02808c770a74c4066",
+  "parent_causal_prefix_proof_sha256": "sha256:dc7715dc5ad21f6f86cba0aee6488c9a24859dc19aa761115d48e2a2f199b350",
+  "prefix_continuity_proof_sha256": null,
+  "replay_diagnostics_sha256": "sha256:dc635867ee73bab4865fad1b0382c2517c8353f590882ae3a4f5e82ba63ae89e",
+  "stage": "development",
+  "zero_use": {
+    "api_calls": 0,
+    "external_cost_usd": 0.0,
+    "llm_calls": 0,
+    "network_access": false,
+    "news_access": false
+  }
+}

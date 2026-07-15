@@ -1,0 +1,45 @@
+{
+  "api_calls": 0,
+  "authoritative_last_check": "seal_exact_bundle immediately before atomic promotion",
+  "clock": "monotonic",
+  "external_cost_usd": 0.0,
+  "limit_seconds": 3600.0,
+  "llm_calls": 0,
+  "network_access": false,
+  "news_access": false,
+  "phase_elapsed_seconds": [
+    {
+      "elapsed_seconds": 3.1090000000040163,
+      "phase": "development git authorization"
+    },
+    {
+      "elapsed_seconds": 4.969000000004598,
+      "phase": "development authorized input loaded"
+    },
+    {
+      "elapsed_seconds": 10.422000000005937,
+      "phase": "development replay completed"
+    },
+    {
+      "elapsed_seconds": 13.64100000000326,
+      "phase": "development parent causal prefix proved"
+    },
+    {
+      "elapsed_seconds": 67.2190000000046,
+      "phase": "development ledgers and differences completed"
+    },
+    {
+      "elapsed_seconds": 386.70300000000134,
+      "phase": "development gates completed"
+    },
+    {
+      "elapsed_seconds": 390.92200000000594,
+      "phase": "development payload construction completed"
+    }
+  ],
+  "runtime_evidence_schema_version": 2,
+  "seconds_before_payload_finalization": 390.92200000000594,
+  "stage": "development",
+  "strict_boundary": "elapsed_seconds < limit_seconds",
+  "within_limit_before_payload_finalization": true
+}

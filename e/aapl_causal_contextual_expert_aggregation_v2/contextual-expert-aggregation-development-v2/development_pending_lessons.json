@@ -1,0 +1,17 @@
+{
+  "arm_order": [
+    "online_full",
+    "frozen_2018",
+    "global_only",
+    "lifetime_only"
+  ],
+  "artifact_sha256": "sha256:0a7924e5c286cd0f1e6ced37f892ae80f5d55b04072b7810055001b792782156",
+  "by_arm": {
+    "frozen_2018": [],
+    "global_only": [],
+    "lifetime_only": [],
+    "online_full": []
+  },
+  "pending_artifact_schema_version": 2,
+  "stage": "development"
+}

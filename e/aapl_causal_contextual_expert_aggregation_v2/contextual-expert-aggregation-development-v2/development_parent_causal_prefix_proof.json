@@ -1,0 +1,60 @@
+{
+  "causal_exact": true,
+  "comparator_column_order": [
+    "fixed_always_long_target_exposure",
+    "fixed_union_cash_target_exposure",
+    "fixed_contextual_only_target_exposure",
+    "fixed_weak_trend_only_target_exposure"
+  ],
+  "comparator_derivation": {
+    "always_long": "never_cash",
+    "contextual_only": "accepted_union_and_contextual_virtual_signal",
+    "union_cash": "accepted_union",
+    "weak_trend_only": "accepted_union_and_weak_trend_virtual_signal"
+  },
+  "comparator_exact": true,
+  "comparator_invariants": {
+    "all_targets_long_outside_accepted_union": true,
+    "always_long_never_cash": true,
+    "contextual_cash_iff_accepted_union_and_contextual_signal": true,
+    "union_cash_iff_accepted_union": true,
+    "weak_trend_cash_iff_accepted_union_and_weak_trend_signal": true
+  },
+  "compared_rows": 4986,
+  "exact": true,
+  "expected_comparator_projection_sha256": "sha256:33e8e221fc792a9378092848d1fb990b5bdfde40135c299c88af61c8563688e0",
+  "first_decision_date": "1999-03-10",
+  "generated_causal_projection_sha256": "sha256:1946f7286e8a2d5153c5e87f72dc4d51505831d7538d344af7007d46b3ae122c",
+  "generated_comparator_projection_sha256": "sha256:33e8e221fc792a9378092848d1fb990b5bdfde40135c299c88af61c8563688e0",
+  "last_decision_date": "2018-12-31",
+  "legacy_parent_comparator_targets_used": false,
+  "parent_causal_column_order": [
+    "aapl_intraday_return",
+    "contextual_prior_intraday_percentile",
+    "contextual_spy_return_10",
+    "contextual_qqq_return_10",
+    "contextual_ready",
+    "contextual_raw_signal",
+    "contextual_virtual_signal",
+    "contextual_virtual_signal_blocked",
+    "weak_trend_prior_intraday_percentile",
+    "weak_trend_spy_return_20",
+    "weak_trend_qqq_return_20",
+    "weak_trend_aapl_sma_20",
+    "weak_trend_ready",
+    "weak_trend_raw_signal",
+    "weak_trend_virtual_signal",
+    "weak_trend_virtual_signal_blocked",
+    "unfiltered_union_candidate_signal",
+    "unfiltered_union_signal",
+    "unfiltered_union_signal_blocked"
+  ],
+  "parent_causal_projection_sha256": "sha256:1946f7286e8a2d5153c5e87f72dc4d51505831d7538d344af7007d46b3ae122c",
+  "parent_projection_kind": "fixed_causal_signals_and_accepted_union_v2",
+  "proof_schema_version": 2,
+  "proof_sha256": "sha256:dc7715dc5ad21f6f86cba0aee6488c9a24859dc19aa761115d48e2a2f199b350",
+  "source_forecast_filename": "development_forecast_through_2018.csv",
+  "source_forecast_payload_sha256": "sha256:83e64c07082b241f717b7e4bab923f6f69150e2a6ac4c2a2e9e54386e037e345",
+  "source_manifest_sha256": "sha256:d6352a96629008a97b54d56462d9549c5b59cf0d43bbbe621d602c2d9a7b4d94",
+  "stage": "development"
+}

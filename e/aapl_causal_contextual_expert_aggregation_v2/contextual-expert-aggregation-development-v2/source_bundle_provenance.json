@@ -1,0 +1,12 @@
+{
+  "provenance_sha256": "sha256:76b9bddf0a12611d6b7dd3d4c8abc0ef969cb078541fdcd6cb8a5ec4c47b8f9e",
+  "source_bundle_checksums_file_sha256": "sha256:1241a282b9408b4669e276a3179e9a491d3724b884deaa54abadd872d7313348",
+  "source_bundle_contract_version": "aapl-chronological-exhaustion-expert-v1",
+  "source_bundle_manifest_file_sha256": "sha256:0a375ca457b61b197ca49dbd557ffa679f97d7534e2628c7110a4cb1e36d0cac",
+  "source_bundle_manifest_path": "e/chronological_exhaustion_expert_v1/exhaustion-expert-development-v1/stage_manifest.json",
+  "source_bundle_manifest_sha256": "sha256:d6352a96629008a97b54d56462d9549c5b59cf0d43bbbe621d602c2d9a7b4d94",
+  "source_bundle_stage": "development",
+  "source_forecast_filename": "development_forecast_through_2018.csv",
+  "source_forecast_sha256": "sha256:83e64c07082b241f717b7e4bab923f6f69150e2a6ac4c2a2e9e54386e037e345",
+  "source_parent_bundle": null
+}

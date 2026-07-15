@@ -1,0 +1,114 @@
+{
+  "arm_order": [
+    "online_full",
+    "frozen_2018",
+    "global_only",
+    "lifetime_only"
+  ],
+  "by_arm": {
+    "frozen_2018": {
+      "accepted_opportunities": 166,
+      "admitted_events": 163,
+      "cash_actions": 142,
+      "checkpoint_sha256": "16471d372af7404d997c14351c6413ce9f499e70870732c174173629afa7ca55",
+      "ending_pending_lessons": 0,
+      "fixed_feature_sha256": "a4289d3533424b69bedab0019211acfb74e139ef2a942ebb6ed3816ee4254bcf",
+      "forecast_sha256": "c4bfd82ed1545d7c77e00ee1a0a034081f6bc0a6d7bbbe0250eca7a107cdb752",
+      "matured_events": 166,
+      "processed_rows": 4986
+    },
+    "global_only": {
+      "accepted_opportunities": 166,
+      "admitted_events": 163,
+      "cash_actions": 142,
+      "checkpoint_sha256": "16471d372af7404d997c14351c6413ce9f499e70870732c174173629afa7ca55",
+      "ending_pending_lessons": 0,
+      "fixed_feature_sha256": "a4289d3533424b69bedab0019211acfb74e139ef2a942ebb6ed3816ee4254bcf",
+      "forecast_sha256": "c4bfd82ed1545d7c77e00ee1a0a034081f6bc0a6d7bbbe0250eca7a107cdb752",
+      "matured_events": 166,
+      "processed_rows": 4986
+    },
+    "lifetime_only": {
+      "accepted_opportunities": 166,
+      "admitted_events": 163,
+      "cash_actions": 142,
+      "checkpoint_sha256": "16471d372af7404d997c14351c6413ce9f499e70870732c174173629afa7ca55",
+      "ending_pending_lessons": 0,
+      "fixed_feature_sha256": "a4289d3533424b69bedab0019211acfb74e139ef2a942ebb6ed3816ee4254bcf",
+      "forecast_sha256": "c4bfd82ed1545d7c77e00ee1a0a034081f6bc0a6d7bbbe0250eca7a107cdb752",
+      "matured_events": 166,
+      "processed_rows": 4986
+    },
+    "online_full": {
+      "accepted_opportunities": 166,
+      "admitted_events": 163,
+      "cash_actions": 142,
+      "checkpoint_sha256": "16471d372af7404d997c14351c6413ce9f499e70870732c174173629afa7ca55",
+      "ending_pending_lessons": 0,
+      "fixed_feature_sha256": "a4289d3533424b69bedab0019211acfb74e139ef2a942ebb6ed3816ee4254bcf",
+      "forecast_sha256": "c4bfd82ed1545d7c77e00ee1a0a034081f6bc0a6d7bbbe0250eca7a107cdb752",
+      "matured_events": 166,
+      "processed_rows": 4986
+    }
+  },
+  "diagnostics_schema_version": 2,
+  "diagnostics_sha256": "sha256:dc635867ee73bab4865fad1b0382c2517c8353f590882ae3a4f5e82ba63ae89e",
+  "extra_proofs": {
+    "development_arm_replay_identity": {
+      "frozen_2018": {
+        "checkpoint_digest_equal": true,
+        "checkpoint_envelope_equal": true,
+        "cooldown_tail_equal": true,
+        "fixed_features_equal": true,
+        "forecasts_equal": true,
+        "matured_events_equal": true,
+        "model_state_equal": true,
+        "passed": true,
+        "pending_state_equal": true,
+        "prefix_hashes_equal": true,
+        "runtime_equal": true
+      },
+      "global_only": {
+        "checkpoint_digest_equal": true,
+        "checkpoint_envelope_equal": true,
+        "cooldown_tail_equal": true,
+        "fixed_features_equal": true,
+        "forecasts_equal": true,
+        "matured_events_equal": true,
+        "model_state_equal": true,
+        "passed": true,
+        "pending_state_equal": true,
+        "prefix_hashes_equal": true,
+        "runtime_equal": true
+      },
+      "lifetime_only": {
+        "checkpoint_digest_equal": true,
+        "checkpoint_envelope_equal": true,
+        "cooldown_tail_equal": true,
+        "fixed_features_equal": true,
+        "forecasts_equal": true,
+        "matured_events_equal": true,
+        "model_state_equal": true,
+        "passed": true,
+        "pending_state_equal": true,
+        "prefix_hashes_equal": true,
+        "runtime_equal": true
+      },
+      "online_full": {
+        "checkpoint_digest_equal": true,
+        "checkpoint_envelope_equal": true,
+        "cooldown_tail_equal": true,
+        "fixed_features_equal": true,
+        "forecasts_equal": true,
+        "matured_events_equal": true,
+        "model_state_equal": true,
+        "passed": true,
+        "pending_state_equal": true,
+        "prefix_hashes_equal": true,
+        "runtime_equal": true
+      }
+    },
+    "seed_target_source_policy": "online_full"
+  },
+  "stage": "development"
+}
