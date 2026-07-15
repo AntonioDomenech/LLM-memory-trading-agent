@@ -1,0 +1,15 @@
+{
+  "api_calls": 0,
+  "external_cost_usd": 0.0,
+  "external_model_calls": 0,
+  "llm_calls": 0,
+  "monotonic_clock": true,
+  "network_access": false,
+  "news_access": false,
+  "runtime_evidence_schema_version": 1,
+  "seconds_before_seal": 1503.4219999999987,
+  "stage": "audit",
+  "strict_limit_rechecked_immediately_before_promotion": true,
+  "strict_limit_seconds": 3600.0,
+  "within_limit_before_seal": true
+}

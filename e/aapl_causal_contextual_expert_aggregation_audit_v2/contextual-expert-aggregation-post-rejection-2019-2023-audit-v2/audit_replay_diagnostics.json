@@ -1,0 +1,86 @@
+{
+  "arm_order": [
+    "online_full",
+    "frozen_2018",
+    "global_only",
+    "lifetime_only"
+  ],
+  "audit_replay_diagnostics_schema_version": 1,
+  "by_arm": {
+    "frozen_2018": {
+      "checkpoint_sha256": "ca07dc09e778b6e1211ef899d6a5bbfde0207418a063a8f92163775fa5eda845",
+      "diagnostics": {
+        "accepted_opportunities": 39,
+        "admitted_events": 0,
+        "cash_actions": 36,
+        "checkpoint_sha256": "ca07dc09e778b6e1211ef899d6a5bbfde0207418a063a8f92163775fa5eda845",
+        "ending_pending_lessons": 0,
+        "fixed_feature_sha256": "600dac64edf35884b02b8a7a9ff8a86eafaa9654bd58141de08227f929d715bb",
+        "forecast_sha256": "501e42329c9bc81e29c214cc7010caf3ffed1e6ec8f757175b8e4eb17625a94a",
+        "matured_events": 39,
+        "processed_rows": 1258
+      }
+    },
+    "global_only": {
+      "checkpoint_sha256": "b5666b1b6fa0d365d9061d1455c34c5d9d3fc8c0a63b02dc80e605d259bb14eb",
+      "diagnostics": {
+        "accepted_opportunities": 39,
+        "admitted_events": 39,
+        "cash_actions": 39,
+        "checkpoint_sha256": "b5666b1b6fa0d365d9061d1455c34c5d9d3fc8c0a63b02dc80e605d259bb14eb",
+        "ending_pending_lessons": 0,
+        "fixed_feature_sha256": "600dac64edf35884b02b8a7a9ff8a86eafaa9654bd58141de08227f929d715bb",
+        "forecast_sha256": "3492903c5af0bbf73b5d8bd0ae4ba709b1e388df0e87ec680a47be31b97c9d7c",
+        "matured_events": 39,
+        "processed_rows": 1258
+      }
+    },
+    "lifetime_only": {
+      "checkpoint_sha256": "f01002897fd59b439dd97d549d9966173d3a551975a38adb48008b2e8e2d14c0",
+      "diagnostics": {
+        "accepted_opportunities": 39,
+        "admitted_events": 39,
+        "cash_actions": 35,
+        "checkpoint_sha256": "f01002897fd59b439dd97d549d9966173d3a551975a38adb48008b2e8e2d14c0",
+        "ending_pending_lessons": 0,
+        "fixed_feature_sha256": "600dac64edf35884b02b8a7a9ff8a86eafaa9654bd58141de08227f929d715bb",
+        "forecast_sha256": "d07b952f1aa3a764d3d135db8627fb30b04d0630dcd711459bba978bcda91da8",
+        "matured_events": 39,
+        "processed_rows": 1258
+      }
+    },
+    "online_full": {
+      "checkpoint_sha256": "349ca26a1694970a1b24762fc3c9dfe289c837128780503f07dbda126848f1b8",
+      "diagnostics": {
+        "accepted_opportunities": 39,
+        "admitted_events": 39,
+        "cash_actions": 36,
+        "checkpoint_sha256": "349ca26a1694970a1b24762fc3c9dfe289c837128780503f07dbda126848f1b8",
+        "ending_pending_lessons": 0,
+        "fixed_feature_sha256": "600dac64edf35884b02b8a7a9ff8a86eafaa9654bd58141de08227f929d715bb",
+        "forecast_sha256": "3f99b0f94d7cd23db251c6c930ec1e8474e0b7d2424f277bf8f274d30304ac77",
+        "matured_events": 39,
+        "processed_rows": 1258
+      }
+    }
+  },
+  "common_fork_checkpoint_sha256": "16471d372af7404d997c14351c6413ce9f499e70870732c174173629afa7ca55",
+  "diagnostics_sha256": "sha256:968f2673caeade7c5f25d39790f3afea26187f6a3501bff5c55728b152c157e1",
+  "frozen_post_cutoff_admitted_events": 0,
+  "frozen_terminal_admitted_count_equals_2018": true,
+  "online_resume_equivalence": {
+    "checkpoint_digest_equal": true,
+    "checkpoint_envelope_equal": true,
+    "cooldown_tail_equal": true,
+    "fixed_features_equal": true,
+    "forecasts_equal": true,
+    "matured_events_equal": true,
+    "model_state_equal": true,
+    "passed": true,
+    "pending_state_equal": true,
+    "prefix_hashes_equal": true,
+    "runtime_equal": true
+  },
+  "stage": "audit",
+  "v2_continuation_runtime_semantics": "confirmation_style_fork_only"
+}

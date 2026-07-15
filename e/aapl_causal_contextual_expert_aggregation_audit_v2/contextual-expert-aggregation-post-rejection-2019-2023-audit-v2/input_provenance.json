@@ -1,0 +1,46 @@
+{
+  "attempt_lock_path": "e/aapl_causal_contextual_expert_aggregation_audit_v2/AUDIT_ATTEMPT_LOCK.json",
+  "attempt_lock_sha256": "sha256:c929ca38a3bc10161630d85ab58d3bbcf916739fd81088b55779639ffcd21664",
+  "audit_provenance_sha256": "sha256:403c9675b93402731ee152914b52370b82db19136e62225dacdc62243d9c6984",
+  "authorized_snapshot": {
+    "adjusted_open_formula": "aapl_open * aapl_adj_close / aapl_close",
+    "authorized_loader_lineage": {
+      "source_manifest_sha256": "sha256:0354355ac460042f96663d1a45cf5e9a8cf4fe873ddf5cc87afefd9c4b5d81dc",
+      "source_parent_manifest_sha256": "sha256:3dfd21609d8851157d7062e5f27cad9e50119fb45a2cd5e8cff8cba9a3d28cd6",
+      "source_provenance_sha256": "sha256:2a13e0bc4a5b5a9dc7ecff2fbbc0c02c1b37e7383bc9752e608ec7affadfaf6c"
+    },
+    "bounded_first_date": "1999-03-10",
+    "bounded_last_date": "2023-12-29",
+    "bounded_result_sha256": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535",
+    "bounded_rows": 6244,
+    "network_access": false,
+    "physical_snapshot_has_later_rows": false,
+    "raw_sha256": "sha256:c5189db9796f25ae69d14814b22ac4a852449aef8b86d3615a289b9fcb8029e9",
+    "rows_after_bound_returned": false,
+    "session_coverage": {
+      "date_sequence_sha256": "77098a2d35b6cee78ccb100514e599ee4ef6dac55738e7084b02d0e0dd0b63c1",
+      "first_session": "1999-03-10",
+      "last_session": "2023-12-29",
+      "observations": 6244
+    },
+    "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\binary_regime_union_selector_v1\\authorized_inputs\\aapl_spy_qqq_through_2023.csv",
+    "source_type": "physically_bounded_local_csv",
+    "tracked_input": {
+      "git_blob": "9b47e6596294025bb22ec872051dcc5f6320962a",
+      "path": "e/binary_regime_union_selector_v1/authorized_inputs/aapl_spy_qqq_through_2023.csv",
+      "sha256": "sha256:c5189db9796f25ae69d14814b22ac4a852449aef8b86d3615a289b9fcb8029e9"
+    }
+  },
+  "input_opened_only_after_durable_lock": true,
+  "post_2023_market_values_accessed": false,
+  "postlock_tracked_input": {
+    "git_blob": "9b47e6596294025bb22ec872051dcc5f6320962a",
+    "head_index_local_equal": true,
+    "path": "e/binary_regime_union_selector_v1/authorized_inputs/aapl_spy_qqq_through_2023.csv",
+    "path_status_clean": true,
+    "sha256": "sha256:c5189db9796f25ae69d14814b22ac4a852449aef8b86d3615a289b9fcb8029e9",
+    "verified_after_attempt_lock": true
+  },
+  "through_2018_model_checkpoint_exact": true,
+  "through_2018_raw_and_canonical_prefix_exact": true
+}

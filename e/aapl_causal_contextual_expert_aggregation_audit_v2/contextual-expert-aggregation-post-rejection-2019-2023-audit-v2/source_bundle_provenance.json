@@ -1,0 +1,17 @@
+{
+  "provenance_sha256": "sha256:bd0eb2fd303616dd0f89bbb52edab26359413ad1666b16848dd401b90e8775f2",
+  "source_bundle_checksums_file_sha256": "sha256:496bd0ca94f30f48d90662a8d344eb34d2ab48d64920b7aa270bcae4f56ac115",
+  "source_bundle_contract_version": "aapl-binary-regime-union-selector-v1",
+  "source_bundle_manifest_file_sha256": "sha256:95d7a2570f720987480f6343524d95f9242bedbc182c646035999bc6cd0bb5fe",
+  "source_bundle_manifest_path": "e/binary_regime_union_selector_v1/binary-regime-union-selector-validation-v1/stage_manifest.json",
+  "source_bundle_manifest_sha256": "sha256:0354355ac460042f96663d1a45cf5e9a8cf4fe873ddf5cc87afefd9c4b5d81dc",
+  "source_bundle_stage": "validation",
+  "source_forecast_filename": "validation_online_forecast.csv",
+  "source_forecast_sha256": "sha256:fc94665acb70dae606948fc50b247f8099d4ca04dca389321c9ed014636a3bc6",
+  "source_parent_bundle": {
+    "checksums_file_sha256": "sha256:bdd6eca8d9b120e593dd07490e883fb7620ce2e7f5a152eb366e180a4a64109c",
+    "manifest_file_sha256": "sha256:348891ec02f6631de959b01989aea968c7274ddddfcdf687c317496572ea0116",
+    "manifest_path": "e/binary_regime_union_selector_v1/binary-regime-union-selector-development-v1/stage_manifest.json",
+    "manifest_sha256": "sha256:3dfd21609d8851157d7062e5f27cad9e50119fb45a2cd5e8cff8cba9a3d28cd6"
+  }
+}

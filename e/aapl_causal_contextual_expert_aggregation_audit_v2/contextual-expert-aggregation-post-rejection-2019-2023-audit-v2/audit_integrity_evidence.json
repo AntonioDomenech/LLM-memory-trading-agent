@@ -1,0 +1,43 @@
+{
+  "attempt_lock": {
+    "parent_directory_fsync_supported": true,
+    "path": "e/aapl_causal_contextual_expert_aggregation_audit_v2/AUDIT_ATTEMPT_LOCK.json",
+    "sha256": "sha256:c929ca38a3bc10161630d85ab58d3bbcf916739fd81088b55779639ffcd21664"
+  },
+  "audit_integrity_evidence_schema_version": 1,
+  "checks": {
+    "all_ledgers_unleveraged_exact": true,
+    "always_long_equals_benchmark_exact": true,
+    "audit_attempt_lock_exact": true,
+    "authorized_price_and_parent_provenance_exact": true,
+    "binary_union_subset_actions_exact": true,
+    "causal_maturity_and_update_order_exact": true,
+    "checkpoint_pending_and_cooldown_exact": true,
+    "development_checkpoint_continuity_exact": true,
+    "exact_rejected_parent_authorization": true,
+    "fixed_expert_and_union_prefix_exact": true,
+    "frozen_post_cutoff_state_unchanged": true,
+    "ledger_episode_and_xor_reconciliation_exact": true,
+    "one_lesson_per_opportunity_exact": true,
+    "online_frozen_forecast_prefix_exact": true,
+    "post_2023_market_values_not_accessed": true,
+    "same_actions_at_both_costs_exact": true,
+    "single_continuous_account_exact": true,
+    "state_probability_action_replay_exact": true,
+    "zero_network_news_llm_api_and_external_cost": true
+  },
+  "input_provenance_sha256": "sha256:403c9675b93402731ee152914b52370b82db19136e62225dacdc62243d9c6984",
+  "integrity_evidence_sha256": "sha256:4960b6c06b7915e8cf0883b97e70d3a3291b385d3a7d8459e7e773ecb8cfee73",
+  "parent_causal_prefix_proof_sha256": "sha256:ccaad7a8af17b74c07e8ab0545c79496fd893a295a7c35067257ea6123e841af",
+  "prefix_continuity_proof_sha256": "sha256:f22d9205370a479718c05882fa021399cc48d68dc882400cbd4391df16874e8a",
+  "replay_diagnostics_sha256": "sha256:968f2673caeade7c5f25d39790f3afea26187f6a3501bff5c55728b152c157e1",
+  "stage": "audit",
+  "zero_use": {
+    "api_calls": 0,
+    "external_cost_usd": 0.0,
+    "external_model_calls": 0,
+    "llm_calls": 0,
+    "network_access": false,
+    "news_access": false
+  }
+}

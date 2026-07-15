@@ -1,0 +1,332 @@
+{
+  "arm_order": [
+    "online_full",
+    "frozen_2018",
+    "global_only",
+    "lifetime_only"
+  ],
+  "bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+  "checkpoint_sha256": "sha256:e195356c0540a4a05ea635927fa466c1c85948beb7de0191e80f5bc10d60fd03",
+  "contract_version": "aapl-causal-contextual-expert-aggregation-v2",
+  "cost_bps": {
+    "base_5bps": 5.0,
+    "stress_10bps": 10.0
+  },
+  "cost_order": [
+    "base_5bps",
+    "stress_10bps"
+  ],
+  "evidence_classification": "through_2018_training_diagnostic",
+  "execution": {
+    "actions": [
+      "LONG_100_PERCENT",
+      "CASH_100_PERCENT"
+    ],
+    "api_calls": 0,
+    "asset": "AAPL",
+    "borrowing": false,
+    "external_cost_usd": 0.0,
+    "forced_terminal_sale": false,
+    "leverage": false,
+    "llm_calls": 0,
+    "maximum_target_exposure": 1.0,
+    "negative_cash": false,
+    "network_access": false,
+    "news_access": false,
+    "promotion_requires_strict_pre_rename_deadline": true,
+    "runtime_limit_seconds": 3600.0,
+    "shorting": false
+  },
+  "fixed_policy_order": [
+    "always_long",
+    "exact_union_cash",
+    "contextual_only",
+    "weak_trend_only"
+  ],
+  "frozen_command": [
+    "python",
+    "-I",
+    "-B",
+    "agent_benchmark/contextual_expert_aggregation_bootstrap.py",
+    "stage",
+    "development"
+  ],
+  "gate_report_sha256": "sha256:57a1e618c1bf862ec722c07a6065a8a8308295ee15f27b49b545b127f1f69d0e",
+  "git_identity": {
+    "branch": "codex/aapl-causal-contextual-expert-aggregation-v2",
+    "cleanliness_scope": "git_visible_index_and_worktree_after_attempt_lock",
+    "commit": "25609a514a9f36bbd09597a1b98ddd2fc753f1cd",
+    "dirty": false,
+    "head_equals_upstream": true,
+    "origin_repository": "github.com/AntonioDomenech/LLM-memory-trading-agent",
+    "origin_url": "https://github.com/AntonioDomenech/LLM-memory-trading-agent.git",
+    "runtime_versions": {
+      "numpy": "2.3.3",
+      "pandas": "2.3.3",
+      "python": "3.12.2"
+    },
+    "tracked_dependency_identity": {
+      ".gitattributes": {
+        "git_blob": "1131dc857b36d18c2c9824f6a3c49eb083ec936d",
+        "sha256": "sha256:cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440"
+      },
+      ".gitignore": {
+        "git_blob": "26a92845a22b19c023075e7386caf4e4c9453763",
+        "sha256": "sha256:c9a92bf91ceea3902d25a53f15c5cb1c1c2e67bf6d60970b6295e23b4cb9a133"
+      },
+      "README.md": {
+        "git_blob": "e8eb4eb277d288598fe90764e6a55409ba9c9465",
+        "sha256": "sha256:fdd927db7ab49f2cfa7af1053ffda4347010cbe76ad8e4cac7021b260a164ef7"
+      },
+      "agent_benchmark/__init__.py": {
+        "git_blob": "21d221a05c171775bc7c98b549d5d81312d9da34",
+        "sha256": "sha256:a73cda1a3844d0e62c65af5cb0dc6ba7ed051b9b305f0269ac26cc69a90558a9"
+      },
+      "agent_benchmark/chronological_exhaustion_expert.py": {
+        "git_blob": "3d01affe636f2917306358a7d80f285b5a10f1d4",
+        "sha256": "sha256:a30224763c9858aed905b76215c2c5a66eddd58f107182d751d8eb6a32688c6e"
+      },
+      "agent_benchmark/contextual_expert_aggregation.py": {
+        "git_blob": "af44fac6cf231ea0e3d19663334976a94cfb058d",
+        "sha256": "sha256:bf058da2a234d3ad9d9e3f30b6a573ce1d88e799a482d05ec2ef11ac20775b93"
+      },
+      "agent_benchmark/contextual_expert_aggregation_artifacts.py": {
+        "git_blob": "2bbf199e3597d4ac9a4d4c03c587d21ed9cfff73",
+        "sha256": "sha256:aee9680a8b97ae0546c9820fed2d2a927849a3f370a93ae4d9c4faa515054c92"
+      },
+      "agent_benchmark/contextual_expert_aggregation_bootstrap.py": {
+        "git_blob": "26b1625c9bac5758cdd96088d5ee08302fdcac70",
+        "sha256": "sha256:09492b9896d00a23befed59c61964db878524a1ec87d59926482afa49a5c1000"
+      },
+      "agent_benchmark/contextual_expert_aggregation_evaluation.py": {
+        "git_blob": "ef968c5cee8b70a692a34adad6df61345d194d94",
+        "sha256": "sha256:a1604a0009b248c39b84fd5659a3d1b960f7b8b63952b6576d79555f2217d9ad"
+      },
+      "agent_benchmark/contextual_expert_aggregation_experiment.py": {
+        "git_blob": "fb74ebf244796ba9feb12ac89a5754bcd7aa1094",
+        "sha256": "sha256:d55a1bcea0ab3f7fd2b126d82f7edb69b4911b5eda770e641e02f8011c2e8ae4"
+      },
+      "agent_benchmark/contextual_expert_aggregation_ledger.py": {
+        "git_blob": "4c51aeefeb76d21fc52a246a6adf532ac447e437",
+        "sha256": "sha256:6b446b13fe8bd1dd39195bd96b15b13dd73ac01ac94d4a7fcb08372edd6fb616"
+      },
+      "agent_benchmark/contextual_expert_aggregation_replay.py": {
+        "git_blob": "20c0edf3c399bff0f5fd47dc433bb495154fad7c",
+        "sha256": "sha256:350faafe88821269dba5dcb38908116c25daa7fee23b9d37bd819b4346e42c91"
+      },
+      "agent_benchmark/contextual_expert_aggregation_stage.py": {
+        "git_blob": "8fa0e61a33cd3ff5b1d16426054527f8bd7b4e3c",
+        "sha256": "sha256:d9432161fa121e0bcc1772f04b02fc9f1a5f004e8b61cb5119bbc052dae8aabd"
+      },
+      "agent_benchmark/contextual_expert_aggregation_verifier.py": {
+        "git_blob": "d60d9974a30992b7848e373e0008ceea3d259128",
+        "sha256": "sha256:f7a6c1c84eb1e65d5c3976e709e5c728f2eabc1728ea6c64359638d5aa5a99eb"
+      },
+      "docs/aapl_causal_contextual_expert_aggregation_v1.md": {
+        "git_blob": "086441041cdf7ea445ee2859dfe6299f584c709c",
+        "sha256": "sha256:598fcc2c7dc7ec6d8fbe5ec9a7f07959ce9491105d6a81717fc712479c900175"
+      },
+      "docs/aapl_causal_contextual_expert_aggregation_v2.md": {
+        "git_blob": "3b18bb482b8433c0d863d09d9de2d49fb93b061f",
+        "sha256": "sha256:8c603c5e3c45fd9e51dc498060512e1db23aca1122218ee261bcca9612929f3e"
+      },
+      "docs/aapl_chronological_exhaustion_expert_v1.md": {
+        "git_blob": "a9544c8bf39e4a7265c6ce9399e795f4e561ba39",
+        "sha256": "sha256:00258afd95250f97d9140f3f1674971cf075a4cd0b2e0990774d298b1fea8f05"
+      },
+      "e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md": {
+        "git_blob": "8f484b8f3f44d02abc8662606c6a7f2edccfd79f",
+        "sha256": "sha256:e1cd23e4d77f4016c8ab2377681c403a1ed9df04f85a064e96c76c41277990be"
+      },
+      "requirements.txt": {
+        "git_blob": "828f2a18d134ac2f516a49ac6adf3b28b85592e8",
+        "sha256": "sha256:9038c7b5b2d98e8723aa4346813228978040e4bf20cd7ef5310b7e9b4481ec99"
+      },
+      "tests/conftest.py": {
+        "git_blob": "8949ec72692bd20802049d7d9001aa1a0ddd43f1",
+        "sha256": "sha256:6be6ae92a1f5dc8a2256f8b542f3c5a9c1524882fd2466e1aa1e48d1e1910884"
+      },
+      "tests/test_chronological_exhaustion_expert.py": {
+        "git_blob": "49317c0a2f270f6fca89785804e84d04bfe1b80f",
+        "sha256": "sha256:def82b41153099008fce1ed6a7c0dc0ecebea0e2911d34a79b54f31b98333d8c"
+      },
+      "tests/test_contextual_expert_aggregation.py": {
+        "git_blob": "8e557364802f4230655b34736ce2d6e2e11efe64",
+        "sha256": "sha256:86465fccf4f4f1b4dedffca5d5b16b0c7275ffe42dae9c883ba3a61a8134c751"
+      },
+      "tests/test_contextual_expert_aggregation_artifacts.py": {
+        "git_blob": "72aaff73fef59d4b4e534b3480b6b9543274bc2a",
+        "sha256": "sha256:84205ab3348a27e07b755da6da02df62a125a9ab2ce2201d8e01378e1366f37e"
+      },
+      "tests/test_contextual_expert_aggregation_bootstrap.py": {
+        "git_blob": "82907b8322ad75c72b6b8bd5d467aa77ed8890ae",
+        "sha256": "sha256:d91c11cfbed176934a4b246d1485c80b835575bd9c5fee39cd74967a01cf411b"
+      },
+      "tests/test_contextual_expert_aggregation_evaluation.py": {
+        "git_blob": "ca0a352ef5dc0e56e17e02f0f3af73ae4b25b807",
+        "sha256": "sha256:784cb74b5ea272507ac68e96bdc854bf3a7ef922c905529eba46f2678f589be2"
+      },
+      "tests/test_contextual_expert_aggregation_experiment.py": {
+        "git_blob": "e8413a940e39fabe758b5db0938e226b989ff485",
+        "sha256": "sha256:e2a5f52a2ff13b97ff3748421e81b8853f4e8f72cea43c2cac36e5eae045204d"
+      },
+      "tests/test_contextual_expert_aggregation_ledger.py": {
+        "git_blob": "4c5689bc660ee9d3e96e9e3d814228510abeccf1",
+        "sha256": "sha256:06f97e2c1ee93e84df945a72cf10ca49143b846f67da993935e9859a0207828c"
+      },
+      "tests/test_contextual_expert_aggregation_replay.py": {
+        "git_blob": "d5faad98513833f4b1de9faddfd5001e8164dbbb",
+        "sha256": "sha256:e1ac39bb2b1b3e6834af3907b7b1f990755ced83e59b324c06492355f07b550f"
+      },
+      "tests/test_contextual_expert_aggregation_stage.py": {
+        "git_blob": "6dc034c6a326d011db73eb9740a7e6f8b04672f0",
+        "sha256": "sha256:f774dabdabb6cd1cd57a006f4e06c85ea177b7951d7c8e5384f56930a91e9053"
+      },
+      "tests/test_contextual_expert_aggregation_verifier.py": {
+        "git_blob": "af343e3330c16ce8660048a6aa634a8ca153f7f7",
+        "sha256": "sha256:93c7374c91fe7e5477326380664f7e81611686c47a15b9e3782dda9cc79128c5"
+      }
+    },
+    "upstream": "origin/codex/aapl-causal-contextual-expert-aggregation-v2",
+    "upstream_branch": "codex/aapl-causal-contextual-expert-aggregation-v2",
+    "upstream_commit": "25609a514a9f36bbd09597a1b98ddd2fc753f1cd",
+    "upstream_remote": "origin"
+  },
+  "input_raw_sha256": "sha256:9e661722b9e474121654b348b44e646af6e5b2f94b1c613690113da2ad4ffdc1",
+  "manifest_sha256": "sha256:6cb657d1d9c323bd96a84b598b9b993e2444f756a65521aa1bf28207f7a63539",
+  "model_constants": {
+    "expert_order": [
+      "always_long",
+      "union_cash",
+      "contextual_only",
+      "weak_trend_only"
+    ],
+    "fast_lookback": 10,
+    "feature_lookback_sessions": 126,
+    "lesson_memory_start": "2000-01-01",
+    "long_tie_tolerance": 1e-12,
+    "market_state_order": [
+      "fast_off_slow_off",
+      "fast_off_slow_on",
+      "fast_on_slow_off",
+      "fast_on_slow_on"
+    ],
+    "model_method": "causal_contextual_expert_aggregation_v1",
+    "per_side_friction": 0.001,
+    "replay_schema_version": 2,
+    "scale_order": [
+      "half_life_8",
+      "half_life_32",
+      "lifetime"
+    ],
+    "serialization_version": 2,
+    "slow_lookback": 20,
+    "state_prior_strength": 4.0
+  },
+  "parent_manifest_sha256": null,
+  "payload_sha256": {
+    ".gitattributes": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+    "development_arm_seed_equivalence.json": "sha256:302e40e53187d179ccadc1c53ea00e96868a55357e50a27c17c6f89de04a5971",
+    "development_checkpoint_through_2018.json": "sha256:abe07112ce2bb72292d65b357dc006ab3be268f8b0d02077563c59fa71a22538",
+    "development_episodes__base_5bps.json": "sha256:5bae10a67380f9b7261ab77794ef237a006063fea747425cf7fdc88b6296755d",
+    "development_episodes__stress_10bps.json": "sha256:3a18542b20512c2732cf807fa1101e8cf9cb2b54c7550594b8d12c4c5a3fcc1c",
+    "development_fixed_features.table.json": "sha256:0dc07ee16a37a641e894e7f780b8a717ae522879a94c5c73b09ca3e98f00fef1",
+    "development_forecast__fixed_comparators.table.json": "sha256:33e8e221fc792a9378092848d1fb990b5bdfde40135c299c88af61c8563688e0",
+    "development_forecast__frozen_2018.table.json": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "development_forecast__global_only.table.json": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "development_forecast__lifetime_only.table.json": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "development_forecast__online_full.table.json": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "development_gate_report.json": "sha256:b28b06d28f749efe10b2f853f55386bab957dc4a68480cbaa7ce815ffa6f4e39",
+    "development_integrity_evidence.json": "sha256:25196983022f01f585b9b8b6f59a3f8581ec6d1caf6c0e49c32b603ed6d34152",
+    "development_ledger__base_5bps__aapl_buy_hold.table.json": "sha256:2aecbe2e33a23de8c3f51162ad7ca415a32978c81a882cd35d28fe43329f79c7",
+    "development_ledger__base_5bps__always_long.table.json": "sha256:94c090e7d9fff7db3bac0fcd0eaf54aa170c7017136d935cb7826154df75d4d5",
+    "development_ledger__base_5bps__contextual_only.table.json": "sha256:bf5c5f1e91269b6928b1ea6e733d3aab2b71a0ccb36597ca5d9e610b168beb58",
+    "development_ledger__base_5bps__exact_union_cash.table.json": "sha256:1f7b976c50b6ccff835440759001855adfe4a4ad05d3f4d495346d51c97b31de",
+    "development_ledger__base_5bps__frozen_2018.table.json": "sha256:8bdd8db7eda27c194425920615e0ba3df7b8b7ec03e715a90ca7980ce20ab259",
+    "development_ledger__base_5bps__global_only.table.json": "sha256:d0c9973ef7cf98fef6c16bbfd742baee26df6f0bcdc199c7892310ee5944167a",
+    "development_ledger__base_5bps__lifetime_only.table.json": "sha256:e1fc633395d2a491bfe25eda9a27ea496349945fdf447a1f4991f0c790ed90a7",
+    "development_ledger__base_5bps__online_full.table.json": "sha256:db31eee40144265ff94b3be7a21d7e2968eba2142a526f21ebe7c06e191841f6",
+    "development_ledger__base_5bps__weak_trend_only.table.json": "sha256:2feb5d4335109fe078518b9c62c4acc64eba1df18a34e4346480874d01062192",
+    "development_ledger__stress_10bps__aapl_buy_hold.table.json": "sha256:99b862e7d480645298418c6069ca3edb67600735ae3fed26c536891ba19230b2",
+    "development_ledger__stress_10bps__always_long.table.json": "sha256:f76ff4e99449d4d49563d323b5ed0b1e320305cb25abf657d08e60bedc2a1835",
+    "development_ledger__stress_10bps__contextual_only.table.json": "sha256:f83c576da2bca4b9662a05aeb4fcffed5bf90f52b6d28d65c32ce6fa85d2f0b3",
+    "development_ledger__stress_10bps__exact_union_cash.table.json": "sha256:05ee6a347ce6dfc48ce12bfe8e596a307ac2edc56ae58261363901d4cea6c1a6",
+    "development_ledger__stress_10bps__frozen_2018.table.json": "sha256:f06f818e0dad4920005e2765ac2ba92082c6912572e7097d13c18f65d4149ddb",
+    "development_ledger__stress_10bps__global_only.table.json": "sha256:6e3d8c972011b0d18f40277d286a5ed2e6978f6b271f9e76975642ae2d3d07ff",
+    "development_ledger__stress_10bps__lifetime_only.table.json": "sha256:3f79372d4b02d9aacf5a8a6ec931707af52ec28bf5833299bd68575d795cac7b",
+    "development_ledger__stress_10bps__online_full.table.json": "sha256:419057f39ee22e826ec71c15ac21de391b338937d4b331daddea46c093d6ffd5",
+    "development_ledger__stress_10bps__weak_trend_only.table.json": "sha256:30b9246eb0635ccee886fc3465c9ed7445b1a814dbe4154edf0bea49cab849f3",
+    "development_matured_lessons__frozen_2018.table.json": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "development_matured_lessons__global_only.table.json": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "development_matured_lessons__lifetime_only.table.json": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "development_matured_lessons__online_full.table.json": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "development_metrics.json": "sha256:2fa0a63fb0ed4451c107eee60db80d48f66e10decfe14119c4ac91976f821fc6",
+    "development_parent_causal_prefix_proof.json": "sha256:503479a0dbdb6cf15d48fe62c1da564c4a7a766d51db4d7ba91ae6b637ba0703",
+    "development_pending_lessons.json": "sha256:c663f983fbfcb1da036813812e4ef28d4787e5100b5f2c5a4cfe2ecbe9f9cbee",
+    "development_prices_through_2018.csv": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+    "development_replay_diagnostics.json": "sha256:fa6b3acbef9d62b526fb1d31c9bdbddc4d4f65f3bec92436d62138580614502d",
+    "development_runtime_cost_evidence.json": "sha256:539a1546d15da80e2452b0c89aad6c1e8f5ef031d4e34647c910a95e38b3a201",
+    "development_state_weight_diagnostics.table.json": "sha256:14639f7e18bfdafc25b6eae9783114eed729a156f1a6fd0e639419fcfaf089cf",
+    "development_xor__base_5bps.json": "sha256:862e5c64a27143da97768bd2bd60c4052853b36aabff901229057733f249c2f9",
+    "development_xor__stress_10bps.json": "sha256:dbfe88ee8210d17c608d7079eec3422233827bd8421d90319039259f5fc9e938",
+    "input_provenance.json": "sha256:e8ae5a968368ba17b4c4156739020c4d2846880e047908eb3eea5c3b571ecd70",
+    "report.json": "sha256:d08e3b650738dad248ce633c4e8077def9c89a614203dfcfc4110b787287e815",
+    "source_bundle_provenance.json": "sha256:59b77a52f4a5f79d8bf8933cd9a538e5e22f55b101f660e8d329ad23ee0d4934"
+  },
+  "policy_order": [
+    "online_full",
+    "frozen_2018",
+    "global_only",
+    "lifetime_only",
+    "always_long",
+    "exact_union_cash",
+    "contextual_only",
+    "weak_trend_only",
+    "aapl_buy_hold"
+  ],
+  "run_id": "contextual-expert-aggregation-development-v2",
+  "runtime_cost_evidence_sha256": "sha256:eb44d5d6c52e5446a38b9a1b2ac1977bdca88e942ea7667cb3bde6c8c33abc6f",
+  "source_bundle_provenance": {
+    "provenance_sha256": "sha256:76b9bddf0a12611d6b7dd3d4c8abc0ef969cb078541fdcd6cb8a5ec4c47b8f9e",
+    "source_bundle_checksums_file_sha256": "sha256:1241a282b9408b4669e276a3179e9a491d3724b884deaa54abadd872d7313348",
+    "source_bundle_contract_version": "aapl-chronological-exhaustion-expert-v1",
+    "source_bundle_manifest_file_sha256": "sha256:0a375ca457b61b197ca49dbd557ffa679f97d7534e2628c7110a4cb1e36d0cac",
+    "source_bundle_manifest_path": "e/chronological_exhaustion_expert_v1/exhaustion-expert-development-v1/stage_manifest.json",
+    "source_bundle_manifest_sha256": "sha256:d6352a96629008a97b54d56462d9549c5b59cf0d43bbbe621d602c2d9a7b4d94",
+    "source_bundle_stage": "development",
+    "source_forecast_filename": "development_forecast_through_2018.csv",
+    "source_forecast_sha256": "sha256:83e64c07082b241f717b7e4bab923f6f69150e2a6ac4c2a2e9e54386e037e345",
+    "source_parent_bundle": null
+  },
+  "source_provenance": {
+    "adjusted_open_formula": "aapl_open * aapl_adj_close / aapl_close",
+    "authorized_loader_lineage": {
+      "source_manifest_sha256": "sha256:d6352a96629008a97b54d56462d9549c5b59cf0d43bbbe621d602c2d9a7b4d94",
+      "source_parent_manifest_sha256": null,
+      "source_provenance_sha256": "sha256:122ddeb1a90fa32666e9b7f49cccb10adc3b2de71b56ad0824f9b4f1e137a070"
+    },
+    "bounded_first_date": "1999-03-10",
+    "bounded_last_date": "2018-12-31",
+    "bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+    "bounded_rows": 4986,
+    "network_access": false,
+    "physical_snapshot_has_later_rows": false,
+    "raw_sha256": "sha256:9e661722b9e474121654b348b44e646af6e5b2f94b1c613690113da2ad4ffdc1",
+    "rows_after_bound_returned": false,
+    "session_coverage": {
+      "date_sequence_sha256": "3b8844f939269760624816e166ebf15705c27549aa89dd578ddb66bd50d87df9",
+      "first_session": "1999-03-10",
+      "last_session": "2018-12-31",
+      "observations": 4986
+    },
+    "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\chronological_exhaustion_expert_v1\\authorized_inputs\\aapl_spy_qqq_through_2018.csv",
+    "source_type": "physically_bounded_local_csv",
+    "tracked_input": {
+      "git_blob": "71b9aa69478a9a591200833131e930064859721f",
+      "path": "e/chronological_exhaustion_expert_v1/authorized_inputs/aapl_spy_qqq_through_2018.csv",
+      "sha256": "sha256:9e661722b9e474121654b348b44e646af6e5b2f94b1c613690113da2ad4ffdc1"
+    }
+  },
+  "stage": "development",
+  "stage_pass": false
+}

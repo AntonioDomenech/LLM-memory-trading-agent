@@ -1,0 +1,40 @@
+{
+  "account_reset_count_after_inception": 0,
+  "audit_input_provenance_sha256": "sha256:403c9675b93402731ee152914b52370b82db19136e62225dacdc62243d9c6984",
+  "audit_prefix_proof_schema_version": 1,
+  "development_account_prefix_verified_for_every_cost_policy": true,
+  "development_parent_replay_artifacts": {
+    "fixed_comparators_sha256": "sha256:33e8e221fc792a9378092848d1fb990b5bdfde40135c299c88af61c8563688e0",
+    "fixed_features_sha256": "sha256:0dc07ee16a37a641e894e7f780b8a717ae522879a94c5c73b09ca3e98f00fef1",
+    "forecast__frozen_2018_sha256": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "forecast__global_only_sha256": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "forecast__lifetime_only_sha256": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "forecast__online_full_sha256": "sha256:eebf168d14ba75bd1a04c48def56000656109745e6d6c357a2672bd41c332f8e",
+    "matured_lessons__frozen_2018_sha256": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "matured_lessons__global_only_sha256": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "matured_lessons__lifetime_only_sha256": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186",
+    "matured_lessons__online_full_sha256": "sha256:3f09a4ec7128fe4ea6cde0a3378f782600ed2ea2b749367ec6b5320971638186"
+  },
+  "fork_parent_checkpoint_sha256": "16471d372af7404d997c14351c6413ce9f499e70870732c174173629afa7ca55",
+  "online_resume_equivalence": {
+    "checkpoint_digest_equal": true,
+    "checkpoint_envelope_equal": true,
+    "cooldown_tail_equal": true,
+    "fixed_features_equal": true,
+    "forecasts_equal": true,
+    "matured_events_equal": true,
+    "model_state_equal": true,
+    "passed": true,
+    "pending_state_equal": true,
+    "prefix_hashes_equal": true,
+    "runtime_equal": true
+  },
+  "parent_checkpoint_payload_sha256": "sha256:abe07112ce2bb72292d65b357dc006ab3be268f8b0d02077563c59fa71a22538",
+  "parent_checkpoint_self_sha256": "sha256:e195356c0540a4a05ea635927fa466c1c85948beb7de0191e80f5bc10d60fd03",
+  "parent_manifest_sha256": "sha256:6cb657d1d9c323bd96a84b598b9b993e2444f756a65521aa1bf28207f7a63539",
+  "parent_semantic_evidence_sha256": "sha256:964ad44206d3a1cb481a330317217a2d910101b34e35240aa1186c8a6069e944",
+  "proof_sha256": "sha256:f22d9205370a479718c05882fa021399cc48d68dc882400cbd4391df16874e8a",
+  "stage": "audit",
+  "suffix_first_session": "2019-01-02",
+  "suffix_last_session": "2023-12-29"
+}
