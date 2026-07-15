@@ -89,7 +89,8 @@ requiring a passing development result:
   `sha256:964ad44206d3a1cb481a330317217a2d910101b34e35240aa1186c8a6069e944`;
 - parent causal-proof self-hash
   `sha256:dc7715dc5ad21f6f86cba0aee6488c9a24859dc19aa761115d48e2a2f199b350`;
-- exactly the 48 checksummed payloads and no extras or omissions;
+- exactly 47 manifest-declared payloads, the checksummed stage manifest, and
+  the checksum inventory: 49 flat files total, with no extras or omissions;
 - `stage_pass=false`, report and gate equality, 35 of 36 checks passing,
   and exactly
   `stress_10bps.full_account_beats_best_fixed_by_gt_0_0001` failing; and
@@ -232,7 +233,8 @@ must pass the inherited integrity controls.
 For each cost separately, `post_rejection_2019_2023_pass` requires the exact
 `online_full` suffix to satisfy all of the following:
 
-- aggregate active log edge versus AAPL is strictly greater than `0.001`;
+- entry-attributed aggregate active log edge versus AAPL is strictly greater
+  than `0.001`, with the ledger-boundary edge reported separately;
 - at least three of the five calendar years have strictly positive edge;
 - aggregate edge remains strictly positive after removing the best year;
 - at least two of the three fixed reporting blocks have positive edge;
@@ -254,7 +256,8 @@ may not soften the declared `0.001` materiality threshold.
 For each cost separately, `continuous_2005_2023_robustness_pass` requires the
 continuous `online_full` account to satisfy all of the following:
 
-- total active log edge versus AAPL is strictly greater than `0.001`;
+- entry-attributed total active log edge versus AAPL is strictly greater than
+  `0.001`, with the ledger-boundary edge reported separately;
 - at least 11 of 19 calendar years have strictly positive edge;
 - total edge remains strictly positive after removing the best year;
 - aggregate edge across all negative-AAPL years is strictly positive;
