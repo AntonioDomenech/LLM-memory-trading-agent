@@ -1,6 +1,6 @@
 # AAPL long/cash approach comparison
 
-Updated through the union contextual veto v1 development rejection on
+Updated through the binary-regime union selector v1 validation rejection on
 2026-07-15.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
@@ -26,6 +26,12 @@ losing years and positive continuous 2024-2026 relative wealth. They are
 research leads under the relaxed long-run-average criterion, but neither is a
 reliable money-making proof: their parameters were chosen after extensive
 pre-2024 searching, and both still lost the already-revealed 2024 audit.
+
+## Chronological approaches that reached 2019-2023 selector validation
+
+| Approach | Model/information | 2019-2023 validation | Continuous 2005-2023 diagnostic | Later data opened? | Decision |
+|---|---|---|---|---|---|
+| Binary-regime union selector v1 | Two-state causal online selector using 20-session SPY/QQQ market regime over the fixed exhaustion union | Beat AAPL in 4/5 years; +7.78% relative wealth at 5 bps and +3.97% at 10 bps. Selector-minus-union improved in only 1/5 years and one veto supplied 85.20% of positive stress-cost veto benefit | +258.49% relative wealth at 5 bps and +212.59% at 10 bps; 16/19 and 14/19 positive years; 4/4 negative-AAPL years beaten | 2019-2023 only; no 2024+ | Strictly rejected; promising long-run union lead, but adaptive selector did not change any action |
 
 ## Chronological development approaches that did not reach later periods
 
@@ -67,3 +73,4 @@ short behavior and are excluded from the eligible table.
 - `e/sec_numeric_event_drift_v1/PREFLIGHT_REJECTED.md`
 - `e/chronological_exhaustion_expert_v1/REJECTED.md`
 - `e/union_contextual_veto_v1/REJECTED.md`
+- `e/binary_regime_union_selector_v1/REJECTED.md`
