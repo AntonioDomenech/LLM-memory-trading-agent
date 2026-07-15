@@ -1,0 +1,31 @@
+{
+  "failures": [
+    "learner_strictly_beats_union_at_10bps"
+  ],
+  "gates": {
+    "always_long_matches_buy_hold": true,
+    "base_5bps_annual_positive_edge_not_concentrated": true,
+    "base_5bps_minimum_eight_cash_episodes": true,
+    "base_5bps_minimum_eight_positive_years": true,
+    "base_5bps_minimum_four_positive_folds": true,
+    "base_5bps_positive_after_removing_best_year": true,
+    "base_5bps_positive_negative_year_aggregate": true,
+    "base_5bps_positive_relative_wealth": true,
+    "base_5bps_positive_total_active_log_edge": true,
+    "base_5bps_two_of_three_negative_years_positive": true,
+    "learner_strictly_beats_union_at_10bps": false,
+    "stress_10bps_annual_positive_edge_not_concentrated": true,
+    "stress_10bps_episode_win_rate_at_least_55pct": true,
+    "stress_10bps_minimum_eight_cash_episodes": true,
+    "stress_10bps_minimum_eight_positive_years": true,
+    "stress_10bps_minimum_four_positive_folds": true,
+    "stress_10bps_positive_after_removing_best_year": true,
+    "stress_10bps_positive_mean_episode_edge": true,
+    "stress_10bps_positive_median_episode_edge": true,
+    "stress_10bps_positive_negative_year_aggregate": true,
+    "stress_10bps_positive_relative_wealth": true,
+    "stress_10bps_positive_total_active_log_edge": true,
+    "stress_10bps_two_of_three_negative_years_positive": true
+  },
+  "passed": false
+}

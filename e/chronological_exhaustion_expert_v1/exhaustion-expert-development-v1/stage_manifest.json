@@ -1,0 +1,84 @@
+{
+  "bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+  "contract_version": "aapl-chronological-exhaustion-expert-v1",
+  "execution": {
+    "actions": [
+      "LONG_100_PERCENT",
+      "CASH_100_PERCENT"
+    ],
+    "api_calls": 0,
+    "asset": "AAPL",
+    "borrowing": false,
+    "estimated_external_cost_usd": 0.0,
+    "leverage": false,
+    "llm_calls": 0,
+    "maximum_target_exposure": 1.0,
+    "minimum_material_active_log_edge": 0.001,
+    "network_access": false,
+    "shorting": false
+  },
+  "git_identity": {
+    "branch": "codex/aapl-chronological-exhaustion-expert-v1",
+    "commit": "ed93d44cc0180b71a4f4f07801c207ba566934f1",
+    "dirty": false,
+    "runtime_versions": {
+      "duckdb": "1.5.3",
+      "numpy": "2.3.3",
+      "pandas": "2.3.3",
+      "python": "3.12.2"
+    },
+    "tracked_dependency_sha256": {
+      "agent_benchmark/chronological_exhaustion_experiment.py": "sha256:b90de4dd9a3fa5e03821953b1f69fcb88b665108920e556a9aa932bd17fcb7aa",
+      "agent_benchmark/chronological_exhaustion_expert.py": "sha256:a30224763c9858aed905b76215c2c5a66eddd58f107182d751d8eb6a32688c6e",
+      "agent_benchmark/deterministic_aapl.py": "sha256:6a2297d298792766da7d7ed9a86c4c86d5dfa7749bb071d39136fd3b6e5ca15e",
+      "agent_benchmark/unleveraged_aapl.py": "sha256:ad752cc5d57edb644b4134b37f0b86a5ee5b7f1bb9d65dda9eea0e2933c0f590",
+      "docs/aapl_chronological_exhaustion_expert_v1.md": "sha256:00258afd95250f97d9140f3f1674971cf075a4cd0b2e0990774d298b1fea8f05"
+    }
+  },
+  "manifest_sha256": "sha256:d6352a96629008a97b54d56462d9549c5b59cf0d43bbbe621d602c2d9a7b4d94",
+  "parent_manifest_sha256": null,
+  "payload_sha256": {
+    ".gitattributes": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+    "development_base_5bps_episodes.csv": "sha256:b422c994fdd6feae5b35f23004bc0c4c199bababaf138591136fc1fc5066e455",
+    "development_base_5bps_ledgers.csv": "sha256:ef3a3e1defa9819baa2204899b1b05a540e5bd673e31d0f063359f790f1a6185",
+    "development_checkpoint_through_2018.json": "sha256:ed600945bdafcf0b504104d29484b43b524b142e3511e390e47f0f2476534808",
+    "development_forecast_through_2018.csv": "sha256:83e64c07082b241f717b7e4bab923f6f69150e2a6ac4c2a2e9e54386e037e345",
+    "development_gate_report.json": "sha256:d4f4046ac591aead0fc00d19395ed47466288975edc0c1591179522eba46388d",
+    "development_metrics.json": "sha256:c4d52b26e363699f5bd042de8d416bc14cd353f6c82fff3f4ed719033dc4550d",
+    "development_prices_through_2018.csv": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+    "development_stress_10bps_episodes.csv": "sha256:9c9dab33393f3200fb033f4a8f34ec2bf40fa97319bb85e038022fdbb68f7a3d",
+    "development_stress_10bps_ledgers.csv": "sha256:14a522dc87f1429b01da9732f9c17176f14aa94543d5348dc413a2c8a164dc21",
+    "input_provenance.json": "sha256:122ddeb1a90fa32666e9b7f49cccb10adc3b2de71b56ad0824f9b4f1e137a070",
+    "report.json": "sha256:b377528c0d050e0f5a930311ca1ad72008d264444aba4e2b3532a829c11e0da1"
+  },
+  "run_id": "exhaustion-expert-development-v1",
+  "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\chronological_exhaustion_expert_v1\\authorized_inputs\\aapl_spy_qqq_through_2018.csv",
+  "source_provenance": {
+    "bounded_first_date": "1999-03-10",
+    "bounded_last_date": "2018-12-31",
+    "bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+    "bounded_rows": 4986,
+    "expected_bounded_result_sha256": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+    "network_access": false,
+    "physical_snapshot_has_later_rows": false,
+    "query": "SELECT\n  CAST(date AS DATE) AS date,\n  CAST(aapl_open AS DOUBLE) AS aapl_open,\n  CAST(aapl_close AS DOUBLE) AS aapl_close,\n  CAST(aapl_adj_close AS DOUBLE) AS aapl_adj_close,\n  CAST(spy_adj_close AS DOUBLE) AS spy_adj_close,\n  CAST(qqq_adj_close AS DOUBLE) AS qqq_adj_close\nFROM read_csv_auto(?, header = true)\nORDER BY CAST(date AS DATE)",
+    "query_parameters": [
+      "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\chronological_exhaustion_expert_v1\\authorized_inputs\\aapl_spy_qqq_through_2018.csv"
+    ],
+    "rows_after_bound_returned": false,
+    "session_coverage": {
+      "date_sequence_sha256": "3b8844f939269760624816e166ebf15705c27549aa89dd578ddb66bd50d87df9",
+      "first_session": "1999-03-10",
+      "last_session": "2018-12-31",
+      "observations": 4986
+    },
+    "source_path": "C:\\Users\\anton\\Documents\\LLM-memory-trading-agent\\e\\chronological_exhaustion_expert_v1\\authorized_inputs\\aapl_spy_qqq_through_2018.csv",
+    "source_type": "physically_bounded_local_csv_duckdb_query",
+    "tracked_input": {
+      "path": "e/chronological_exhaustion_expert_v1/authorized_inputs/aapl_spy_qqq_through_2018.csv",
+      "sha256": "sha256:9e661722b9e474121654b348b44e646af6e5b2f94b1c613690113da2ad4ffdc1"
+    }
+  },
+  "stage": "development",
+  "stage_pass": false
+}

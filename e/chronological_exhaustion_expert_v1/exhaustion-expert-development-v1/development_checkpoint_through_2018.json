@@ -1,0 +1,36 @@
+{
+  "checkpoint_cutoff": "2018-12-31",
+  "contract_version": "aapl-chronological-exhaustion-expert-v1",
+  "experts": {
+    "contextual": {
+      "matured_count": 149,
+      "matured_wins": 89,
+      "sum_net_edge": 1.2551111944852498,
+      "sum_squared_net_edge": 0.18024097091014488
+    },
+    "weak_trend": {
+      "matured_count": 75,
+      "matured_wins": 52,
+      "sum_net_edge": 0.9113365596178977,
+      "sum_squared_net_edge": 0.09114378080083335
+    }
+  },
+  "last_observed_session": "2018-12-31",
+  "learning_mode": "causal_online",
+  "trailing_cooldown_and_pending_context": [
+    {
+      "combined_cash_signal": false,
+      "contextual_virtual_signal": false,
+      "decision_date": "2018-12-28T00:00:00",
+      "target_exposure": 1.0,
+      "weak_trend_virtual_signal": false
+    },
+    {
+      "combined_cash_signal": false,
+      "contextual_virtual_signal": false,
+      "decision_date": "2018-12-31T00:00:00",
+      "target_exposure": 1.0,
+      "weak_trend_virtual_signal": false
+    }
+  ]
+}

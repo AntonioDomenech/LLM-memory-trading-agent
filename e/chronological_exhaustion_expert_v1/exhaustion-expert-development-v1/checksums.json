@@ -1,0 +1,15 @@
+{
+  ".gitattributes": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+  "development_base_5bps_episodes.csv": "sha256:b422c994fdd6feae5b35f23004bc0c4c199bababaf138591136fc1fc5066e455",
+  "development_base_5bps_ledgers.csv": "sha256:ef3a3e1defa9819baa2204899b1b05a540e5bd673e31d0f063359f790f1a6185",
+  "development_checkpoint_through_2018.json": "sha256:ed600945bdafcf0b504104d29484b43b524b142e3511e390e47f0f2476534808",
+  "development_forecast_through_2018.csv": "sha256:83e64c07082b241f717b7e4bab923f6f69150e2a6ac4c2a2e9e54386e037e345",
+  "development_gate_report.json": "sha256:d4f4046ac591aead0fc00d19395ed47466288975edc0c1591179522eba46388d",
+  "development_metrics.json": "sha256:c4d52b26e363699f5bd042de8d416bc14cd353f6c82fff3f4ed719033dc4550d",
+  "development_prices_through_2018.csv": "sha256:31b56551b8d1b837f2e69178ab7f206b6bf3c19d11d9d47be0e33cf501db3f45",
+  "development_stress_10bps_episodes.csv": "sha256:9c9dab33393f3200fb033f4a8f34ec2bf40fa97319bb85e038022fdbb68f7a3d",
+  "development_stress_10bps_ledgers.csv": "sha256:14a522dc87f1429b01da9732f9c17176f14aa94543d5348dc413a2c8a164dc21",
+  "input_provenance.json": "sha256:122ddeb1a90fa32666e9b7f49cccb10adc3b2de71b56ad0824f9b4f1e137a070",
+  "report.json": "sha256:b377528c0d050e0f5a930311ca1ad72008d264444aba4e2b3532a829c11e0da1",
+  "stage_manifest.json": "sha256:0a375ca457b61b197ca49dbd557ffa679f97d7534e2628c7110a4cb1e36d0cac"
+}

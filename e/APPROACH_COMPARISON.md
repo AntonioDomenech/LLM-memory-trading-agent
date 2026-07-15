@@ -1,6 +1,7 @@
 # AAPL long/cash approach comparison
 
-Updated through the SEC numeric event-drift preflight on 2026-07-15.
+Updated through the chronological exhaustion expert v1 development rejection
+on 2026-07-15.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
 paid API. Published 2024-2026 figures are repeated historical audits, not a
@@ -37,6 +38,7 @@ pre-2024 searching, and both still lost the already-revealed 2024 audit.
 | One-session rare-loss forest v1 | Rare-event forest with IWM/VIX | Zero cash trades; exact tie; sentiment worsened accuracy | No | Rejected |
 | Sector-breadth residual edge v1 | Sector ETFs, IWM, VIX and residual momentum GAM | Full candidate: -0.8951 edge and -59.15% relative wealth. Post-rejection p99 tail: +9.82% at 10 bps, but only 3/7 folds and 4/14 years won | No | Rejected; tail retained only as an ensemble lead |
 | SEC numeric event drift v1 | AAPL 10-Q/10-K changes plus QQQ/VIX sentiment | Preflight found only 38 events from 2009-2018; after warm-up, 24 predictions and five helpful cash episodes | No | Rejected before implementation; too small for a reliable claim |
+| Chronological exhaustion expert v1 | Causal posterior trust gate over contextual and weak-trend exhaustion; no LLM | At 10 bps: +155.10% wealth vs buy-and-hold, 10/14 winning years, 7/7 positive folds and 3/3 negative-AAPL years; learner nevertheless trailed the plain union by 0.035357 log edge | No | Rejected; learning removed two winners and added no value |
 
 ## Outside the current no-leverage contract
 
@@ -62,3 +64,4 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_sector_breadth_residual_edge_v1/REJECTED.md`
 - `e/aapl_sector_breadth_residual_edge_v1/SPARSE_TAIL_DIAGNOSTIC.md`
 - `e/sec_numeric_event_drift_v1/PREFLIGHT_REJECTED.md`
+- `e/chronological_exhaustion_expert_v1/REJECTED.md`
