@@ -35,7 +35,7 @@ pre-2024 searching, and both still lost the already-revealed 2024 audit.
 | Direct CASH-edge GAM v1 | Price plus IWM/VIX/TNX | Least-bad 10-bps edge -1.0646; 39.88% episode win rate | No | Rejected |
 | One-session regime consensus v1 | Local HMM/state consensus | Zero cash trades; exact tie | No | Rejected |
 | One-session rare-loss forest v1 | Rare-event forest with IWM/VIX | Zero cash trades; exact tie; sentiment worsened accuracy | No | Rejected |
-| Sector-breadth residual edge v1 | Sector ETFs, IWM, VIX and residual momentum GAM | Least-bad 5-bps edge -0.8951; -59.15% relative wealth; 4/14 winning years | No | Rejected |
+| Sector-breadth residual edge v1 | Sector ETFs, IWM, VIX and residual momentum GAM | Full candidate: -0.8951 edge and -59.15% relative wealth. Post-rejection p99 tail: +9.82% at 10 bps, but only 3/7 folds and 4/14 years won | No | Rejected; tail retained only as an ensemble lead |
 
 ## Outside the current no-leverage contract
 
@@ -59,3 +59,4 @@ short behavior and are excluded from the eligible table.
 - `e/regime_consensus_v1/REJECTED.md`
 - `e/rare_loss_forest_v1/REJECTED.md`
 - `e/aapl_sector_breadth_residual_edge_v1/REJECTED.md`
+- `e/aapl_sector_breadth_residual_edge_v1/SPARSE_TAIL_DIAGNOSTIC.md`
