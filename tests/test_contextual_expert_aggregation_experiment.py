@@ -7,14 +7,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from agent_benchmark import contextual_expert_aggregation_experiment as experiment
-from agent_benchmark.contextual_expert_aggregation import (
-    ContextualExpertAggregator,
-    MarketSession,
-)
+from agent_benchmark import contextual_expert_aggregation_artifacts as artifacts
+from agent_benchmark import contextual_expert_aggregation_ledger as ledger
+from agent_benchmark import contextual_expert_aggregation_replay as replay
 
 
 Error = experiment.ContextualExpertAggregationExperimentError
@@ -101,7 +101,7 @@ def _write_snapshot(
 
 def _fake_git_identity() -> dict[str, Any]:
     commit = "f" * 40
-    dependency_path = experiment.RUNNER_TEST_PATH.as_posix()
+    dependency_path = experiment.VERIFIER_IMPLEMENTATION_PATH.as_posix()
     return {
         "branch": experiment.EXPECTED_BRANCH,
         "commit": commit,
@@ -113,7 +113,7 @@ def _fake_git_identity() -> dict[str, Any]:
         "origin_repository": experiment.EXPECTED_ORIGIN_REPOSITORY,
         "head_equals_upstream": True,
         "dirty": False,
-        "cleanliness_scope": "complete_index_and_worktree_after_attempt_lock",
+        "cleanliness_scope": "git_visible_index_and_worktree_after_attempt_lock",
         "tracked_dependency_identity": {
             dependency_path: {
                 "sha256": "sha256:" + "1" * 64,
@@ -138,115 +138,98 @@ def _fake_prelock_git_identity() -> dict[str, Any]:
     }
 
 
-def _synthetic_model_checkpoint() -> dict[str, Any]:
-    model = ContextualExpertAggregator()
-    for row in DEV_ROWS:
-        model.process_session(
-            MarketSession(
-                session_date=row[0],
-                aapl_open=row[1],
-                aapl_close=row[2],
-                aapl_adj_close=row[3],
-                spy_adj_close=row[4],
-                qqq_adj_close=row[5],
-            )
-        )
-    return model.to_dict()
+_SYNTHETIC_COMPOSITE_CHECKPOINT: dict[str, Any] | None = None
 
 
-def _synthetic_account_state() -> dict[str, Any]:
-    state = {
-        "cash": 0.0,
-        "shares": 100.0,
-        "last_fill_date": "2018-12-31",
-        "previous_requested_target": 1.0,
-        "last_equity": 1000.0,
-        "running_peak": 1000.0,
-        "pending_decision_date": "2018-12-31",
-        "pending_target_exposure": 1.0,
-    }
-    return {
-        cost: {policy: dict(state) for policy in experiment.ACCOUNT_POLICY_NAMES}
-        for cost in experiment.ACCOUNT_COST_NAMES
-    }
-
-
-def _cooldown_rows_from_model(model_checkpoint: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            "decision_date": row["session_date"],
-            "contextual_virtual_signal": row["contextual_signal"],
-            "weak_trend_virtual_signal": row["weak_trend_signal"],
-            "union_candidate_signal": bool(
-                row["contextual_signal"] or row["weak_trend_signal"]
-            ),
-            "canonical_union_opportunity": row[
-                "canonical_union_opportunity"
-            ],
-        }
-        for row in model_checkpoint["state"]["market_history"]
+def _synthetic_replay_frame() -> pd.DataFrame:
+    all_dates = pd.bdate_range("1999-03-10", "2018-12-31")
+    removable = all_dates[1:-1]
+    remove_count = (
+        len(all_dates)
+        - artifacts.SOURCE_SESSION_COUNT_BY_STAGE[artifacts.DEVELOPMENT_STAGE]
+    )
+    remove_positions = np.linspace(
+        0, len(removable) - 1, remove_count, dtype=int
+    )
+    dates = all_dates.difference(removable[remove_positions])
+    assert len(dates) == artifacts.SOURCE_SESSION_COUNT_BY_STAGE[
+        artifacts.DEVELOPMENT_STAGE
     ]
+    values = np.linspace(90.0, 110.0, len(dates))
+    return pd.DataFrame(
+        {
+            "aapl_open": values,
+            "aapl_close": values * 1.001,
+            "aapl_adj_close": values * 1.001,
+            "spy_adj_close": np.linspace(100.0, 120.0, len(dates)),
+            "qqq_adj_close": np.linspace(80.0, 105.0, len(dates)),
+        },
+        index=dates,
+    )
+
+
+def _synthetic_administrative_accounts() -> dict[str, dict[str, object]]:
+    dates = pd.DatetimeIndex(
+        ["2005-01-03", "2018-12-31"], name="date"
+    )
+    opens = pd.Series([100.0, 120.0], index=dates, dtype=float)
+    targets = pd.Series([1, 1], index=dates, dtype=int)
+    accounts: dict[str, dict[str, object]] = {}
+    for cost in artifacts.COST_ORDER:
+        accounts[cost] = {}
+        for policy in artifacts.POLICY_ORDER:
+            run = ledger.run_continuous_ledger(
+                opens,
+                targets,
+                policy_name=policy,
+                cost_bps=artifacts.COST_BPS[cost],
+            )
+            accounts[cost][policy] = run.state.to_checkpoint()
+    return accounts
 
 
 def _synthetic_checkpoint() -> dict[str, Any]:
-    model_checkpoint = _synthetic_model_checkpoint()
-    return {
-        "contract_version": experiment.CONTRACT_VERSION,
-        "checkpoint_schema_version": experiment.CHECKPOINT_SCHEMA_VERSION,
-        "checkpoint_cutoff": "2018-12-31",
-        "last_observed_session": "2018-12-31",
-        "model_checkpoint": model_checkpoint,
-        "union_cooldown": {
-            "prior_canonical_union_opportunity": False,
-            "last_rows": _cooldown_rows_from_model(model_checkpoint),
-        },
-        "administrative_accounts": _synthetic_account_state(),
-    }
+    global _SYNTHETIC_COMPOSITE_CHECKPOINT
 
-
-def _boundary_cooldown_checkpoint(
-    *, first_retained_accepted: bool
-) -> dict[str, Any]:
-    model = ContextualExpertAggregator()
-    dates = [
-        value.date().isoformat()
-        for value in pd.bdate_range(end="2018-12-31", periods=23)
-    ]
-    for index, session_date in enumerate(dates):
-        contextual = index in {0, 1}
-        opportunity = index == 0 or (
-            index == 1 and first_retained_accepted
-        )
-        model.process_session(
-            MarketSession(
-                session_date=session_date,
-                aapl_open=100.0 + index,
-                aapl_close=100.0 + index,
-                aapl_adj_close=100.0 + index,
-                spy_adj_close=200.0 + index,
-                qqq_adj_close=300.0 + index,
-                contextual_signal=contextual,
-                weak_trend_signal=False,
-                canonical_union_opportunity=opportunity,
+    if _SYNTHETIC_COMPOSITE_CHECKPOINT is None:
+        replay_result = replay.replay_from_empty(_synthetic_replay_frame())
+        _SYNTHETIC_COMPOSITE_CHECKPOINT = (
+            artifacts.build_composite_stage_checkpoint(
+                stage=artifacts.DEVELOPMENT_STAGE,
+                replay_checkpoints={
+                    arm: replay_result.checkpoint for arm in artifacts.ARM_ORDER
+                },
+                administrative_accounts=_synthetic_administrative_accounts(),
             )
         )
-    model_checkpoint = model.to_dict()
-    checkpoint = _synthetic_checkpoint()
-    checkpoint["model_checkpoint"] = model_checkpoint
-    checkpoint["union_cooldown"] = {
-        "prior_canonical_union_opportunity": True,
-        "last_rows": _cooldown_rows_from_model(model_checkpoint),
+    return json.loads(json.dumps(_SYNTHETIC_COMPOSITE_CHECKPOINT))
+
+
+def _resign_composite_checkpoint(checkpoint: dict[str, Any]) -> None:
+    unsigned = {
+        key: value
+        for key, value in checkpoint.items()
+        if key != "checkpoint_sha256"
     }
-    return checkpoint
+    payload = json.dumps(
+        unsigned,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    checkpoint["checkpoint_sha256"] = "sha256:" + hashlib.sha256(
+        payload
+    ).hexdigest()
 
 
 def _install_synthetic_exact_verifier(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    payload_names: set[str],
     accept: bool = True,
 ) -> None:
-    dependency_path = experiment.RUNNER_TEST_PATH
+    dependency_path = experiment.VERIFIER_IMPLEMENTATION_PATH
+    payload_names = set(artifacts.DEVELOPMENT_PAYLOAD_NAMES)
 
     def verify(
         bundle: experiment.VerifiedBundle,
@@ -350,6 +333,17 @@ def _seal_synthetic_development_authorization(
         "gate_report": gate,
     }
     checkpoint_value = _synthetic_checkpoint() if checkpoint is None else checkpoint
+    checkpoint_bytes = (
+        artifacts.composite_stage_checkpoint_bytes(checkpoint_value)
+        if checkpoint is None
+        else json.dumps(
+            checkpoint_value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    )
     source = {
         "source_type": "physically_bounded_local_csv",
         "bounded_first_date": price_spec.first_session,
@@ -374,15 +368,18 @@ def _seal_synthetic_development_authorization(
         },
     }
     payloads = {
-        ".gitattributes": b"* -text\n",
-        "report.json": experiment.pretty_json_bytes(report),
-        "input_provenance.json": experiment.pretty_json_bytes(source),
-        "development_prices_through_2018.csv": _canonical_bytes(DEV_ROWS),
-        "development_checkpoint_through_2018.json": experiment.pretty_json_bytes(
-            checkpoint_value
-        ),
-        "development_gate_report.json": experiment.pretty_json_bytes(gate),
+        name: b"{}\n" for name in artifacts.DEVELOPMENT_PAYLOAD_NAMES
     }
+    payloads.update(
+        {
+            ".gitattributes": artifacts.GIT_ATTRIBUTES_BYTES,
+            "report.json": experiment.pretty_json_bytes(report),
+            "input_provenance.json": experiment.pretty_json_bytes(source),
+            "development_prices_through_2018.csv": _canonical_bytes(DEV_ROWS),
+            "development_checkpoint_through_2018.json": checkpoint_bytes,
+            "development_gate_report.json": experiment.pretty_json_bytes(gate),
+        }
+    )
     return experiment.seal_exact_bundle(
         root / "development-run",
         manifest_fields={
@@ -394,7 +391,7 @@ def _seal_synthetic_development_authorization(
             "git_identity": git_identity,
         },
         payloads=payloads,
-        expected_payload_names=set(payloads),
+        expected_payload_names=set(artifacts.DEVELOPMENT_PAYLOAD_NAMES),
         deadline=experiment.StageDeadline(FakeClock()),
     )
 
@@ -486,6 +483,78 @@ def test_frozen_price_contract_never_authorizes_post_2023() -> None:
         "spy_adj_close",
         "qqq_adj_close",
     )
+
+
+def test_foundation_uses_artifact_orders_inventory_and_full_dependency_set() -> None:
+    assert experiment.ARM_ORDER == artifacts.ARM_ORDER
+    assert experiment.FIXED_POLICY_ORDER == artifacts.FIXED_POLICY_ORDER
+    assert experiment.POLICY_ORDER == artifacts.POLICY_ORDER
+    assert experiment.COST_ORDER == artifacts.COST_ORDER
+    assert (
+        experiment.DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS
+        is artifacts.DEVELOPMENT_PAYLOAD_NAMES
+    )
+    assert len(experiment.DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS) == 47
+    assert experiment.FROZEN_DEPENDENCY_PATHS == (
+        Path(".gitattributes"),
+        Path(".gitignore"),
+        Path("requirements.txt"),
+        Path("docs/aapl_causal_contextual_expert_aggregation_v1.md"),
+        Path("docs/aapl_chronological_exhaustion_expert_v1.md"),
+        Path("agent_benchmark/__init__.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_bootstrap.py"),
+        Path("agent_benchmark/contextual_expert_aggregation.py"),
+        Path("agent_benchmark/chronological_exhaustion_expert.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_replay.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_ledger.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_evaluation.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_artifacts.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_stage.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_verifier.py"),
+        Path("agent_benchmark/contextual_expert_aggregation_experiment.py"),
+        Path("tests/conftest.py"),
+        Path("tests/test_contextual_expert_aggregation_bootstrap.py"),
+        Path("tests/test_contextual_expert_aggregation.py"),
+        Path("tests/test_chronological_exhaustion_expert.py"),
+        Path("tests/test_contextual_expert_aggregation_replay.py"),
+        Path("tests/test_contextual_expert_aggregation_ledger.py"),
+        Path("tests/test_contextual_expert_aggregation_evaluation.py"),
+        Path("tests/test_contextual_expert_aggregation_artifacts.py"),
+        Path("tests/test_contextual_expert_aggregation_stage.py"),
+        Path("tests/test_contextual_expert_aggregation_verifier.py"),
+        Path("tests/test_contextual_expert_aggregation_experiment.py"),
+        Path("README.md"),
+    )
+    assert not hasattr(experiment, "set_development_verifier")
+
+
+def test_verifier_registration_is_lazy_source_owned_and_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_benchmark import (
+        contextual_expert_aggregation_verifier as verifier,
+    )
+
+    registration = verifier.DEVELOPMENT_VERIFIER_REGISTRATION
+    monkeypatch.setattr(
+        experiment,
+        "_REGISTERED_DEVELOPMENT_VERIFIER",
+        experiment._UNRESOLVED_DEVELOPMENT_VERIFIER,
+    )
+
+    assert experiment._development_verifier_registration() is registration
+    assert registration.verify is verifier.verify_development_authorization_bundle
+    assert registration.verifier_id == verifier.VERIFIER_ID
+    assert registration.dependency_path == verifier.VERIFIER_IMPLEMENTATION_PATH
+    assert (
+        registration.expected_payload_names
+        == artifacts.DEVELOPMENT_PAYLOAD_NAMES
+    )
+    monkeypatch.setattr(verifier, "DEVELOPMENT_VERIFIER_REGISTRATION", None)
+    assert experiment._development_verifier_registration() is registration
+
+    monkeypatch.setattr(experiment, "_REGISTERED_DEVELOPMENT_VERIFIER", None)
+    assert experiment._development_verifier_registration() is None
 
 
 def test_actual_frozen_constants_match_tracked_local_metadata_only() -> None:
@@ -895,6 +964,58 @@ def test_exact_bundle_verifier_rejects_manifest_metadata_tamper(
         )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ("compact_manifest", "compact_checksums", "duplicate_checksums"),
+)
+def test_exact_bundle_verifier_requires_canonical_seal_metadata_bytes(
+    tmp_path: Path, mutation: str
+) -> None:
+    output = tmp_path / f"canonical-{mutation}"
+    experiment.seal_exact_bundle(
+        output,
+        manifest_fields={
+            "stage": "development",
+            "stage_pass": False,
+            "run_id": output.name,
+        },
+        payloads={"report.json": b"{}\n"},
+        expected_payload_names={"report.json"},
+        deadline=experiment.StageDeadline(FakeClock()),
+    )
+    manifest_path = output / "stage_manifest.json"
+    checksums_path = output / "checksums.json"
+    if mutation == "compact_manifest":
+        value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_path.write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    elif mutation == "compact_checksums":
+        value = json.loads(checksums_path.read_text(encoding="utf-8"))
+        checksums_path.write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    else:
+        value = json.loads(checksums_path.read_text(encoding="utf-8"))
+        duplicate = json.dumps(value["report.json"])
+        original = checksums_path.read_text(encoding="utf-8")
+        checksums_path.write_text(
+            original.replace(
+                "{\n", f'{{\n  "report.json": {duplicate},\n', 1
+            ),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(Error, match="canonical pretty JSON bytes"):
+        experiment.verify_exact_bundle(
+            output,
+            expected_contract_version=experiment.CONTRACT_VERSION,
+            expected_stage="development",
+        )
+
+
 def test_exact_bundle_verifier_intrinsically_binds_run_id_to_directory(
     tmp_path: Path,
 ) -> None:
@@ -1217,21 +1338,30 @@ def test_parent_link_binds_self_hash_and_exact_embedded_manifest(
         experiment.require_parent_link(wrong, parent_verified)
 
 
-def test_cooldown_checkpoint_proves_boundary_suppression_and_rejects_fake_acceptance(
-) -> None:
-    suppressed = _boundary_cooldown_checkpoint(first_retained_accepted=False)
-    experiment._validate_development_checkpoint(suppressed)
+def test_development_checkpoint_is_the_exact_artifact_composite() -> None:
+    checkpoint = _synthetic_checkpoint()
+    experiment._validate_development_checkpoint(checkpoint)
+    parsed = artifacts.parse_composite_stage_checkpoint(checkpoint)
+    assert tuple(parsed.replay_checkpoints) == artifacts.ARM_ORDER
+    assert tuple(parsed.administrative_accounts) == artifacts.COST_ORDER
 
-    fake_accepted = _boundary_cooldown_checkpoint(first_retained_accepted=True)
-    with pytest.raises(Error, match="one-session rule"):
-        experiment._validate_development_checkpoint(fake_accepted)
+    reordered = _synthetic_checkpoint()
+    reordered["policy_order"] = list(reversed(artifacts.POLICY_ORDER))
+    _resign_composite_checkpoint(reordered)
+    with pytest.raises(Error, match="exact composite"):
+        experiment._validate_development_checkpoint(reordered)
 
-    fabricated_prior = json.loads(json.dumps(suppressed))
-    fabricated_prior["union_cooldown"][
-        "prior_canonical_union_opportunity"
-    ] = False
-    with pytest.raises(Error, match="one-session rule"):
-        experiment._validate_development_checkpoint(fabricated_prior)
+    legacy = {
+        "contract_version": experiment.CONTRACT_VERSION,
+        "checkpoint_schema_version": 1,
+        "checkpoint_cutoff": "2018-12-31",
+        "last_observed_session": "2018-12-31",
+        "model_checkpoint": {},
+        "union_cooldown": {},
+        "administrative_accounts": {},
+    }
+    with pytest.raises(Error, match="exact composite"):
+        experiment._validate_development_checkpoint(legacy)
 
 
 def test_confirmation_authorization_creates_durable_one_shot_lock(
@@ -1245,10 +1375,7 @@ def test_confirmation_authorization_creates_durable_one_shot_lock(
         price_spec=price_spec,
         git_identity=git_identity,
     )
-    _install_synthetic_exact_verifier(
-        monkeypatch,
-        payload_names=set(development.manifest["payload_sha256"]),
-    )
+    _install_synthetic_exact_verifier(monkeypatch)
     real_verify = experiment.verify_exact_bundle
 
     def local_verify(directory: Path, **kwargs: Any) -> experiment.VerifiedBundle:
@@ -1335,10 +1462,7 @@ def test_confirmation_authorization_rejects_bad_gate_or_checkpoint_before_lock(
         git_identity=git_identity,
         gate_pass=failure != "gate",
     )
-    _install_synthetic_exact_verifier(
-        monkeypatch,
-        payload_names=set(development.manifest["payload_sha256"]),
-    )
+    _install_synthetic_exact_verifier(monkeypatch)
     if failure == "checkpoint":
         checkpoint = development.directory / "development_checkpoint_through_2018.json"
         checkpoint.write_bytes(b"{}\n")
@@ -1385,10 +1509,7 @@ def test_confirmation_authorization_never_opens_confirmation_input_before_lock(
         price_spec=price_spec,
         git_identity=git_identity,
     )
-    _install_synthetic_exact_verifier(
-        monkeypatch,
-        payload_names=set(development.manifest["payload_sha256"]),
-    )
+    _install_synthetic_exact_verifier(monkeypatch)
     confirmation_path = tmp_path / "synthetic-confirmation-through-2023.csv"
     confirmation_path.write_bytes(b"must-not-be-opened-before-lock\n")
     original_read_bytes = Path.read_bytes
@@ -1427,7 +1548,9 @@ def test_confirmation_authorization_never_opens_confirmation_input_before_lock(
     assert lock_value["postlock_complete_cleanliness_required"] is True
 
 
-@pytest.mark.parametrize("verifier_mode", ["missing", "rejecting"])
+@pytest.mark.parametrize(
+    "verifier_mode", ["missing", "rejecting", "wrong_inventory"]
+)
 def test_confirmation_authorization_requires_registered_accepting_exact_verifier(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1443,11 +1566,24 @@ def test_confirmation_authorization_requires_registered_accepting_exact_verifier
     )
     if verifier_mode == "missing":
         monkeypatch.setattr(experiment, "_REGISTERED_DEVELOPMENT_VERIFIER", None)
+    elif verifier_mode == "rejecting":
+        _install_synthetic_exact_verifier(monkeypatch, accept=False)
     else:
-        _install_synthetic_exact_verifier(
-            monkeypatch,
-            payload_names=set(development.manifest["payload_sha256"]),
-            accept=False,
+        _install_synthetic_exact_verifier(monkeypatch)
+        registration = experiment._REGISTERED_DEVELOPMENT_VERIFIER
+        assert isinstance(
+            registration, experiment.DevelopmentVerifierRegistration
+        )
+        monkeypatch.setattr(
+            experiment,
+            "_REGISTERED_DEVELOPMENT_VERIFIER",
+            replace(
+                registration,
+                expected_payload_names=frozenset(
+                    set(artifacts.DEVELOPMENT_PAYLOAD_NAMES)
+                    - {"development_arm_seed_equivalence.json"}
+                ),
+            ),
         )
     git_common = _patch_synthetic_authorization_environment(
         monkeypatch,
@@ -1458,7 +1594,10 @@ def test_confirmation_authorization_requires_registered_accepting_exact_verifier
         ),
     )
 
-    with pytest.raises(Error, match="not registered|rejected fake development"):
+    with pytest.raises(
+        Error,
+        match="not registered|rejected fake development|invalid frozen payload inventory",
+    ):
         experiment.authorize_confirmation_attempt(
             repo_root=tmp_path,
             development_manifest_path=development.manifest_path,
@@ -1469,38 +1608,34 @@ def test_confirmation_authorization_requires_registered_accepting_exact_verifier
 @pytest.mark.parametrize(
     "checkpoint_failure",
     [
-        "model_restore",
-        "cooldown",
-        "fake_unresolved_acceptance",
+        "missing_replay_arm",
+        "replay_runtime",
+        "reordered_arm_inventory",
         "negative_account",
-        "missing_account_key",
+        "missing_policy",
     ],
 )
-def test_confirmation_authorization_rejects_semantically_invalid_checkpoint(
+def test_confirmation_authorization_rejects_invalid_composite_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     checkpoint_failure: str,
 ) -> None:
-    checkpoint = json.loads(json.dumps(_synthetic_checkpoint()))
-    if checkpoint_failure == "model_restore":
-        checkpoint["model_checkpoint"] = {}
-    elif checkpoint_failure == "cooldown":
-        checkpoint["union_cooldown"]["last_rows"][0][
-            "contextual_virtual_signal"
-        ] = True
-    elif checkpoint_failure == "fake_unresolved_acceptance":
-        last_row = checkpoint["union_cooldown"]["last_rows"][-1]
-        last_row["contextual_virtual_signal"] = True
-        last_row["union_candidate_signal"] = True
-        last_row["canonical_union_opportunity"] = True
+    checkpoint = _synthetic_checkpoint()
+    if checkpoint_failure == "missing_replay_arm":
+        del checkpoint["replay_checkpoints"]["frozen_2018"]
+    elif checkpoint_failure == "replay_runtime":
+        checkpoint["replay_checkpoints"]["online_full"]["model_payload"][
+            "runtime"
+        ]["learning_mode"] = "frozen_cutoff"
+    elif checkpoint_failure == "reordered_arm_inventory":
+        checkpoint["arm_order"] = list(reversed(artifacts.ARM_ORDER))
     elif checkpoint_failure == "negative_account":
-        checkpoint["administrative_accounts"]["base_5bps"]["online"][
-            "cash"
-        ] = -1.0
+        checkpoint["administrative_accounts"]["base_5bps"]["online_full"][
+            "account_state"
+        ]["cash"] = -1.0
     else:
-        del checkpoint["administrative_accounts"]["base_5bps"]["online"][
-            "pending_target_exposure"
-        ]
+        del checkpoint["administrative_accounts"]["base_5bps"]["online_full"]
+    _resign_composite_checkpoint(checkpoint)
 
     price_spec = _spec("dev.csv", DEV_ROWS)
     monkeypatch.setattr(experiment, "DEVELOPMENT_PRICE_SPEC", price_spec)
@@ -1511,10 +1646,7 @@ def test_confirmation_authorization_rejects_semantically_invalid_checkpoint(
         git_identity=git_identity,
         checkpoint=checkpoint,
     )
-    _install_synthetic_exact_verifier(
-        monkeypatch,
-        payload_names=set(development.manifest["payload_sha256"]),
-    )
+    _install_synthetic_exact_verifier(monkeypatch)
     git_common = _patch_synthetic_authorization_environment(
         monkeypatch,
         tmp_path,
@@ -1543,10 +1675,7 @@ def test_confirmation_authorization_fails_closed_when_lock_parent_fsync_fails(
         price_spec=price_spec,
         git_identity=git_identity,
     )
-    _install_synthetic_exact_verifier(
-        monkeypatch,
-        payload_names=set(development.manifest["payload_sha256"]),
-    )
+    _install_synthetic_exact_verifier(monkeypatch)
 
     def fsync_until_lock_exists(directory: Path) -> bool:
         return not list(Path(directory).glob("confirmation-attempt-*.json"))
@@ -1580,10 +1709,7 @@ def test_confirmation_authorization_consumes_lock_before_postlock_dirty_failure(
         price_spec=price_spec,
         git_identity=git_identity,
     )
-    _install_synthetic_exact_verifier(
-        monkeypatch,
-        payload_names=set(development.manifest["payload_sha256"]),
-    )
+    _install_synthetic_exact_verifier(monkeypatch)
     git_common: Path
 
     def reject_dirty_after_lock(*args: Any, **kwargs: Any) -> dict[str, Any]:

@@ -443,6 +443,15 @@ must independently recompute the manifest self-hash, payload inventory,
 checkpoint continuity, report/gate consistency, causal diagnostics, ledger
 reconciliations, and no-leverage proofs.
 
+Both the stage and verifier must be entered through
+`python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py`,
+using operation `stage` or `verify` and exactly one allowed stage. Before any
+project package import, this bootstrap requires isolated Python with bytecode
+writes disabled and rejects redirected, ignored, untracked, staged-divergent,
+or working-tree-divergent Python/native import candidates. Ordinary Git status
+is recorded honestly as Git-visible cleanliness; the bootstrap separately
+attests the ignored import surface and local Git controls.
+
 ## Branch and commit-before-run discipline
 
 Version 1 lives on `codex/aapl-causal-contextual-expert-aggregation-v1`.

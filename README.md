@@ -51,6 +51,37 @@ python -m agent_benchmark.local_gemma_loop --max-iterations 3
 This preset uses `gemma4:12b` at `http://127.0.0.1:11434/v1`, rejects
 non-loopback model URLs in no-paid mode, and reports API cost as `$0.00`.
 
+## Causal contextual aggregation v1
+
+This source-frozen, zero-cost AAPL research approach is long/cash only. It
+learns causally through 2018, then permits one locked 2019-2023 confirmation
+only if development passes and its verified artifacts have been committed and
+pushed. This branch never opens a 2024-or-later market value and makes no
+real-capital claim. The exact contract is
+`docs/aapl_causal_contextual_expert_aggregation_v1.md`.
+
+The only authorized stage commands are:
+
+```bash
+python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py stage development
+python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py stage confirmation
+```
+
+Verify the immutable result from either stage with:
+
+```bash
+python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py verify development
+python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py verify confirmation
+```
+
+The runner fixes every input, output, run ID, cost, policy, and endpoint in
+source. It uses no network, news, LLM, paid API, leverage, shorting, borrowing,
+or negative cash. The isolated bootstrap rejects untracked, ignored, modified,
+or redirected Python/native import candidates before loading the package. Do
+not run confirmation manually unless the development
+bundle has passed its independent verifier and has been committed and pushed;
+the authorization layer also enforces this sequence.
+
 ## Historical warehouse
 
 The 2000-2025 local warehouse uses DuckDB plus Parquet files under

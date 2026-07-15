@@ -30,6 +30,18 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from .contextual_expert_aggregation_artifacts import (
+    ARM_ORDER,
+    COMPOSITE_CHECKPOINT_SCHEMA_VERSION,
+    COST_ORDER,
+    DEVELOPMENT_PAYLOAD_NAMES,
+    DEVELOPMENT_STAGE,
+    FIXED_POLICY_ORDER,
+    POLICY_ORDER,
+    ContextualExpertAggregationArtifactError,
+    parse_composite_stage_checkpoint,
+)
+
 
 CONTRACT_VERSION = "aapl-causal-contextual-expert-aggregation-v1"
 EXPECTED_BRANCH = "codex/aapl-causal-contextual-expert-aggregation-v1"
@@ -66,23 +78,95 @@ CANONICAL_PRICE_COLUMNS = (
     "qqq_adj_close",
 )
 
+ROOT_GIT_ATTRIBUTES_PATH = Path(".gitattributes")
+ROOT_GIT_IGNORE_PATH = Path(".gitignore")
+REQUIREMENTS_PATH = Path("requirements.txt")
 CONTRACT_PATH = Path("docs/aapl_causal_contextual_expert_aggregation_v1.md")
+FIXED_EXPERT_CONTRACT_PATH = Path(
+    "docs/aapl_chronological_exhaustion_expert_v1.md"
+)
 MODEL_IMPLEMENTATION_PATH = Path(
     "agent_benchmark/contextual_expert_aggregation.py"
+)
+PACKAGE_INITIALIZER_PATH = Path("agent_benchmark/__init__.py")
+BOOTSTRAP_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_bootstrap.py"
+)
+FIXED_EXPERT_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/chronological_exhaustion_expert.py"
+)
+REPLAY_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_replay.py"
+)
+LEDGER_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_ledger.py"
+)
+EVALUATION_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_evaluation.py"
+)
+ARTIFACTS_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_artifacts.py"
+)
+STAGE_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_stage.py"
+)
+VERIFIER_IMPLEMENTATION_PATH = Path(
+    "agent_benchmark/contextual_expert_aggregation_verifier.py"
 )
 RUNNER_IMPLEMENTATION_PATH = Path(
     "agent_benchmark/contextual_expert_aggregation_experiment.py"
 )
 MODEL_TEST_PATH = Path("tests/test_contextual_expert_aggregation.py")
+PYTEST_CONFIGURATION_PATH = Path("tests/conftest.py")
+BOOTSTRAP_TEST_PATH = Path(
+    "tests/test_contextual_expert_aggregation_bootstrap.py"
+)
+FIXED_EXPERT_TEST_PATH = Path("tests/test_chronological_exhaustion_expert.py")
+REPLAY_TEST_PATH = Path("tests/test_contextual_expert_aggregation_replay.py")
+LEDGER_TEST_PATH = Path("tests/test_contextual_expert_aggregation_ledger.py")
+EVALUATION_TEST_PATH = Path(
+    "tests/test_contextual_expert_aggregation_evaluation.py"
+)
+ARTIFACTS_TEST_PATH = Path(
+    "tests/test_contextual_expert_aggregation_artifacts.py"
+)
+STAGE_TEST_PATH = Path("tests/test_contextual_expert_aggregation_stage.py")
+VERIFIER_TEST_PATH = Path(
+    "tests/test_contextual_expert_aggregation_verifier.py"
+)
 RUNNER_TEST_PATH = Path(
     "tests/test_contextual_expert_aggregation_experiment.py"
 )
+README_PATH = Path("README.md")
 FROZEN_DEPENDENCY_PATHS = (
+    ROOT_GIT_ATTRIBUTES_PATH,
+    ROOT_GIT_IGNORE_PATH,
+    REQUIREMENTS_PATH,
     CONTRACT_PATH,
+    FIXED_EXPERT_CONTRACT_PATH,
+    PACKAGE_INITIALIZER_PATH,
+    BOOTSTRAP_IMPLEMENTATION_PATH,
     MODEL_IMPLEMENTATION_PATH,
+    FIXED_EXPERT_IMPLEMENTATION_PATH,
+    REPLAY_IMPLEMENTATION_PATH,
+    LEDGER_IMPLEMENTATION_PATH,
+    EVALUATION_IMPLEMENTATION_PATH,
+    ARTIFACTS_IMPLEMENTATION_PATH,
+    STAGE_IMPLEMENTATION_PATH,
+    VERIFIER_IMPLEMENTATION_PATH,
     RUNNER_IMPLEMENTATION_PATH,
+    PYTEST_CONFIGURATION_PATH,
+    BOOTSTRAP_TEST_PATH,
     MODEL_TEST_PATH,
+    FIXED_EXPERT_TEST_PATH,
+    REPLAY_TEST_PATH,
+    LEDGER_TEST_PATH,
+    EVALUATION_TEST_PATH,
+    ARTIFACTS_TEST_PATH,
+    STAGE_TEST_PATH,
+    VERIFIER_TEST_PATH,
     RUNNER_TEST_PATH,
+    README_PATH,
 )
 
 DEVELOPMENT_CHECKPOINT_FILENAME = "development_checkpoint_through_2018.json"
@@ -91,32 +175,13 @@ DEVELOPMENT_REPORT_FILENAME = "report.json"
 DEVELOPMENT_PRICE_FILENAME = "development_prices_through_2018.csv"
 CONFIRMATION_REGISTRY_DIRECTORY = Path("codex-evidence") / CONTRACT_VERSION
 CONFIRMATION_ATTEMPT_STAGE = "confirmation"
-CHECKPOINT_SCHEMA_VERSION = 1
-ACCOUNT_COST_NAMES = ("base_5bps", "stress_10bps")
-ACCOUNT_POLICY_NAMES = (
-    "online",
-    "always_long",
-    "exact_union_cash",
-    "contextual_only",
-    "weak_trend_only",
-    "aapl_buy_hold",
-)
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT_OBJECT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SAFE_STAGE_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _SAFE_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
-DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS = frozenset(
-    {
-        ".gitattributes",
-        DEVELOPMENT_REPORT_FILENAME,
-        "input_provenance.json",
-        DEVELOPMENT_PRICE_FILENAME,
-        DEVELOPMENT_CHECKPOINT_FILENAME,
-        DEVELOPMENT_GATE_REPORT_FILENAME,
-    }
-)
+DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS = DEVELOPMENT_PAYLOAD_NAMES
 
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _AUTHORIZED_LOADER_ATTESTATION = object()
@@ -196,61 +261,6 @@ def _require_same_directory_identity(
         raise ContextualExpertAggregationExperimentError(
             f"{label} changed identity during the operation"
         )
-
-
-def _strict_object_keys(
-    value: Any, expected: set[str] | frozenset[str], *, field_name: str
-) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != set(expected):
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} has missing, extra, or reordered schema content"
-        )
-    return value
-
-
-def _strict_iso_date(value: Any, *, field_name: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be an exact ISO date"
-        )
-    try:
-        parsed = datetime.strptime(value, "%Y-%m-%d")
-    except ValueError as exc:
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be an exact ISO date"
-        ) from exc
-    if parsed.strftime("%Y-%m-%d") != value:
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be an exact ISO date"
-        )
-    return value
-
-
-def _finite_nonnegative_number(value: Any, *, field_name: str) -> float:
-    if isinstance(value, bool):
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be a finite nonnegative number"
-        )
-    try:
-        result = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be a finite nonnegative number"
-        ) from exc
-    if not math.isfinite(result) or result < 0.0:
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be a finite nonnegative number"
-        )
-    return result
-
-
-def _strict_binary_target(value: Any, *, field_name: str) -> float:
-    result = _finite_nonnegative_number(value, field_name=field_name)
-    if result not in (0.0, 1.0):
-        raise ContextualExpertAggregationExperimentError(
-            f"{field_name} must be exactly zero or one"
-        )
-    return result
 
 
 @dataclass(frozen=True)
@@ -479,11 +489,39 @@ class DevelopmentVerifierRegistration:
     verify: Callable[[VerifiedBundle, AuthorizedPriceSpec], DevelopmentVerificationEvidence]
 
 
-# The full replay/verifier does not exist in the foundation yet.  Authorization
-# must therefore fail closed until implementation source registers one exact,
-# dependency-bound verifier here.  There is deliberately no public setter and
-# no authorize-time callback override.
-_REGISTERED_DEVELOPMENT_VERIFIER: DevelopmentVerifierRegistration | None = None
+# The verifier imports these frozen protocol dataclasses, so registration is
+# resolved only after this module has finished importing.  Once resolved, the
+# exact source-owned object is cached and cannot be replaced through any public
+# setter or authorize-time callback.  Explicit ``None`` remains a test-only,
+# fail-closed state.
+_UNRESOLVED_DEVELOPMENT_VERIFIER = object()
+_REGISTERED_DEVELOPMENT_VERIFIER: (
+    DevelopmentVerifierRegistration | None | object
+) = _UNRESOLVED_DEVELOPMENT_VERIFIER
+
+
+def _development_verifier_registration() -> DevelopmentVerifierRegistration | None:
+    global _REGISTERED_DEVELOPMENT_VERIFIER
+
+    registration = _REGISTERED_DEVELOPMENT_VERIFIER
+    if registration is _UNRESOLVED_DEVELOPMENT_VERIFIER:
+        try:
+            from .contextual_expert_aggregation_verifier import (
+                DEVELOPMENT_VERIFIER_REGISTRATION,
+            )
+        except (ImportError, AttributeError) as exc:
+            raise ContextualExpertAggregationExperimentError(
+                "Exact development authorization verifier is not registered"
+            ) from exc
+        registration = DEVELOPMENT_VERIFIER_REGISTRATION
+        _REGISTERED_DEVELOPMENT_VERIFIER = registration
+    if registration is None:
+        return None
+    if not isinstance(registration, DevelopmentVerifierRegistration):
+        raise ContextualExpertAggregationExperimentError(
+            "Exact development authorization verifier registration is invalid"
+        )
+    return registration
 
 
 class StageDeadline:
@@ -1065,7 +1103,7 @@ def clean_git_identity(
     *,
     expected_branch: str | None = EXPECTED_BRANCH,
 ) -> dict[str, Any]:
-    """Require a fully clean tree after the canonical attempt lock exists."""
+    """Require a Git-visible clean tree after the attempt lock exists."""
 
     root = _harden_path(repo_root, label="Repository root", require_exists=True)
     metadata = _git_metadata_identity(root, expected_branch=expected_branch)
@@ -1079,12 +1117,14 @@ def clean_git_identity(
         ) from exc
     if status:
         raise ContextualExpertAggregationExperimentError(
-            "Stage requires a completely clean worktree and index"
+            "Stage requires a Git-visible clean worktree and index"
         )
     return {
         **metadata,
         "dirty": False,
-        "cleanliness_scope": "complete_index_and_worktree_after_attempt_lock",
+        "cleanliness_scope": (
+            "git_visible_index_and_worktree_after_attempt_lock"
+        ),
         "tracked_dependency_identity": _tracked_dependency_identity(root),
         "runtime_versions": _runtime_versions(),
     }
@@ -1127,6 +1167,21 @@ def _verify_bundle_identity(
         raise ContextualExpertAggregationExperimentError(
             "Sealed bundle metadata is unreadable"
         ) from exc
+    try:
+        canonical_manifest_bytes = pretty_json_bytes(manifest_value)
+        canonical_checksums_bytes = pretty_json_bytes(checksums_value)
+    except (TypeError, ValueError) as exc:
+        raise ContextualExpertAggregationExperimentError(
+            "Stage seal metadata is not canonical finite JSON"
+        ) from exc
+    if manifest_bytes != canonical_manifest_bytes:
+        raise ContextualExpertAggregationExperimentError(
+            "Stage manifest must use exact canonical pretty JSON bytes"
+        )
+    if checksums_bytes != canonical_checksums_bytes:
+        raise ContextualExpertAggregationExperimentError(
+            "Stage checksums must use exact canonical pretty JSON bytes"
+        )
     if not isinstance(manifest_value, dict):
         raise ContextualExpertAggregationExperimentError(
             "Stage manifest must be a JSON object"
@@ -1482,239 +1537,34 @@ def _bundle_json_object(bundle: VerifiedBundle, filename: str) -> dict[str, Any]
     return value
 
 
-def _validate_administrative_accounts(value: Any) -> None:
-    accounts = _strict_object_keys(
-        value, set(ACCOUNT_COST_NAMES), field_name="administrative accounts"
-    )
-    action_states: dict[str, tuple[float, float]] = {}
-    required_state_keys = {
-        "cash",
-        "shares",
-        "last_fill_date",
-        "previous_requested_target",
-        "last_equity",
-        "running_peak",
-        "pending_decision_date",
-        "pending_target_exposure",
-    }
-    for cost_name in ACCOUNT_COST_NAMES:
-        policies = _strict_object_keys(
-            accounts[cost_name],
-            set(ACCOUNT_POLICY_NAMES),
-            field_name=f"administrative accounts[{cost_name}]",
-        )
-        for policy_name in ACCOUNT_POLICY_NAMES:
-            state_value = _strict_object_keys(
-                policies[policy_name],
-                required_state_keys,
-                field_name=f"account[{cost_name}][{policy_name}]",
-            )
-            cash = _finite_nonnegative_number(
-                state_value["cash"], field_name="account cash"
-            )
-            shares = _finite_nonnegative_number(
-                state_value["shares"], field_name="account shares"
-            )
-            last_equity = _finite_nonnegative_number(
-                state_value["last_equity"], field_name="account last_equity"
-            )
-            running_peak = _finite_nonnegative_number(
-                state_value["running_peak"], field_name="account running_peak"
-            )
-            if last_equity <= 0.0 or running_peak + 1e-12 < last_equity:
-                raise ContextualExpertAggregationExperimentError(
-                    "Administrative account equity or running peak is inconsistent"
-                )
-            if cash == 0.0 and shares == 0.0:
-                raise ContextualExpertAggregationExperimentError(
-                    "Administrative account cannot have zero cash and zero shares"
-                )
-            if _strict_iso_date(
-                state_value["last_fill_date"], field_name="last_fill_date"
-            ) != DEVELOPMENT_END.date().isoformat():
-                raise ContextualExpertAggregationExperimentError(
-                    "Administrative account does not end at the development cutoff"
-                )
-            previous_target = _strict_binary_target(
-                state_value["previous_requested_target"],
-                field_name="previous_requested_target",
-            )
-            if _strict_iso_date(
-                state_value["pending_decision_date"],
-                field_name="pending_decision_date",
-            ) != DEVELOPMENT_END.date().isoformat():
-                raise ContextualExpertAggregationExperimentError(
-                    "Administrative account omits the cutoff-close pending decision"
-                )
-            pending_target = _strict_binary_target(
-                state_value["pending_target_exposure"],
-                field_name="pending_target_exposure",
-            )
-            prior = action_states.setdefault(
-                policy_name, (previous_target, pending_target)
-            )
-            if prior != (previous_target, pending_target):
-                raise ContextualExpertAggregationExperimentError(
-                    "Cost scenarios do not share exact administrative actions"
-                )
-        if policies["always_long"] != policies["aapl_buy_hold"]:
-            raise ContextualExpertAggregationExperimentError(
-                "Always LONG and same-ledger AAPL account checkpoints differ"
-            )
-
-
 def _validate_development_checkpoint(checkpoint: Mapping[str, Any]) -> None:
-    _strict_object_keys(
-        checkpoint,
-        {
-            "contract_version",
-            "checkpoint_schema_version",
-            "checkpoint_cutoff",
-            "last_observed_session",
-            "model_checkpoint",
-            "union_cooldown",
-            "administrative_accounts",
-        },
-        field_name="development checkpoint",
-    )
-    cutoff = DEVELOPMENT_END.date().isoformat()
-    if (
-        checkpoint["contract_version"] != CONTRACT_VERSION
-        or checkpoint["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
-        or checkpoint["checkpoint_cutoff"] != cutoff
-        or checkpoint["last_observed_session"] != cutoff
-    ):
-        raise ContextualExpertAggregationExperimentError(
-            "Development checkpoint is not exact through the frozen cutoff"
-        )
-    try:
-        from agent_benchmark.contextual_expert_aggregation import (
-            CAUSAL_ONLINE_MODE,
-            FULL_MODE,
-            ContextualExpertAggregator,
-        )
+    """Require the artifact-owned composite model plus account checkpoint."""
 
-        model = ContextualExpertAggregator.from_dict(checkpoint["model_checkpoint"])
-        model_payload = model.to_dict()
-    except (KeyError, TypeError, ValueError) as exc:
+    try:
+        parsed = parse_composite_stage_checkpoint(checkpoint)
+    except (
+        ContextualExpertAggregationArtifactError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
         raise ContextualExpertAggregationExperimentError(
-            "Development model checkpoint is not independently restorable"
+            "Development checkpoint is not the exact composite artifact checkpoint"
         ) from exc
     if (
-        model_payload != checkpoint["model_checkpoint"]
-        or model_payload["runtime"]
-        != {
-            "learning_mode": CAUSAL_ONLINE_MODE,
-            "frozen_cutoff": None,
-            "ablation_mode": FULL_MODE,
-        }
-        or model_payload["state"]["last_session_date"] != cutoff
+        parsed.stage != DEVELOPMENT_STAGE
+        or parsed.checkpoint_schema_version
+        != COMPOSITE_CHECKPOINT_SCHEMA_VERSION
+        or tuple(parsed.replay_checkpoints) != ARM_ORDER
+        or tuple(parsed.administrative_accounts) != COST_ORDER
+        or any(
+            tuple(parsed.administrative_accounts[cost]) != POLICY_ORDER
+            for cost in COST_ORDER
+        )
     ):
         raise ContextualExpertAggregationExperimentError(
-            "Development model checkpoint runtime or replay state is not exact"
+            "Development checkpoint differs from the frozen composite ordering"
         )
-
-    cooldown = _strict_object_keys(
-        checkpoint["union_cooldown"],
-        {"prior_canonical_union_opportunity", "last_rows"},
-        field_name="union cooldown checkpoint",
-    )
-    prior_accepted = cooldown["prior_canonical_union_opportunity"]
-    if type(prior_accepted) is not bool:
-        raise ContextualExpertAggregationExperimentError(
-            "Union cooldown prior acceptance must be an exact boolean"
-        )
-    rows = cooldown["last_rows"]
-    model_history = model_payload["state"]["market_history"]
-    if not isinstance(rows, list) or not rows or len(rows) != len(model_history):
-        raise ContextualExpertAggregationExperimentError(
-            "Union cooldown checkpoint must preserve the full bounded model tail"
-        )
-    expected_rows = [
-        {
-            "decision_date": row["session_date"],
-            "contextual_virtual_signal": row["contextual_signal"],
-            "weak_trend_virtual_signal": row["weak_trend_signal"],
-            "union_candidate_signal": bool(
-                row["contextual_signal"] or row["weak_trend_signal"]
-            ),
-            "canonical_union_opportunity": row[
-                "canonical_union_opportunity"
-            ],
-        }
-        for row in model_history
-    ]
-    if rows != expected_rows:
-        raise ContextualExpertAggregationExperimentError(
-            "Union cooldown tail differs from the restored model history"
-        )
-    if (
-        model_payload["state"]["processed_session_count"] == len(model_history)
-        and prior_accepted is not False
-    ):
-        raise ContextualExpertAggregationExperimentError(
-            "Union cooldown cannot claim prior acceptance before model history"
-        )
-    row_keys = {
-        "decision_date",
-        "contextual_virtual_signal",
-        "weak_trend_virtual_signal",
-        "union_candidate_signal",
-        "canonical_union_opportunity",
-    }
-    previous_date: str | None = None
-    previous_accepted = prior_accepted
-    for raw_row in rows:
-        row = _strict_object_keys(
-            raw_row, row_keys, field_name="union cooldown row"
-        )
-        decision_date = _strict_iso_date(
-            row["decision_date"], field_name="cooldown decision_date"
-        )
-        if previous_date is not None and decision_date <= previous_date:
-            raise ContextualExpertAggregationExperimentError(
-                "Union cooldown rows are not strictly chronological"
-            )
-        bool_fields = (
-            "contextual_virtual_signal",
-            "weak_trend_virtual_signal",
-            "union_candidate_signal",
-            "canonical_union_opportunity",
-        )
-        if any(type(row[name]) is not bool for name in bool_fields):
-            raise ContextualExpertAggregationExperimentError(
-                "Union cooldown rows require exact booleans"
-            )
-        candidate = bool(
-            row["contextual_virtual_signal"] or row["weak_trend_virtual_signal"]
-        )
-        accepted = bool(row["canonical_union_opportunity"])
-        if row["union_candidate_signal"] is not candidate or accepted != (
-            candidate and not previous_accepted
-        ):
-            raise ContextualExpertAggregationExperimentError(
-                "Union cooldown row violates the frozen one-session rule"
-            )
-        previous_date = decision_date
-        previous_accepted = accepted
-    if previous_date != cutoff:
-        raise ContextualExpertAggregationExperimentError(
-            "Union cooldown rows do not end at the development cutoff"
-        )
-    pending_dates = {
-        str(row["signal_date"])
-        for row in model_payload["state"]["pending_lessons"]
-    }
-    unresolved_accepted_dates = {
-        str(row["decision_date"])
-        for row in rows[-2:]
-        if row["canonical_union_opportunity"] is True
-    }
-    if pending_dates != unresolved_accepted_dates:
-        raise ContextualExpertAggregationExperimentError(
-            "Pending model lessons do not exactly match unresolved cooldown opportunities"
-        )
-    _validate_administrative_accounts(checkpoint["administrative_accounts"])
 
 
 def _registered_development_verification(
@@ -1722,21 +1572,23 @@ def _registered_development_verification(
     *,
     current_git_identity: Mapping[str, Any],
 ) -> DevelopmentVerificationEvidence:
-    registration = _REGISTERED_DEVELOPMENT_VERIFIER
-    if not isinstance(registration, DevelopmentVerifierRegistration):
+    registration = _development_verifier_registration()
+    if registration is None:
         raise ContextualExpertAggregationExperimentError(
             "Exact development authorization verifier is not registered"
         )
     dependency_path = Path(registration.dependency_path)
-    if dependency_path not in _frozen_dependency_paths():
+    if (
+        dependency_path != VERIFIER_IMPLEMENTATION_PATH
+        or dependency_path not in _frozen_dependency_paths()
+    ):
         raise ContextualExpertAggregationExperimentError(
             "Exact development verifier dependency is not frozen"
         )
     expected_names = frozenset(registration.expected_payload_names)
     if (
         not registration.verifier_id
-        or not expected_names
-        or not DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS.issubset(expected_names)
+        or expected_names != DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS
         or set(bundle.payload_sha256) != set(expected_names)
     ):
         raise ContextualExpertAggregationExperimentError(
@@ -1807,7 +1659,8 @@ def _validate_development_authorization_bundle(
         manifest.get("contract_version") != CONTRACT_VERSION
         or manifest.get("stage") != "development"
         or manifest.get("stage_pass") is not True
-        or not DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS.issubset(bundle.payload_sha256)
+        or set(bundle.payload_sha256)
+        != set(DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS)
     ):
         raise ContextualExpertAggregationExperimentError(
             "Confirmation requires the exact passing development bundle"
@@ -2129,6 +1982,7 @@ def authorize_confirmation_attempt(
         manifest_path.parent,
         expected_contract_version=CONTRACT_VERSION,
         expected_stage="development",
+        expected_payload_names=DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS,
         require_stage_pass=True,
         repo_root=root,
     )
@@ -2238,6 +2092,7 @@ def verify_confirmation_authorization(
         expected_contract_version=CONTRACT_VERSION,
         expected_stage="development",
         expected_manifest_sha256=authorization.development_manifest_sha256,
+        expected_payload_names=DEVELOPMENT_AUTHORIZATION_REQUIRED_PAYLOADS,
         require_stage_pass=True,
         repo_root=root,
     )
@@ -2673,9 +2528,10 @@ def seal_exact_bundle(
 
 
 __all__ = [
-    "ACCOUNT_COST_NAMES",
-    "ACCOUNT_POLICY_NAMES",
     "ALLOWED_STAGES",
+    "ARM_ORDER",
+    "ARTIFACTS_IMPLEMENTATION_PATH",
+    "ARTIFACTS_TEST_PATH",
     "AUTHORIZED_PRICE_SPECS",
     "AuthorizedPriceSpec",
     "BundleIdentity",
@@ -2685,7 +2541,8 @@ __all__ = [
     "CONFIRMATION_REGISTRY_DIRECTORY",
     "ConfirmationAuthorization",
     "CONTRACT_VERSION",
-    "CHECKPOINT_SCHEMA_VERSION",
+    "COMPOSITE_CHECKPOINT_SCHEMA_VERSION",
+    "COST_ORDER",
     "ContextualExpertAggregationExperimentError",
     "DEVELOPMENT_CHECKPOINT_FILENAME",
     "DEVELOPMENT_END",
@@ -2693,18 +2550,30 @@ __all__ = [
     "DEVELOPMENT_GATE_REPORT_FILENAME",
     "DEVELOPMENT_PRICE_FILENAME",
     "DEVELOPMENT_PRICE_SPEC",
+    "DEVELOPMENT_PAYLOAD_NAMES",
     "DEVELOPMENT_REPORT_FILENAME",
     "DevelopmentVerificationEvidence",
     "DevelopmentVerifierRegistration",
+    "EVALUATION_IMPLEMENTATION_PATH",
+    "EVALUATION_TEST_PATH",
     "EXPECTED_BRANCH",
     "EXPECTED_ORIGIN_REPOSITORY",
     "EXPECTED_ORIGIN_URLS",
     "FROZEN_DEPENDENCY_PATHS",
+    "FIXED_POLICY_ORDER",
+    "LEDGER_IMPLEMENTATION_PATH",
+    "LEDGER_TEST_PATH",
     "LoadedPriceSnapshot",
     "PHYSICAL_PRICE_COLUMNS",
+    "POLICY_ORDER",
+    "README_PATH",
+    "REPLAY_IMPLEMENTATION_PATH",
+    "REPLAY_TEST_PATH",
     "RUN_TIME_LIMIT_SECONDS",
     "SealedBundle",
     "StageDeadline",
+    "STAGE_IMPLEMENTATION_PATH",
+    "STAGE_TEST_PATH",
     "TrackedFileIdentity",
     "VerifiedBundle",
     "canonical_json_bytes",
@@ -2726,4 +2595,6 @@ __all__ = [
     "verify_confirmation_authorization",
     "verify_exact_bundle",
     "verify_frozen_bundle_identity",
+    "VERIFIER_IMPLEMENTATION_PATH",
+    "VERIFIER_TEST_PATH",
 ]

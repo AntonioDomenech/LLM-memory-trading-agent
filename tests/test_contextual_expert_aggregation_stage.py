@@ -137,8 +137,10 @@ def test_frozen_paths_run_ids_and_policy_inventory_are_artifact_owned() -> None:
     assert stage.FROZEN_COMMAND_BY_STAGE == {
         selected: (
             "python",
-            "-m",
-            "agent_benchmark.contextual_expert_aggregation_stage",
+            "-I",
+            "-B",
+            "agent_benchmark/contextual_expert_aggregation_bootstrap.py",
+            "stage",
             selected,
         )
         for selected in artifacts.STAGE_ORDER
@@ -656,6 +658,12 @@ def test_run_stage_uses_only_frozen_output_and_exact_inventory(
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
+        stage._bootstrap,
+        "require_active_attestation",
+        lambda **kwargs: {},
+    )
+
+    monkeypatch.setattr(
         stage._experiment,
         "clean_git_identity",
         lambda root: {"branch": "frozen"},
@@ -704,6 +712,23 @@ def test_run_stage_uses_only_frozen_output_and_exact_inventory(
     assert set(captured["expected"]) == expected_names
     assert result["run_id"] == artifacts.RUN_ID_BY_STAGE["development"]
     assert result["stage_pass"] is False
+
+
+def test_run_stage_requires_isolated_bootstrap_before_git_or_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        stage._experiment,
+        "clean_git_identity",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Git must not be reached")
+        ),
+    )
+    with pytest.raises(
+        stage._bootstrap.BootstrapSecurityError,
+        match="isolated bootstrap",
+    ):
+        stage.run_stage("development", repo_root=tmp_path)
 
 
 def test_main_returns_two_for_authentic_rejection_and_accepts_no_path_flags(

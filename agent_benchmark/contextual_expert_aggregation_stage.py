@@ -1,9 +1,9 @@
 """Frozen stage runner for causal contextual expert aggregation.
 
-The command surface is deliberately tiny::
+The authorized command surface is deliberately tiny::
 
-    python -m agent_benchmark.contextual_expert_aggregation_stage development
-    python -m agent_benchmark.contextual_expert_aggregation_stage confirmation
+    python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py stage development
+    python -I -B agent_benchmark/contextual_expert_aggregation_bootstrap.py stage confirmation
 
 Inputs, outputs, run identifiers, costs, policies, cutoffs, and retry semantics
 are source-frozen.  This module performs no network, news, API, or LLM work.
@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from . import contextual_expert_aggregation_artifacts as _artifacts
+from . import contextual_expert_aggregation_bootstrap as _bootstrap
 from . import contextual_expert_aggregation_evaluation as _evaluation
 from . import contextual_expert_aggregation_experiment as _experiment
 from . import contextual_expert_aggregation_ledger as _ledger
@@ -69,8 +70,10 @@ DEVELOPMENT_MANIFEST_PATH = (
 FROZEN_COMMAND_BY_STAGE: Mapping[str, tuple[str, ...]] = {
     stage: (
         "python",
-        "-m",
-        "agent_benchmark.contextual_expert_aggregation_stage",
+        "-I",
+        "-B",
+        "agent_benchmark/contextual_expert_aggregation_bootstrap.py",
+        "stage",
         stage,
     )
     for stage in STAGE_ORDER
@@ -2006,8 +2009,11 @@ def run_stage(
     """Run one source-frozen stage.  Test hooks are not exposed by the CLI."""
 
     selected = _stage(stage)
-    trace = _RuntimeTrace.start(clock)
     root = Path.cwd().resolve() if repo_root is None else Path(repo_root).resolve()
+    _bootstrap.require_active_attestation(
+        operation="stage", stage=selected, repo_root=root
+    )
+    trace = _RuntimeTrace.start(clock)
     if selected == DEVELOPMENT_STAGE:
         git_identity = _experiment.clean_git_identity(root)
         trace.mark("development git authorization")
