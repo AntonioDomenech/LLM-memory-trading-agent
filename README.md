@@ -51,14 +51,17 @@ python -m agent_benchmark.local_gemma_loop --max-iterations 3
 This preset uses `gemma4:12b` at `http://127.0.0.1:11434/v1`, rejects
 non-loopback model URLs in no-paid mode, and reports API cost as `$0.00`.
 
-## Causal contextual aggregation v1
+## Causal contextual aggregation v2
 
 This source-frozen, zero-cost AAPL research approach is long/cash only. It
 learns causally through 2018, then permits one locked 2019-2023 confirmation
 only if development passes and its verified artifacts have been committed and
 pushed. This branch never opens a 2024-or-later market value and makes no
-real-capital claim. The exact contract is
-`docs/aapl_causal_contextual_expert_aggregation_v1.md`.
+real-capital claim. V1 stopped at a parent-proof preflight before scoring and
+is permanently preserved at
+`e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md`. The
+preregistered v2 proof repair is
+`docs/aapl_causal_contextual_expert_aggregation_v2.md`.
 
 The only authorized stage commands are:
 
