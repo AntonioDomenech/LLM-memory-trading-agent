@@ -41,7 +41,7 @@ from .contextual_expert_aggregation_replay import (
 )
 
 
-CONTRACT_VERSION = "aapl-causal-contextual-expert-aggregation-v1"
+CONTRACT_VERSION = "aapl-causal-contextual-expert-aggregation-v2"
 GIT_ATTRIBUTES_BYTES = b"* -text\n"
 TABLE_SCHEMA_VERSION = 1
 COMPOSITE_CHECKPOINT_SCHEMA_VERSION = 1
@@ -69,11 +69,32 @@ COST_BPS: Mapping[str, float] = MappingProxyType(
 
 RUN_ID_BY_STAGE: Mapping[str, str] = MappingProxyType(
     {
-        DEVELOPMENT_STAGE: "contextual-expert-aggregation-development-v1",
-        CONFIRMATION_STAGE: "contextual-expert-aggregation-confirmation-v1",
+        DEVELOPMENT_STAGE: "contextual-expert-aggregation-development-v2",
+        CONFIRMATION_STAGE: "contextual-expert-aggregation-confirmation-v2",
     }
 )
-OUTPUT_PARENT = Path("e/aapl_causal_contextual_expert_aggregation_v1")
+RUNTIME_PHASES_BY_STAGE: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        DEVELOPMENT_STAGE: (
+            "development git authorization",
+            "development authorized input loaded",
+            "development replay completed",
+            "development parent causal prefix proved",
+            "development ledgers and differences completed",
+            "development gates completed",
+            "development payload construction completed",
+        ),
+        CONFIRMATION_STAGE: (
+            "confirmation attempt durably authorized",
+            "development checkpoint and account prefix replayed",
+            "confirmation replay forks completed",
+            "confirmation ledgers and differences completed",
+            "confirmation gates completed",
+            "confirmation payload construction completed",
+        ),
+    }
+)
+OUTPUT_PARENT = Path("e/aapl_causal_contextual_expert_aggregation_v2")
 OUTPUT_DIRECTORY_BY_STAGE: Mapping[str, Path] = MappingProxyType(
     {stage: OUTPUT_PARENT / run_id for stage, run_id in RUN_ID_BY_STAGE.items()}
 )
@@ -481,7 +502,7 @@ def _payload_inventory(stage: str) -> frozenset[str]:
         "source_bundle_provenance.json",
         f"{selected}_prices_through_{token}.csv",
         f"{selected}_fixed_features.table.json",
-        f"{selected}_fixed_parent_prefix_proof.json",
+        f"{selected}_parent_causal_prefix_proof.json",
         f"{selected}_forecast__fixed_comparators.table.json",
         f"{selected}_state_weight_diagnostics.table.json",
         f"{selected}_replay_diagnostics.json",
@@ -1034,6 +1055,7 @@ __all__ = [
     "PAYLOAD_NAMES_BY_STAGE",
     "POLICY_ORDER",
     "RUN_ID_BY_STAGE",
+    "RUNTIME_PHASES_BY_STAGE",
     "SCALAR_TYPES",
     "STAGE_ORDER",
     "SOURCE_SESSION_COUNT_BY_STAGE",

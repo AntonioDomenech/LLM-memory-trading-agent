@@ -30,7 +30,7 @@ from . import contextual_expert_aggregation_replay as _replay
 from . import contextual_expert_aggregation_stage as _stage_runner
 
 
-VERIFIER_ID = "contextual-expert-aggregation-exact-verifier-v1"
+VERIFIER_ID = "contextual-expert-aggregation-exact-verifier-v2"
 VERIFIER_IMPLEMENTATION_PATH = Path(
     "agent_benchmark/contextual_expert_aggregation_verifier.py"
 )
@@ -53,25 +53,7 @@ _STAGES = _artifacts.STAGE_ORDER
 _ARM_ORDER = _artifacts.ARM_ORDER
 _ONLINE_FULL = _replay.ONLINE_FULL_ARM
 
-_RUNTIME_PHASES: Mapping[str, tuple[str, ...]] = {
-    _DEVELOPMENT: (
-        "development git authorization",
-        "development authorized input loaded",
-        "development replay completed",
-        "development fixed parent prefix proved",
-        "development ledgers and differences completed",
-        "development gates completed",
-        "development payload construction completed",
-    ),
-    _CONFIRMATION: (
-        "confirmation attempt durably authorized",
-        "development checkpoint and account prefix replayed",
-        "confirmation replay forks completed",
-        "confirmation ledgers and differences completed",
-        "confirmation gates completed",
-        "confirmation payload construction completed",
-    ),
-}
+_RUNTIME_PHASES = _artifacts.RUNTIME_PHASES_BY_STAGE
 
 _RUNTIME_KEYS = frozenset(
     {
@@ -460,7 +442,7 @@ def _development_computation(repo_root: Path) -> _stage_runner.StageComputation:
     )
     replays, replay_extra = _stage_runner._development_replays(snapshot.frame)
     fixed = _stage_runner._fixed_features_for_replays(replays)
-    parent_proof, source_provenance = _stage_runner._fixed_parent_prefix_proof(
+    parent_proof, source_provenance = _stage_runner._parent_causal_prefix_proof(
         repo_root,
         stage=_DEVELOPMENT,
         fixed_features=fixed,
@@ -477,7 +459,7 @@ def _development_computation(repo_root: Path) -> _stage_runner.StageComputation:
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof=parent_proof,
+        parent_causal_prefix_proof=parent_proof,
         source_bundle_provenance=source_provenance,
         replay_diagnostics=_stage_runner._replay_diagnostics_payload(
             stage=_DEVELOPMENT,
@@ -814,7 +796,7 @@ def _confirmation_computation(
     resume.require()
     fixed = _stage_runner._fixed_features_for_replays(replays)
     parent_proof, source_provenance = (
-        _stage_runner._fixed_parent_prefix_proof(
+        _stage_runner._parent_causal_prefix_proof(
             repo_root,
             stage=_CONFIRMATION,
             fixed_features=fixed,
@@ -859,7 +841,7 @@ def _confirmation_computation(
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof=parent_proof,
+        parent_causal_prefix_proof=parent_proof,
         source_bundle_provenance=source_provenance,
         replay_diagnostics=_stage_runner._replay_diagnostics_payload(
             stage=_CONFIRMATION,

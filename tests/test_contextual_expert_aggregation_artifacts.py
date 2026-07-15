@@ -29,6 +29,7 @@ from agent_benchmark.contextual_expert_aggregation_artifacts import (
     OUTPUT_DIRECTORY_BY_STAGE,
     POLICY_ORDER,
     RUN_ID_BY_STAGE,
+    RUNTIME_PHASES_BY_STAGE,
     SOURCE_SESSION_COUNT_BY_STAGE,
     SOURCE_START_SESSION_BY_STAGE,
     build_arm_seed_equivalence,
@@ -195,19 +196,54 @@ def test_orders_run_ids_paths_and_payload_inventories_are_frozen() -> None:
     }
     assert FIRST_CONFIRMATION_SESSION == "2019-01-02"
     assert RUN_ID_BY_STAGE == {
-        "development": "contextual-expert-aggregation-development-v1",
-        "confirmation": "contextual-expert-aggregation-confirmation-v1",
+        "development": "contextual-expert-aggregation-development-v2",
+        "confirmation": "contextual-expert-aggregation-confirmation-v2",
+    }
+    assert RUNTIME_PHASES_BY_STAGE == {
+        "development": (
+            "development git authorization",
+            "development authorized input loaded",
+            "development replay completed",
+            "development parent causal prefix proved",
+            "development ledgers and differences completed",
+            "development gates completed",
+            "development payload construction completed",
+        ),
+        "confirmation": (
+            "confirmation attempt durably authorized",
+            "development checkpoint and account prefix replayed",
+            "confirmation replay forks completed",
+            "confirmation ledgers and differences completed",
+            "confirmation gates completed",
+            "confirmation payload construction completed",
+        ),
     }
     assert OUTPUT_DIRECTORY_BY_STAGE[DEVELOPMENT_STAGE] == Path(
-        "e/aapl_causal_contextual_expert_aggregation_v1/"
-        "contextual-expert-aggregation-development-v1"
+        "e/aapl_causal_contextual_expert_aggregation_v2/"
+        "contextual-expert-aggregation-development-v2"
     )
     assert len(DEVELOPMENT_PAYLOAD_NAMES) == 47
     assert len(CONFIRMATION_PAYLOAD_NAMES) == 50
     assert payload_names_for_stage(DEVELOPMENT_STAGE) is DEVELOPMENT_PAYLOAD_NAMES
     assert payload_names_for_stage(CONFIRMATION_STAGE) is CONFIRMATION_PAYLOAD_NAMES
     assert "development_arm_seed_equivalence.json" in DEVELOPMENT_PAYLOAD_NAMES
+    assert (
+        "development_parent_causal_prefix_proof.json"
+        in DEVELOPMENT_PAYLOAD_NAMES
+    )
+    assert (
+        "development_fixed_parent_prefix_proof.json"
+        not in DEVELOPMENT_PAYLOAD_NAMES
+    )
     assert "confirmation_attempt_authorization.json" in CONFIRMATION_PAYLOAD_NAMES
+    assert (
+        "confirmation_parent_causal_prefix_proof.json"
+        in CONFIRMATION_PAYLOAD_NAMES
+    )
+    assert (
+        "confirmation_fixed_parent_prefix_proof.json"
+        not in CONFIRMATION_PAYLOAD_NAMES
+    )
     assert "development_parent_manifest.json" in CONFIRMATION_PAYLOAD_NAMES
     expected_ledgers = {
         f"development_ledger__{cost}__{policy}.table.json"

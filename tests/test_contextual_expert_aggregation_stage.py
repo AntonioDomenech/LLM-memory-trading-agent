@@ -128,6 +128,7 @@ def test_public_cli_has_only_one_frozen_stage_argument() -> None:
 
 def test_frozen_paths_run_ids_and_policy_inventory_are_artifact_owned() -> None:
     assert stage.RUN_ID_BY_STAGE == artifacts.RUN_ID_BY_STAGE
+    assert stage.RUNTIME_PHASES_BY_STAGE is artifacts.RUNTIME_PHASES_BY_STAGE
     assert stage.OUTPUT_DIRECTORY_BY_STAGE == artifacts.OUTPUT_DIRECTORY_BY_STAGE
     assert stage.POLICY_ORDER == artifacts.POLICY_ORDER
     assert stage.COST_ORDER == artifacts.COST_ORDER
@@ -426,7 +427,7 @@ def test_development_replay_and_accounts_form_exact_four_arm_seed_checkpoint() -
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof={"proof_sha256": digest},
+        parent_causal_prefix_proof={"proof_sha256": digest},
         source_bundle_provenance={"provenance_sha256": digest},
         replay_diagnostics={"diagnostics_sha256": digest},
         prefix_continuity_proof=None,
@@ -532,7 +533,7 @@ def test_confirmation_payloads_are_suffix_models_with_continuous_full_ledgers(
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof={"proof_sha256": digest},
+        parent_causal_prefix_proof={"proof_sha256": digest},
         source_bundle_provenance={"provenance_sha256": digest},
         replay_diagnostics=stage._replay_diagnostics_payload(
             stage="confirmation", replays=confirmation_replays, extra={}
@@ -574,44 +575,163 @@ def test_confirmation_payloads_are_suffix_models_with_continuous_full_ledgers(
             stage._validate_table_payload(filename, payload)
 
 
-def test_parent_projection_requires_exact_dates_booleans_and_binary_targets() -> None:
+def test_parent_causal_projection_requires_exact_dates_booleans_and_finiteness() -> None:
     dates = ["2019-01-02", "2019-01-03"]
     raw: dict[str, object] = {"decision_date": dates}
     types = dict(
         zip(
-            stage.PARENT_PROJECTION_COLUMNS,
-            stage.PARENT_PROJECTION_SCHEMA.column_types,
+            stage.PARENT_CAUSAL_PROJECTION_COLUMNS,
+            stage.PARENT_CAUSAL_PROJECTION_SCHEMA.column_types,
         )
     )
     for name in replay.FIXED_CAUSAL_SIGNAL_COLUMNS:
         raw[name] = [False, True] if types[name] == "bool" else [0.1, 0.2]
     raw["contextual_prior_intraday_percentile"] = [np.nan, 0.2]
-    for source_name in stage.PARENT_TARGET_COLUMN_MAP.values():
-        raw[source_name] = [1.0, 0.0]
     frame = pd.DataFrame(raw)
     expected = pd.DatetimeIndex(dates, name="decision_date")
-    projected = stage._strict_parent_projection(frame, expected_index=expected)
-    assert tuple(projected.columns) == stage.PARENT_PROJECTION_COLUMNS
+    projected = stage._strict_parent_causal_projection(
+        frame, expected_index=expected
+    )
+    assert tuple(projected.columns) == stage.PARENT_CAUSAL_PROJECTION_COLUMNS
     assert np.isnan(projected.iloc[0]["contextual_prior_intraday_percentile"])
     assert b"NaN" not in stage.table_bytes(
-        projected, schema=stage.PARENT_PROJECTION_SCHEMA
+        projected, schema=stage.PARENT_CAUSAL_PROJECTION_SCHEMA
     )
 
     bad = frame.copy()
     bad["contextual_ready"] = [1, 0]
     with pytest.raises(Error, match="boolean"):
-        stage._strict_parent_projection(bad, expected_index=expected)
-    bad = frame.copy()
-    bad["always_long_target_exposure"] = [1.0, 0.5]
-    with pytest.raises(Error, match="binary"):
-        stage._strict_parent_projection(bad, expected_index=expected)
+        stage._strict_parent_causal_projection(bad, expected_index=expected)
     bad = frame.copy()
     bad["contextual_prior_intraday_percentile"] = [np.inf, 0.2]
     with pytest.raises(Error, match="infinite"):
-        stage._strict_parent_projection(bad, expected_index=expected)
+        stage._strict_parent_causal_projection(bad, expected_index=expected)
     with pytest.raises(Error, match="date sequence"):
-        stage._strict_parent_projection(
+        stage._strict_parent_causal_projection(
             frame, expected_index=pd.DatetimeIndex(dates[::-1], name="decision_date")
+        )
+
+
+def test_comparator_projection_independently_enforces_union_gating() -> None:
+    index = pd.DatetimeIndex(
+        ["2006-02-14", "2006-02-15", "2006-02-16"], name="decision_date"
+    )
+    fixed = pd.DataFrame(
+        {
+            "unfiltered_union_signal": [True, False, True],
+            "contextual_virtual_signal": [False, True, False],
+            "weak_trend_virtual_signal": [True, False, True],
+            "fixed_always_long_target_exposure": [1.0, 1.0, 1.0],
+            "fixed_union_cash_target_exposure": [0.0, 1.0, 0.0],
+            "fixed_contextual_only_target_exposure": [1.0, 1.0, 1.0],
+            "fixed_weak_trend_only_target_exposure": [0.0, 1.0, 0.0],
+        },
+        index=index,
+    )
+    observed, expected, invariants = stage._derived_comparator_projection(fixed)
+    assert stage.table_bytes(
+        observed, schema=stage.COMPARATOR_PROJECTION_SCHEMA
+    ) == stage.table_bytes(expected, schema=stage.COMPARATOR_PROJECTION_SCHEMA)
+    assert all(invariants.values())
+
+    resurrected = fixed.copy()
+    resurrected.loc[
+        pd.Timestamp("2006-02-15"), "fixed_contextual_only_target_exposure"
+    ] = 0.0
+    with pytest.raises(Error, match="union-gated contract"):
+        stage._derived_comparator_projection(resurrected)
+
+    nonbinary = fixed.copy()
+    nonbinary.iloc[0, nonbinary.columns.get_loc(
+        "fixed_union_cash_target_exposure"
+    )] = 0.5
+    with pytest.raises(Error, match="not binary"):
+        stage._derived_comparator_projection(nonbinary)
+
+
+def test_parent_causal_proof_excludes_legacy_comparator_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index = pd.DatetimeIndex(
+        ["2006-02-14", "2006-02-15"], name="decision_date"
+    )
+    types = dict(
+        zip(
+            stage.PARENT_CAUSAL_PROJECTION_COLUMNS,
+            stage.PARENT_CAUSAL_PROJECTION_SCHEMA.column_types,
+        )
+    )
+    causal: dict[str, object] = {}
+    for name in stage.PARENT_CAUSAL_PROJECTION_COLUMNS:
+        causal[name] = [False, False] if types[name] == "bool" else [0.1, 0.2]
+    causal.update(
+        {
+            "contextual_raw_signal": [False, True],
+            "contextual_virtual_signal": [False, True],
+            "weak_trend_raw_signal": [True, False],
+            "weak_trend_virtual_signal": [True, False],
+            "unfiltered_union_candidate_signal": [True, True],
+            "unfiltered_union_signal": [True, False],
+            "unfiltered_union_signal_blocked": [False, True],
+        }
+    )
+    fixed = pd.DataFrame(causal, index=index)
+    fixed["fixed_always_long_target_exposure"] = [1.0, 1.0]
+    fixed["fixed_union_cash_target_exposure"] = [0.0, 1.0]
+    fixed["fixed_contextual_only_target_exposure"] = [1.0, 1.0]
+    fixed["fixed_weak_trend_only_target_exposure"] = [0.0, 1.0]
+
+    parent = fixed.loc[:, list(stage.PARENT_CAUSAL_PROJECTION_COLUMNS)].copy()
+    parent.insert(0, "decision_date", [value.date().isoformat() for value in index])
+    # These legacy targets deliberately disagree on the union-suppressed
+    # second row. V2 verifies their source file hash but never treats them as
+    # current comparator truth.
+    parent["always_long_target_exposure"] = [1.0, 1.0]
+    parent["unfiltered_union_target_exposure"] = [0.0, 1.0]
+    parent["unfiltered_contextual_target_exposure"] = [1.0, 0.0]
+    parent["unfiltered_weak_trend_target_exposure"] = [0.0, 1.0]
+    filename = stage.PARENT_FORECAST_BY_STAGE["development"]
+    parent_bytes = parent.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    (tmp_path / filename).write_bytes(parent_bytes)
+    digest = stage._experiment.sha256_bytes(parent_bytes)
+    source = SimpleNamespace(
+        directory=tmp_path,
+        payload_sha256={filename: digest},
+        manifest={"manifest_sha256": "sha256:" + "a" * 64},
+    )
+    monkeypatch.setattr(
+        stage._experiment,
+        "verify_frozen_bundle_identity",
+        lambda repo_root, identity: source,
+    )
+    monkeypatch.setattr(
+        stage,
+        "_source_bundle_provenance",
+        lambda repo_root, *, stage: {"provenance_sha256": "sha256:" + "b" * 64},
+    )
+
+    proof, _ = stage._parent_causal_prefix_proof(
+        tmp_path, stage="development", fixed_features=fixed
+    )
+    assert proof["proof_schema_version"] == 2
+    assert proof["causal_exact"]
+    assert proof["comparator_exact"]
+    assert proof["legacy_parent_comparator_targets_used"] is False
+    assert all(proof["comparator_invariants"].values())
+    assert (
+        proof["parent_causal_projection_sha256"]
+        == proof["generated_causal_projection_sha256"]
+    )
+    assert (
+        proof["expected_comparator_projection_sha256"]
+        == proof["generated_comparator_projection_sha256"]
+    )
+
+    tampered = fixed.copy()
+    tampered.iloc[0, tampered.columns.get_loc("aapl_intraday_return")] += 0.01
+    with pytest.raises(Error, match="causal signals differ"):
+        stage._parent_causal_prefix_proof(
+            tmp_path, stage="development", fixed_features=tampered
         )
 
 

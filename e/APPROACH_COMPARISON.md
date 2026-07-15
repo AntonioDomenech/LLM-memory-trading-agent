@@ -1,7 +1,7 @@
 # AAPL long/cash approach comparison
 
-Updated through the binary-regime selector v1 post-rejection long-run audit on
-2026-07-15.
+Updated through the contextual aggregation v1 preflight rejection and v2
+preregistration on 2026-07-15.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
 paid API. Published 2024-2026 figures are repeated historical audits, not a
@@ -42,6 +42,12 @@ extensive historical research, and each lead still lost the already-revealed
 | Approach | Model/information | 2019-2023 validation | Continuous 2005-2023 diagnostic | Later data opened? | Decision |
 |---|---|---|---|---|---|
 | Binary-regime union selector v1 | Two-state causal online selector using 20-session SPY/QQQ market regime over the fixed exhaustion union | Beat AAPL in 4/5 years; +7.78% relative wealth at 5 bps and +3.97% at 10 bps. Selector-minus-union improved in only 1/5 years and one veto supplied 85.20% of positive stress-cost veto benefit | +258.49% relative wealth at 5 bps and +212.59% at 10 bps; 16/19 and 14/19 positive years; 4/4 negative-AAPL years beaten | Yes, later on a separate immutable post-rejection audit branch | Validation rejection remains final; the later audit passed long-run robustness but failed the 2024 strict gate |
+
+## Current preregistered approach
+
+| Approach | Model/information | Current evidence | Later data opened? | Decision |
+|---|---|---|---|---|
+| Causal contextual expert aggregation v2 | Multiscale causal online aggregator over the fixed exhaustion experts and SPY/QQQ market state | V2 contract and synthetic implementation tests only; no performance score yet. It repairs only the v1 parent-proof semantics and preserves every trading rule | No | Awaiting its one through-2018 development attempt |
 
 ## Chronological development approaches that did not reach later periods
 

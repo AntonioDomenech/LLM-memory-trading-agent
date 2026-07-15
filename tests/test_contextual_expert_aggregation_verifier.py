@@ -191,7 +191,7 @@ def _synthetic_development_bundle(
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof=parent_proof,
+        parent_causal_prefix_proof=parent_proof,
         source_bundle_provenance=source_provenance,
         replay_diagnostics=stage_runner._replay_diagnostics_payload(
             stage="development", replays=replays, extra=replay_extra
@@ -244,7 +244,7 @@ def _synthetic_development_bundle(
     )
     monkeypatch.setattr(
         stage_runner,
-        "_fixed_parent_prefix_proof",
+        "_parent_causal_prefix_proof",
         lambda *args, **kwargs: (parent_proof, source_provenance),
     )
     monkeypatch.setattr(
@@ -257,11 +257,12 @@ def _synthetic_development_bundle(
 
 def test_frozen_public_exports_and_immutable_registration() -> None:
     assert verifier.VERIFIER_ID == (
-        "contextual-expert-aggregation-exact-verifier-v1"
+        "contextual-expert-aggregation-exact-verifier-v2"
     )
     assert verifier.VERIFIER_IMPLEMENTATION_PATH == Path(
         "agent_benchmark/contextual_expert_aggregation_verifier.py"
     )
+    assert verifier._RUNTIME_PHASES is artifacts.RUNTIME_PHASES_BY_STAGE
     registration = verifier.DEVELOPMENT_VERIFIER_REGISTRATION
     assert registration.verifier_id == verifier.VERIFIER_ID
     assert registration.dependency_path == verifier.VERIFIER_IMPLEMENTATION_PATH
@@ -643,6 +644,29 @@ def test_synthetic_development_is_regenerated_byte_for_byte_and_tamper_fails(
             tampered, stage="development", repo_root=tmp_path
         )
 
+    proof_name = "development_parent_causal_prefix_proof.json"
+    proof_tampered_payloads = dict(payloads)
+    proof_tampered_payloads[proof_name] = stage_runner._json_bytes(
+        {"proof_sha256": "sha256:" + "b" * 64}
+    )
+    proof_tampered_directory = (
+        tmp_path / "p" / artifacts.RUN_ID_BY_STAGE["development"]
+    )
+    proof_tampered = _write_bundle(
+        proof_tampered_directory,
+        stage="development",
+        manifest_fields={
+            name: value
+            for name, value in bundle.manifest.items()
+            if name not in {"contract_version", "payload_sha256", "manifest_sha256"}
+        },
+        payloads=proof_tampered_payloads,
+    )
+    with pytest.raises(Error, match=proof_name):
+        verifier._verify_semantics(
+            proof_tampered, stage="development", repo_root=tmp_path
+        )
+
     checksums_path = bundle.directory / "checksums.json"
     checksums = json.loads(checksums_path.read_text(encoding="utf-8"))
     checksums_path.write_text(
@@ -753,7 +777,7 @@ def test_synthetic_confirmation_regenerates_suffix_and_full_continuous_ledgers(
     parent_checksums_bytes = (
         development_bundle.directory / "checksums.json"
     ).read_bytes()
-    fixed_parent_proof = {"proof_sha256": digest}
+    parent_causal_prefix_proof = {"proof_sha256": digest}
     source_provenance = {"provenance_sha256": digest}
     computation = stage_runner.StageComputation(
         stage="confirmation",
@@ -763,7 +787,7 @@ def test_synthetic_confirmation_regenerates_suffix_and_full_continuous_ledgers(
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof=fixed_parent_proof,
+        parent_causal_prefix_proof=parent_causal_prefix_proof,
         source_bundle_provenance=source_provenance,
         replay_diagnostics=stage_runner._replay_diagnostics_payload(
             stage="confirmation",
@@ -847,8 +871,8 @@ def test_synthetic_confirmation_regenerates_suffix_and_full_continuous_ledgers(
     )
     monkeypatch.setattr(
         stage_runner,
-        "_fixed_parent_prefix_proof",
-        lambda *args, **kwargs: (fixed_parent_proof, source_provenance),
+        "_parent_causal_prefix_proof",
+        lambda *args, **kwargs: (parent_causal_prefix_proof, source_provenance),
     )
     semantic = verifier._verify_semantics(
         confirmation_bundle,

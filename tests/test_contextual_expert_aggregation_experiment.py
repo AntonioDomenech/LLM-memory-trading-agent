@@ -500,7 +500,12 @@ def test_foundation_uses_artifact_orders_inventory_and_full_dependency_set() -> 
         Path(".gitattributes"),
         Path(".gitignore"),
         Path("requirements.txt"),
+        Path("docs/aapl_causal_contextual_expert_aggregation_v2.md"),
         Path("docs/aapl_causal_contextual_expert_aggregation_v1.md"),
+        Path(
+            "e/aapl_causal_contextual_expert_aggregation_v1/"
+            "PREFLIGHT_REJECTED.md"
+        ),
         Path("docs/aapl_chronological_exhaustion_expert_v1.md"),
         Path("agent_benchmark/__init__.py"),
         Path("agent_benchmark/contextual_expert_aggregation_bootstrap.py"),

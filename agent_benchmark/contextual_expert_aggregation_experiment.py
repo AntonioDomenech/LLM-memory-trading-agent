@@ -43,8 +43,8 @@ from .contextual_expert_aggregation_artifacts import (
 )
 
 
-CONTRACT_VERSION = "aapl-causal-contextual-expert-aggregation-v1"
-EXPECTED_BRANCH = "codex/aapl-causal-contextual-expert-aggregation-v1"
+CONTRACT_VERSION = "aapl-causal-contextual-expert-aggregation-v2"
+EXPECTED_BRANCH = "codex/aapl-causal-contextual-expert-aggregation-v2"
 EXPECTED_ORIGIN_REPOSITORY = (
     "github.com/AntonioDomenech/LLM-memory-trading-agent"
 )
@@ -81,7 +81,13 @@ CANONICAL_PRICE_COLUMNS = (
 ROOT_GIT_ATTRIBUTES_PATH = Path(".gitattributes")
 ROOT_GIT_IGNORE_PATH = Path(".gitignore")
 REQUIREMENTS_PATH = Path("requirements.txt")
-CONTRACT_PATH = Path("docs/aapl_causal_contextual_expert_aggregation_v1.md")
+CONTRACT_PATH = Path("docs/aapl_causal_contextual_expert_aggregation_v2.md")
+PREDECESSOR_CONTRACT_PATH = Path(
+    "docs/aapl_causal_contextual_expert_aggregation_v1.md"
+)
+PREDECESSOR_REJECTION_PATH = Path(
+    "e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md"
+)
 FIXED_EXPERT_CONTRACT_PATH = Path(
     "docs/aapl_chronological_exhaustion_expert_v1.md"
 )
@@ -143,6 +149,8 @@ FROZEN_DEPENDENCY_PATHS = (
     ROOT_GIT_IGNORE_PATH,
     REQUIREMENTS_PATH,
     CONTRACT_PATH,
+    PREDECESSOR_CONTRACT_PATH,
+    PREDECESSOR_REJECTION_PATH,
     FIXED_EXPERT_CONTRACT_PATH,
     PACKAGE_INITIALIZER_PATH,
     BOOTSTRAP_IMPLEMENTATION_PATH,

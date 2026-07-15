@@ -55,6 +55,7 @@ POLICY_ORDER = _artifacts.POLICY_ORDER
 COST_ORDER = _artifacts.COST_ORDER
 COST_BPS = _artifacts.COST_BPS
 RUN_ID_BY_STAGE = _artifacts.RUN_ID_BY_STAGE
+RUNTIME_PHASES_BY_STAGE = _artifacts.RUNTIME_PHASES_BY_STAGE
 OUTPUT_DIRECTORY_BY_STAGE = _artifacts.OUTPUT_DIRECTORY_BY_STAGE
 OUTPUT_PARENT = _artifacts.OUTPUT_PARENT
 RUN_TIME_LIMIT_SECONDS = _experiment.RUN_TIME_LIMIT_SECONDS
@@ -83,16 +84,7 @@ PARENT_FORECAST_BY_STAGE: Mapping[str, str] = {
     DEVELOPMENT_STAGE: "development_forecast_through_2018.csv",
     CONFIRMATION_STAGE: "validation_online_forecast.csv",
 }
-PARENT_TARGET_COLUMN_MAP: Mapping[str, str] = {
-    "fixed_always_long_target_exposure": "always_long_target_exposure",
-    "fixed_union_cash_target_exposure": "unfiltered_union_target_exposure",
-    "fixed_contextual_only_target_exposure": (
-        "unfiltered_contextual_target_exposure"
-    ),
-    "fixed_weak_trend_only_target_exposure": (
-        "unfiltered_weak_trend_target_exposure"
-    ),
-}
+PARENT_PREFIX_PROOF_SCHEMA_VERSION = 2
 
 ABLATION_POLICY_BY_COMPARISON: Mapping[str, str] = {
     "online_minus_frozen_2018": FROZEN_2018_ARM,
@@ -101,7 +93,7 @@ ABLATION_POLICY_BY_COMPARISON: Mapping[str, str] = {
 }
 
 FATAL_GATE_SCHEMA_VERSION = 1
-STAGE_EVIDENCE_SCHEMA_VERSION = 1
+STAGE_EVIDENCE_SCHEMA_VERSION = 2
 NO_EXECUTED_TERMINAL_CASH = "no_executed_terminal_cash_residual"
 NO_PARTIAL_XOR_BOUNDARY = "no_partial_xor_boundary"
 
@@ -523,7 +515,7 @@ class StageComputation:
     accounts: Mapping[str, Mapping[str, _ledger.AccountState]]
     episodes: Mapping[str, Mapping[str, _ledger.EpisodeExtraction]]
     xors: Mapping[str, Mapping[str, _ledger.XorExtraction]]
-    fixed_parent_proof: Mapping[str, Any]
+    parent_causal_prefix_proof: Mapping[str, Any]
     source_bundle_provenance: Mapping[str, Any]
     replay_diagnostics: Mapping[str, Any]
     prefix_continuity_proof: Mapping[str, Any] | None
@@ -941,15 +933,22 @@ def _gate_and_metrics(
     return integrity, gate, metrics
 
 
-PARENT_PROJECTION_COLUMNS = (
-    *_replay.FIXED_CAUSAL_SIGNAL_COLUMNS,
-    *_replay.COMPARATOR_TARGET_COLUMNS,
-)
-PARENT_PROJECTION_SCHEMA = _artifacts.CanonicalTableSchema(
-    columns=PARENT_PROJECTION_COLUMNS,
+PARENT_CAUSAL_PROJECTION_COLUMNS = tuple(_replay.FIXED_CAUSAL_SIGNAL_COLUMNS)
+PARENT_CAUSAL_PROJECTION_SCHEMA = _artifacts.CanonicalTableSchema(
+    columns=PARENT_CAUSAL_PROJECTION_COLUMNS,
     column_types=tuple(
         _fixed_feature_types()[_replay.FIXED_FEATURE_COLUMNS.index(name)]
-        for name in PARENT_PROJECTION_COLUMNS
+        for name in PARENT_CAUSAL_PROJECTION_COLUMNS
+    ),
+    index_name="decision_date",
+    index_type="iso_date",
+)
+COMPARATOR_PROJECTION_COLUMNS = tuple(_replay.COMPARATOR_TARGET_COLUMNS)
+COMPARATOR_PROJECTION_SCHEMA = _artifacts.CanonicalTableSchema(
+    columns=COMPARATOR_PROJECTION_COLUMNS,
+    column_types=tuple(
+        _fixed_feature_types()[_replay.FIXED_FEATURE_COLUMNS.index(name)]
+        for name in COMPARATOR_PROJECTION_COLUMNS
     ),
     index_name="decision_date",
     index_type="iso_date",
@@ -1004,17 +1003,16 @@ def _source_bundle_provenance(
     return result
 
 
-def _strict_parent_projection(
+def _strict_parent_causal_projection(
     raw: pd.DataFrame, *, expected_index: pd.DatetimeIndex
 ) -> pd.DataFrame:
     required_parent = {
         "decision_date",
         *_replay.FIXED_CAUSAL_SIGNAL_COLUMNS,
-        *PARENT_TARGET_COLUMN_MAP.values(),
     }
     if not required_parent.issubset(raw.columns):
         raise ContextualExpertAggregationStageError(
-            "sealed source forecast omits a fixed causal projection column"
+            "sealed source forecast omits a fixed causal signal column"
         )
     date_values = raw["decision_date"].tolist()
     if any(type(value) is not str for value in date_values):
@@ -1037,7 +1035,12 @@ def _strict_parent_projection(
             "sealed source forecast date sequence changed"
         )
     result = pd.DataFrame(index=index)
-    fixed_types = dict(zip(PARENT_PROJECTION_COLUMNS, PARENT_PROJECTION_SCHEMA.column_types))
+    fixed_types = dict(
+        zip(
+            PARENT_CAUSAL_PROJECTION_COLUMNS,
+            PARENT_CAUSAL_PROJECTION_SCHEMA.column_types,
+        )
+    )
     for name in _replay.FIXED_CAUSAL_SIGNAL_COLUMNS:
         series = raw[name]
         if fixed_types[name] == "bool":
@@ -1060,17 +1063,98 @@ def _strict_parent_projection(
                     f"sealed source forecast {name} is nonfinite"
                 )
             result[name] = values.to_numpy()
-    for generated_name, source_name in PARENT_TARGET_COLUMN_MAP.items():
-        values = pd.to_numeric(raw[source_name], errors="raise").astype(float)
+    return result.loc[:, list(PARENT_CAUSAL_PROJECTION_COLUMNS)]
+
+
+def _derived_comparator_projection(
+    fixed_features: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, bool]]:
+    required = {
+        "unfiltered_union_signal",
+        "contextual_virtual_signal",
+        "weak_trend_virtual_signal",
+        *COMPARATOR_PROJECTION_COLUMNS,
+    }
+    missing = sorted(required.difference(fixed_features.columns))
+    if missing:
+        raise ContextualExpertAggregationStageError(
+            f"fixed feature frame omits comparator inputs: {missing}"
+        )
+    accepted_union = fixed_features["unfiltered_union_signal"]
+    contextual = fixed_features["contextual_virtual_signal"]
+    weak_trend = fixed_features["weak_trend_virtual_signal"]
+    for name, values in (
+        ("unfiltered_union_signal", accepted_union),
+        ("contextual_virtual_signal", contextual),
+        ("weak_trend_virtual_signal", weak_trend),
+    ):
+        if not values.map(lambda value: isinstance(value, (bool, np.bool_))).all():
+            raise ContextualExpertAggregationStageError(
+                f"fixed comparator input {name} is not exactly boolean"
+            )
+    union_values = accepted_union.to_numpy(dtype=bool)
+    contextual_values = contextual.to_numpy(dtype=bool)
+    weak_values = weak_trend.to_numpy(dtype=bool)
+    expected = pd.DataFrame(
+        {
+            "fixed_always_long_target_exposure": np.ones(len(fixed_features)),
+            "fixed_union_cash_target_exposure": np.where(
+                union_values, 0.0, 1.0
+            ),
+            "fixed_contextual_only_target_exposure": np.where(
+                union_values & contextual_values, 0.0, 1.0
+            ),
+            "fixed_weak_trend_only_target_exposure": np.where(
+                union_values & weak_values, 0.0, 1.0
+            ),
+        },
+        index=fixed_features.index.rename("decision_date"),
+    ).loc[:, list(COMPARATOR_PROJECTION_COLUMNS)]
+    observed = fixed_features.loc[:, list(COMPARATOR_PROJECTION_COLUMNS)].copy()
+    observed.index = observed.index.rename("decision_date")
+    for name in COMPARATOR_PROJECTION_COLUMNS:
+        try:
+            values = pd.to_numeric(observed[name], errors="raise").astype(float)
+        except (TypeError, ValueError) as exc:
+            raise ContextualExpertAggregationStageError(
+                f"generated comparator target {name} is not numeric"
+            ) from exc
         if not values.isin([0.0, 1.0]).all():
             raise ContextualExpertAggregationStageError(
-                "sealed parent comparator target is not binary"
+                f"generated comparator target {name} is not binary"
             )
-        result[generated_name] = values.to_numpy()
-    return result.loc[:, list(PARENT_PROJECTION_COLUMNS)]
+        observed[name] = values.to_numpy()
+    observed_cash = {
+        name: observed[name].to_numpy(dtype=float) == 0.0
+        for name in COMPARATOR_PROJECTION_COLUMNS
+    }
+    invariants = {
+        "always_long_never_cash": not observed_cash[
+            "fixed_always_long_target_exposure"
+        ].any(),
+        "union_cash_iff_accepted_union": np.array_equal(
+            observed_cash["fixed_union_cash_target_exposure"], union_values
+        ),
+        "contextual_cash_iff_accepted_union_and_contextual_signal": np.array_equal(
+            observed_cash["fixed_contextual_only_target_exposure"],
+            union_values & contextual_values,
+        ),
+        "weak_trend_cash_iff_accepted_union_and_weak_trend_signal": np.array_equal(
+            observed_cash["fixed_weak_trend_only_target_exposure"],
+            union_values & weak_values,
+        ),
+        "all_targets_long_outside_accepted_union": all(
+            not cash[~union_values].any() for cash in observed_cash.values()
+        ),
+    }
+    if not all(invariants.values()):
+        raise ContextualExpertAggregationStageError(
+            "generated comparator targets violate the frozen union-gated contract"
+        )
+    return observed, expected, invariants
 
 
-def _fixed_parent_prefix_proof(
+def _parent_causal_prefix_proof(
     repo_root: Path,
     *,
     stage: str,
@@ -1095,29 +1179,70 @@ def _fixed_parent_prefix_proof(
         raise ContextualExpertAggregationStageError(
             "sealed source forecast bytes changed after bundle verification"
         )
-    generated = fixed_features.loc[:, list(PARENT_PROJECTION_COLUMNS)].copy()
-    generated.index = generated.index.rename("decision_date")
-    parent = _strict_parent_projection(raw, expected_index=generated.index)
-    generated_bytes = table_bytes(generated, schema=PARENT_PROJECTION_SCHEMA)
-    parent_projection_bytes = table_bytes(parent, schema=PARENT_PROJECTION_SCHEMA)
-    if parent_projection_bytes != generated_bytes:
+    generated_causal = fixed_features.loc[
+        :, list(PARENT_CAUSAL_PROJECTION_COLUMNS)
+    ].copy()
+    generated_causal.index = generated_causal.index.rename("decision_date")
+    parent_causal = _strict_parent_causal_projection(
+        raw, expected_index=generated_causal.index
+    )
+    generated_causal_bytes = table_bytes(
+        generated_causal, schema=PARENT_CAUSAL_PROJECTION_SCHEMA
+    )
+    parent_causal_bytes = table_bytes(
+        parent_causal, schema=PARENT_CAUSAL_PROJECTION_SCHEMA
+    )
+    if parent_causal_bytes != generated_causal_bytes:
         raise ContextualExpertAggregationStageError(
-            "fixed causal signals or comparator targets differ from the sealed parent"
+            "fixed causal signals differ from the sealed parent"
+        )
+    observed_comparators, expected_comparators, comparator_invariants = (
+        _derived_comparator_projection(fixed_features)
+    )
+    observed_comparator_bytes = table_bytes(
+        observed_comparators, schema=COMPARATOR_PROJECTION_SCHEMA
+    )
+    expected_comparator_bytes = table_bytes(
+        expected_comparators, schema=COMPARATOR_PROJECTION_SCHEMA
+    )
+    if observed_comparator_bytes != expected_comparator_bytes:
+        raise ContextualExpertAggregationStageError(
+            "generated comparator targets differ from the frozen union-gated derivation"
         )
     proof = {
-        "proof_schema_version": STAGE_EVIDENCE_SCHEMA_VERSION,
+        "proof_schema_version": PARENT_PREFIX_PROOF_SCHEMA_VERSION,
         "stage": selected,
         "source_manifest_sha256": source.manifest["manifest_sha256"],
         "source_forecast_filename": filename,
         "source_forecast_payload_sha256": source.payload_sha256[filename],
-        "compared_rows": len(generated),
-        "first_decision_date": generated.index[0].date().isoformat(),
-        "last_decision_date": generated.index[-1].date().isoformat(),
-        "column_order": list(PARENT_PROJECTION_COLUMNS),
-        "parent_projection_sha256": _experiment.sha256_bytes(
-            parent_projection_bytes
+        "compared_rows": len(generated_causal),
+        "first_decision_date": generated_causal.index[0].date().isoformat(),
+        "last_decision_date": generated_causal.index[-1].date().isoformat(),
+        "parent_projection_kind": "fixed_causal_signals_and_accepted_union_v2",
+        "parent_causal_column_order": list(PARENT_CAUSAL_PROJECTION_COLUMNS),
+        "parent_causal_projection_sha256": _experiment.sha256_bytes(
+            parent_causal_bytes
         ),
-        "generated_projection_sha256": _experiment.sha256_bytes(generated_bytes),
+        "generated_causal_projection_sha256": _experiment.sha256_bytes(
+            generated_causal_bytes
+        ),
+        "comparator_column_order": list(COMPARATOR_PROJECTION_COLUMNS),
+        "comparator_derivation": {
+            "always_long": "never_cash",
+            "union_cash": "accepted_union",
+            "contextual_only": "accepted_union_and_contextual_virtual_signal",
+            "weak_trend_only": "accepted_union_and_weak_trend_virtual_signal",
+        },
+        "comparator_invariants": comparator_invariants,
+        "expected_comparator_projection_sha256": _experiment.sha256_bytes(
+            expected_comparator_bytes
+        ),
+        "generated_comparator_projection_sha256": _experiment.sha256_bytes(
+            observed_comparator_bytes
+        ),
+        "legacy_parent_comparator_targets_used": False,
+        "causal_exact": True,
+        "comparator_exact": True,
         "exact": True,
     }
     proof["proof_sha256"] = _sha256_json(proof)
@@ -1151,21 +1276,21 @@ def _compute_development(
     snapshot = _experiment.load_authorized_prices(
         repo_root, stage=DEVELOPMENT_STAGE
     )
-    trace.mark("development authorized input loaded")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[DEVELOPMENT_STAGE][1])
     replays, replay_extra = _development_replays(snapshot.frame)
-    trace.mark("development replay completed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[DEVELOPMENT_STAGE][2])
     fixed = _fixed_features_for_replays(replays)
-    parent_proof, source_provenance = _fixed_parent_prefix_proof(
+    parent_proof, source_provenance = _parent_causal_prefix_proof(
         repo_root,
         stage=DEVELOPMENT_STAGE,
         fixed_features=fixed,
     )
-    trace.mark("development fixed parent prefix proved")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[DEVELOPMENT_STAGE][3])
     ledgers, accounts = _run_development_ledgers(
         snapshot=snapshot, replays=replays
     )
     episodes, xors = _extract_episodes_and_xors(ledgers)
-    trace.mark("development ledgers and differences completed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[DEVELOPMENT_STAGE][4])
     return StageComputation(
         stage=DEVELOPMENT_STAGE,
         snapshot=snapshot,
@@ -1174,7 +1299,7 @@ def _compute_development(
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof=parent_proof,
+        parent_causal_prefix_proof=parent_proof,
         source_bundle_provenance=source_provenance,
         replay_diagnostics=_replay_diagnostics_payload(
             stage=DEVELOPMENT_STAGE,
@@ -1444,7 +1569,7 @@ def _compute_confirmation(
         repo_root=repo_root,
         development_manifest_path=repo_root / DEVELOPMENT_MANIFEST_PATH,
     )
-    trace.mark("confirmation attempt durably authorized")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[CONFIRMATION_STAGE][0])
     development_bundle = _read_development_bundle(
         repo_root,
         expected_manifest_sha256=authorization.development_manifest_sha256,
@@ -1478,7 +1603,7 @@ def _compute_confirmation(
     parent_replay_artifacts = _require_development_replay_artifacts(
         development_bundle, regenerated=development_online
     )
-    trace.mark("development checkpoint and account prefix replayed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[CONFIRMATION_STAGE][1])
 
     # This is the first call authorized to return any 2019-2023 market value.
     confirmation_snapshot = _experiment.load_authorized_prices(
@@ -1506,9 +1631,9 @@ def _compute_confirmation(
         full_online, confirmation_replays[ONLINE_FULL_ARM]
     )
     resume.require()
-    trace.mark("confirmation replay forks completed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[CONFIRMATION_STAGE][2])
     fixed = _fixed_features_for_replays(confirmation_replays)
-    parent_proof, source_provenance = _fixed_parent_prefix_proof(
+    parent_proof, source_provenance = _parent_causal_prefix_proof(
         repo_root,
         stage=CONFIRMATION_STAGE,
         fixed_features=fixed,
@@ -1522,7 +1647,7 @@ def _compute_confirmation(
         development_checkpoint=development_checkpoint,
     )
     episodes, xors = _extract_episodes_and_xors(ledgers)
-    trace.mark("confirmation ledgers and differences completed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[CONFIRMATION_STAGE][3])
     prefix_proof = {
         "proof_schema_version": STAGE_EVIDENCE_SCHEMA_VERSION,
         "development_manifest_sha256": development_bundle.manifest[
@@ -1553,7 +1678,7 @@ def _compute_confirmation(
         accounts=accounts,
         episodes=episodes,
         xors=xors,
-        fixed_parent_proof=parent_proof,
+        parent_causal_prefix_proof=parent_proof,
         source_bundle_provenance=source_provenance,
         replay_diagnostics=_replay_diagnostics_payload(
             stage=CONFIRMATION_STAGE,
@@ -1670,7 +1795,7 @@ def _integrity_payload(
         "integrity_evidence_schema_version": STAGE_EVIDENCE_SCHEMA_VERSION,
         "stage": _stage(stage),
         "checks": {name: bool(integrity[name]) for name in sorted(integrity)},
-        "fixed_parent_prefix_proof_sha256": computation.fixed_parent_proof[
+        "parent_causal_prefix_proof_sha256": computation.parent_causal_prefix_proof[
             "proof_sha256"
         ],
         "replay_diagnostics_sha256": computation.replay_diagnostics[
@@ -1721,8 +1846,8 @@ def _base_payloads(
         f"{stage}_fixed_features.table.json": _decision_table_bytes(
             fixed, schema=FIXED_FEATURE_SCHEMA
         ),
-        f"{stage}_fixed_parent_prefix_proof.json": _json_bytes(
-            computation.fixed_parent_proof
+        f"{stage}_parent_causal_prefix_proof.json": _json_bytes(
+            computation.parent_causal_prefix_proof
         ),
         f"{stage}_forecast__fixed_comparators.table.json": _decision_table_bytes(
             fixed.loc[:, list(_replay.COMPARATOR_TARGET_COLUMNS)],
@@ -2016,7 +2141,7 @@ def run_stage(
     trace = _RuntimeTrace.start(clock)
     if selected == DEVELOPMENT_STAGE:
         git_identity = _experiment.clean_git_identity(root)
-        trace.mark("development git authorization")
+        trace.mark(RUNTIME_PHASES_BY_STAGE[DEVELOPMENT_STAGE][0])
         _ensure_output_parent(root)
         computation = _compute_development(root, trace=trace)
     else:
@@ -2030,14 +2155,14 @@ def run_stage(
             "postlock_git_identity"
         ]
     integrity, gate_report, metrics = _gate_and_metrics(computation)
-    trace.mark(f"{selected} gates completed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[selected][-2])
     payloads, checkpoint = _base_payloads(
         computation,
         integrity=integrity,
         gate_report=gate_report,
         metrics=metrics,
     )
-    trace.mark(f"{selected} payload construction completed")
+    trace.mark(RUNTIME_PHASES_BY_STAGE[selected][-1])
     runtime = trace.evidence(stage=selected)
     payloads[f"{selected}_runtime_cost_evidence.json"] = _json_bytes(runtime)
     report = _report(
@@ -2118,7 +2243,8 @@ __all__ = [
     "LEDGER_SCHEMA",
     "MATURED_EVENT_SCHEMA",
     "MODEL_CONSTANTS",
-    "PARENT_PROJECTION_SCHEMA",
+    "COMPARATOR_PROJECTION_SCHEMA",
+    "PARENT_CAUSAL_PROJECTION_SCHEMA",
     "StageComputation",
     "build_fatal_gate_report",
     "classify_terminal_residuals",

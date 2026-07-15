@@ -179,7 +179,7 @@ def _rehash_checkpoint_payload(payload: dict) -> dict:
     return payload
 
 
-def test_fixed_frame_uses_accepted_union_and_never_stage_availability(
+def test_fixed_frame_uses_union_gated_individual_comparators(
     monkeypatch: pytest.MonkeyPatch,
 ):
     index = pd.bdate_range("2001-01-01", periods=4, name="date")
@@ -201,8 +201,14 @@ def test_fixed_frame_uses_accepted_union_and_never_stage_availability(
     assert fixed["unfiltered_union_signal"].tolist() == [True, False, True, False]
     assert not any("stage_outcome" in column for column in fixed.columns)
     assert fixed["fixed_union_cash_target_exposure"].tolist() == [0.0, 1.0, 0.0, 1.0]
-    # The weak expert contributed to the suppressed candidate at row 1, but a
-    # comparator action cannot resurrect a non-opportunity.
+    assert fixed["fixed_contextual_only_target_exposure"].tolist() == [
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+    ]
+    # The weak expert contributed to the union-suppressed candidate at row 1,
+    # but an individual comparator cannot resurrect a non-opportunity.
     assert fixed["fixed_weak_trend_only_target_exposure"].tolist() == [
         1.0,
         1.0,
