@@ -1,9 +1,8 @@
 # AAPL long/cash approach comparison
 
-Updated through the independently verified contextual aggregation v2
-post-rejection 2019-2023 continuation audit plus the union-duration,
-additive-residual, and persistent-market-stress preflight rejections on
-2026-07-15.
+Updated through the contextual aggregation v2 one-shot 2024 audit that failed
+closed on 2026-07-16. Its forensic bundle contains a provisional economic
+rejection, but no certified final bundle or success marker.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
 paid API. Published 2024-2026 figures are repeated historical audits, not a
@@ -44,15 +43,17 @@ extensive historical research, and each lead still lost the already-revealed
 | Approach | Model/information | 2019-2023 validation or audit | Continuous 2005-2023 diagnostic | Learning evidence | Later-data decision |
 |---|---|---|---|---|---|
 | Binary-regime union selector v1 | Two-state causal online selector using 20-session SPY/QQQ market regime over the fixed exhaustion union | Beat AAPL in 4/5 years; +7.78% relative wealth at 5 bps and +3.97% at 10 bps. Selector-minus-union improved in only 1/5 years and one veto supplied 85.20% of positive stress-cost veto benefit | +258.49% relative wealth at 5 bps and +212.59% at 10 bps; 16/19 and 14/19 positive years; 4/4 negative-AAPL years beaten | Sparse selector value; post-2023 lessons later changed no action | Validation rejection remains final; a later audit passed long-run robustness but failed the 2024 strict gate |
-| Causal contextual expert aggregation v2 post-rejection audit | Exact rejected v2 multiscale online learner with frozen-2018, global-only and lifetime-only controls; AAPL plus SPY/QQQ state, no news or LLM | +7.78% relative wealth at 5 bps and +3.97% at 10 bps; 4/5 positive years; 3/3 and 2/3 positive blocks; all suffix criteria passed | +196.08% relative wealth at 5 bps and +155.86% at 10 bps; 16/19 and 13/19 positive years; all four negative-AAPL years had positive edge | Online matched frozen-2018 actions exactly: 38 score differences but zero threshold crossings, action differences, or incremental edge | Historical-policy candidate only; learning candidate false; parent rejection final; 2024+ closed pending a separate preregistered audit |
+| Causal contextual expert aggregation v2 post-rejection audit | Exact rejected v2 multiscale online learner with frozen-2018, global-only and lifetime-only controls; AAPL plus SPY/QQQ state, no news or LLM | +7.78% relative wealth at 5 bps and +3.97% at 10 bps; 4/5 positive years; 3/3 and 2/3 positive blocks; all suffix criteria passed | +196.08% relative wealth at 5 bps and +155.86% at 10 bps; 16/19 and 13/19 positive years; all four negative-AAPL years had positive edge | Online matched frozen-2018 actions exactly: 38 score differences but zero threshold crossings, action differences, or incremental edge | Separate one-shot 2024 audit failed closed; its provisional diagnostic also rejected the policy and learning; no later period authorized |
 
 The v2 continuation passed every declared policy and integrity criterion
-(64/64) at both cost levels. This supports the already learned policy as a
-historical lead, not useful continual learning: the online and frozen-2018
-arms made identical decisions. The original development rejection remains
-final, the evidence is reused historical rather than prospective, and it does
-not authorize real capital. A separate 2024+ audit may be proposed, but no
-2024-or-later value may be opened under the completed contract.
+(64/64) at both cost levels. That historical evidence did not survive the
+separate one-shot 2024 audit. The execution failed before final promotion
+because two valid readings of Windows' coarse monotonic clock were equal. The
+preserved provisional bundle independently passed its 58 declared pre-sealing
+integrity checks but still returned only +27.4184% at 5 bps versus AAPL's
++30.8286%, a -3.4102 percentage-point deficit. Five new causal lessons changed no action,
+so learning was `unexercised`. The original development rejection remains
+final and no later period or real capital is authorized.
 
 ## Chronological development approaches that did not reach later periods
 
@@ -101,6 +102,8 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md`
 - `e/aapl_causal_contextual_expert_aggregation_v2/REJECTED.md`
 - `e/aapl_causal_contextual_expert_aggregation_audit_v2/RESULT.md`
+- `docs/aapl_causal_contextual_expert_aggregation_2024_audit_v2_failure.md`
+- `e/aapl_causal_contextual_expert_aggregation_2024_audit_v2/runs/.failed-contextual-expert-aggregation-frozen-policy-2024-audit-v2`
 - `e/aapl_causal_union_duration_learner_v1/PREFLIGHT_REJECTED.md`
 - `e/aapl_additive_residual_shock_v1/PREFLIGHT_REJECTED.md`
 - `e/aapl_persistent_market_stress_v1/PREFLIGHT_REJECTED.md`
