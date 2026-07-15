@@ -1,7 +1,8 @@
 # AAPL long/cash approach comparison
 
 Updated through the independently verified contextual aggregation v2
-development rejection and union-duration preflight rejection on 2026-07-15.
+development rejection plus the union-duration and additive-residual preflight
+rejections on 2026-07-15.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
 paid API. Published 2024-2026 figures are repeated historical audits, not a
@@ -59,6 +60,7 @@ extensive historical research, and each lead still lost the already-revealed
 | Causal contextual expert aggregation v1 | Multiscale causal online aggregator over the fixed exhaustion experts and SPY/QQQ market state | Preflight stopped before ledgers or scoring: all 19 causal fields matched, but 3 of 114,678 projection cells exposed a mismatch between the v1 union-gated comparator contract and legacy independent parent targets | No | Permanently rejected before scoring; proof repair requires v2 |
 | Causal contextual expert aggregation v2 | Multiscale causal online aggregator over the fixed exhaustion experts and SPY/QQQ market state | At 10 bps: +146.09% wealth vs buy-and-hold, 9/14 positive years, 7/7 positive folds and 3/3 negative-AAPL years; learner skipped 11 union episodes and trailed the fixed union by 0.071286 log edge | No | Verified rejection; strong underlying signal, but learned filtering removed net value |
 | Union-conditioned duration learner v1 | Proposed causal learner over one-, two-, and three-session CASH holds after every fixed union entry | Preflight fixed policies at 10 bps: duration 1 edge 0.971826, duration 2 edge 0.465302, duration 3 edge 0.533822. Extension rewards were negative in both 2005-2011 and 2012-2018; positive contexts were sparse or unstable | No | Rejected before implementation; longer holds lack stable incremental signal |
+| Additive residual shock v1 | Proposed one-session CASH addition after a causal 126-session AAPL residual z-score above 2.0 versus SPY/QQQ | At 10 bps, residual-only edge was -0.280002; adding it reduced union edge from 0.971826 to 0.577635. Incremental edge was positive in only 2/14 years and 1/7 folds | No | Exact candidate rejected before implementation; broad, crisis-concentrated underperformance |
 
 ## Outside the current no-leverage contract
 
@@ -89,5 +91,6 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md`
 - `e/aapl_causal_contextual_expert_aggregation_v2/REJECTED.md`
 - `e/aapl_causal_union_duration_learner_v1/PREFLIGHT_REJECTED.md`
+- `e/aapl_additive_residual_shock_v1/PREFLIGHT_REJECTED.md`
 - `e/binary_regime_union_selector_v1/REJECTED.md`
 - `e/binary_regime_longrun_audit_v1/REJECTED.md`
