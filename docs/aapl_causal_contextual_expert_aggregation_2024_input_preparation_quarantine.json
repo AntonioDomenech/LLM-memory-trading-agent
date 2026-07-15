@@ -1,0 +1,93 @@
+{
+  "schema_version": "aapl-contextual-aggregation-through-2024-input-full-lineage-v1",
+  "created_for_contract": "aapl-causal-contextual-expert-aggregation-2024-audit-v2",
+  "quarantine_classification": "preparation_only_not_an_audit_input",
+  "audit_surface_access": "forbidden",
+  "preparation_classification": "deterministic_data_only_physical_cutoff",
+  "destination": {
+    "path": "e/aapl_causal_contextual_expert_aggregation_2024_audit_v2/authorized_inputs/aapl_spy_qqq_through_2024.csv",
+    "schema": [
+      "date",
+      "aapl_open",
+      "aapl_close",
+      "aapl_adj_close",
+      "spy_adj_close",
+      "qqq_adj_close"
+    ],
+    "raw_sha256": "sha256:abf8115e61e7a7724ed816db7dbd0fe053b098123b2e1e43886eb0074b575be7",
+    "git_blob": "3cdb68aac6a3b7b1cda4f64ee81193690f28a1d7",
+    "canonical_sha256": "sha256:5b3df584b4ccedb6f6871e6cbd43095126378485aec4f3a55f4846d2fb74f071",
+    "date_sequence_sha256": "6a3a247806d34797029831a945c15458e15eabc2bd36b021d2a815668c7d5e4c",
+    "first_session": "1999-03-10",
+    "last_session": "2024-12-31",
+    "rows": 6496,
+    "bytes": 681685,
+    "physical_snapshot_has_later_rows": false,
+    "rows_after_bound_returned": false
+  },
+  "source": {
+    "path": "e/binary_regime_longrun_audit_v1/authorized_inputs/aapl_spy_qqq_through_2026_ytd.csv",
+    "schema": [
+      "date",
+      "aapl_open",
+      "aapl_close",
+      "aapl_adj_close",
+      "spy_adj_close",
+      "qqq_adj_close"
+    ],
+    "raw_sha256": "sha256:cf384e8218f97d4c6e7ca89860877ef5edb67e938af66886bdf81912bd35479b",
+    "git_blob": "358ff80f066ae3ba36ee66613fc90d62dbc31a2f",
+    "first_session": "1999-03-10",
+    "last_session": "2026-07-09",
+    "rows": 6875,
+    "date_sequence_sha256": "b88df14b4ec60534ace68645ee19c8a0b7d03d0c2c1829a3ad48f8a0a24c9299",
+    "canonical_sha256": "sha256:c01447f975d4a90e49c315f23177f357966363b1ec4790632fa54c0dee250b21",
+    "sealed_source_bundle": {
+      "manifest_path": "e/binary_regime_longrun_audit_v1/binary-regime-longrun-audit-v1/stage_manifest.json",
+      "manifest_file_sha256": "sha256:b98e250b5940170bb88aa7d61b76e4ce938b27efe245fb7aa26ea54aef1fc0e1",
+      "manifest_self_sha256": "sha256:ad59b77b27ead2012c8ae73e422ba85b26bb58121fbefedaecfa5640c7f87cdb",
+      "checksums_file_sha256": "sha256:9c8ef690335be5304ee66f4e28cf7d262952bc4ff8af19dc819a943bbfeb9e49",
+      "input_provenance_file_sha256": "sha256:341f6b3894544a6da332b2a5983988ae720d554dc0a2d984de7a63e3707c97e9",
+      "contract_version": "aapl-binary-regime-longrun-audit-v1",
+      "stage": "post_hoc_long_run_audit"
+    }
+  },
+  "prefix_authority": {
+    "through_2023_rows": 6244,
+    "through_2023_last_session": "2023-12-29",
+    "through_2023_canonical_sha256": "sha256:3b5e02acaa69a56fa47a0fd34275472d226b62c0f61741c13d3680b239b82535",
+    "through_2023_prefix_match": true,
+    "parent_audit_manifest_self_sha256": "sha256:c71e201a8a3d1ef2b0ebe914d46abfdd0f5a9154d4f106ce723168a9bce009e8",
+    "parent_checkpoint_payload_sha256": "sha256:560571500f580f9e0fd4319a93905b4ad1e498f1c1f27de9d647da455b6d5477",
+    "parent_checkpoint_self_sha256": "sha256:4aaf549c9352ac322f36c46cb8dcdd03f672a1eba580813ba8a1947d323a85eb"
+  },
+  "preparation": {
+    "method": "verify the exact tracked source identity, then copy its header and first 6496 ordered data rows to a UTF-8 no-BOM LF file",
+    "lineage_strength": "self_attested_mechanical_cut_plus_independent_destination_integrity_review",
+    "standalone_cutter_pre_registered": false,
+    "standalone_cutter_identity_available": false,
+    "limitation": "The mechanical cut preceded this audit preregistration, so no separately committed cutter implementation or execution commit exists. The evidence instead binds exact source and destination identities, the deterministic method, the sealed source bundle, and an independent bounded-destination/prefix/checkpoint review.",
+    "cutoff": "2024-12-31",
+    "source_full_sha256_verified_before_copy": true,
+    "destination_written_atomically_from_temporary_file": true,
+    "destination_overwrite_allowed": false,
+    "later_numeric_values_written_to_destination": false,
+    "policy_or_evaluation_code_executed": false,
+    "strategy_parameters_changed": false,
+    "market_values_printed": false,
+    "network_access": false,
+    "news_access": false,
+    "llm_calls": 0,
+    "api_calls": 0,
+    "external_cost_usd": 0.0,
+    "disclosure": "A metadata-only check identified the first later date as 2025-01-02. No later price was printed or written, and the audit policy has no path to the longer source."
+  },
+  "pre_registration_review": {
+    "classification": "independent_bounded_data_integrity_only",
+    "bounded_loader_invoked": true,
+    "policy_or_scoring_function_invoked": false,
+    "market_values_printed": false,
+    "destination_raw_canonical_date_schema_and_bound_checks_passed": true,
+    "through_2023_prefix_and_checkpoint_regeneration_passed": true
+  }
+}
