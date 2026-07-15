@@ -56,6 +56,7 @@ extensive historical research, and each lead still lost the already-revealed
 | SEC numeric event drift v1 | AAPL 10-Q/10-K changes plus QQQ/VIX sentiment | Preflight found only 38 events from 2009-2018; after warm-up, 24 predictions and five helpful cash episodes | No | Rejected before implementation; too small for a reliable claim |
 | Chronological exhaustion expert v1 | Causal posterior trust gate over contextual and weak-trend exhaustion; no LLM | At 10 bps: +155.10% wealth vs buy-and-hold, 10/14 winning years, 7/7 positive folds and 3/3 negative-AAPL years; learner nevertheless trailed the plain union by 0.035357 log edge | No | Rejected; learning removed two winners and added no value |
 | Union contextual veto v1 | Discounted Bayesian pure veto using AAPL plus SPY/QQQ sentiment | Exactly reproduced the strong union: at 10 bps +164.28% wealth vs buy-and-hold, 11/14 positive years, 7/7 positive folds and 3/3 negative-AAPL years; 0 vetoes and 0 incremental edge | No | Rejected; learner was inert, underlying union remains a lead |
+| Causal contextual expert aggregation v1 | Multiscale causal online aggregator over the fixed exhaustion experts and SPY/QQQ market state | Preflight stopped before ledgers or scoring: all 19 causal fields matched, but 3 of 114,678 projection cells exposed a mismatch between the v1 union-gated comparator contract and legacy independent parent targets | No | Permanently rejected before scoring; proof repair requires v2 |
 
 ## Outside the current no-leverage contract
 
@@ -83,5 +84,6 @@ short behavior and are excluded from the eligible table.
 - `e/sec_numeric_event_drift_v1/PREFLIGHT_REJECTED.md`
 - `e/chronological_exhaustion_expert_v1/REJECTED.md`
 - `e/union_contextual_veto_v1/REJECTED.md`
+- `e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md`
 - `e/binary_regime_union_selector_v1/REJECTED.md`
 - `e/binary_regime_longrun_audit_v1/REJECTED.md`
