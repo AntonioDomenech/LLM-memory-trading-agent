@@ -1,0 +1,191 @@
+{
+  "checkpoint_cutoff": "2018-12-31",
+  "contract_version": "aapl-union-contextual-veto-v1",
+  "feature_order": [
+    "feature_intercept",
+    "feature_weak_only",
+    "feature_expert_overlap",
+    "feature_tail_strength",
+    "feature_market_sentiment_10",
+    "feature_market_sentiment_20",
+    "feature_aapl_trend"
+  ],
+  "last_observed_session": "2018-12-31",
+  "learning_mode": "causal_online",
+  "model_constants": {
+    "coefficient_prior_standard_deviation": 0.02,
+    "fixed_observation_standard_deviation": 0.04,
+    "lesson_cost_bps_per_changing_leg": 10.0,
+    "lesson_start": "2000-01-01",
+    "minimum_effective_lessons": 30.0,
+    "minimum_predicted_harm": 0.001,
+    "minimum_raw_lessons": 40,
+    "one_sided_confidence_multiplier": 1.282,
+    "per_lesson_discount_rho": 0.995
+  },
+  "pending_shadow_opportunities": [],
+  "serialized_bayesian_state": {
+    "A": [
+      [
+        72283.08044115038,
+        7002.179046321764,
+        25619.84526511663,
+        39766.441565072084,
+        -20146.33270655276,
+        -18269.672902918468,
+        -11462.366844473365
+      ],
+      [
+        7002.179046321764,
+        9502.179046321762,
+        0.0,
+        4335.396773464889,
+        1114.1842506951357,
+        -2177.8062569349117,
+        -2760.815773962066
+      ],
+      [
+        25619.84526511663,
+        0.0,
+        28119.845265116637,
+        19301.810378210797,
+        -11565.407500677256,
+        -10490.533405806053,
+        -10305.651417319488
+      ],
+      [
+        39766.441565072084,
+        4335.396773464889,
+        19301.810378210797,
+        32038.858022924505,
+        -12077.009000840346,
+        -11391.251017677594,
+        -7525.191224753412
+      ],
+      [
+        -20146.33270655276,
+        1114.1842506951357,
+        -11565.407500677256,
+        -12077.009000840346,
+        15072.081425893413,
+        8894.872089253573,
+        5703.931484075685
+      ],
+      [
+        -18269.672902918468,
+        -2177.8062569349117,
+        -10490.533405806053,
+        -11391.251017677594,
+        8894.872089253573,
+        14312.012557718035,
+        6199.122205812698
+      ],
+      [
+        -11462.366844473365,
+        -2760.815773962066,
+        -10305.651417319488,
+        -7525.191224753412,
+        5703.931484075685,
+        6199.122205812698,
+        18316.483604500478
+      ]
+    ],
+    "b": [
+      555.0725866138209,
+      39.585723414131444,
+      364.03519460875265,
+      363.98058384298884,
+      -189.78656179714972,
+      -179.2516212043448,
+      -200.37476113785718
+    ],
+    "feature_order": [
+      "feature_intercept",
+      "feature_weak_only",
+      "feature_expert_overlap",
+      "feature_tail_strength",
+      "feature_market_sentiment_10",
+      "feature_market_sentiment_20",
+      "feature_aapl_trend"
+    ],
+    "label_sum": 1.315878451114382,
+    "n_eff": 111.65292870584064,
+    "n_raw": 163,
+    "schema_version": "union-contextual-veto-state-v1",
+    "squared_label_sum": 0.1908091829329319,
+    "wins": 100
+  },
+  "serialized_pending_shadow_lessons": {
+    "feature_order": [
+      "feature_intercept",
+      "feature_weak_only",
+      "feature_expert_overlap",
+      "feature_tail_strength",
+      "feature_market_sentiment_10",
+      "feature_market_sentiment_20",
+      "feature_aapl_trend"
+    ],
+    "lessons": [],
+    "schema_version": "union-contextual-veto-pending-v1"
+  },
+  "sufficient_state": {
+    "label_sum": 1.315878451114382,
+    "n_eff": 111.65292870584064,
+    "n_raw": 163,
+    "precision_matrix_upper_triangle": {
+      "state_A_0_0": 72283.08044115038,
+      "state_A_0_1": 7002.179046321764,
+      "state_A_0_2": 25619.84526511663,
+      "state_A_0_3": 39766.441565072084,
+      "state_A_0_4": -20146.33270655276,
+      "state_A_0_5": -18269.672902918468,
+      "state_A_0_6": -11462.366844473365,
+      "state_A_1_1": 9502.179046321762,
+      "state_A_1_2": 0.0,
+      "state_A_1_3": 4335.396773464889,
+      "state_A_1_4": 1114.1842506951357,
+      "state_A_1_5": -2177.8062569349117,
+      "state_A_1_6": -2760.815773962066,
+      "state_A_2_2": 28119.845265116637,
+      "state_A_2_3": 19301.810378210797,
+      "state_A_2_4": -11565.407500677256,
+      "state_A_2_5": -10490.533405806053,
+      "state_A_2_6": -10305.651417319488,
+      "state_A_3_3": 32038.858022924505,
+      "state_A_3_4": -12077.009000840346,
+      "state_A_3_5": -11391.251017677594,
+      "state_A_3_6": -7525.191224753412,
+      "state_A_4_4": 15072.081425893413,
+      "state_A_4_5": 8894.872089253573,
+      "state_A_4_6": 5703.931484075685,
+      "state_A_5_5": 14312.012557718035,
+      "state_A_5_6": 6199.122205812698,
+      "state_A_6_6": 18316.483604500478
+    },
+    "squared_label_sum": 0.1908091829329319,
+    "state_vector": {
+      "state_b_0": 555.0725866138209,
+      "state_b_1": 39.585723414131444,
+      "state_b_2": 364.03519460875265,
+      "state_b_3": 363.98058384298884,
+      "state_b_4": -189.78656179714972,
+      "state_b_5": -179.2516212043448,
+      "state_b_6": -200.37476113785718
+    },
+    "wins": 100
+  },
+  "trailing_cooldown_context": [
+    {
+      "canonical_union_cash_signal": false,
+      "decision_date": "2018-12-28",
+      "features": null,
+      "union_candidate_signal": false
+    },
+    {
+      "canonical_union_cash_signal": false,
+      "decision_date": "2018-12-31",
+      "features": null,
+      "union_candidate_signal": false
+    }
+  ]
+}
