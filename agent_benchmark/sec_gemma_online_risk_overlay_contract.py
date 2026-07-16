@@ -1,4 +1,4 @@
-"""Pure preregistration for the SEC/Gemma online risk-overlay experiment.
+"""Pure v2.1 preregistration for the SEC/Gemma online risk-overlay experiment.
 
 This module performs no filesystem, network, SEC, market, model, or clock I/O.
 The exact manifest is intentionally strict: changing any field creates a new
@@ -21,8 +21,8 @@ from agent_benchmark.sec_filing_gemma_extractor_schema import (
 )
 
 
-CONTRACT_VERSION: Final[str] = "aapl-sec-gemma-online-risk-overlay-v2"
-BRANCH_NAME: Final[str] = "codex/aapl-sec-gemma-online-risk-overlay-v2"
+CONTRACT_VERSION: Final[str] = "aapl-sec-gemma-online-risk-overlay-v2-1"
+BRANCH_NAME: Final[str] = "codex/aapl-sec-gemma-online-risk-overlay-v2-1"
 BASELINE_POLICY_ID: Final[str] = "fixed-contextual-plus-weak-trend-union-v1"
 BASELINE_SOURCE_FILE: Final[str] = (
     "agent_benchmark/chronological_exhaustion_expert.py"
@@ -45,19 +45,19 @@ MODEL_LAYER_DIGESTS: Final[tuple[str, ...]] = (
 )
 OLLAMA_VERSION: Final[str] = "0.32.0"
 RUNTIME_FINGERPRINT_SHA256: Final[str] = (
-    "f92e21f67100de148c03e222ae9232826e69b2f4ca058f2a2c3f560026ccb92b"
+    "816a7c1a6b1e87d083f8e0f85654f80ba0db124bf09fe8dedce960c8124e1c77"
 )
 FINAL_ATTEMPT_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-final-attempt-001"
+    "aapl-sec-gemma-online-risk-overlay-v2-1-final-attempt-001"
 )
 CONFIRMATION_ATTEMPT_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-confirmation-attempt-001"
+    "aapl-sec-gemma-online-risk-overlay-v2-1-confirmation-attempt-001"
 )
 DEVELOPMENT_ATTEMPT_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-development-attempt-001"
+    "aapl-sec-gemma-online-risk-overlay-v2-1-development-attempt-001"
 )
 DEVELOPMENT_ACQUISITION_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-development-acquisition-001"
+    "aapl-sec-gemma-online-risk-overlay-v2-1-development-acquisition-001"
 )
 POSITIVE_EDGE_TOLERANCE: Final[float] = 1e-12
 HORIZON_SESSIONS: Final[int] = 20
@@ -95,6 +95,12 @@ SOURCE_PINS: Final[dict[str, str]] = {
     "sec_filing_gemma_corpus": (
         "74831feadcae050eee497da0a3405d65a5c4649a59830bf3f768ab4d35f9164b"
     ),
+    "sec_audit_transport": (
+        "52915b70c4e43d40987e69c2102241aa6926fdbe93cf688e2388ba01dcf29bd2"
+    ),
+    "sec_point_in_time": (
+        "ccdfc7514fc94223fc9b4f1f57975ac17bcd0f8e5c2e82b10c9f970d11248854"
+    ),
     "sec_filing_content": (
         "70c969c8eee82e82c0ea1a8a5e424178122fdba8ac1b12ed5a12e207177e10bf"
     ),
@@ -125,6 +131,8 @@ SOURCE_PIN_FILES: Final[dict[str, str]] = {
     ),
     "sec_filing_gemma_ollama": "agent_benchmark/sec_filing_gemma_ollama.py",
     "sec_filing_gemma_corpus": "agent_benchmark/sec_filing_gemma_corpus.py",
+    "sec_audit_transport": "agent_benchmark/sec_audit_transport.py",
+    "sec_point_in_time": "agent_benchmark/sec_point_in_time.py",
     "sec_filing_content": "agent_benchmark/sec_filing_content.py",
     "sec_session_calendar": "agent_benchmark/sec_session_calendar.py",
     "sec_filing_gemma_market_source_bytes": (
@@ -136,6 +144,174 @@ SOURCE_PIN_FILES: Final[dict[str, str]] = {
     "sec_filing_gemma_learner": "agent_benchmark/sec_filing_gemma_learner.py",
     "chronological_exhaustion_expert": BASELINE_SOURCE_FILE,
 }
+
+NEW_SOURCE_FILES: Final[dict[str, str]] = {
+    "acquisition": (
+        "agent_benchmark/sec_gemma_online_risk_overlay_acquisition.py"
+    ),
+    "attempt": "agent_benchmark/sec_gemma_online_risk_overlay_attempt.py",
+    "baseline": "agent_benchmark/sec_gemma_online_risk_overlay_baseline.py",
+    "features": "agent_benchmark/sec_gemma_online_risk_overlay_features.py",
+    "learner": "agent_benchmark/sec_gemma_online_risk_overlay_learner.py",
+    "ledger": "agent_benchmark/sec_gemma_online_risk_overlay_ledger.py",
+    "market_verifier": (
+        "agent_benchmark/sec_gemma_online_risk_overlay_market_verifier.py"
+    ),
+    "metrics": "agent_benchmark/sec_gemma_online_risk_overlay_metrics.py",
+    "no_leverage": (
+        "agent_benchmark/sec_gemma_online_risk_overlay_no_leverage.py"
+    ),
+    "policy": "agent_benchmark/sec_gemma_online_risk_overlay_policy.py",
+    "production": (
+        "agent_benchmark/sec_gemma_online_risk_overlay_production.py"
+    ),
+    "publisher": (
+        "agent_benchmark/sec_gemma_online_risk_overlay_publisher.py"
+    ),
+    "registry": "agent_benchmark/sec_gemma_online_risk_overlay_registry.py",
+    "replay": "agent_benchmark/sec_gemma_online_risk_overlay_replay.py",
+    "runner": "agent_benchmark/sec_gemma_online_risk_overlay_runner.py",
+    "runtime": "agent_benchmark/sec_gemma_online_risk_overlay_runtime.py",
+    "source_verifier": (
+        "agent_benchmark/sec_gemma_online_risk_overlay_source_verifier.py"
+    ),
+    "store": "agent_benchmark/sec_gemma_online_risk_overlay_store.py",
+    "vault": "agent_benchmark/sec_gemma_online_risk_overlay_vault.py",
+}
+
+ACQUISITION_VALIDATION_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "verifier_id",
+    "verdict",
+    "stage",
+    "attempt_id",
+    "attempt_kind",
+    "acquisition_plan_sha256",
+    "bundle_sha256",
+    "manifest_sha256",
+    "private_index_sha256",
+    "predecessor_chain_bundle_sha256s",
+    "checks",
+    "check_set_sha256",
+    "validation_sha256",
+)
+ACQUISITION_VALIDATION_CHECKS: Final[tuple[str, ...]] = (
+    "exact_raw_bytes_replayed_sha256",
+    "request_receipts_reconciled_sha256",
+    "stage_and_attempt_scope_bound_sha256",
+    "private_identity_digest_only_sha256",
+    "market_prefix_continuity_replayed_sha256",
+    "blinded_model_requests_replayed_sha256",
+    "request_byte_retry_redirect_caps_reconciled_sha256",
+)
+ACQUISITION_TERMINAL_EVIDENCE_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "verifier_id",
+    "verdict",
+    "terminal_status",
+    "stage",
+    "attempt_id",
+    "attempt_kind",
+    "attempt_plan_sha256",
+    "acquisition_validation_sha256",
+    "bundle_sha256",
+    "manifest_sha256",
+    "private_index_sha256",
+    "check_set_sha256",
+    "record_commitment_sha256",
+    "acquisition_artifact_receipt_sha256",
+    "external_publication_sha256",
+    "terminal_evidence_sha256",
+)
+SCORED_TERMINAL_EVIDENCE_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "verifier_id",
+    "verdict",
+    "terminal_status",
+    "stage",
+    "attempt_id",
+    "attempt_kind",
+    "attempt_plan_sha256",
+    "stage_input_bundle_sha256",
+    "deterministic_evaluation_sha256",
+    "stage_metrics_input_sha256",
+    "stage_metrics_sha256",
+    "gate_report_sha256",
+    "no_leverage_proofs_sha256",
+    "joint_stage_report_sha256",
+    "record_counts",
+    "record_commitment_sha256",
+    "joint_artifact_receipt_sha256",
+    "gate_checks",
+    "gate_check_set_sha256",
+    "failed_gate_names",
+    "external_publication_sha256",
+    "terminal_evidence_sha256",
+)
+EXTERNAL_TAG_REF_TEMPLATE: Final[str] = (
+    "refs/tags/sec-gemma-online-risk-overlay-v2-1/"
+    "{attempt_id}/{report_kind}/{artifact_sha256}"
+)
+EXTERNAL_TAG_MESSAGE_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "contract_version",
+    "contract_sha256",
+    "implementation_commit",
+    "attempt_id",
+    "terminal_status",
+    "report_kind",
+    "artifact_sha256",
+    "predecessor_publication_sha256",
+    "external_cost_usd",
+)
+EXTERNAL_PUBLICATION_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "publisher_id",
+    "contract_version",
+    "contract_sha256",
+    "implementation_commit",
+    "attempt_id",
+    "terminal_status",
+    "report_kind",
+    "artifact_sha256",
+    "predecessor_publication_sha256",
+    "tag_ref",
+    "tag_target_commit",
+    "tag_message_sha256",
+    "remote_name",
+    "remote_url",
+    "remote_tag_object_sha1",
+    "remote_peeled_commit",
+    "external_cost_usd",
+    "publication_sha256",
+)
+FINAL_REGISTRY_SUCCESSOR_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "contract_version",
+    "contract_sha256",
+    "branch",
+    "implementation_commit",
+    "predecessor_registry_sha256",
+    "predecessor_registry_tip_sha256",
+    "predecessor_reveal_count",
+    "successor_ordinal",
+    "final_attempt_id",
+    "status",
+    "successor_entry_sha256",
+    "successor_registry_sha256",
+)
+FINAL_REGISTRY_AUTHORIZATION_FIELDS: Final[tuple[str, ...]] = (
+    "schema_version",
+    "verifier_id",
+    "predecessor_registry_sha256",
+    "predecessor_registry_tip_sha256",
+    "predecessor_reveal_count",
+    "successor_entry_sha256",
+    "successor_registry_sha256",
+    "external_publication_sha256",
+    "final_attempt_id",
+    "authorization_sha256",
+)
 
 DEVELOPMENT_BLOCKS: Final[tuple[tuple[str, str, str], ...]] = (
     ("block_1", "2005-01-03", "2007-12-31"),
@@ -206,7 +382,7 @@ def build_runtime_fingerprint_material() -> dict[str, Any]:
     """Return the exact local-model metadata whose literal hash is pinned."""
 
     return {
-        "schema_version": "sec-gemma-v2-local-runtime-pin-v1",
+        "schema_version": "sec-gemma-v2-1-local-runtime-pin-v1",
         "model_name": MODEL_NAME,
         "ollama_version": OLLAMA_VERSION,
         "model_manifest_sha256": MODEL_MANIFEST_SHA256,
@@ -215,9 +391,10 @@ def build_runtime_fingerprint_material() -> dict[str, Any]:
         "version_response_sha256": (
             "2bd89ec9b983123a225f3df0381c737a45302bb7417e345bf9ef92304e4388cf"
         ),
-        "show_response_sha256": (
-            "8ab2bd35bfd63bc37b9dd7e932ee38f3ad4dfa773d0767baf4a7d08eea7428e0"
+        "show_semantic_sha256": (
+            "5ccdf8b9a40bb762ea998dc9f5691ab2855d96833d60940b1d93686d08eb47e6"
         ),
+        "show_semantic_excluded_keys": ["modified_at"],
         "model_info_sha256": (
             "d21c1c125758901fcea224a7cb9df1057aeba7ebb5177b82d6ba1a096d65fc7b"
         ),
@@ -273,6 +450,29 @@ def build_contract_manifest() -> dict[str, Any]:
                 "minimum_development_corpus_filings_2000_2018": 72,
                 "minimum_confirmation_filings": 19,
                 "complete_metadata_eligible_universe_required": True,
+                "detached_replay": {
+                    "catalogue": (
+                        "rebuild the exact official SEC catalogue, complete eligible "
+                        "universe, source receipts, and hashes from the quarantined raw "
+                        "official bytes with validate_detached_catalog_replay"
+                    ),
+                    "stage_content": (
+                        "rebuild every selected primary-document byte artifact and "
+                        "receipt with validate_detached_stage_content_replay"
+                    ),
+                    "universe_membership": (
+                        "every selected filing accession, form, primary-document URL, "
+                        "acceptance timestamp, and availability session must equal the "
+                        "replayed official universe; caller-supplied metadata is never "
+                        "an authority"
+                    ),
+                    "future_metadata_boundary": (
+                        "a current SEC submissions response may contain records after "
+                        "the active stage cutoff only inside the opaque acquisition "
+                        "vault; no count, row, timestamp, accession, or derived value "
+                        "from those records is released to scoring code"
+                    ),
+                },
             },
             "market": {
                 "evidence_symbols": ["AAPL", "SPY", "QQQ", "IWM", "VIX", "TNX"],
@@ -370,6 +570,12 @@ def build_contract_manifest() -> dict[str, Any]:
                         "row beyond the stage value boundary is returned to the "
                         "experiment. The final 2026-07-10 transport row remains private"
                     ),
+                    "opaque_vault_rule": (
+                        "raw SEC and Yahoo bytes are owned by a durable capability-gated "
+                        "quarantine process and are never returned as a public mapping "
+                        "or object attribute; scoring receives only a canonical stage-"
+                        "cutoff slice after its own attempt is durably consumed"
+                    ),
                     "visibility_and_lock_rule": (
                         "development raw bytes may be acquired into quarantine before "
                         "the development lock but no price value may be exposed; "
@@ -382,7 +588,46 @@ def build_contract_manifest() -> dict[str, Any]:
                         "receipts expose no values and cannot be used to choose a batch"
                     ),
                 },
-                "required_prefix_sessions": 253,
+                "required_market_coverage": {
+                    "aapl_exact_expected_session_counts": {
+                        "development_through_2018_12_31": 5283,
+                        "confirmation_through_2023_12_29": 6541,
+                        "final_exposed_through_2026_07_09": 7172,
+                        "final_transport_through_2026_07_10": 7173,
+                    },
+                    "context_first_accepted_session": {
+                        "SPY": "1998-01-02",
+                        "QQQ": "1999-03-10",
+                        "IWM": "2000-05-26",
+                        "VIX": "1998-01-02",
+                        "TNX": "1998-01-02",
+                    },
+                    "context_allowed_missing_sessions": {
+                        "SPY": [],
+                        "QQQ": [],
+                        "IWM": [],
+                        "VIX": [],
+                        "TNX": [
+                            "1998-10-12",
+                            "1998-11-11",
+                            "1999-10-11",
+                            "1999-11-11",
+                            "2003-11-11",
+                            "2005-10-10",
+                            "2005-11-11",
+                            "2006-10-09",
+                            "2010-10-11",
+                            "2016-11-11",
+                        ],
+                    },
+                    "coverage_rule": (
+                        "AAPL must contain every frozen expected session through the "
+                        "stage boundary; each context symbol must contain every frozen "
+                        "session from its first accepted session except only the listed "
+                        "absences. A weekend, unexplained gap, missing last usable "
+                        "session, or truncated 253-row tail terminally fails acquisition"
+                    ),
+                },
                 "canonical_provider_fields": [
                     "raw_open",
                     "raw_high",
@@ -446,21 +691,29 @@ def build_contract_manifest() -> dict[str, Any]:
             "runtime_version_response_sha256": (
                 "2bd89ec9b983123a225f3df0381c737a45302bb7417e345bf9ef92304e4388cf"
             ),
-            "runtime_show_response_sha256": (
-                "8ab2bd35bfd63bc37b9dd7e932ee38f3ad4dfa773d0767baf4a7d08eea7428e0"
+            "runtime_show_semantic_sha256": (
+                "5ccdf8b9a40bb762ea998dc9f5691ab2855d96833d60940b1d93686d08eb47e6"
+            ),
+            "runtime_show_semantic_excluded_keys": ["modified_at"],
+            "runtime_show_raw_sha256_diagnostic_only": (
+                "5f56fb0fb2214ddcb9fa21c66aa31e37297f553e8758aeda5958f0f287d70893"
             ),
             "runtime_model_info_sha256": (
                 "d21c1c125758901fcea224a7cb9df1057aeba7ebb5177b82d6ba1a096d65fc7b"
             ),
             "runtime_note": (
-                "Gemma 4 exposes two active FROM blobs; v2 must verify the exact "
-                "manifest and all four layer digests rather than v1's one-FROM parser"
+                "Gemma 4 exposes two active FROM blobs; v2.1 verifies the exact "
+                "manifest and all four layer digests and replaces v2's unstable raw "
+                "show-byte pin with one strict semantic show pin"
             ),
             "pre_call_identity_gate": (
                 "before every semantic batch, hash the installed manifest bytes, "
                 "verify the config and ordered layer digests, hash every layer's "
-                "content, query exact version/show bytes, rebuild the fingerprint, "
-                "and require byte-for-byte equality with these pins"
+                "content, query strict version/show JSON, require the exact show key "
+                "set and a string modified_at field, remove only modified_at, hash the "
+                "canonical remaining show object, rebuild the fingerprint, and require "
+                "semantic equality with these pins; the observed raw show hash remains "
+                "diagnostic and whitespace, key order, or modified_at alone cannot fail"
             ),
             "endpoint": "http://127.0.0.1:11434/api/chat",
             "loopback_only": True,
@@ -489,10 +742,25 @@ def build_contract_manifest() -> dict[str, Any]:
                 role: {"file": SOURCE_PIN_FILES[role], "sha256": digest}
                 for role, digest in sorted(SOURCE_PINS.items())
             },
-            "new_v2_sources": (
-                "feature, runtime, online-replay, ledger, store, and verifier source "
-                "hashes must be bound to the preregistration commit in the effectful "
-                "attempt manifest before SEC, model, confirmation, or final access"
+            "new_v2_1_sources": dict(sorted(NEW_SOURCE_FILES.items())),
+            "source_inventory_rule": (
+                "the implementation manifest must bind every exact new role/path plus "
+                "every literal inherited source pin; dependency-closed local imports "
+                "from production, acquisition, runtime, publisher, registry, vault, "
+                "runner, and transports may not escape this inventory"
+            ),
+            "allowed_external_python_distributions": [
+                "requests",
+                "urllib3",
+                "certifi",
+                "charset-normalizer",
+                "idna",
+            ],
+            "external_distribution_rule": (
+                "if a listed distribution is imported by the production transport, "
+                "the clean implementation receipt must bind its installed version, "
+                "direct_url metadata when present, and SHA-256 of every imported module "
+                "file before registration; no unlisted distribution may be imported"
             ),
         },
         "features": {
@@ -1083,6 +1351,141 @@ def build_contract_manifest() -> dict[str, Any]:
             "undefined_or_nonfinite_metric_fails_every_dependent_gate": True,
             "failure_blocks_next_stage": True,
         },
+        "execution_integrity": {
+            "production_authorities_required_before_registration": [
+                "source-bound parent deadline guard",
+                "reviewed exact SEC transport and acquisition adapter",
+                "reviewed owned Yahoo transport",
+                "durable opaque quarantine repository",
+                "source-bound Gemma and deterministic stage executor",
+                "non-force external Git-tag report publisher",
+                "verified final-registry successor authorizer",
+            ],
+            "test_double_boundary": (
+                "fake, injected, foreign, subclassed, or test-only transports, stores, "
+                "executors, publishers, vaults, clocks, and registry authorizers may "
+                "exercise local tests but can never register or consume a production "
+                "attempt"
+            ),
+            "production_source_binding": (
+                "every authority is an exact source-inventory role verified from the "
+                "clean pushed implementation commit immediately before registration "
+                "and again immediately before consumption"
+            ),
+            "opaque_types": {
+                "acquisition_validation": "VerifiedAcquisitionReport",
+                "acquisition_terminal": "VerifiedAcquisitionTerminalEvidence",
+                "scored_terminal": "VerifiedScoredTerminalEvidence",
+                "external_publication": "VerifiedExternalPublication",
+                "final_registry": "VerifiedFinalRegistryAuthorization",
+            },
+            "cross_version_boundary": (
+                "every schema version, verifier ID, state namespace, receipt, and tag "
+                "namespace is v2-1; a v2 artifact is rejected rather than upgraded, "
+                "translated, or re-emitted"
+            ),
+            "acquisition_terminal_pass": {
+                "authority": (
+                    "only the opaque VerifiedAcquisitionReport returned by a complete "
+                    "detached replay of the currently sealed durable quarantine"
+                ),
+                "validation_fields": list(ACQUISITION_VALIDATION_FIELDS),
+                "exact_checks": list(ACQUISITION_VALIDATION_CHECKS),
+                "terminal_evidence_fields": list(
+                    ACQUISITION_TERMINAL_EVIDENCE_FIELDS
+                ),
+                "digest_fields_are_strict_lowercase_sha256": True,
+                "stale_report_after_vault_mutation_fails": True,
+                "store_artifact_receipt_and_payload_hash_must_exist": True,
+                "terminal_anchor_binds_entire_evidence_and_publication": True,
+                "arbitrary_all_true_mapping_forbidden": True,
+            },
+            "scored_terminal_pass": {
+                "authority": (
+                    "only an opaque scored-stage verification rebuilt from the sealed "
+                    "chronological replay, exact deterministic stage metrics, exact "
+                    "literal stage gate report, independent no-leverage proofs, current "
+                    "store record commitment, and sealed joint report"
+                ),
+                "exact_gate_key_set": (
+                    "must equal the literal keys under gates[stage], with no missing, "
+                    "extra, renamed, truncated, or caller-selected checks"
+                ),
+                "terminal_evidence_fields": list(
+                    SCORED_TERMINAL_EVIDENCE_FIELDS
+                ),
+                "every_literal_gate_true": True,
+                "joint_report_hash_and_store_artifact_receipt_bound": True,
+                "terminal_anchor_binds_entire_evidence_and_publication": True,
+                "arbitrary_all_true_mapping_forbidden": True,
+            },
+            "failed_scored_gate": (
+                "persist the complete deterministic evaluation, stage metrics, gate "
+                "report, no-leverage proofs, and joint report; append the exact joint "
+                "artifact to the store, externally pin its hash, terminally fail the "
+                "attempt, then release only that sealed diagnostic. Never convert it "
+                "to pass, retry it, hide it, or advance to the next stage. finish_attempt "
+                "must receive opaque VerifiedScoredTerminalEvidence and bind the joint "
+                "artifact receipt, exact failed gate names, and publication receipt in "
+                "the terminal anchor; invalid or partial evaluation releases nothing"
+            ),
+            "external_report_pin": {
+                "transport": (
+                    "one annotated Git tag pushed without force to the frozen origin"
+                ),
+                "git_object_format": "sha1",
+                "ref_template": EXTERNAL_TAG_REF_TEMPLATE,
+                "report_kinds": [
+                    "acquisition_pass",
+                    "scored_pass",
+                    "scored_failed_gate",
+                    "final_registry_successor",
+                ],
+                "tag_target": "the clean pushed implementation commit",
+                "tag_message_fields": list(EXTERNAL_TAG_MESSAGE_FIELDS),
+                "publication_fields": list(EXTERNAL_PUBLICATION_FIELDS),
+                "opaque_receipt_type": "VerifiedExternalPublication",
+                "remote_confirmation": (
+                    "the exact remote annotated-tag object SHA-1 and peeled target are "
+                    "read back and stored before the terminal transition"
+                ),
+                "bare_hash_or_string_return_forbidden": True,
+                "deletion_force_or_reuse_forbidden": True,
+            },
+            "final_registry_authorization": {
+                "successor_fields": list(FINAL_REGISTRY_SUCCESSOR_FIELDS),
+                "authorization_fields": list(
+                    FINAL_REGISTRY_AUTHORIZATION_FIELDS
+                ),
+                "successor_rule": (
+                    "validate the frozen predecessor registry and tip, require successor "
+                    "ordinal = predecessor reveal count + 1, append exactly this contract, "
+                    "branch, clean implementation commit, final attempt ID, and status "
+                    "registered_unrun, hash the successor entry and whole registry, then "
+                    "externally publish that registry hash before final registration"
+                ),
+                "attempt_plan_input": (
+                    "only opaque VerifiedFinalRegistryAuthorization; an arbitrary "
+                    "hexadecimal string, mapping, or publication receipt alone is never "
+                    "authorization"
+                ),
+            },
+            "check_name_rule": (
+                "dedicated validators accept the exact frozen names even when longer "
+                "than 64 characters; generic source-role syntax is not reused for gate "
+                "or acquisition check names"
+            ),
+            "attempt_deadline_scope": (
+                "the parent monotonic deadline starts before prerequisite final-registry "
+                "authorization or any attempt registration, whichever is earlier, and "
+                "ends only after source reverification, registration, consumption, all "
+                "network/model/deterministic work, replay, metrics, gates, no-leverage "
+                "proofs, every store write, external Git publication and readback, the "
+                "terminal anchor commit, and sealed-result construction; all governance "
+                "overhead consumes the 239-second contingency and the complete interval "
+                "must remain strictly below 3600 seconds"
+            ),
+        },
         "runtime": {
             "scope": (
                 "each effectful acquisition attempt and each scored stage attempt is "
@@ -1168,7 +1571,7 @@ def build_contract_manifest() -> dict[str, Any]:
                 "the first implementation commit must record the exact commit that "
                 "contains this literal contract hash; every effectful attempt binds "
                 "that commit, the implementation commit, clean-tree identity, and all "
-                "new-v2 source hashes before access"
+                "new-v2.1 source hashes before access"
             ),
             "development_acquisition": {
                 "attempt_id": DEVELOPMENT_ACQUISITION_ID,
@@ -1180,6 +1583,10 @@ def build_contract_manifest() -> dict[str, Any]:
                     "deterministic blinded model requests; no semantic output, price "
                     "value, return, label, action, or score"
                 ),
+                "raw_quarantine_is_opaque": True,
+                "detached_catalog_and_stage_content_replay_required": True,
+                "exact_full_market_coverage_required": True,
+                "verified_acquisition_report_and_external_pin_required_for_pass": True,
                 "failed_or_indeterminate_acquisition_is_terminal": True,
             },
             "development": {
@@ -1188,6 +1595,9 @@ def build_contract_manifest() -> dict[str, Any]:
                 "acquisition_pass_required": True,
                 "consume_before_first_real_gemma_call_or_first_canonical_market_value_read": True,
                 "latency_preflight_calls_occur_after_consumption": True,
+                "source_bound_production_executor_required_before_consumption": True,
+                "exact_scored_stage_verification_required_for_pass": True,
+                "failed_gate_joint_report_must_be_pinned_and_released": True,
                 "indeterminate_execution_is_terminal": True,
             },
             "confirmation": {
@@ -1195,6 +1605,9 @@ def build_contract_manifest() -> dict[str, Any]:
                 "one_shot": True,
                 "consume_before_first_stage_network_request": True,
                 "consume_before_first_2019_feature_or_outcome_read": True,
+                "source_bound_production_executor_required_before_consumption": True,
+                "exact_scored_stage_verification_required_for_pass": True,
+                "failed_gate_joint_report_must_be_pinned_and_released": True,
                 "indeterminate_execution_is_terminal": True,
                 "development_pass_required": True,
             },
@@ -1203,6 +1616,9 @@ def build_contract_manifest() -> dict[str, Any]:
                 "one_shot": True,
                 "consume_before_first_stage_network_request": True,
                 "consume_before_first_2024_feature_or_outcome_read": True,
+                "source_bound_production_executor_required_before_consumption": True,
+                "exact_scored_stage_verification_required_for_pass": True,
+                "failed_gate_joint_report_must_be_pinned_and_released": True,
                 "indeterminate_execution_is_terminal": True,
                 "confirmation_pass_required": True,
                 "predecessor_registry_pin_file": (
@@ -1218,6 +1634,7 @@ def build_contract_manifest() -> dict[str, Any]:
                     "10b0ecce18437a9c0e7f03f27882a3d7ba8836c1bcc48a75c3a64d0623de879a"
                 ),
                 "historical_final_reveal_count_lower_bound": 10,
+                "opaque_verified_successor_authorization_required": True,
                 "register_and_externally_pin_before_consumption": True,
             },
             "result_release": (
@@ -1235,16 +1652,19 @@ def build_contract_manifest() -> dict[str, Any]:
             "complete_metrics": True,
             "checksums": True,
             "failed_attempts_preserved": True,
+            "failed_gate_complete_joint_diagnostic_externally_pinned": True,
             "later_stage_joint_release_only": True,
             "input_source_hashes_bound_before_stage_access": True,
             "pending_actions_and_lessons_preserved_across_boundaries": True,
+            "raw_acquisition_bytes_never_exposed_as_public_objects": True,
+            "terminal_pass_binds_existing_store_artifact_receipts": True,
         },
     }
     return copy.deepcopy(manifest)
 
 
 CONTRACT_SHA256: Final[str] = (
-    "57b325b25ae53f650538a0265622a6c662e7fb1894a78e805705f7bae3c55d5d"
+    "913a743495d4c92025110cf8af036bfce3a73dfa67f324de93e1cee0be3e9dfa"
 )
 if canonical_sha256(build_contract_manifest()) != CONTRACT_SHA256:
     raise RuntimeError(

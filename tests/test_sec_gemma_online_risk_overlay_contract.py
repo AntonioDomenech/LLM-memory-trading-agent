@@ -13,6 +13,9 @@ from agent_benchmark.sec_session_calendar import (
     MARKET_HISTORY_CALENDAR_ID,
 )
 from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
+    ACQUISITION_TERMINAL_EVIDENCE_FIELDS,
+    ACQUISITION_VALIDATION_FIELDS,
+    BRANCH_NAME,
     CONFIRMATION_ATTEMPT_ID,
     CONTRACT_SHA256,
     CONTRACT_VERSION,
@@ -20,10 +23,14 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
     DEVELOPMENT_ATTEMPT_ID,
     FEATURES,
     FINAL_ATTEMPT_ID,
+    FINAL_REGISTRY_AUTHORIZATION_FIELDS,
+    FINAL_REGISTRY_SUCCESSOR_FIELDS,
     HORIZON_SESSIONS,
     MAX_TOTAL_RUNTIME_SECONDS,
     MODEL_MANIFEST_SHA256,
+    NEW_SOURCE_FILES,
     RUNTIME_FINGERPRINT_SHA256,
+    SCORED_TERMINAL_EVIDENCE_FIELDS,
     SOURCE_PIN_FILES,
     SOURCE_PINS,
     SecGemmaOnlineRiskOverlayContractError,
@@ -45,9 +52,11 @@ def test_manifest_is_exact_deterministic_and_detached() -> None:
     assert first is not second
     assert canonical_sha256(first) == CONTRACT_SHA256
     assert CONTRACT_SHA256 == (
-        "57b325b25ae53f650538a0265622a6c662e7fb1894a78e805705f7bae3c55d5d"
+        "913a743495d4c92025110cf8af036bfce3a73dfa67f324de93e1cee0be3e9dfa"
     )
     assert first["contract_version"] == CONTRACT_VERSION
+    assert CONTRACT_VERSION == "aapl-sec-gemma-online-risk-overlay-v2-1"
+    assert BRANCH_NAME == "codex/aapl-sec-gemma-online-risk-overlay-v2-1"
     assert first["features"]["ordered_names"] == list(FEATURES)
     assert first["features"]["count"] == 12
     assert first["policy"]["overlay_horizon_sessions"] == HORIZON_SESSIONS
@@ -151,6 +160,15 @@ def test_model_runtime_and_horizon_are_literal_not_placeholders() -> None:
     assert canonical_sha256(build_runtime_fingerprint_material()) == (
         RUNTIME_FINGERPRINT_SHA256
     )
+    assert RUNTIME_FINGERPRINT_SHA256 == (
+        "816a7c1a6b1e87d083f8e0f85654f80ba0db124bf09fe8dedce960c8124e1c77"
+    )
+    assert build_runtime_fingerprint_material()[
+        "show_semantic_sha256"
+    ] == "5ccdf8b9a40bb762ea998dc9f5691ab2855d96833d60940b1d93686d08eb47e6"
+    assert build_runtime_fingerprint_material()[
+        "show_semantic_excluded_keys"
+    ] == ["modified_at"]
     assert horizon == {
         "decision_close_index": "t",
         "entry_open_index": "t+1",
@@ -280,8 +298,118 @@ def test_market_provider_windows_and_prefix_continuity_are_frozen() -> None:
     assert "only after their durable stage locks" in source[
         "visibility_and_lock_rule"
     ]
+    assert "never returned as a public mapping" in source["opaque_vault_rule"]
     assert "adjusted_open" in market["ledger_price_validation"]
     assert "terminally fails the stage" in market["ledger_price_validation"]
+    coverage = market["required_market_coverage"]
+    assert coverage["aapl_exact_expected_session_counts"] == {
+        "development_through_2018_12_31": 5283,
+        "confirmation_through_2023_12_29": 6541,
+        "final_exposed_through_2026_07_09": 7172,
+        "final_transport_through_2026_07_10": 7173,
+    }
+    assert coverage["context_first_accepted_session"]["IWM"] == "2000-05-26"
+    assert coverage["context_allowed_missing_sessions"]["SPY"] == []
+    assert coverage["context_allowed_missing_sessions"]["TNX"][-1] == (
+        "2016-11-11"
+    )
+    assert "truncated 253-row tail" in coverage["coverage_rule"]
+
+
+def test_sec_acquisition_is_replayed_and_future_metadata_stays_opaque() -> None:
+    sec = build_contract_manifest()["data"]["sec"]
+    replay = sec["detached_replay"]
+
+    assert "validate_detached_catalog_replay" in replay["catalogue"]
+    assert "validate_detached_stage_content_replay" in replay["stage_content"]
+    assert "caller-supplied metadata is never an authority" in replay[
+        "universe_membership"
+    ]
+    assert "only inside the opaque acquisition vault" in replay[
+        "future_metadata_boundary"
+    ]
+
+
+def test_terminal_reports_require_exact_evidence_and_external_pins() -> None:
+    integrity = build_contract_manifest()["execution_integrity"]
+    acquisition = integrity["acquisition_terminal_pass"]
+    scored = integrity["scored_terminal_pass"]
+    pin = integrity["external_report_pin"]
+
+    assert acquisition["exact_checks"] == [
+        "exact_raw_bytes_replayed_sha256",
+        "request_receipts_reconciled_sha256",
+        "stage_and_attempt_scope_bound_sha256",
+        "private_identity_digest_only_sha256",
+        "market_prefix_continuity_replayed_sha256",
+        "blinded_model_requests_replayed_sha256",
+        "request_byte_retry_redirect_caps_reconciled_sha256",
+    ]
+    assert acquisition["arbitrary_all_true_mapping_forbidden"] is True
+    assert acquisition["validation_fields"] == list(
+        ACQUISITION_VALIDATION_FIELDS
+    )
+    assert acquisition["terminal_evidence_fields"] == list(
+        ACQUISITION_TERMINAL_EVIDENCE_FIELDS
+    )
+    assert scored["every_literal_gate_true"] is True
+    assert scored["terminal_evidence_fields"] == list(
+        SCORED_TERMINAL_EVIDENCE_FIELDS
+    )
+    assert scored["arbitrary_all_true_mapping_forbidden"] is True
+    assert "externally pin its hash" in integrity["failed_scored_gate"]
+    assert pin["ref_template"] == (
+        "refs/tags/sec-gemma-online-risk-overlay-v2-1/"
+        "{attempt_id}/{report_kind}/{artifact_sha256}"
+    )
+    assert pin["deletion_force_or_reuse_forbidden"] is True
+    registry = integrity["final_registry_authorization"]
+    assert registry["successor_fields"] == list(
+        FINAL_REGISTRY_SUCCESSOR_FIELDS
+    )
+    assert registry["authorization_fields"] == list(
+        FINAL_REGISTRY_AUTHORIZATION_FIELDS
+    )
+    assert "arbitrary hexadecimal string" in registry[
+        "attempt_plan_input"
+    ]
+    assert "can never register or consume" in integrity["test_double_boundary"]
+    assert "strictly below 3600 seconds" in integrity["attempt_deadline_scope"]
+
+
+def test_new_source_inventory_is_exact_and_dependency_closed() -> None:
+    gemma = build_contract_manifest()["gemma"]
+
+    assert gemma["new_v2_1_sources"] == dict(sorted(NEW_SOURCE_FILES.items()))
+    assert set(NEW_SOURCE_FILES) == {
+        "acquisition",
+        "attempt",
+        "baseline",
+        "features",
+        "learner",
+        "ledger",
+        "market_verifier",
+        "metrics",
+        "no_leverage",
+        "policy",
+        "production",
+        "publisher",
+        "registry",
+        "replay",
+        "runner",
+        "runtime",
+        "source_verifier",
+        "store",
+        "vault",
+    }
+    assert "dependency-closed local imports" in gemma["source_inventory_rule"]
+    assert gemma["allowed_external_python_distributions"] == [
+        "requests",
+        "urllib3",
+        "certifi",
+        "charset-normalizer",
+        "idna",
+    ]
 
 
 def test_event_unavailability_never_becomes_an_implicit_imputation() -> None:
@@ -472,48 +600,27 @@ def test_every_ambiguous_gate_has_an_explicit_cost_scope() -> None:
 
 def test_document_matches_key_machine_contract_facts() -> None:
     document = (
-        REPO_ROOT / "docs/aapl_sec_gemma_online_risk_overlay_v2.md"
+        REPO_ROOT / "docs/aapl_sec_gemma_online_risk_overlay_v2_1.md"
     ).read_text(encoding="utf-8")
     normalized_document = " ".join(document.split())
 
     for expected in (
-        "`unfiltered_union_signal`",
-        "`maturity_session <= decision_session`",
-        "no-filing-meaning ablation",
-        "adjusted open `t+21`",
-        "one fixed attempt ID",
-        "1,000 requests",
-        "owned HTTPS request per symbol",
-        "exactly six requests",
-        "transport requests through 2026-07-10",
-        "terminal valuation end on 2026-07-09",
-        "Only a decision through July 8",
-        "Only the four actual filing-meaning values",
-        "quality-preserving no-meaning",
-        "`MDD = min(wealth/running_peak - 1)`",
-        "239 seconds reserved as contingency",
-        "total 3,599 seconds",
-        "at least two of the three final periods",
+        "same trading thesis",
+        "long one unit of AAPL or in cash only",
+        "keeps learning during later unseen periods",
+        "development on 2000-2018",
+        "untouched confirmation on 2019-2023",
+        "2024, 2025, and 2026 year to date",
+        "removes only that field",
+        "raw response hash is recorded as diagnostic evidence",
+        "durable opaque quarantine vault",
+        "complete frozen history, not merely the latest 253 rows",
+        "arbitrary all-true mapping cannot pass",
+        "externally pinned",
+        "non-force annotated Git tag",
+        "3,599 seconds",
     ):
         assert expected in normalized_document
-
-    ordered_features = "\n".join(
-        (
-            "1. AAPL minus QQQ 20-session log return;",
-            "2. AAPL 63-session drawdown;",
-            "3. AAPL 20-session realized volatility;",
-            "4. SPY 20-session log return;",
-            "5. IWM 20-session log return;",
-            "6. VIX 20-session log change;",
-            "7. commercial deterioration;",
-            "8. financial deterioration;",
-            "9. risk/outlook deterioration;",
-            "10. adverse-flag fraction;",
-            "11. semantic quality risk; and",
-            "12. 10-K form indicator.",
-        )
-    )
-    assert ordered_features in document
 
 
 @pytest.mark.parametrize(
