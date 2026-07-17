@@ -2,8 +2,11 @@
 
 ## Status
 
-This is an unrun preregistration on
-`codex/aapl-sec-gemma-online-risk-overlay-v2-2`.
+Rejected at the complete-lifecycle runtime preflight on
+`codex/aapl-sec-gemma-online-risk-overlay-v2-2`. The implementation remains
+unrun: no official SEC acquisition, Yahoo market acquisition, Gemma
+generation, prediction, trade, score, or performance result occurred. See
+`docs/aapl_sec_gemma_online_risk_overlay_v2_2_preflight_rejection.md`.
 
 The rejected v2 branch and the v2.1 rejected no-effect preflight branch at
 commit `9c2fbb0` remain preserved separately. No v2.2 SEC acquisition, Gemma
