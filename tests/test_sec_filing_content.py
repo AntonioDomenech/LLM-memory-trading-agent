@@ -799,3 +799,299 @@ def test_availability_refuses_duplicate_or_invalid_sessions() -> None:
         )
     with pytest.raises(SecPointInTimeError, match="invalid"):
         conservative_availability_session(acceptance, ["not-a-date"])
+
+
+def test_parse_complete_submission_accepts_exclusive_legacy_ims_without_rewriting() -> None:
+    filing_text = _long_html()
+    ims_payload = (
+        "synthetic opaque prelude\n"
+        f"<IMS-DOCUMENT>{ACCESSION}.txt : synthetic\n"
+        "<IMS-HEADER>\n"
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n"
+        f"ACCESSION NUMBER: {ACCESSION}\n"
+        "CONFORMED SUBMISSION TYPE: 10-K\n"
+        "FILED AS OF DATE: 20161026\n"
+        "SUBJECT COMPANY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC SUBJECT INC\n"
+        f"    CENTRAL INDEX KEY: {AAPL_CIK}\n"
+        "FILED BY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC AGENT LLC\n"
+        f"    CENTRAL INDEX KEY: {SUBMITTER_CIK}\n"
+        "</IMS-HEADER>\n"
+        "<DOCUMENT>\n"
+        "<TYPE>10-K\n"
+        "<SEQUENCE>1\n"
+        f"<FILENAME>{PRIMARY}\n"
+        "<DESCRIPTION>SYNTHETIC PRIMARY DOCUMENT\n"
+        f"<TEXT>{filing_text}</TEXT>\n"
+        "</DOCUMENT>\n"
+        "</IMS-DOCUMENT>\n"
+        "synthetic opaque suffix\n"
+    ).encode("latin-1")
+    sec_payload = (
+        "synthetic opaque prelude\n"
+        f"<SEC-DOCUMENT>{ACCESSION}.txt : synthetic\n"
+        "<SEC-HEADER>\n"
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n"
+        f"ACCESSION NUMBER: {ACCESSION}\n"
+        "CONFORMED SUBMISSION TYPE: 10-K\n"
+        "FILED AS OF DATE: 20161026\n"
+        "SUBJECT COMPANY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC SUBJECT INC\n"
+        f"    CENTRAL INDEX KEY: {AAPL_CIK}\n"
+        "FILED BY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC AGENT LLC\n"
+        f"    CENTRAL INDEX KEY: {SUBMITTER_CIK}\n"
+        "</SEC-HEADER>\n"
+        "<DOCUMENT>\n"
+        "<TYPE>10-K\n"
+        "<SEQUENCE>1\n"
+        f"<FILENAME>{PRIMARY}\n"
+        "<DESCRIPTION>SYNTHETIC PRIMARY DOCUMENT\n"
+        f"<TEXT>{filing_text}</TEXT>\n"
+        "</DOCUMENT>\n"
+        "</SEC-DOCUMENT>\n"
+        "synthetic opaque suffix\n"
+    ).encode("latin-1")
+
+    original_sha256 = content_sha256(ims_payload)
+    parsed = parse_complete_submission(ims_payload)
+    parsed_sec = parse_complete_submission(sec_payload)
+    for extra_accession in (ACCESSION, "0000123456-16-000001"):
+        ims_extra = ims_payload.replace(
+            f"{ACCESSION}.txt : synthetic".encode("ascii"),
+            f"{ACCESSION}.txt {extra_accession}".encode("ascii"),
+            1,
+        )
+        sec_extra = sec_payload.replace(
+            f"{ACCESSION}.txt : synthetic".encode("ascii"),
+            f"{ACCESSION}.txt {extra_accession}".encode("ascii"),
+            1,
+        )
+        assert parse_complete_submission(ims_extra).header == (
+            parse_complete_submission(sec_extra).header
+        )
+    unicode_accession = ACCESSION.translate(
+        str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
+    )
+    ims_unicode_accession = (
+        ims_payload.decode("latin-1")
+        .replace(f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n", "")
+        .replace(ACCESSION, unicode_accession)
+    )
+    sec_unicode_accession = (
+        sec_payload.decode("latin-1")
+        .replace(f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n", "")
+        .replace(ACCESSION, unicode_accession)
+    )
+    assert parse_complete_submission(
+        ims_unicode_accession, allow_missing_acceptance=True
+    ).header == parse_complete_submission(
+        sec_unicode_accession, allow_missing_acceptance=True
+    ).header
+
+    assert f"sha256:{hashlib.sha256(ims_payload).hexdigest()}" == original_sha256
+    assert parsed.submission_sha256 == original_sha256
+    assert parsed.header == parsed_sec.header
+    assert parsed.documents == parsed_sec.documents
+    assert parsed.submission_sha256 != parsed_sec.submission_sha256
+    assert len(parsed.documents) == 1
+    document = parsed.documents[0]
+    assert ims_payload[document.text_start_byte : document.text_end_byte] == (
+        document.text.encode("latin-1")
+    )
+    assert document.text_sha256 == content_sha256(
+        ims_payload[document.text_start_byte : document.text_end_byte]
+    )
+
+
+def test_complete_submission_ims_envelope_matrix_rejects_mixed_duplicate_unbalanced_and_cross_family() -> None:
+    base = (
+        "synthetic-prefix\n"
+        f"<IMS-DOCUMENT>{ACCESSION}.txt\n"
+        "<IMS-HEADER>\n"
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n"
+        f"ACCESSION NUMBER: {ACCESSION}\n"
+        "CONFORMED SUBMISSION TYPE: 10-K\n"
+        "FILED AS OF DATE: 20161026\n"
+        "SUBJECT COMPANY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC SUBJECT INC\n"
+        f"    CENTRAL INDEX KEY: {AAPL_CIK}\n"
+        "FILED BY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC AGENT LLC\n"
+        f"    CENTRAL INDEX KEY: {SUBMITTER_CIK}\n"
+        "</IMS-HEADER>\n"
+        "<DOCUMENT>\n"
+        "<TYPE>10-K\n"
+        "<SEQUENCE>1\n"
+        f"<FILENAME>{PRIMARY}\n"
+        "<TEXT><p>Synthetic filing text.</p></TEXT>\n"
+        "</DOCUMENT>\n"
+        "</IMS-DOCUMENT>\n"
+        "synthetic-suffix\n"
+    )
+    parse_complete_submission(base.encode("latin-1"))
+    parse_complete_submission(
+        base.replace("IMS-DOCUMENT", "ims-document")
+        .replace("IMS-HEADER", "ims-header")
+        .encode("latin-1")
+    )
+    bad_payloads = (
+        base.replace("<IMS-HEADER>", "<SEC-HEADER>", 1).replace(
+            "</IMS-HEADER>", "</SEC-HEADER>", 1
+        ),
+        base.replace("</IMS-HEADER>", "</SEC-HEADER>", 1),
+        base.replace("</IMS-DOCUMENT>", "</SEC-DOCUMENT>", 1),
+        base.replace("<IMS-DOCUMENT>", "<IMS-DOCUMENT><IMS-DOCUMENT>", 1),
+        base.replace(
+            "</IMS-DOCUMENT>",
+            "</IMS-DOCUMENT></IMS-DOCUMENT>",
+            1,
+        ),
+        base.replace("<IMS-HEADER>", "<IMS-HEADER><IMS-HEADER>", 1),
+        base.replace("</IMS-HEADER>", "</IMS-HEADER></IMS-HEADER>", 1),
+        base.replace("<IMS-DOCUMENT>", "", 1),
+        base.replace("</IMS-DOCUMENT>", "", 1),
+        base.replace("<IMS-HEADER>", "", 1),
+        base.replace("</IMS-HEADER>", "", 1),
+        base.replace(
+            f"<IMS-DOCUMENT>{ACCESSION}.txt\n<IMS-HEADER>",
+            f"<IMS-HEADER>\n<IMS-DOCUMENT>{ACCESSION}.txt",
+            1,
+        ),
+        base.replace(
+            "</DOCUMENT>\n</IMS-DOCUMENT>",
+            "</IMS-DOCUMENT>\n</DOCUMENT>",
+            1,
+        ),
+        "<SEC-HEADER></SEC-HEADER>\n" + base,
+        base.replace(
+            "synthetic-prefix\n",
+            "synthetic-prefix\n"
+            "<TEXT><SEC-HEADER></SEC-HEADER></TEXT>\n",
+            1,
+        ),
+        base.replace(
+            "<DOCUMENT>\n<TYPE>",
+            "<DOCUMENT>\n"
+            "<TEXT><SEC-HEADER></SEC-HEADER></TEXT>\n<TYPE>",
+            1,
+        ),
+        base.replace("<TYPE>10-K\n", "<TYPE>10-K\n<TYPE>10-K\n", 1),
+        base.replace("<SEQUENCE>1\n", "<SEQUENCE>1\n<SEQUENCE>1\n", 1),
+        base.replace("<TYPE>10-K\n", "<TYPE>   \n", 1),
+        base.replace("<SEQUENCE>1\n", "<SEQUENCE>   \n", 1),
+        base.replace("<SEQUENCE>1\n", "<SEQUENCE>0\n", 1),
+        base.replace("<SEQUENCE>1\n", "<SEQUENCE>²\n", 1),
+        base.replace("<IMS-DOCUMENT>", "<IMS-DOCUMENT synthetic='1'>", 1),
+        base.replace("<IMS-DOCUMENT>", "<IMS-DOCUMENT >", 1),
+        base.replace("<IMS-HEADER>", "<IMS-HEADE>", 1),
+    )
+    for bad_payload in bad_payloads:
+        with pytest.raises(SecPointInTimeError):
+            parse_complete_submission(bad_payload.encode("latin-1"))
+    unicode_lookalike = base.replace("IMS", "ıMS")
+    with pytest.raises(SecPointInTimeError):
+        parse_complete_submission(unicode_lookalike)
+
+
+def test_submission_envelope_markers_inside_text_do_not_switch_family() -> None:
+    sec_text = (
+        "<IMS-DOCUMENT>0000000000-00-000001</IMS-DOCUMENT>"
+        "<IMS-HEADER>literal filing text</IMS-HEADER>"
+    )
+    sec_payload = (
+        f"<SEC-DOCUMENT>{ACCESSION}.txt\n"
+        "<SEC-HEADER>\n"
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n"
+        f"ACCESSION NUMBER: {ACCESSION}\n"
+        "CONFORMED SUBMISSION TYPE: 10-K\n"
+        "FILED AS OF DATE: 20161026\n"
+        "SUBJECT COMPANY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC SUBJECT INC\n"
+        f"    CENTRAL INDEX KEY: {AAPL_CIK}\n"
+        "FILED BY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC AGENT LLC\n"
+        f"    CENTRAL INDEX KEY: {SUBMITTER_CIK}\n"
+        "</SEC-HEADER>\n"
+        "<DOCUMENT>\n"
+        "<TYPE>10-K\n"
+        "<SEQUENCE>1\n"
+        f"<FILENAME>{PRIMARY}\n"
+        f"<TEXT>{sec_text}</TEXT>\n"
+        "</DOCUMENT>\n"
+        "</SEC-DOCUMENT>\n"
+    ).encode("latin-1")
+    ims_text = (
+        "<SEC-DOCUMENT>0000000000-00-000002</SEC-DOCUMENT>"
+        "<SEC-HEADER>literal filing text</SEC-HEADER>"
+        "<IMS-DOCUMENT>0000000000-00-000003</IMS-DOCUMENT>"
+        "<IMS-HEADER>literal filing text</IMS-HEADER>"
+    )
+    ims_payload = (
+        f"<IMS-DOCUMENT>{ACCESSION}.txt\n"
+        "<IMS-HEADER>\n"
+        f"<ACCEPTANCE-DATETIME>{ACCEPTED}\n"
+        f"ACCESSION NUMBER: {ACCESSION}\n"
+        "CONFORMED SUBMISSION TYPE: 10-K\n"
+        "FILED AS OF DATE: 20161026\n"
+        "SUBJECT COMPANY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC SUBJECT INC\n"
+        f"    CENTRAL INDEX KEY: {AAPL_CIK}\n"
+        "FILED BY:\n"
+        "  COMPANY DATA:\n"
+        "    COMPANY CONFORMED NAME: SYNTHETIC AGENT LLC\n"
+        f"    CENTRAL INDEX KEY: {SUBMITTER_CIK}\n"
+        "</IMS-HEADER>\n"
+        "<DOCUMENT>\n"
+        "<TYPE>10-K\n"
+        "<SEQUENCE>1\n"
+        f"<FILENAME>{PRIMARY}\n"
+        f"<TEXT>{ims_text}</TEXT>\n"
+        "</DOCUMENT>\n"
+        "</IMS-DOCUMENT>\n"
+    ).encode("latin-1")
+
+    parsed_sec = parse_complete_submission(sec_payload)
+    parsed_ims = parse_complete_submission(ims_payload)
+    metadata_variants = (
+        sec_payload.decode("latin-1").replace(
+            "<TYPE>10-K\n", "\v<TYPE>10-K\n", 1
+        ),
+        sec_payload.decode("latin-1").replace(
+            "<TYPE>10-K\n", "\f<TYPE>10-K\n", 1
+        ),
+        sec_payload.decode("latin-1").replace(
+            "<TYPE>10-K\n", "\xa0<TYPE>10-K\n", 1
+        ),
+        sec_payload.decode("latin-1").replace(
+            "<SEQUENCE>1\n", "\v<SEQUENCE>1\n", 1
+        ),
+        sec_payload.decode("latin-1").replace(
+            "<TYPE>10-K\n", "<TYPE>\v10-K\n", 1
+        ),
+        sec_payload.decode("latin-1").replace(
+            "<SEQUENCE>1\n", "<SEQUENCE>١\n", 1
+        ),
+    )
+    for metadata_variant in metadata_variants:
+        parsed_variant = parse_complete_submission(metadata_variant)
+        assert parsed_variant.documents[0].text == sec_text
+
+    assert parsed_sec.documents[0].text == sec_text
+    assert parsed_ims.documents[0].text == ims_text
+    for original, parsed in ((sec_payload, parsed_sec), (ims_payload, parsed_ims)):
+        document = parsed.documents[0]
+        exact_text = original[document.text_start_byte : document.text_end_byte]
+        assert exact_text == document.text.encode("latin-1")
+        assert document.text_sha256 == content_sha256(exact_text)
+        assert parsed.submission_sha256 == content_sha256(original)

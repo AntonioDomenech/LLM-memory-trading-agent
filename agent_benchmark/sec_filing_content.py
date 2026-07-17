@@ -361,28 +361,216 @@ def parse_complete_submission(
     text, raw, source_encoding = _coerce_payload(
         payload, field_name="complete-submission payload"
     )
-    header_matches = re.findall(
-        r"<SEC-HEADER>(.*?)</SEC-HEADER>",
+    envelope_family = "SEC"
+    selected_ims_header: str | None = None
+    selected_ims_accessions: set[str] | None = None
+    if re.search(
+        r"</?IMS-(?:DOCUMENT|HEADER)>",
         text,
-        flags=re.IGNORECASE | re.DOTALL,
+        flags=re.IGNORECASE | re.ASCII,
+    ) is not None:
+        structural_documents = list(
+            re.finditer(
+                r"<DOCUMENT>(.*?)</DOCUMENT>",
+                text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        )
+        if (
+            not structural_documents
+            or len(re.findall(r"<DOCUMENT>", text, flags=re.IGNORECASE))
+            != len(structural_documents)
+            or len(re.findall(r"</DOCUMENT>", text, flags=re.IGNORECASE))
+            != len(structural_documents)
+        ):
+            raise SecPointInTimeError(
+                "Complete submission has unbalanced DOCUMENT sections"
+            )
+        authenticated_text_spans: list[tuple[int, int]] = []
+        for structural_document in structural_documents:
+            structural_block = structural_document.group(1)
+            structural_texts = list(
+                re.finditer(
+                    r"<TEXT>(.*?)</TEXT>",
+                    structural_block,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+            )
+            if (
+                len(structural_texts) != 1
+                or len(
+                    re.findall(
+                        r"<TEXT>", structural_block, flags=re.IGNORECASE
+                    )
+                )
+                != 1
+                or len(
+                    re.findall(
+                        r"</TEXT>", structural_block, flags=re.IGNORECASE
+                    )
+                )
+                != 1
+            ):
+                raise SecPointInTimeError(
+                    "DOCUMENT must contain one unambiguous TEXT section"
+                )
+            structural_metadata = structural_block[: structural_texts[0].start()]
+            structural_types = re.findall(
+                r"^\s*<TYPE>\s*([^\r\n<]*)\s*$",
+                structural_metadata,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            structural_sequences = re.findall(
+                r"^\s*<SEQUENCE>\s*([^\r\n<]*)\s*$",
+                structural_metadata,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            structural_sequence = (
+                structural_sequences[0].strip()
+                if len(structural_sequences) == 1
+                else ""
+            )
+            try:
+                structural_sequence_number = int(structural_sequence)
+            except ValueError:
+                structural_sequence_number = 0
+            if (
+                len(structural_types) != 1
+                or not structural_types[0].strip()
+                or len(structural_sequences) != 1
+                or not structural_sequence.isdigit()
+                or structural_sequence_number < 1
+            ):
+                raise SecPointInTimeError(
+                    "DOCUMENT mask requires singular TYPE and positive SEQUENCE"
+                )
+            authenticated_text_spans.append(
+                (
+                    structural_document.start(1)
+                    + structural_texts[0].start(1),
+                    structural_document.start(1)
+                    + structural_texts[0].end(1),
+                )
+            )
+        structural_characters = list(text)
+        for text_start, text_end in authenticated_text_spans:
+            structural_characters[text_start:text_end] = " " * (
+                text_end - text_start
+            )
+        structural_view = "".join(structural_characters)
+        structural_ims = re.search(
+            r"</?IMS-(?:DOCUMENT|HEADER)>",
+            structural_view,
+            flags=re.IGNORECASE | re.ASCII,
+        )
+        if structural_ims is not None:
+            ims_document_open = list(
+                re.finditer(
+                    r"<IMS-DOCUMENT>",
+                    structural_view,
+                    flags=re.IGNORECASE | re.ASCII,
+                )
+            )
+            ims_document_close = list(
+                re.finditer(
+                    r"</IMS-DOCUMENT>",
+                    structural_view,
+                    flags=re.IGNORECASE | re.ASCII,
+                )
+            )
+            ims_header_open = list(
+                re.finditer(
+                    r"<IMS-HEADER>",
+                    structural_view,
+                    flags=re.IGNORECASE | re.ASCII,
+                )
+            )
+            ims_header_close = list(
+                re.finditer(
+                    r"</IMS-HEADER>",
+                    structural_view,
+                    flags=re.IGNORECASE | re.ASCII,
+                )
+            )
+            structural_sec = re.findall(
+                r"</?SEC-(?:DOCUMENT|HEADER)>",
+                structural_view,
+                flags=re.IGNORECASE | re.ASCII,
+            )
+            if (
+                len(ims_document_open) != 1
+                or len(ims_document_close) != 1
+                or len(ims_header_open) != 1
+                or len(ims_header_close) != 1
+                or structural_sec
+                or not (
+                    ims_document_open[0].start()
+                    < ims_header_open[0].start()
+                    < ims_header_close[0].start()
+                    < structural_documents[0].start()
+                    and structural_documents[-1].end()
+                    < ims_document_close[0].start()
+                    and all(
+                        ims_header_close[0].end()
+                        <= document.start()
+                        and document.end()
+                        <= ims_document_close[0].start()
+                        for document in structural_documents
+                    )
+                )
+            ):
+                raise SecPointInTimeError(
+                    "Complete submission IMS envelope is ambiguous or unbalanced"
+                )
+            envelope_family = "IMS"
+            selected_ims_header = text[
+                ims_header_open[0].end() : ims_header_close[0].start()
+            ]
+            selected_ims_accessions = {
+                value
+                for value in re.findall(
+                    r"(?a:<IMS-DOCUMENT>)[^\r\n<]*?"
+                    r"(\d{10}-\d{2}-\d{6})(?:\.txt)?",
+                    text[
+                        ims_document_open[0].start() :
+                        ims_header_open[0].start()
+                    ],
+                    flags=re.IGNORECASE,
+                )
+            }
+    header_matches = (
+        [selected_ims_header]
+        if envelope_family == "IMS" and selected_ims_header is not None
+        else re.findall(
+            r"<SEC-HEADER>(.*?)</SEC-HEADER>",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
     )
     if len(header_matches) != 1:
-        raise SecPointInTimeError("Complete submission must contain one SEC-HEADER")
+        raise SecPointInTimeError(
+            f"Complete submission must contain one {envelope_family}-HEADER"
+        )
     header = _parse_header(
         header_matches[0],
         allow_missing_acceptance=allow_missing_acceptance,
     )
-    submission_accessions = {
-        value
-        for value in re.findall(
-            r"<SEC-DOCUMENT>[^\r\n<]*?(\d{10}-\d{2}-\d{6})(?:\.txt)?",
-            text,
-            flags=re.IGNORECASE,
-        )
-    }
+    submission_accessions = (
+        selected_ims_accessions
+        if envelope_family == "IMS"
+        else {
+            value
+            for value in re.findall(
+                r"<SEC-DOCUMENT>[^\r\n<]*?"
+                r"(\d{10}-\d{2}-\d{6})(?:\.txt)?",
+                text,
+                flags=re.IGNORECASE,
+            )
+        }
+    )
     if submission_accessions != {header.accession_number}:
         raise SecPointInTimeError(
-            "SEC-DOCUMENT accession does not match the SGML header"
+            f"{envelope_family}-DOCUMENT accession does not match the SGML header"
         )
     document_matches = list(
         re.finditer(
