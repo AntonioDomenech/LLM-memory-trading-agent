@@ -1,0 +1,125 @@
+{
+  "acquisition_plan_sha256": "30340bcb85c1344a839d2aad1ec0fe91e3af24d2b62d39fce09649eddc10ab25",
+  "acquisition_sha256": "3a5d2e19eb0fe52de8a940c603a17e38a54b52acfcab0154ebdab0beb3bce548",
+  "attempt_history": {
+    "attempt_count": 3,
+    "authority_sha256": "f4b72a472259c22aa7f2d6858d4eaaf788f1960c3006777d81ebd2acd950f50c",
+    "event_count": 14,
+    "head_event_sha256": "b54d8208e6b0a2775ce34e3a24ca31c2782cd74919e702b6e1f995d3f46866ca",
+    "ignored_local_state": true,
+    "journal_path": "data/aapl_sec_gemma_lean_evidence_v3/development_attempt_journal",
+    "lifetime_network_accounting": {
+      "sec": {
+        "ambiguous_settled_request_intents": 0,
+        "confirmed_response_started_requests": 4,
+        "exact_network_request_count": 4,
+        "indeterminate_request_intents": 0,
+        "known_network_requests": 4,
+        "network_request_count_lower_bound": 4,
+        "network_request_count_upper_bound": 4,
+        "unsettled_request_intents": 0,
+        "validated_source_unit_bytes": 0,
+        "validated_source_unit_requests": 0
+      },
+      "yahoo": {
+        "ambiguous_settled_request_intents": 0,
+        "confirmed_response_started_requests": 0,
+        "exact_network_request_count": 0,
+        "indeterminate_request_intents": 0,
+        "known_network_requests": 0,
+        "network_request_count_lower_bound": 0,
+        "network_request_count_upper_bound": 0,
+        "unsettled_request_intents": 0,
+        "validated_source_unit_bytes": 0,
+        "validated_source_unit_requests": 0
+      }
+    },
+    "schema_version": "aapl-sec-gemma-lean-evidence-v3-attempt-event-v1",
+    "terminal_outcome_recorded": true
+  },
+  "effect_counts": {
+    "confirmation_sources_opened": 0,
+    "final_sources_opened": 0,
+    "market_data_requests": 0,
+    "market_data_requests_lower_bound": 0,
+    "market_data_requests_upper_bound": 0,
+    "model_generation_calls": 0,
+    "official_sec_requests": 4,
+    "official_sec_requests_lower_bound": 4,
+    "official_sec_requests_upper_bound": 4,
+    "paid_api_calls": 0,
+    "performance_results_opened": 0,
+    "trading_actions": 0
+  },
+  "execution_authorized": false,
+  "failure_evidence": {
+    "claims_in_failed_manifests_treated_as_authority": false,
+    "failure_evidence_sha256": "31357d7fa9ce3fe5dcb835d095dd9ae03062c5a4973bfc6eafd3063d8d55aeae",
+    "ignored_checkpoint_root": "data/aapl_sec_gemma_lean_evidence_v3",
+    "manifest_count": 0,
+    "manifests": []
+  },
+  "finished_at_utc": "2026-07-17T09:44:17.359705Z",
+  "model_authorized": false,
+  "next_step": "commit_rejection_and_update_approach_comparison",
+  "performance_results_opened": false,
+  "preflight_sha256": "fbe80357d677c6d3e85aeb256523d49eb9894cfbae667f34cf8280283824acec",
+  "preregistration_commit": "f64e90e99dfb99f5b17609513c7d931dc939811f",
+  "privacy": {
+    "readable_sec_contact_published": false,
+    "sec_contact_fingerprint_only": true
+  },
+  "rejection": {
+    "code": "sec_catalog_reference_date_mismatch",
+    "disposition": "terminal_integrity_rejection",
+    "later_stage_access_stopped": true
+  },
+  "repository": {
+    "acquisition_source_path": "agent_benchmark/sec_gemma_lean_acquisition.py",
+    "acquisition_source_sha256": "269ea475b068e5b256b2cc7aa9c8371678b1e46a7b5736913b13b628074c661a",
+    "branch": "codex/aapl-sec-gemma-lean-evidence-v3",
+    "cached_upstream_commit": "5d22a770aa239c9fc579408241f73aa00eb47fec",
+    "dependency_closure_sha256": "d37bb45d1d792efa88cb834e1b6a0cabde5ea3e435466a00905002b29152e1bd",
+    "frozen_scientific_source_blobs_sha256": "29582d89eff5ddfb09bdadde86f3b62048bce808f180df3feff57b4efbfb9ec1",
+    "head_commit": "5d22a770aa239c9fc579408241f73aa00eb47fec",
+    "preflight_artifact_sha256": "fbba973228dc50bd08014d71c2e4abe0ecd11877cb4d9bf30ec921d9b8c65559",
+    "preflight_sha256": "fbe80357d677c6d3e85aeb256523d49eb9894cfbae667f34cf8280283824acec",
+    "preregistration_commit": "f64e90e99dfb99f5b17609513c7d931dc939811f",
+    "scientific_parent_commit": "efbc481c57e480d48303763163676e64e87df49d"
+  },
+  "request_accounting": {
+    "all_request_effects_exact": true,
+    "lifetime_network_accounting": {
+      "sec": {
+        "ambiguous_settled_request_intents": 0,
+        "confirmed_response_started_requests": 4,
+        "exact_network_request_count": 4,
+        "indeterminate_request_intents": 0,
+        "known_network_requests": 4,
+        "network_request_count_lower_bound": 4,
+        "network_request_count_upper_bound": 4,
+        "unsettled_request_intents": 0,
+        "validated_source_unit_bytes": 0,
+        "validated_source_unit_requests": 0
+      },
+      "yahoo": {
+        "ambiguous_settled_request_intents": 0,
+        "confirmed_response_started_requests": 0,
+        "exact_network_request_count": 0,
+        "indeterminate_request_intents": 0,
+        "known_network_requests": 0,
+        "network_request_count_lower_bound": 0,
+        "network_request_count_upper_bound": 0,
+        "unsettled_request_intents": 0,
+        "validated_source_unit_bytes": 0,
+        "validated_source_unit_requests": 0
+      }
+    },
+    "sealed_evidence_complete": false
+  },
+  "schema_version": "aapl-sec-gemma-lean-evidence-v3-development-acquisition-v1",
+  "scientific_parent_commit": "efbc481c57e480d48303763163676e64e87df49d",
+  "sec_contact_sha256": "sha256:ba878db7d6df9986bfe47aa609d0918ed5746ad62025f4e4e3e82e585837ece1",
+  "stage": "development",
+  "status": "rejected"
+}
