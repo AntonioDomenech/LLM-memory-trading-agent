@@ -1,1 +1,2 @@
 e/** -text whitespace=cr-at-eol
+*.py text eol=lf
