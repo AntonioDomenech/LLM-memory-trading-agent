@@ -1,0 +1,144 @@
+{
+  "acquisition_sha256": "f46331d0ba6c16128e88b0f084f6b430b73da4d34050517fcaaf9813d99f0984",
+  "acquisition_sha256_basis": "sha256 of UTF-8 canonical JSON without acquisition_sha256",
+  "boundary_evidence": {
+    "declared_master_coverage_start": "1994-07-01",
+    "pre_boundary_exact_nonamended_target_count": 1,
+    "pre_boundary_targets": [
+      {
+        "acceptance_datetime": "1994-01-26T05:00:00.000Z",
+        "accession_number": "0000320193-94-000002",
+        "date_of_filing_date_change_present": false,
+        "filing_date": "1994-01-26",
+        "form": "10-Q",
+        "primary_document_present": false,
+        "report_date": "1993-12-31",
+        "semantic_identity_sha256": "7873374f84905077fbb323edf1e1c2ac33c8d766fb925723fb7e3af5595b3a71",
+        "source_file": "CIK0000320193-submissions-001.json",
+        "source_position_zero_based": 1235,
+        "source_row_count": 1236,
+        "source_row_order_sha256": "424d413e5ed48beb3490eaee77db90166a93717d70b6cdb10fc9688875581abb",
+        "subject_cik": "0000320193"
+      }
+    ],
+    "rejection_rule": "every exact non-amended 10-K or 10-Q filed before the declared master coverage rejects",
+    "submissions_reference": {
+      "filing_count": 1236,
+      "filing_from": "1994-01-26",
+      "filing_to": "2015-05-27",
+      "reference_position_zero_based": 0
+    }
+  },
+  "effect_counts": {
+    "complete_submission_requests": 0,
+    "confirmation_sources_opened": 0,
+    "final_sources_opened": 0,
+    "market_data_requests": 0,
+    "master_index_requests": 0,
+    "model_generation_calls": 0,
+    "official_sec_requests": 2,
+    "paid_api_calls": 0,
+    "performance_calculations": 0,
+    "performance_results_opened": 0,
+    "trading_actions": 0,
+    "yahoo_requests": 0
+  },
+  "execution_authorized": false,
+  "finished_at_utc": "2026-07-17T18:07:52.341145Z",
+  "implementation_findings": [
+    {
+      "code": "terminal_reason_redaction_too_broad",
+      "evidence": "the journal terminal stores source_rejected while deterministic sealed-evidence replay raises master_boundary_incomplete",
+      "required_successor_action": "preserve an exact bounded source rejection code without echoing source content"
+    },
+    {
+      "code": "role_manifest_hash_representation_mismatch",
+      "evidence": "source manifests store body_sha256 as sha256:<64 hex> while the acquisition inventory loader requires bare 64 hex",
+      "required_successor_action": "freeze one representation and hostile-test post-terminal detached inventory loading"
+    }
+  ],
+  "journal_evidence": {
+    "cumulative_active_ms": 4893,
+    "detached_journal_validation_passed": true,
+    "event_count": 12,
+    "http_200_responses": 2,
+    "lifetime_intents": 2,
+    "lifetime_received_bytes": 364553,
+    "no_open_invocation": true,
+    "no_open_role": true,
+    "resume_allowed": false,
+    "role_plan_sha256": "27ed2c91a5b3c17fb585312360125dbdc2a888fd275897773eb874984db67d04",
+    "role_seals": 2,
+    "successful_response_bytes": 364553,
+    "terminal_event_sha256": "339f722276c5ccb6ec4a8286b64641b4edf6ec906ee95568c8684ec358b7f131",
+    "terminal_status": "rejected",
+    "unclean_active_ms": 0
+  },
+  "model_authorized": false,
+  "next_step": "commit rejection and comparison update, then separately preregister a source-authority successor",
+  "performance_results_opened": false,
+  "privacy": {
+    "private_paths_published": false,
+    "raw_sec_bodies_published": false,
+    "readable_sec_contact_published": false,
+    "sec_contact_fingerprint_published": false
+  },
+  "rejection": {
+    "direct_terminal_code": "source_rejected",
+    "disposition": "terminal_integrity_rejection_for_v3_1",
+    "later_stage_access_stopped": true,
+    "offline_replay_cause": "master_boundary_incomplete",
+    "offline_replay_deterministic": true,
+    "source_authoritative": false
+  },
+  "repository": {
+    "branch": "codex/aapl-sec-gemma-lean-evidence-v3-1",
+    "executed_source_inventory_sha256": "529e14f00c2e6b1283fdda0784f9fb7711dfa5ccfd5c628f724e96b14fb1bd75",
+    "implementation_commit": "281aec0f2e1790ded4a3c2ead34301ce57adf392",
+    "implementation_delta_manifest_sha256": "b56cb0c83ecca935339e0bc3c0ecdc2092a995fb0a7482d100a5aafee4b3f9fa",
+    "implementation_tree": "97dcd2ae1959dc7573d53d605376522ab17fb8e2",
+    "preflight_artifact_file_sha256": "edfc3ba2911c95051166227eeeceae9498e41ad996e26741774b2f1ae4b11040",
+    "preflight_evidence_commit": "ed57ff8eb834736ac1b70e91261d5257e72d1920",
+    "preflight_evidence_tree": "2949efb649899e20d00395c54686d3b71a7734b6",
+    "preflight_sha256": "44eb679d129a9aa552b83cbc123362c6a656c29a8859258ccfc8356af0c98703",
+    "preregistration_commit": "fe38fce300e858eeddb6894a540b8e52830d9287",
+    "scientific_parent_commit": "efbc481c57e480d48303763163676e64e87df49d"
+  },
+  "schema_version": "aapl-sec-gemma-lean-evidence-v3-1-development-acquisition-v1",
+  "scientific_disposition": {
+    "family_wide_market_or_model_lock_triggered": false,
+    "market_model_or_performance_evidence_seen": false,
+    "successor_must_be_separately_preregistered": true,
+    "v3_1_attempt_terminal": true
+  },
+  "source_roles": [
+    {
+      "body_bytes": 164394,
+      "body_sha256": "ea2aa552e984a29e920cf80e0827cf32b632563935f029b6ec9de7f4fa3c026d",
+      "http_status": 200,
+      "manifest_file_sha256": "b19daa52cee8fb829f28d283e3f923968359b6fcdbbda718fd5979d7a75914af",
+      "parse_receipt_file_sha256": "e2549b3bc4f15d782917c5fbbc70dc4049cffa52f66d74bc6573020d4ad42258",
+      "role_id": "submissions/main",
+      "sequence": 0,
+      "source_evidence_sha256": "da5db892fc4333b67e7620e45037743cad15b4154dec9d2f29ef117a4c4aefb4",
+      "transport_receipt_sha256": "662f50982f4b4b196e1c506e6dde2a53e01f0b1210e47eae90b3a5c075b38ceb",
+      "transport_receipt_validation_passed": true,
+      "url": "https://data.sec.gov/submissions/CIK0000320193.json"
+    },
+    {
+      "body_bytes": 200159,
+      "body_sha256": "17885ab6d82e1da0baa842eb8b4b9f302a8b44482c65d55c8bf03e63c3c1c3f8",
+      "http_status": 200,
+      "manifest_file_sha256": "6547932224d4f95ce712fb10e97b73fc7e5b79ac197fe20ca435316f5dd020c5",
+      "parse_receipt_file_sha256": "23393c199fdb9c9cb0e36daa13694d65653cfb9c06c049898f74b1cf3b1e22d2",
+      "role_id": "submissions/historical/CIK0000320193-submissions-001.json",
+      "sequence": 1,
+      "source_evidence_sha256": "aba8c0ec48d800a688ba93a50e0d6d94cb601ca92074de2c69c5b0dc2945de22",
+      "transport_receipt_sha256": "b5a3367ace855c0025ca7f5c21946c8914ddeb03aeb618801b2482aa2e3c7796",
+      "transport_receipt_validation_passed": true,
+      "url": "https://data.sec.gov/submissions/CIK0000320193-submissions-001.json"
+    }
+  ],
+  "stage": "development",
+  "status": "rejected"
+}

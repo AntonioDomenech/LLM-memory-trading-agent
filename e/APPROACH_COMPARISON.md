@@ -1,11 +1,14 @@
 # AAPL long/cash approach comparison
 
-Updated through the SEC/Gemma lean evidence v3 development-source integrity
+Updated through the SEC/Gemma lean evidence v3.1 development-source integrity
 rejection on 2026-07-17. The three preceding SEC/Gemma entries stopped before
 official SEC, market-value, or generative-model effects. Lean v3 then made four
 fully journaled official SEC catalogue requests and stopped before market,
 Gemma, performance, or trading effects because the SEC main Submissions
-metadata disagreed with its referenced historical file.
+metadata disagreed with its referenced historical file. Lean v3.1 made two
+fully journaled official SEC Submissions requests and stopped before any master
+index, filing body, market, Gemma, performance, or trading effect because one
+exact Apple 10-Q filed on 1994-01-26 predates its frozen 1994-Q3 master boundary.
 All eligible approaches use 0% or 100% AAPL exposure, no shorting, no leverage,
 no negative cash, the same adjusted-open ledger as AAPL buy-and-hold, and no
 paid API. Published 2024-2026 figures are repeated historical audits, not a
@@ -79,6 +82,7 @@ final and no later period or real capital is authorized.
 | SEC/Gemma online risk overlay v2.1 | Same causal filing learner and long/cash policy with corrected model identity and hardened local execution | Local implementation review found a non-atomic interval after immutable remote pass/fail publication but before the local terminal anchor; a crash or deadline could leave contradictory terminal states | No | Preflight rejected before SEC, market-value, or Gemma effects; crash-safe terminal authority and recovery require a separately preregistered successor |
 | SEC/Gemma online risk overlay v2.2 | Same causal filing learner and long/cash policy with crash-safe publication and recovery | Source and non-generative Ollama identity checks passed, but the complete lifecycle resets a separate one-hour clock for four commands and permits later recovery time | No | Preflight rejected before SEC, market-value, or Gemma effects; a successor must bind the complete experiment to one shared one-hour deadline |
 | SEC/Gemma lean evidence v3 | Lean source-first local Gemma filing learner with one shared lifecycle and resumable content-addressed checkpoints | Four exact HTTP-200 SEC catalogue requests were journaled across the acquisition and diagnostic attempts. The frozen integrity parser found that the main Submissions `filingTo` claim did not equal the referenced historical file's maximum filing date, so no source unit could be sealed | No | Development acquisition terminally rejected for source integrity before market data, Gemma, performance, confirmation, final, paid-API, or trading effects; any response to the upstream mismatch requires a separately preregistered successor rather than a post-hoc rule change |
+| SEC/Gemma lean evidence v3.1 | Lean source-first local Gemma filing learner with committed-blob implementation proof, one-shot preflight, strict TLS transport, append-only journal, and detached replay | Two exact HTTP-200 SEC Submissions responses were sealed. One non-amended Apple 10-Q, accession `0000320193-94-000002`, was filed on 1994-01-26 before the frozen 1994-Q3 master start; deterministic replay returned `master_boundary_incomplete` | No | Development acquisition terminally rejected before any master index, filing body, market data, Gemma, performance, paid API, or trading effect. A successor must broaden independent master authority without special-casing the observed filing and must repair exact-error and manifest-hash integration defects |
 
 ## Outside the current no-leverage contract
 
@@ -120,3 +124,4 @@ short behavior and are excluded from the eligible table.
 - `docs/aapl_sec_gemma_online_risk_overlay_v2_1_preflight_rejection.md`
 - `docs/aapl_sec_gemma_online_risk_overlay_v2_2_preflight_rejection.md`
 - `e/aapl_sec_gemma_lean_evidence_v3/DEVELOPMENT_ACQUISITION.json`
+- `e/aapl_sec_gemma_lean_evidence_v3_1/DEVELOPMENT_ACQUISITION.json`
