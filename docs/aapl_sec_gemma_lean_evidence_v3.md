@@ -175,4 +175,3 @@ Historical outperformance cannot authorize real capital. A historically
 promising survivor must next make append-only prospective paper decisions
 before its outcomes are known. Broker execution requires separate fresh user
 authorization outside this approach.
-
