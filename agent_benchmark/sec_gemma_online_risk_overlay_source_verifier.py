@@ -1,4 +1,4 @@
-"""Live Git and source-tree verification for the SEC/Gemma overlay v2.1.
+"""Live Git and source-tree verification for the SEC/Gemma overlay v2.2.
 
 The verifier performs read-only local checks.  It does not fetch, mutate Git,
 open a network connection, or trust caller-supplied commit and source hashes.
@@ -24,6 +24,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 from types import MappingProxyType
 from typing import Any, Final, Mapping
 
@@ -38,10 +39,10 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
 
 
 SOURCE_VERIFICATION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-source-verification-v3"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-source-verification-v3"
 )
 PREREGISTRATION_COMMIT: Final[str] = (
-    "939856e6773fc6dd5bbf468193a29f34c8724c6e"
+    "a849b9d704ffd98547e570735a221b2b75f7db86"
 )
 EXPECTED_ORIGIN_URL: Final[str] = (
     "https://github.com/AntonioDomenech/LLM-memory-trading-agent.git"
@@ -129,6 +130,8 @@ _REQUESTS_OPTIONAL_IMPORTS: Final[frozenset[str]] = frozenset(
         "zstandard",
     }
 )
+_REQUESTS_LOAD_LOCK = threading.RLock()
+_VERIFIED_REQUESTS_MODULE: Any | None = None
 
 
 class SecGemmaOnlineRiskOverlaySourceVerificationError(RuntimeError):
@@ -883,6 +886,7 @@ def _audit_allowed_requests_modules(
     allowed_files: Mapping[Path, tuple[str, str, str]],
     package_entries: Mapping[str, Path],
     modules_before_load: set[str],
+    reject_unrelated_optional_modules: bool = True,
 ) -> None:
     """Prove the selected resolver and every newly loaded external module."""
 
@@ -901,9 +905,12 @@ def _audit_allowed_requests_modules(
         requests_compat.chardet is not charset_normalizer
         or requests_models.chardet is not charset_normalizer
         or requests_packages.chardet is not charset_normalizer
-        or any(
-            name == "chardet" or name.startswith("chardet.")
-            for name in sys.modules
+        or (
+            reject_unrelated_optional_modules
+            and any(
+                name == "chardet" or name.startswith("chardet.")
+                for name in sys.modules
+            )
         )
     ):
         raise SecGemmaOnlineRiskOverlaySourceVerificationError(
@@ -945,12 +952,16 @@ def _audit_allowed_requests_modules(
         or urllib3_response.HAS_ZSTD is not False
         or "br" in urllib3_request.ACCEPT_ENCODING.split(",")
         or "zstd" in urllib3_request.ACCEPT_ENCODING.split(",")
-        or any(
-            name in sys.modules
-            or any(
-                loaded.startswith(f"{name}.") for loaded in sys.modules
+        or (
+            reject_unrelated_optional_modules
+            and any(
+                name in sys.modules
+                or any(
+                    loaded.startswith(f"{name}.")
+                    for loaded in sys.modules
+                )
+                for name in _REQUESTS_OPTIONAL_IMPORTS
             )
-            for name in _REQUESTS_OPTIONAL_IMPORTS
         )
     ):
         raise SecGemmaOnlineRiskOverlaySourceVerificationError(
@@ -1030,39 +1041,90 @@ def _audit_allowed_requests_modules(
 
 
 def load_allowed_requests() -> Any:
-    """Load Requests through its frozen charset-normalizer-only dependency path."""
+    """Load one verified Requests runtime despite unrelated prior imports.
 
-    if any(
-        name == "chardet" or name.startswith("chardet.")
-        for name in sys.modules
-    ):
-        raise SecGemmaOnlineRiskOverlaySourceVerificationError(
-            "Chardet was loaded before the frozen Requests runtime"
+    Requests chooses its character detector at import time.  Test runners and
+    application hosts may already have imported Requests or Chardet for an
+    unrelated purpose, so auditing the ambient module cache would make the
+    production module depend on collection order.  Instead, the first call
+    transactionally removes only the Requests dependency family, imports and
+    audits the exact frozen five-distribution runtime under the import guard,
+    and leaves that verified runtime as the canonical process module.  Existing
+    callers keep their old module references, but effectful overlay code only
+    receives the newly verified object.
+
+    If isolation or verification fails, the prior module cache is restored
+    exactly and no partially loaded Requests runtime is retained.
+    """
+
+    global _VERIFIED_REQUESTS_MODULE
+
+    managed_roots = _REQUESTS_RUNTIME_IMPORTS | _REQUESTS_OPTIONAL_IMPORTS
+
+    def managed_names() -> tuple[str, ...]:
+        return tuple(
+            name
+            for name in sys.modules
+            if name.split(".", 1)[0] in managed_roots
         )
-    allowed_files, package_entries = _allowed_requests_runtime_files()
-    before = set(sys.modules)
-    guard = _FrozenRequestsImportGuard()
-    sys.meta_path.insert(0, guard)
-    guard_removed = False
-    try:
-        requests_module = importlib.import_module("requests")
-        _audit_allowed_requests_modules(
-            requests_module=requests_module,
-            allowed_files=allowed_files,
-            package_entries=package_entries,
-            modules_before_load=before,
-        )
-    finally:
+
+    with _REQUESTS_LOAD_LOCK:
+        allowed_files, package_entries = _allowed_requests_runtime_files()
+        if _VERIFIED_REQUESTS_MODULE is not None:
+            _audit_allowed_requests_modules(
+                requests_module=_VERIFIED_REQUESTS_MODULE,
+                allowed_files=allowed_files,
+                package_entries=package_entries,
+                modules_before_load=set(sys.modules),
+                reject_unrelated_optional_modules=False,
+            )
+            return _VERIFIED_REQUESTS_MODULE
+
+        displaced = {
+            name: sys.modules[name]
+            for name in managed_names()
+        }
+        for name in displaced:
+            sys.modules.pop(name, None)
+
+        before = set(sys.modules)
+        guard = _FrozenRequestsImportGuard()
+        sys.meta_path.insert(0, guard)
+        requests_module: Any | None = None
+        failure: BaseException | None = None
         try:
-            sys.meta_path.remove(guard)
-            guard_removed = True
-        except ValueError:
-            guard_removed = False
-    if not guard_removed:
-        raise SecGemmaOnlineRiskOverlaySourceVerificationError(
-            "Frozen Requests import guard was displaced"
-        )
-    return requests_module
+            requests_module = importlib.import_module("requests")
+            _audit_allowed_requests_modules(
+                requests_module=requests_module,
+                allowed_files=allowed_files,
+                package_entries=package_entries,
+                modules_before_load=before,
+            )
+        except BaseException as exc:
+            failure = exc
+        finally:
+            try:
+                sys.meta_path.remove(guard)
+            except ValueError:
+                if failure is None:
+                    failure = (
+                        SecGemmaOnlineRiskOverlaySourceVerificationError(
+                            "Frozen Requests import guard was displaced"
+                        )
+                    )
+
+        if failure is not None or requests_module is None:
+            for name in managed_names():
+                sys.modules.pop(name, None)
+            sys.modules.update(displaced)
+            if failure is not None:
+                raise failure
+            raise SecGemmaOnlineRiskOverlaySourceVerificationError(
+                "Frozen Requests runtime returned no module"
+            )
+
+        _VERIFIED_REQUESTS_MODULE = requests_module
+        return requests_module
 
 
 def _verify_real_source(repo_root: Path, relative_path: str) -> bytes:

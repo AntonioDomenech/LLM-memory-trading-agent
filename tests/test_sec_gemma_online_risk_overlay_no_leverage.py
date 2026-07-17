@@ -21,7 +21,7 @@ from agent_benchmark.sec_gemma_online_risk_overlay_no_leverage import (
 )
 
 
-_LEDGER_SCHEMA_VERSION = "aapl-sec-gemma-online-risk-overlay-v2-1-ledger-v1"
+_LEDGER_SCHEMA_VERSION = "aapl-sec-gemma-online-risk-overlay-v2-2-ledger-v1"
 _GENESIS = canonical_sha256(
     {
         "schema_version": _LEDGER_SCHEMA_VERSION,

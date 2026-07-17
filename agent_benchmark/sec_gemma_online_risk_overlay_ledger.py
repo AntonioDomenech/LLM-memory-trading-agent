@@ -30,22 +30,22 @@ from agent_benchmark.sec_gemma_online_risk_overlay_policy import (
 
 
 LEDGER_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-ledger-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-ledger-v1"
 )
 LEDGER_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-ledger-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-ledger-row-v1"
 )
 COUNTERFACTUAL_LESSON_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-counterfactual-lesson-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-counterfactual-lesson-v1"
 )
 OVERLAY_EPISODE_OBSERVATION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-episode-observation-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-episode-observation-v1"
 )
 TARGET_STREAM_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-target-stream-v2"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-target-stream-v2"
 )
 TERMINAL_PENDING_STATE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-terminal-pending-state-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-terminal-pending-state-v1"
 )
 INITIAL_CASH: Final[float] = 1_000.0
 ALLOWED_COST_BPS: Final[frozenset[int]] = frozenset({5, 10})

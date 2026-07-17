@@ -73,10 +73,10 @@ from agent_benchmark.sec_session_calendar import (
 
 
 FEATURE_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-feature-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-feature-row-v1"
 )
 MARKET_RESULT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-market-features-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-market-features-v1"
 )
 MARKET_PREFIX_PROOF_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-validated-market-prefix-proof-v1"

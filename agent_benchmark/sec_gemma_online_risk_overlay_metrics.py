@@ -50,34 +50,34 @@ from agent_benchmark.sec_gemma_online_risk_overlay_policy import (
 
 
 METRICS_INPUT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-metrics-input-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-metrics-input-v1"
 )
 STAGE_METRICS_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-stage-metrics-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-stage-metrics-v1"
 )
 WINDOW_COMPARISON_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-window-comparison-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-window-comparison-v1"
 )
 ACTION_DIFFERENCE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-action-differences-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-action-differences-v1"
 )
 XOR_ATTRIBUTION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-xor-attribution-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-xor-attribution-v1"
 )
 EPISODE_ATTRIBUTION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-episode-attribution-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-episode-attribution-v1"
 )
 COVERAGE_METRICS_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-coverage-metrics-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-coverage-metrics-v1"
 )
 BRIER_METRICS_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-brier-metrics-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-brier-metrics-v1"
 )
 CALENDAR_DIAGNOSTICS_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-calendar-diagnostics-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-calendar-diagnostics-v1"
 )
 GATE_REPORT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-gate-report-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-gate-report-v1"
 )
 
 STAGES: Final[tuple[str, ...]] = (

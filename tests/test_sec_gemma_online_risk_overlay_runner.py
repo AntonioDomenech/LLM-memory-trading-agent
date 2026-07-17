@@ -8,8 +8,11 @@ from typing import Any
 
 import pytest
 
+import agent_benchmark.sec_gemma_online_risk_overlay_acquisition as acquisition_module
 import agent_benchmark.sec_gemma_online_risk_overlay_production as production_module
 import agent_benchmark.sec_gemma_online_risk_overlay_runner as runner_module
+import agent_benchmark.sec_gemma_online_risk_overlay_store as store_module
+import agent_benchmark.sec_gemma_online_risk_overlay_vault as vault_module
 from agent_benchmark.sec_gemma_online_risk_overlay_acquisition import (
     ACQUISITION_VALIDATION_SCHEMA_VERSION,
     ACQUISITION_VALIDATION_VERIFIER_ID,
@@ -192,19 +195,51 @@ def _manifest() -> dict[str, Any]:
 
 
 class FakeCapability:
-    def __init__(self, attempt_id: str) -> None:
+    def __init__(
+        self,
+        attempt_id: str,
+        *,
+        operation_kind: str | None = None,
+        operation_sha256: str | None = None,
+    ) -> None:
         self.attempt_id = attempt_id
+        self.operation_kind = operation_kind
+        self.operation_sha256 = operation_sha256
+
+
+class FakeDurableAuthority:
+    def __init__(
+        self,
+        material: dict[str, Any],
+        store_receipt: StoreRecordReceipt,
+        *,
+        external_publication: Any | None = None,
+    ) -> None:
+        self._material = copy.deepcopy(material)
+        self.store_receipt = store_receipt
+        self.external_publication = external_publication
+
+    def as_dict(self) -> dict[str, Any]:
+        return copy.deepcopy(self._material)
 
 
 class FakeStore:
     def __init__(self, manifest: dict[str, Any]) -> None:
         self.manifest = manifest
+        self.store_instance_id = _digest("fake-store-instance")
+        self.store_session_nonce_sha256 = _digest(
+            "fake-store-session-nonce"
+        )
         self.plans: dict[str, dict[str, Any]] = {}
         self.histories: dict[str, list[dict[str, Any]]] = {}
         self.records: list[dict[str, Any]] = []
+        self.governance: dict[
+            str, list[FakeDurableAuthority]
+        ] = {}
         self.events: list[str] = []
         self.anchor_bindings: dict[str, dict[str, Any]] = {}
         self.sequence = 0
+        self.journal_tip_sha256 = _digest("fake-journal-genesis")
 
     def seed_pass(
         self,
@@ -275,7 +310,7 @@ class FakeStore:
     ) -> StoreRecordReceipt:
         self.sequence += 1
         payload_hash = canonical_sha256(payload)
-        return StoreRecordReceipt(
+        receipt = StoreRecordReceipt(
             table=table,
             identity=identity,
             attempt_id=attempt_id,
@@ -285,6 +320,8 @@ class FakeStore:
                 f"{self.sequence}:{table}:{identity}:{payload_hash}"
             ),
         )
+        self.journal_tip_sha256 = receipt.journal_entry_sha256
+        return receipt
 
     def _append(
         self,
@@ -392,6 +429,430 @@ class FakeStore:
                 commitment_rows
             ),
         }
+
+    def _governance_authority(
+        self,
+        *,
+        table: str,
+        identity: str,
+        attempt_id: str,
+        material: dict[str, Any],
+        external_publication: Any | None = None,
+    ) -> FakeDurableAuthority:
+        receipt = self._receipt(
+            table, identity, attempt_id, material
+        )
+        self.events.append(f"commit:{table}:{attempt_id}")
+        authority = FakeDurableAuthority(
+            material,
+            receipt,
+            external_publication=external_publication,
+        )
+        self.governance.setdefault(table, []).append(authority)
+        return authority
+
+    def attempt_plan(self, attempt_id: str) -> dict[str, Any]:
+        return copy.deepcopy(self.plans[attempt_id])
+
+    def governance_records(
+        self,
+        table: str,
+        *,
+        attempt_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = [
+            authority.as_dict()
+            for authority in self.governance.get(table, [])
+        ]
+        if attempt_id is not None:
+            rows = [
+                row
+                for row in rows
+                if row.get("attempt_id") == attempt_id
+            ]
+        return rows
+
+    def _governance_lookup(
+        self,
+        table: str,
+        attempt_id: str,
+        *,
+        hash_field: str | None = None,
+        digest: str | None = None,
+    ) -> FakeDurableAuthority:
+        matches = [
+            authority
+            for authority in self.governance.get(table, [])
+            if authority.as_dict().get("attempt_id") == attempt_id
+            and (
+                hash_field is None
+                or authority.as_dict().get(hash_field) == digest
+            )
+        ]
+        assert len(matches) == 1
+        return matches[0]
+
+    def terminal_reconstruction_authority(
+        self, attempt_id: str
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "terminal_reconstruction_materials", attempt_id
+        )
+
+    def publication_intent_authority(
+        self, attempt_id: str
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "publication_intents", attempt_id
+        )
+
+    def publication_receipt_authority(
+        self,
+        attempt_id: str,
+        external_publication: Any,
+    ) -> FakeDurableAuthority:
+        authority = self._governance_lookup(
+            "publication_receipts", attempt_id
+        )
+        assert (
+            authority.as_dict()["external_publication_sha256"]
+            == external_publication.publication_sha256
+        )
+        authority.external_publication = external_publication
+        return authority
+
+    def remote_observation_authority(
+        self,
+        attempt_id: str,
+        remote_observation_sha256: str,
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "publication_remote_observations",
+            attempt_id,
+            hash_field="publication_remote_observation_sha256",
+            digest=remote_observation_sha256,
+        )
+
+    def publication_worker_ownership_authority(
+        self,
+        attempt_id: str,
+        worker_ownership_sha256: str,
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "publication_worker_ownership",
+            attempt_id,
+            hash_field="worker_ownership_sha256",
+            digest=worker_ownership_sha256,
+        )
+
+    def pre_push_authorization_authority(
+        self,
+        attempt_id: str,
+        pre_push_authorization_sha256: str,
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "publication_pre_push_authorizations",
+            attempt_id,
+            hash_field="pre_push_authorization_sha256",
+            digest=pre_push_authorization_sha256,
+        )
+
+    def recovery_completion_authority(
+        self,
+        attempt_id: str,
+        recovery_invocation_completion_sha256: str,
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "publication_recovery_invocation_completions",
+            attempt_id,
+            hash_field="recovery_invocation_completion_sha256",
+            digest=recovery_invocation_completion_sha256,
+        )
+
+    def reconcile_publication_recovery_state(
+        self, attempt_id: str
+    ) -> None:
+        self.events.append(f"reconcile-publication:{attempt_id}")
+
+    def terminalization_claim_authority(
+        self, attempt_id: str
+    ) -> FakeDurableAuthority:
+        return self._governance_lookup(
+            "terminalization_claims", attempt_id
+        )
+
+    def terminal_artifact_payload_and_receipt(
+        self, attempt_id: str
+    ) -> tuple[dict[str, Any], StoreRecordReceipt]:
+        matches = [
+            item
+            for item in self.records
+            if item["receipt"].table == "artifacts"
+            and item["receipt"].attempt_id == attempt_id
+            and item["receipt"].identity
+            == f"terminal_artifact:{attempt_id}"
+        ]
+        assert len(matches) == 1
+        return (
+            copy.deepcopy(matches[0]["payload"]),
+            matches[0]["receipt"],
+        )
+
+    def pending_acquisition_phase_evidence(
+        self, attempt_id: str
+    ) -> dict[str, Any]:
+        matches = [
+            copy.deepcopy(item["payload"])
+            for item in self.records
+            if item["receipt"].table == "evidence"
+            and item["receipt"].attempt_id == attempt_id
+        ]
+        return {
+            item["phase"]: item
+            for item in matches
+            if "phase" in item
+        }
+
+    def commit_terminal_reconstruction_material(
+        self,
+        capability: FakeCapability,
+        material: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="terminal_reconstruction_materials",
+            identity=f"terminal_reconstruction:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=material,
+        )
+
+    def commit_publication_intent(
+        self,
+        capability: FakeCapability,
+        material: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_intents",
+            identity=f"publication_intent:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=material,
+        )
+
+    def issue_publication_recovery_capability(
+        self,
+        attempt_id: str,
+        *,
+        operation_kind: str,
+        operation_sha256: str | None = None,
+    ) -> FakeCapability:
+        self.events.append(f"publication-capability:{attempt_id}")
+        return FakeCapability(
+            attempt_id,
+            operation_kind=operation_kind,
+            operation_sha256=operation_sha256,
+        )
+
+    def commit_recovery_start(
+        self,
+        capability: FakeCapability,
+        start: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_recovery_invocation_starts",
+            identity=(
+                "publication_recovery_start:"
+                f"{capability.attempt_id}:{start['invocation_ordinal']}"
+            ),
+            attempt_id=capability.attempt_id,
+            material=start,
+        )
+
+    def commit_transport_manifest(
+        self,
+        capability: FakeCapability,
+        manifest: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_transports",
+            identity=f"publication_transport:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=manifest,
+        )
+
+    def claim_publication_worker_ownership(
+        self,
+        capability: FakeCapability,
+        ownership: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_worker_ownership",
+            identity=f"publication_owner:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=ownership,
+        )
+
+    def commit_worker_quiescence(
+        self,
+        capability: FakeCapability,
+        quiescence: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_worker_quiescence",
+            identity=f"publication_quiescence:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=quiescence,
+        )
+
+    def commit_remote_observation(
+        self,
+        capability: FakeCapability,
+        readback_evidence: dict[str, Any],
+        observation: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        del readback_evidence
+        return self._governance_authority(
+            table="publication_remote_observations",
+            identity=(
+                "publication_observation:"
+                f"{capability.attempt_id}:{self.sequence + 1}"
+            ),
+            attempt_id=capability.attempt_id,
+            material=observation,
+        )
+
+    def commit_pre_push_authorization(
+        self,
+        capability: FakeCapability,
+        authorization: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_pre_push_authorizations",
+            identity=f"publication_authorization:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=authorization,
+        )
+
+    def commit_publication_conflict(
+        self,
+        capability: FakeCapability,
+        conflict: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_conflicts",
+            identity=f"publication_conflict:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=conflict,
+        )
+
+    def commit_recovery_completion(
+        self,
+        capability: FakeCapability,
+        completion: dict[str, Any],
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_recovery_invocation_completions",
+            identity=(
+                "publication_recovery_completion:"
+                f"{capability.attempt_id}:"
+                f"{completion['invocation_ordinal']}"
+            ),
+            attempt_id=capability.attempt_id,
+            material=completion,
+        )
+
+    def commit_publication_receipt(
+        self,
+        capability: FakeCapability,
+        receipt: dict[str, Any],
+        external_publication: Any,
+    ) -> FakeDurableAuthority:
+        return self._governance_authority(
+            table="publication_receipts",
+            identity=f"publication_receipt:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=receipt,
+            external_publication=external_publication,
+        )
+
+    def release_publication_capability(
+        self, capability: FakeCapability
+    ) -> None:
+        self.events.append(
+            f"release-publication:{capability.attempt_id}"
+        )
+
+    def issue_terminalization_capability(
+        self, attempt_id: str
+    ) -> FakeCapability:
+        self.events.append(f"terminalization-capability:{attempt_id}")
+        return FakeCapability(attempt_id)
+
+    def commit_terminalization_claim(
+        self,
+        capability: FakeCapability,
+        terminal_evidence: Any,
+        terminal_status: str,
+    ) -> FakeDurableAuthority:
+        material = {
+            "attempt_id": capability.attempt_id,
+            "terminal_status": terminal_status,
+            "terminal_evidence_sha256": terminal_evidence.evidence[
+                "terminal_evidence_sha256"
+            ],
+        }
+        return self._governance_authority(
+            table="terminalization_claims",
+            identity=f"terminalization_claim:{capability.attempt_id}",
+            attempt_id=capability.attempt_id,
+            material=material,
+        )
+
+    def complete_terminalized_attempt(
+        self,
+        claim: FakeDurableAuthority,
+        verified_terminal_evidence: Any,
+    ) -> StoreRecordReceipt:
+        claim_material = claim.as_dict()
+        attempt_id = claim_material["attempt_id"]
+        terminal_status = claim_material["terminal_status"]
+        self.events.append(f"finish:{terminal_status}")
+        publication = (
+            verified_terminal_evidence.external_publication
+        )
+        self.anchor_bindings[attempt_id] = {
+            "terminal_evidence": copy.deepcopy(
+                verified_terminal_evidence.evidence
+            ),
+            "external_publication": copy.deepcopy(
+                publication.publication
+            ),
+            "artifact_receipt": {
+                field: getattr(
+                    verified_terminal_evidence.artifact_receipt,
+                    field,
+                )
+                for field in (
+                    "table",
+                    "identity",
+                    "attempt_id",
+                    "payload_sha256",
+                    "journal_sequence",
+                    "journal_entry_sha256",
+                )
+            },
+        }
+        terminal = build_attempt_transition(
+            attempt_plan=self.plans[attempt_id],
+            implementation_manifest=self.manifest,
+            status=terminal_status,
+            prior_transition=self.histories[attempt_id][-1],
+        )
+        self.histories[attempt_id].append(terminal)
+        return self._receipt(
+            "attempts",
+            f"{attempt_id}:3",
+            attempt_id,
+            terminal,
+        )
 
     def finish_attempt(
         self,
@@ -512,6 +973,8 @@ class FakeStore:
     def snapshot(self) -> dict[str, Any]:
         return {
             "chain_valid": True,
+            "journal_entry_count": self.sequence,
+            "journal_tip_sha256": self.journal_tip_sha256,
             "attempt_states": {
                 attempt_id: history[-1]["status"]
                 for attempt_id, history in self.histories.items()
@@ -879,6 +1342,59 @@ class FakeEvaluator:
         return copy.deepcopy(evaluation)
 
 
+def _opaque_acquisition_report(
+    payload: dict[str, Any],
+    vault_path: Path,
+) -> Any:
+    vault = vault_module.open_test_acquisition_vault(vault_path)
+    attempt_id = payload["attempt_id"]
+    capability = store_module.EffectCapability(
+        attempt_id=attempt_id,
+        allowed_effects=("official_sec_network", "market_network"),
+        receipt=StoreRecordReceipt(
+            table="attempts",
+            identity="attempt:test-recovery-report",
+            attempt_id=attempt_id,
+            payload_sha256=_digest("test-recovery-attempt"),
+            journal_sequence=1,
+            journal_entry_sha256=_digest(
+                "test-recovery-attempt-journal"
+            ),
+        ),
+        store_instance_id=_digest("test-recovery-store"),
+        store_nonce=_digest("test-recovery-store-nonce"),
+        transition_sha256=_digest("test-recovery-transition"),
+        _sentinel=store_module._CAPABILITY_SENTINEL,
+    )
+
+    class VaultAuthorizer:
+        @staticmethod
+        def authorize_effect(
+            supplied: Any, effect: str
+        ) -> None:
+            assert supplied is capability
+            assert effect in capability.allowed_effects
+
+    handle = vault_module._seal_quarantine(
+        vault,
+        store=VaultAuthorizer(),
+        capability=capability,
+        stage=payload["stage"],
+        attempt_id=attempt_id,
+        bundle_sha256=payload["bundle_sha256"],
+        manifest_sha256=payload["manifest_sha256"],
+        private_index_sha256=payload["private_index_sha256"],
+        predecessor_handles=(),
+        quarantine={},
+    )
+    return acquisition_module.VerifiedAcquisitionReport(
+        payload,
+        vault=vault,
+        handle=handle,
+        _sentinel=acquisition_module._VERIFIED_REPORT_SENTINEL,
+    )
+
+
 class FakeAcquisitionAdapter:
     def __init__(
         self,
@@ -888,13 +1404,17 @@ class FakeAcquisitionAdapter:
         market_elapsed: float = 1.0,
         manifest_overrides: dict[str, Any] | None = None,
         report_checks: dict[str, str] | None = None,
+        recovery_vault_path: Path | None = None,
     ) -> None:
         self.clock = clock
         self.duration = duration
         self.market_elapsed = market_elapsed
         self.manifest_overrides = manifest_overrides or {}
         self.report_checks = report_checks
+        self.recovery_vault_path = recovery_vault_path
         self.calls: list[str] = []
+        self.rehydrate_calls: list[str] = []
+        self._recovery_report: Any | None = None
 
     def acquire(
         self,
@@ -937,8 +1457,10 @@ class FakeAcquisitionAdapter:
             "stage": stage,
             "attempt_id": capability.attempt_id,
             "attempt_kind": ATTEMPT_KIND_BY_ID[capability.attempt_id],
-            "acquisition_plan_sha256": _digest(
-                f"{command}:acquisition-plan"
+            "acquisition_plan_sha256": (
+                acquisition_module.build_acquisition_plan(stage)[
+                    "acquisition_plan_sha256"
+                ]
             ),
             "bundle_sha256": bundle_hash,
             "manifest_sha256": manifest_hash,
@@ -953,9 +1475,13 @@ class FakeAcquisitionAdapter:
             **report_body,
             "validation_sha256": canonical_sha256(report_body),
         }
+        if self.recovery_vault_path is not None:
+            self._recovery_report = _opaque_acquisition_report(
+                report, self.recovery_vault_path
+            )
         summary_body = {
             "schema_version": (
-                "aapl-sec-gemma-online-risk-overlay-v2-1-"
+                "aapl-sec-gemma-online-risk-overlay-v2-2-"
                 "public-summary-v1"
             ),
             "stage": stage,
@@ -995,7 +1521,7 @@ class FakeAcquisitionAdapter:
         }
         accounting_body = {
             "schema_version": (
-                "aapl-sec-gemma-online-risk-overlay-v2-1-"
+                "aapl-sec-gemma-online-risk-overlay-v2-2-"
                 "request-accounting-v1"
             ),
             "stage": stage,
@@ -1018,6 +1544,15 @@ class FakeAcquisitionAdapter:
             "public_summary": summary,
             "request_accounting": accounting,
         }
+
+    def rehydrate_pending_acquisition_report(
+        self, *, attempt_id: str
+    ) -> Any:
+        self.rehydrate_calls.append(attempt_id)
+        assert self.calls == [DEVELOPMENT_ACQUISITION_COMMAND]
+        assert self._recovery_report is not None
+        assert self._recovery_report["attempt_id"] == attempt_id
+        return self._recovery_report
 
 
 def _fake_verified_publication(
@@ -1059,10 +1594,39 @@ def _fake_verified_publication(
     )
 
 
+class FakePublicationReadback:
+    def __init__(
+        self,
+        *,
+        evidence: dict[str, Any],
+        observation: dict[str, Any] | None,
+        observed_ref_state: str,
+    ) -> None:
+        self.evidence = copy.deepcopy(evidence)
+        self.observation = copy.deepcopy(observation)
+        self.observed_ref_state = observed_ref_state
+
+
+class FakePushReceipt:
+    def __init__(self, push_command_sha256: str) -> None:
+        self.push_command_sha256 = push_command_sha256
+
+
 class FakePublisher:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        remote_states: list[str | None] | None = None,
+    ) -> None:
         self.calls: list[str] = []
+        self.read_calls: list[str] = []
+        self.push_calls: list[str] = []
         self.manifest: dict[str, Any] | None = None
+        self.remote_states = (
+            None
+            if remote_states is None
+            else list(remote_states)
+        )
 
     def publish(
         self,
@@ -1088,6 +1652,244 @@ class FakePublisher:
             ),
         )
 
+    def read_remote(self, **kwargs: Any) -> FakePublicationReadback:
+        prepared = kwargs["prepared_publication"]
+        expected = prepared.expected_publication
+        self.read_calls.append(kwargs["observation_phase"])
+        state = (
+            "exact_expected"
+            if self.remote_states is None
+            else self.remote_states.pop(0)
+        )
+        evidence_body = {
+            "attempt_id": expected["attempt_id"],
+            "observation_ordinal": kwargs["observation_ordinal"],
+            "observation_phase": kwargs["observation_phase"],
+        }
+        evidence = {
+            **evidence_body,
+            "publication_readback_evidence_sha256": canonical_sha256(
+                evidence_body
+            ),
+        }
+        if state is None:
+            return FakePublicationReadback(
+                evidence=evidence,
+                observation=None,
+                observed_ref_state="unknown",
+            )
+        if state == "exact_expected":
+            published = self.publish(
+                attempt_id=expected["attempt_id"],
+                terminal_status=expected["terminal_status"],
+                report_kind=expected["report_kind"],
+                artifact_sha256=expected["artifact_sha256"],
+                predecessor_publication_sha256=expected[
+                    "predecessor_publication_sha256"
+                ],
+                deadline_monotonic=kwargs["timeout_seconds"],
+            )
+            if not hasattr(published, "publication"):
+                return FakePublicationReadback(
+                    evidence=evidence,
+                    observation=None,
+                    observed_ref_state="unknown",
+                )
+        observation_body = {
+            "attempt_id": expected["attempt_id"],
+            "tag_ref": prepared.tag_ref,
+            "expected_tag_object_sha1": (
+                prepared.expected_tag_object_sha1
+            ),
+            "observation_operation_kind": kwargs[
+                "operation_kind"
+            ],
+            "observation_operation_sha256": kwargs[
+                "operation_sha256"
+            ],
+            "worker_ownership_sha256": kwargs[
+                "worker_ownership"
+            ].as_dict()["worker_ownership_sha256"],
+            "observation_ordinal": kwargs[
+                "observation_ordinal"
+            ],
+            "observation_phase": kwargs["observation_phase"],
+            "observed_ref_state": state,
+            "remote_tag_object_sha1": expected[
+                "remote_tag_object_sha1"
+            ],
+            "remote_peeled_commit": expected[
+                "remote_peeled_commit"
+            ],
+        }
+        observation = {
+            **observation_body,
+            "publication_remote_observation_sha256": canonical_sha256(
+                observation_body
+            ),
+        }
+        return FakePublicationReadback(
+            evidence=evidence,
+            observation=observation,
+            observed_ref_state=state,
+        )
+
+    def push_once(self, **kwargs: Any) -> FakePushReceipt:
+        artifact_sha256 = kwargs[
+            "prepared_publication"
+        ].expected_publication["artifact_sha256"]
+        self.push_calls.append(artifact_sha256)
+        return FakePushReceipt(
+            _digest(f"fake-push-command:{len(self.push_calls)}")
+        )
+
+
+class FakePublicationWorkerHandle:
+    def __init__(self, *, attempt_id: str) -> None:
+        self._transport_root = (
+            WORKSPACE_ROOT / ".test-publication-transport"
+        )
+        self._source_object_directory = WORKSPACE_ROOT / ".git"
+        self._executable_pins = {
+            "fake_executable_sha256": _digest("fake-executable")
+        }
+        self._host_environment_values = {
+            "SystemRoot": "C:\\Windows"
+        }
+        ownership_body = {
+            "attempt_id": attempt_id,
+            "owner_pid": 1,
+        }
+        self._ownership_material = {
+            **ownership_body,
+            "worker_ownership_sha256": canonical_sha256(
+                ownership_body
+            ),
+        }
+        self.aborted = False
+        self.quiesced = False
+
+    @property
+    def transport_root(self) -> Path:
+        return self._transport_root
+
+    @property
+    def source_object_directory(self) -> Path:
+        return self._source_object_directory
+
+    @property
+    def executable_pins(self) -> dict[str, Any]:
+        return copy.deepcopy(self._executable_pins)
+
+    @property
+    def host_environment_values(self) -> dict[str, str]:
+        return copy.deepcopy(self._host_environment_values)
+
+    @property
+    def ownership_material(self) -> dict[str, Any]:
+        return copy.deepcopy(self._ownership_material)
+
+    def verify_executable_pins(
+        self, pins: dict[str, Any]
+    ) -> None:
+        assert pins == self._executable_pins
+
+    def abort_uncommitted(self) -> None:
+        self.aborted = True
+
+    def quiesce(
+        self, *, worker_ownership_sha256: str
+    ) -> dict[str, Any]:
+        assert worker_ownership_sha256 == self._ownership_material[
+            "worker_ownership_sha256"
+        ]
+        self.quiesced = True
+        body = {
+            "worker_ownership_sha256": worker_ownership_sha256,
+            "worker_quiescent": True,
+        }
+        return {
+            **body,
+            "worker_quiescence_sha256": canonical_sha256(body),
+        }
+
+
+class FakePublicationRuntime:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.handles: list[FakePublicationWorkerHandle] = []
+
+    def begin(self, **kwargs: Any) -> FakePublicationWorkerHandle:
+        self.calls.append(kwargs["attempt_id"])
+        handle = FakePublicationWorkerHandle(
+            attempt_id=kwargs["attempt_id"]
+        )
+        self.handles.append(handle)
+        return handle
+
+
+class FakePreparedPublicationTransport:
+    def __init__(
+        self,
+        *,
+        prepared_publication: Any,
+        pre_transport_store_journal_sequence: int,
+        pre_transport_store_journal_tip_sha256: str,
+    ) -> None:
+        body = {
+            "attempt_id": prepared_publication.expected_publication[
+                "attempt_id"
+            ],
+            "tag_ref": prepared_publication.tag_ref,
+            "pre_transport_store_journal_sequence": (
+                pre_transport_store_journal_sequence
+            ),
+            "pre_transport_store_journal_tip_sha256": (
+                pre_transport_store_journal_tip_sha256
+            ),
+        }
+        self.manifest = {
+            **body,
+            "publication_transport_manifest_sha256": canonical_sha256(
+                body
+            ),
+        }
+
+
+@pytest.fixture(autouse=True)
+def _fake_publication_primitives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def prepare_transport(**kwargs: Any) -> FakePreparedPublicationTransport:
+        kwargs["identity_verifier"](kwargs["executable_pins"])
+        return FakePreparedPublicationTransport(
+            prepared_publication=kwargs["prepared_publication"],
+            pre_transport_store_journal_sequence=kwargs[
+                "pre_transport_store_journal_sequence"
+            ],
+            pre_transport_store_journal_tip_sha256=kwargs[
+                "pre_transport_store_journal_tip_sha256"
+            ],
+        )
+
+    def issue_publication(**kwargs: Any) -> Any:
+        prepared = kwargs["prepared_publication"]
+        return _issue_verified_external_publication(
+            prepared.expected_publication,
+            implementation_manifest=prepared.implementation_manifest,
+        )
+
+    monkeypatch.setattr(
+        runner_module,
+        "prepare_isolated_publication_transport",
+        prepare_transport,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "issue_verified_external_publication_from_observation",
+        issue_publication,
+    )
+
 
 class FakeFinalRegistryAuthority:
     def __init__(self, payload: dict[str, Any]) -> None:
@@ -1112,14 +1914,10 @@ class FakeTerminalEvidence:
         self.external_publication = external_publication
 
 
-def _issue_fake_acquisition_terminal_evidence(
-    **kwargs: Any,
-) -> FakeTerminalEvidence:
-    report = copy.deepcopy(kwargs["acquisition_report"])
-    material = copy.deepcopy(kwargs["report_material"])
-    receipt = kwargs["acquisition_artifact_receipt"]
-    publication = kwargs["external_publication"]
-    receipt_material = {
+def _store_receipt_material(
+    receipt: StoreRecordReceipt,
+) -> dict[str, Any]:
+    return {
         field: getattr(receipt, field)
         for field in (
             "table",
@@ -1130,13 +1928,27 @@ def _issue_fake_acquisition_terminal_evidence(
             "journal_entry_sha256",
         )
     }
+
+
+def _issue_fake_acquisition_terminal_evidence(
+    **kwargs: Any,
+) -> FakeTerminalEvidence:
+    report = copy.deepcopy(dict(kwargs["acquisition_report"]))
+    material = copy.deepcopy(kwargs["report_material"])
+    receipt = kwargs["acquisition_artifact_receipt"]
+    publication_intent = kwargs["publication_intent"]
+    publication_receipt = kwargs["publication_receipt"]
+    publication = publication_receipt.external_publication
+    receipt_material = _store_receipt_material(receipt)
+    intent_material = publication_intent.as_dict()
+    durable_receipt_material = publication_receipt.as_dict()
     body = {
         "schema_version": (
-            "aapl-sec-gemma-online-risk-overlay-v2-1-"
+            "aapl-sec-gemma-online-risk-overlay-v2-2-"
             "acquisition-terminal-evidence-v1"
         ),
         "verifier_id": (
-            "aapl-sec-gemma-online-risk-overlay-v2-1-"
+            "aapl-sec-gemma-online-risk-overlay-v2-2-"
             "acquisition-terminal-evidence-verifier-v1"
         ),
         "verdict": "pass",
@@ -1158,6 +1970,18 @@ def _issue_fake_acquisition_terminal_evidence(
         "acquisition_artifact_receipt_sha256": canonical_sha256(
             receipt_material
         ),
+        "publication_intent_sha256": intent_material[
+            "publication_intent_sha256"
+        ],
+        "publication_intent_store_receipt_sha256": canonical_sha256(
+            _store_receipt_material(publication_intent.store_receipt)
+        ),
+        "publication_receipt_sha256": durable_receipt_material[
+            "publication_receipt_sha256"
+        ],
+        "publication_receipt_store_receipt_sha256": canonical_sha256(
+            _store_receipt_material(publication_receipt.store_receipt)
+        ),
         "external_publication_sha256": (
             publication.publication_sha256
         ),
@@ -1170,6 +1994,97 @@ def _issue_fake_acquisition_terminal_evidence(
     return FakeTerminalEvidence(
         evidence=evidence,
         artifact_payload=report,
+        artifact_receipt=receipt,
+        external_publication=publication,
+    )
+
+
+def _issue_fake_scored_terminal_evidence(
+    **kwargs: Any,
+) -> FakeTerminalEvidence:
+    plan = copy.deepcopy(kwargs["attempt_plan"])
+    joint = copy.deepcopy(kwargs["joint_stage_report"])
+    material = copy.deepcopy(kwargs["report_material"])
+    receipt = kwargs["joint_artifact_receipt"]
+    gate_checks = copy.deepcopy(kwargs["gate_checks"])
+    publication_intent = kwargs["publication_intent"]
+    publication_receipt = kwargs["publication_receipt"]
+    publication = publication_receipt.external_publication
+    evaluation = joint["deterministic_evaluation"]
+    failed = [
+        name for name, passed in gate_checks.items() if passed is not True
+    ]
+    terminal_status = (
+        TERMINAL_PASS if not failed else TERMINAL_FAIL
+    )
+    body = {
+        "schema_version": (
+            "aapl-sec-gemma-online-risk-overlay-v2-2-"
+            "scored-terminal-evidence-v1"
+        ),
+        "verifier_id": (
+            "aapl-sec-gemma-online-risk-overlay-v2-2-"
+            "scored-terminal-evidence-verifier-v1"
+        ),
+        "verdict": "pass" if not failed else "failed_gate",
+        "terminal_status": terminal_status,
+        "stage": joint["metric_stage"],
+        "attempt_id": plan["attempt_id"],
+        "attempt_kind": plan["attempt_kind"],
+        "attempt_plan_sha256": plan["attempt_plan_sha256"],
+        "stage_input_bundle_sha256": evaluation[
+            "stage_input_bundle_sha256"
+        ],
+        "deterministic_evaluation_sha256": evaluation[
+            "deterministic_evaluation_sha256"
+        ],
+        "stage_metrics_input_sha256": evaluation[
+            "metrics_input_sha256"
+        ],
+        "stage_metrics_sha256": evaluation[
+            "stage_metrics_sha256"
+        ],
+        "gate_report_sha256": evaluation["gate_report_sha256"],
+        "no_leverage_proofs_sha256": evaluation[
+            "no_leverage_proofs_sha256"
+        ],
+        "joint_stage_report_sha256": joint[
+            "joint_stage_report_sha256"
+        ],
+        "record_counts": material["record_counts"],
+        "record_commitment_sha256": material[
+            "record_commitment_sha256"
+        ],
+        "joint_artifact_receipt_sha256": canonical_sha256(
+            _store_receipt_material(receipt)
+        ),
+        "gate_checks": gate_checks,
+        "gate_check_set_sha256": canonical_sha256(gate_checks),
+        "failed_gate_names": failed,
+        "publication_intent_sha256": publication_intent.as_dict()[
+            "publication_intent_sha256"
+        ],
+        "publication_intent_store_receipt_sha256": canonical_sha256(
+            _store_receipt_material(publication_intent.store_receipt)
+        ),
+        "publication_receipt_sha256": publication_receipt.as_dict()[
+            "publication_receipt_sha256"
+        ],
+        "publication_receipt_store_receipt_sha256": canonical_sha256(
+            _store_receipt_material(publication_receipt.store_receipt)
+        ),
+        "external_publication_sha256": (
+            publication.publication_sha256
+        ),
+    }
+    evidence = {
+        **body,
+        "terminal_evidence_sha256": canonical_sha256(body),
+    }
+    assert set(evidence) == set(SCORED_TERMINAL_EVIDENCE_FIELDS)
+    return FakeTerminalEvidence(
+        evidence=evidence,
+        artifact_payload=joint,
         artifact_receipt=receipt,
         external_publication=publication,
     )
@@ -1197,6 +2112,9 @@ def _dependencies(
         issue_acquisition_terminal_evidence_fn=(
             _issue_fake_acquisition_terminal_evidence
         ),
+        issue_scored_terminal_evidence_fn=(
+            _issue_fake_scored_terminal_evidence
+        ),
     )
 
 
@@ -1212,6 +2130,8 @@ def _runner(
     acquisition_adapter: FakeAcquisitionAdapter | None = None,
     test_only_allow_effects: bool = True,
     final_registry_authority: FakeFinalRegistryAuthority | None = None,
+    publication_runtime: FakePublicationRuntime | None = None,
+    production_authorities: Any | None = None,
 ) -> SecGemmaOnlineRiskOverlayRunner:
     publisher.manifest = manifest
     return SecGemmaOnlineRiskOverlayRunner(
@@ -1225,7 +2145,13 @@ def _runner(
             else FakeAcquisitionAdapter(clock)
         ),
         report_publisher=publisher,
+        publication_runtime=(
+            publication_runtime
+            if publication_runtime is not None
+            else FakePublicationRuntime()
+        ),
         final_registry_authority=final_registry_authority,
+        production_authorities=production_authorities,
         clock=clock,
         dependencies=_dependencies(
             manifest,
@@ -1357,6 +2283,228 @@ def test_production_mode_refuses_generic_adapters_before_registration() -> None:
     assert executor.events == []
 
 
+@pytest.mark.parametrize(
+    "worker_authority",
+    [None, object()],
+)
+def test_production_recovery_cannot_run_without_opaque_supervised_worker(
+    worker_authority: Any,
+) -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+        test_only_allow_effects=False,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayRunnerError,
+        match="opaque supervised-worker authority",
+    ):
+        runner.recover_publication(
+            attempt_id,
+            supervised_worker_authority=worker_authority,
+        )
+
+    assert store.events == []
+    assert publisher.read_calls == []
+    assert publisher.push_calls == []
+
+
+def test_test_recovery_cannot_claim_supervised_worker_authority() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayRunnerError,
+        match="Test publication recovery cannot claim",
+    ):
+        runner.recover_publication(
+            ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING],
+            supervised_worker_authority=object(),
+        )
+
+    assert store.events == []
+
+
+def test_supervised_worker_authority_binds_source_composition_and_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    clock = MutableClock()
+    clock.value = 10.0
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher()
+    production_authorities = object()
+    calls: list[dict[str, Any]] = []
+
+    class FakeExactWorkerAuthority:
+        def authorize_runner_recovery(
+            self, **kwargs: Any
+        ) -> tuple[float, float]:
+            calls.append(kwargs)
+            return 5.0, 305.0
+
+    worker_authority = FakeExactWorkerAuthority()
+    monkeypatch.setattr(
+        production_module,
+        "is_verified_supervised_publication_recovery_worker_authority",
+        lambda value: value is worker_authority,
+        raising=False,
+    )
+    entered: list[tuple[str, float, float]] = []
+
+    def enter_worker(
+        self: SecGemmaOnlineRiskOverlayRunner,
+        attempt_id: str,
+        *,
+        recovery_started_at: float,
+        invocation_deadline: float,
+    ) -> dict[str, Any]:
+        entered.append(
+                (
+                    attempt_id,
+                    recovery_started_at,
+                    invocation_deadline,
+                )
+        )
+        return {"sealed": True}
+
+    monkeypatch.setattr(
+        SecGemmaOnlineRiskOverlayRunner,
+        "_recover_publication_in_supervised_worker",
+        enter_worker,
+    )
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+        test_only_allow_effects=False,
+        production_authorities=production_authorities,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    result = runner.recover_publication(
+        attempt_id,
+        supervised_worker_authority=worker_authority,
+    )
+
+    assert result == {"sealed": True}
+    assert len(calls) == 1
+    assert calls[0]["repo_root"] == WORKSPACE_ROOT
+    assert calls[0]["implementation_manifest"] == manifest
+    assert (
+        calls[0]["production_authorities"]
+        is production_authorities
+    )
+    assert calls[0]["attempt_id"] == attempt_id
+    assert calls[0]["worker_entry_monotonic"] == 10.0
+    assert calls[0]["worker_deadline_monotonic"] == 310.0
+    assert entered == [(attempt_id, 5.0, 305.0)]
+
+
+def test_supervised_worker_authority_cannot_extend_300_second_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher()
+
+    class ExtendingWorkerAuthority:
+        def authorize_runner_recovery(
+            self, **kwargs: Any
+        ) -> tuple[float, float]:
+            return (
+                kwargs["worker_entry_monotonic"],
+                kwargs["worker_deadline_monotonic"] + 1.0,
+            )
+
+    worker_authority = ExtendingWorkerAuthority()
+    monkeypatch.setattr(
+        production_module,
+        "is_verified_supervised_publication_recovery_worker_authority",
+        lambda value: value is worker_authority,
+        raising=False,
+    )
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+        test_only_allow_effects=False,
+        production_authorities=object(),
+    )
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayRunnerError,
+        match="window is invalid",
+    ):
+        runner.recover_publication(
+            ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING],
+            supervised_worker_authority=worker_authority,
+        )
+
+    assert store.events == []
+
+
+def test_recovery_elapsed_includes_pre_child_supervisor_time() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    publisher = FakePublisher(remote_states=[None, None])
+    runner = _runner(
+        manifest,
+        store,
+        FakeExecutor(store, clock),
+        publisher,
+        clock=clock,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    initial = runner.run(CONFIRMATION_COMMAND)
+    assert initial["result_status"] == "publication_pending"
+    clock.value = 10.0
+
+    recovered = runner._recover_publication_in_supervised_worker(
+        attempt_id,
+        recovery_started_at=5.0,
+        invocation_deadline=305.0,
+    )
+
+    assert recovered["result_status"] == "publication_pending"
+    completions = store.governance_records(
+        "publication_recovery_invocation_completions",
+        attempt_id=attempt_id,
+    )
+    assert len(completions) == 1
+    assert float.fromhex(completions[0]["elapsed_seconds"]) == 5.0
+
+
 def test_production_readiness_precedes_registration_and_consumption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1366,12 +2514,14 @@ def test_production_readiness_precedes_registration_and_consumption(
     adapter = FakeAcquisitionAdapter(time.monotonic)
     publisher = FakePublisher()
     publisher.manifest = manifest
+    publication_runtime = FakePublicationRuntime()
 
     class FakeExactProductionAuthorities:
         def __init__(self) -> None:
             self.phase_executor = executor
             self.acquisition_adapter = adapter
             self.report_publisher = publisher
+            self.publication_runtime = publication_runtime
             self.final_registry_authority = None
             self.store = store
             self.ready_calls: list[str] = []
@@ -1403,6 +2553,7 @@ def test_production_readiness_precedes_registration_and_consumption(
         phase_executor=executor,
         acquisition_adapter=adapter,
         report_publisher=publisher,
+        publication_runtime=publication_runtime,
         production_authorities=authority,
         clock=time.monotonic,
         test_only_allow_effects=False,
@@ -1433,6 +2584,7 @@ def test_production_readiness_precedes_final_registry_publication(
     adapter = FakeAcquisitionAdapter(time.monotonic)
     publisher = FakePublisher()
     publisher.manifest = manifest
+    publication_runtime = FakePublicationRuntime()
 
     class RecordingRegistry:
         def __init__(self) -> None:
@@ -1449,6 +2601,7 @@ def test_production_readiness_precedes_final_registry_publication(
             self.phase_executor = executor
             self.acquisition_adapter = adapter
             self.report_publisher = publisher
+            self.publication_runtime = publication_runtime
             self.final_registry_authority = registry
             self.store = store
 
@@ -1472,6 +2625,7 @@ def test_production_readiness_precedes_final_registry_publication(
         phase_executor=executor,
         acquisition_adapter=adapter,
         report_publisher=publisher,
+        publication_runtime=publication_runtime,
         final_registry_authority=registry,
         production_authorities=authority,
         clock=time.monotonic,
@@ -1844,7 +2998,7 @@ def test_budget_report_includes_parent_deterministic_evaluation_time() -> None:
     assert total_bound > 4.0
 
 
-def test_publication_crossing_tightened_contingency_is_indeterminate() -> None:
+def test_publication_crossing_its_90_second_partition_is_pending() -> None:
     manifest = _manifest()
     store = FakeStore(manifest)
     _seed_confirmation_predecessor(store)
@@ -1854,7 +3008,7 @@ def test_publication_crossing_tightened_contingency_is_indeterminate() -> None:
     class SlowPublisher(FakePublisher):
         def publish(self, **kwargs: Any) -> Any:
             result = super().publish(**kwargs)
-            clock.value += 240.0
+            clock.value += 100.0
             return result
 
     publisher = SlowPublisher()
@@ -1867,13 +3021,198 @@ def test_publication_crossing_tightened_contingency_is_indeterminate() -> None:
     )
 
     result = runner.run(CONFIRMATION_COMMAND)
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
 
     assert publisher.calls
-    assert result["terminal_status"] == TERMINAL_INDETERMINATE
-    assert result["terminal_artifact"] is None
-    assert result["diagnostic_code"] == (
-        "worker_or_deadline_indeterminate"
+    assert result["result_status"] == "publication_pending"
+    assert result["semantic_result_released"] is False
+    assert result["next_stage_authority_blocked"] is True
+    assert result["publication_recovery_required"] is True
+    assert store.histories[attempt_id][-1]["status"] == CONSUMED
+    assert attempt_id not in store.anchor_bindings
+
+
+def test_publication_command_timeout_preserves_quiescence_reserve() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    clock = MutableClock()
+    runner = _runner(
+        manifest,
+        store,
+        FakeExecutor(store, clock),
+        FakePublisher(),
+        clock=clock,
     )
+
+    clock.value = 100.0
+    assert runner._publication_timeout(200.0, "test publication") == 85.0
+    assert runner._publication_timeout(500.0, "test publication") == 300.0
+
+    clock.value = 185.0
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayRunnerIndeterminate,
+        match="lacks the frozen publication quiescence reserve",
+    ):
+        runner._publication_timeout(200.0, "test publication")
+
+
+def test_normal_publication_timeout_quiesces_inside_its_partition() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+
+    class DeadlinePublisher(FakePublisher):
+        def __init__(self) -> None:
+            super().__init__(remote_states=[None])
+            self.command_timeouts: list[float] = []
+
+        def read_remote(self, **kwargs: Any) -> FakePublicationReadback:
+            timeout = kwargs["timeout_seconds"]
+            self.command_timeouts.append(timeout)
+            clock.value += timeout
+            return super().read_remote(**kwargs)
+
+    class CleanupHandle(FakePublicationWorkerHandle):
+        def quiesce(
+            self, *, worker_ownership_sha256: str
+        ) -> dict[str, Any]:
+            result = super().quiesce(
+                worker_ownership_sha256=worker_ownership_sha256
+            )
+            clock.value += 14.0
+            return result
+
+    class CleanupRuntime(FakePublicationRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.publication_started_at: float | None = None
+
+        def begin(self, **kwargs: Any) -> FakePublicationWorkerHandle:
+            self.calls.append(kwargs["attempt_id"])
+            self.publication_started_at = clock.value
+            handle = CleanupHandle(attempt_id=kwargs["attempt_id"])
+            self.handles.append(handle)
+            return handle
+
+    publisher = DeadlinePublisher()
+    runtime = CleanupRuntime()
+    runner = _runner(
+        manifest,
+        store,
+        FakeExecutor(store, clock),
+        publisher,
+        clock=clock,
+        publication_runtime=runtime,
+    )
+
+    result = runner.run(CONFIRMATION_COMMAND)
+
+    assert result["result_status"] == "publication_pending"
+    assert publisher.command_timeouts == [75.0]
+    assert runtime.handles[0].quiesced is True
+    assert runtime.publication_started_at is not None
+    assert clock.value - runtime.publication_started_at == 89.0
+
+
+def test_publication_does_not_spawn_inside_quiescence_reserve() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+
+    class ReserveExhaustingRuntime(FakePublicationRuntime):
+        def begin(self, **kwargs: Any) -> FakePublicationWorkerHandle:
+            handle = super().begin(**kwargs)
+            clock.value += 75.0
+            return handle
+
+    publisher = FakePublisher(remote_states=[None])
+    runtime = ReserveExhaustingRuntime()
+    runner = _runner(
+        manifest,
+        store,
+        FakeExecutor(store, clock),
+        publisher,
+        clock=clock,
+        publication_runtime=runtime,
+    )
+
+    result = runner.run(CONFIRMATION_COMMAND)
+
+    assert result["result_status"] == "publication_pending"
+    assert publisher.read_calls == []
+    assert publisher.push_calls == []
+    assert runtime.handles[0].quiesced is True
+
+
+def test_intent_commit_cannot_borrow_from_publication_partition() -> None:
+    manifest = _manifest()
+    clock = MutableClock()
+
+    class SlowIntentStore(FakeStore):
+        def commit_publication_intent(
+            self,
+            capability: FakeCapability,
+            material: dict[str, Any],
+        ) -> FakeDurableAuthority:
+            result = super().commit_publication_intent(
+                capability, material
+            )
+            clock.value += 90.0
+            return result
+
+    store = SlowIntentStore(manifest)
+    _seed_confirmation_predecessor(store)
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+
+    result = runner.run(CONFIRMATION_COMMAND)
+
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+    assert result["result_status"] == "publication_pending"
+    assert publisher.read_calls == []
+    assert store.histories[attempt_id][-1]["status"] == CONSUMED
+
+
+def test_pending_handoff_cannot_borrow_past_its_60_second_partition() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+
+    class TooSlowPublisher(FakePublisher):
+        def publish(self, **kwargs: Any) -> Any:
+            result = super().publish(**kwargs)
+            clock.value += 240.0
+            return result
+
+    publisher = TooSlowPublisher()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayRunnerIndeterminate,
+        match="exceptional publication-pending handoff",
+    ):
+        runner.run(CONFIRMATION_COMMAND)
+
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+    assert store.histories[attempt_id][-1]["status"] == CONSUMED
+    assert attempt_id not in store.anchor_bindings
 
 
 def test_parent_deadline_is_checked_after_canonical_result_hash(
@@ -2121,7 +3460,7 @@ def test_failed_gate_is_terminal_and_blocks_report_publication() -> None:
     ) == result
 
 
-def test_invalid_publisher_receipt_after_effect_is_terminal_indeterminate() -> None:
+def test_invalid_publisher_receipt_after_effect_is_pending() -> None:
     class InvalidReceiptPublisher(FakePublisher):
         def publish(self, **kwargs: Any) -> dict[str, Any]:
             super().publish(**kwargs)
@@ -2145,11 +3484,460 @@ def test_invalid_publisher_receipt_after_effect_is_terminal_indeterminate() -> N
     attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
 
     assert publisher.calls
-    assert result["terminal_status"] == TERMINAL_INDETERMINATE
-    assert result["diagnostic_code"] == "post_consumption_indeterminate"
-    assert result["terminal_evidence"] is None
-    assert result["external_publication"] is None
+    assert result["result_status"] == "publication_pending"
+    assert result["semantic_result_released"] is False
+    assert result["next_stage_authority_blocked"] is True
+    assert result["publication_recovery_required"] is True
+    assert store.histories[attempt_id][-1]["status"] == CONSUMED
     assert attempt_id not in store.anchor_bindings
+
+
+def test_recovery_pre_push_exact_terminalizes_pending_attempt() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher(
+        remote_states=[None, "exact_expected"]
+    )
+    publication_runtime = FakePublicationRuntime()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+        publication_runtime=publication_runtime,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    pending = runner.run(CONFIRMATION_COMMAND)
+    recovered = runner.recover_publication(attempt_id)
+
+    assert pending["result_status"] == "publication_pending"
+    assert recovered["passed"] is True
+    assert recovered["terminal_status"] == TERMINAL_PASS
+    assert store.histories[attempt_id][-1]["status"] == TERMINAL_PASS
+    assert publisher.read_calls == ["pre_push", "pre_push"]
+    assert publisher.push_calls == []
+    completions = store.governance_records(
+        "publication_recovery_invocation_completions",
+        attempt_id=attempt_id,
+    )
+    assert [row["outcome"] for row in completions] == [
+        "remote_exact_without_push"
+    ]
+    assert len(
+        store.governance_records(
+            "publication_receipts", attempt_id=attempt_id
+        )
+    ) == 1
+    assert len(
+        store.governance_records(
+            "terminalization_claims", attempt_id=attempt_id
+        )
+    ) == 1
+
+
+def test_recovery_cap_starts_before_local_reconciliation() -> None:
+    manifest = _manifest()
+    clock = MutableClock()
+
+    class SlowReconciliationStore(FakeStore):
+        def reconcile_publication_recovery_state(
+            self, attempt_id: str
+        ) -> None:
+            super().reconcile_publication_recovery_state(attempt_id)
+            clock.value += 301.0
+
+    store = SlowReconciliationStore(manifest)
+    _seed_confirmation_predecessor(store)
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher(remote_states=[None])
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    pending = runner.run(CONFIRMATION_COMMAND)
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayRunnerIndeterminate,
+        match="local publication recovery reconciliation",
+    ):
+        runner.recover_publication(attempt_id)
+
+    assert pending["result_status"] == "publication_pending"
+    assert publisher.read_calls == ["pre_push"]
+    assert store.governance_records(
+        "publication_recovery_invocation_starts",
+        attempt_id=attempt_id,
+    ) == []
+
+
+def test_same_session_orphan_exact_observation_is_reconciled_locally() -> None:
+    manifest = _manifest()
+
+    class OrphanObservationStore(FakeStore):
+        def __init__(self, value: dict[str, Any]) -> None:
+            super().__init__(value)
+            self.completion_failures = 2
+
+        def commit_recovery_completion(
+            self,
+            capability: FakeCapability,
+            completion: dict[str, Any],
+        ) -> FakeDurableAuthority:
+            if self.completion_failures:
+                self.completion_failures -= 1
+                raise RuntimeError("injected completion interruption")
+            return super().commit_recovery_completion(
+                capability, completion
+            )
+
+        def reconcile_publication_recovery_state(
+            self, attempt_id: str
+        ) -> None:
+            super().reconcile_publication_recovery_state(attempt_id)
+            starts = self.governance_records(
+                "publication_recovery_invocation_starts",
+                attempt_id=attempt_id,
+            )
+            completions = self.governance_records(
+                "publication_recovery_invocation_completions",
+                attempt_id=attempt_id,
+            )
+            observations = [
+                row
+                for row in self.governance_records(
+                    "publication_remote_observations",
+                    attempt_id=attempt_id,
+                )
+                if row["observation_operation_kind"]
+                == "publication_recovery"
+                and row["observed_ref_state"] == "exact_expected"
+            ]
+            if not starts or completions or not observations:
+                return
+            start = self._governance_lookup(
+                "publication_recovery_invocation_starts",
+                attempt_id,
+            )
+            observation = self.remote_observation_authority(
+                attempt_id,
+                observations[-1][
+                    "publication_remote_observation_sha256"
+                ],
+            )
+            material = (
+                runner_module._build_publication_recovery_completion(
+                    implementation_manifest=self.manifest,
+                    store=self,
+                    attempt_id=attempt_id,
+                    publication_intent=(
+                        self.publication_intent_authority(attempt_id)
+                    ),
+                    recovery_start=start,
+                    outcome="remote_exact_without_push",
+                    remote_observation=observation,
+                    pre_push_authorization=None,
+                    push_command_count_upper_bound=0,
+                    elapsed_seconds=1.0,
+                )
+            )
+            super().commit_recovery_completion(
+                FakeCapability(
+                    attempt_id,
+                    operation_kind="publication_recovery",
+                    operation_sha256=start.as_dict()[
+                        "recovery_invocation_start_sha256"
+                    ],
+                ),
+                material,
+            )
+
+    store = OrphanObservationStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher(
+        remote_states=[None, "exact_expected"]
+    )
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    pending = runner.run(CONFIRMATION_COMMAND)
+    recovered = runner.recover_publication(attempt_id)
+
+    assert pending["result_status"] == "publication_pending"
+    assert recovered["terminal_status"] == TERMINAL_PASS
+    assert publisher.read_calls == ["pre_push", "pre_push"]
+    assert len(
+        store.governance_records(
+            "publication_recovery_invocation_completions",
+            attempt_id=attempt_id,
+        )
+    ) == 1
+
+
+def test_durable_normal_conflict_is_poisoned_without_a_new_remote_read() -> None:
+    manifest = _manifest()
+
+    class InterruptedConflictStore(FakeStore):
+        def __init__(self, value: dict[str, Any]) -> None:
+            super().__init__(value)
+            self.fail_conflict_once = True
+
+        def commit_publication_conflict(
+            self,
+            capability: FakeCapability,
+            conflict: dict[str, Any],
+        ) -> FakeDurableAuthority:
+            if self.fail_conflict_once:
+                self.fail_conflict_once = False
+                raise RuntimeError("injected conflict interruption")
+            return super().commit_publication_conflict(
+                capability, conflict
+            )
+
+    store = InterruptedConflictStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher(remote_states=["conflicting"])
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    initial = runner.run(CONFIRMATION_COMMAND)
+    recovered = runner.recover_publication(attempt_id)
+
+    assert initial["result_status"] == "publication_pending"
+    assert recovered["result_status"] == "publication_pending"
+    assert publisher.read_calls == ["pre_push"]
+    conflicts = store.governance_records(
+        "publication_conflicts", attempt_id=attempt_id
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0]["conflict_reason"] == (
+        "durable_remote_ref_conflict"
+    )
+
+
+def test_development_acquisition_recovery_rehydrates_without_rerun(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    acquisition = FakeAcquisitionAdapter(
+        clock,
+        recovery_vault_path=tmp_path / "acquisition-recovery-vault",
+    )
+    publisher = FakePublisher(
+        remote_states=[None, "exact_expected"]
+    )
+    publication_runtime = FakePublicationRuntime()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+        acquisition_adapter=acquisition,
+        publication_runtime=publication_runtime,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[DEVELOPMENT_ACQUISITION]
+
+    pending = runner.run(DEVELOPMENT_ACQUISITION_COMMAND)
+    acquisition_calls_before = list(acquisition.calls)
+    executor_events_before = list(executor.events)
+    recovered = runner.recover_publication(attempt_id)
+
+    assert pending["result_status"] == "publication_pending"
+    assert recovered["passed"] is True
+    assert recovered["terminal_status"] == TERMINAL_PASS
+    assert recovered["terminal_artifact"]["verdict"] == "pass"
+    assert acquisition.calls == acquisition_calls_before == [
+        DEVELOPMENT_ACQUISITION_COMMAND
+    ]
+    assert acquisition.rehydrate_calls == [attempt_id]
+    assert executor.events == executor_events_before == []
+    assert store.histories[attempt_id][-1]["status"] == TERMINAL_PASS
+    assert publisher.read_calls == ["pre_push", "pre_push"]
+    assert publisher.push_calls == []
+    assert len(publication_runtime.calls) == 2
+    assert (
+        store.governance_records(
+            "publication_recovery_invocation_completions",
+            attempt_id=attempt_id,
+        )[0]["outcome"]
+        == "remote_exact_without_push"
+    )
+
+
+def test_recovery_absent_push_then_exact_terminalizes() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher(
+        remote_states=[
+            None,
+            "absent",
+            "exact_expected",
+        ]
+    )
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    pending = runner.run(CONFIRMATION_COMMAND)
+    recovered = runner.recover_publication(attempt_id)
+
+    assert pending["result_status"] == "publication_pending"
+    assert recovered["passed"] is True
+    assert recovered["terminal_status"] == TERMINAL_PASS
+    assert publisher.read_calls == [
+        "pre_push",
+        "pre_push",
+        "post_push",
+    ]
+    assert publisher.push_calls == [
+        recovered["terminal_artifact"][
+            "joint_stage_report_sha256"
+        ]
+    ]
+    authorizations = store.governance_records(
+        "publication_pre_push_authorizations",
+        attempt_id=attempt_id,
+    )
+    assert len(authorizations) == 1
+    assert authorizations[0]["authorization_operation_kind"] == (
+        "publication_recovery"
+    )
+    completions = store.governance_records(
+        "publication_recovery_invocation_completions",
+        attempt_id=attempt_id,
+    )
+    assert [row["outcome"] for row in completions] == [
+        "published_exact_after_push"
+    ]
+    assert completions[0]["push_command_count_upper_bound"] == 1
+
+
+def test_recovery_conflict_stays_pending_without_semantic_release() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher(
+        remote_states=[None, "conflicting"]
+    )
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    initial = runner.run(CONFIRMATION_COMMAND)
+    first_recovery = runner.recover_publication(attempt_id)
+    read_count = len(publisher.read_calls)
+    second_recovery = runner.recover_publication(attempt_id)
+
+    assert initial["result_status"] == "publication_pending"
+    assert first_recovery["result_status"] == "publication_pending"
+    assert second_recovery == first_recovery
+    assert first_recovery["semantic_result_released"] is False
+    assert first_recovery["next_stage_authority_blocked"] is True
+    assert first_recovery["publication_recovery_required"] is True
+    assert store.histories[attempt_id][-1]["status"] == CONSUMED
+    assert len(publisher.read_calls) == read_count
+    assert publisher.push_calls == []
+    assert len(
+        store.governance_records(
+            "publication_conflicts", attempt_id=attempt_id
+        )
+    ) == 1
+    assert (
+        store.governance_records(
+            "publication_recovery_invocation_completions",
+            attempt_id=attempt_id,
+        )[0]["outcome"]
+        == "remote_conflict_poisoned_without_push"
+    )
+    assert (
+        store.governance_records(
+            "publication_receipts", attempt_id=attempt_id
+        )
+        == []
+    )
+    assert attempt_id not in store.anchor_bindings
+
+
+def test_recover_publication_is_idempotent_when_already_terminal() -> None:
+    manifest = _manifest()
+    store = FakeStore(manifest)
+    _seed_confirmation_predecessor(store)
+    clock = MutableClock()
+    executor = FakeExecutor(store, clock)
+    publisher = FakePublisher()
+    publication_runtime = FakePublicationRuntime()
+    runner = _runner(
+        manifest,
+        store,
+        executor,
+        publisher,
+        clock=clock,
+        publication_runtime=publication_runtime,
+    )
+    attempt_id = ATTEMPT_ID_BY_KIND[CONFIRMATION_SCORING]
+
+    original = runner.run(CONFIRMATION_COMMAND)
+    history_before = store.attempt_history(attempt_id)
+    governance_counts_before = {
+        table: len(rows)
+        for table, rows in store.governance.items()
+    }
+    runtime_calls_before = list(publication_runtime.calls)
+    read_calls_before = list(publisher.read_calls)
+
+    recovered = runner.recover_publication(attempt_id)
+
+    assert recovered == original
+    assert store.attempt_history(attempt_id) == history_before
+    assert {
+        table: len(rows)
+        for table, rows in store.governance.items()
+    } == governance_counts_before
+    assert publication_runtime.calls == runtime_calls_before
+    assert publisher.read_calls == read_calls_before
 
 
 def test_sealed_validator_rejects_unsubstantiated_scored_terminal_fail() -> None:

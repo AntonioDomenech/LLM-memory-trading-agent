@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 import math
+import os
 import subprocess
+import sys
 import time
 from types import MethodType
 
@@ -20,7 +23,13 @@ from agent_benchmark.sec_filing_gemma_contract import (
 )
 from agent_benchmark.sec_filing_gemma_ollama import OLLAMA_ENDPOINT
 from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
+    CONTRACT_SHA256,
+    CONTRACT_VERSION,
+    DEVELOPMENT_ACQUISITION_ID,
     MAX_DETERMINISTIC_SECONDS,
+    PUBLICATION_NORMAL_OPERATION_SHA256,
+    PUBLICATION_WORKER_OWNERSHIP_FIELDS,
+    PUBLICATION_WORKER_QUIESCENCE_FIELDS,
     canonical_json_bytes,
     canonical_sha256,
 )
@@ -35,7 +44,9 @@ from agent_benchmark.sec_gemma_online_risk_overlay_production import (
     _EXECUTOR_SENTINEL,
     _PrivateSecUserAgent,
     _ProductionAcquisitionAdapter,
+    _ProductionPublicationRuntime,
     _ProductionPhaseExecutor,
+    _PUBLICATION_RUNTIME_SENTINEL,
     _acquisition_worker_payload,
     _decision_market_lookback_rows,
     _deterministic_phase_payload,
@@ -1332,6 +1343,7 @@ def test_private_identity_and_bundle_never_accept_generic_authorities(
             phase_executor=object(),  # type: ignore[arg-type]
             acquisition_adapter=object(),  # type: ignore[arg-type]
             report_publisher=object(),
+            publication_runtime=object(),  # type: ignore[arg-type]
             final_registry_authority=object(),
             _sentinel=_AUTHORITIES_SENTINEL,
         )
@@ -1362,3 +1374,1904 @@ def test_restart_readiness_fails_before_consumption_without_opaque_state() -> No
             "development_acquisition",
             store=Store(),
         )
+
+
+class _FakePublicationKernel:
+    def __init__(self, *, job_name: str, mutex_name: str) -> None:
+        self.job_name = job_name
+        self.mutex_name = mutex_name
+        self.executions: list[dict[str, object]] = []
+        self.quiesce_count = 0
+        self.abort_count = 0
+
+    def execute(self, **kwargs: object):
+        from agent_benchmark.sec_gemma_online_risk_overlay_publisher import (
+            PublicationProcessExecution,
+        )
+
+        self.executions.append(copy.deepcopy(kwargs))
+        return PublicationProcessExecution(
+            process_exit_status="exited",
+            process_exit_code=0,
+            stdout=b"ok\n",
+            stderr=b"",
+        )
+
+    def quiesce(self) -> tuple[int, int]:
+        self.quiesce_count += 1
+        return 0, 0
+
+    def close_uncommitted(self) -> None:
+        self.abort_count += 1
+
+
+def _test_publication_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    _ProductionPublicationRuntime,
+    list[_FakePublicationKernel],
+    list[dict[str, object]],
+]:
+    import agent_benchmark.sec_gemma_online_risk_overlay_publisher as publisher
+
+    repo = tmp_path.resolve()
+    (repo / ".git" / "objects").mkdir(parents=True)
+    child_environment = {"exact": "child"}
+    monkeypatch.setattr(
+        publisher,
+        "build_exact_child_environment",
+        lambda **kwargs: dict(child_environment),
+    )
+    monkeypatch.setattr(
+        production,
+        "_publication_owner_process_identity",
+        lambda: (4321, "0x1234"),
+    )
+    kernels: list[_FakePublicationKernel] = []
+    pin_checks: list[dict[str, object]] = []
+
+    def kernel_factory(**kwargs: str) -> _FakePublicationKernel:
+        kernel = _FakePublicationKernel(**kwargs)
+        kernels.append(kernel)
+        return kernel
+
+    def pin_verifier(value: object, **kwargs: object) -> None:
+        assert kwargs == {
+            "expected_dependency_closure_sha256": "9" * 64
+        }
+        pin_checks.append(copy.deepcopy(dict(value)))  # type: ignore[arg-type]
+
+    class Store:
+        material: dict[str, object] | None = None
+        intent: dict[str, object] | None = None
+        transport: dict[str, object] | None = None
+        authorization: dict[str, object] | None = None
+
+        @staticmethod
+        def _authority(material: dict[str, object] | None) -> object:
+            assert material is not None
+            authority = type("Authority", (), {})()
+            authority.material = copy.deepcopy(material)
+            return authority
+
+        def publication_worker_ownership_authority(
+            self,
+            attempt_id: str,
+            ownership_sha256: str,
+        ) -> object:
+            assert self.material is not None
+            assert self.material["attempt_id"] == attempt_id
+            assert (
+                self.material["worker_ownership_sha256"]
+                == ownership_sha256
+            )
+
+            return self._authority(self.material)
+
+        def publication_intent_authority(
+            self, attempt_id: str
+        ) -> object:
+            assert self.intent is not None
+            assert self.intent["attempt_id"] == attempt_id
+            return self._authority(self.intent)
+
+        def transport_manifest_authority(
+            self,
+            attempt_id: str,
+            manifest_sha256: str,
+        ) -> object:
+            assert self.transport is not None
+            assert self.transport["attempt_id"] == attempt_id
+            assert (
+                self.transport[
+                    "isolated_transport_git_directory_manifest_sha256"
+                ]
+                == manifest_sha256
+            )
+            return self._authority(self.transport)
+
+        def pre_push_authorization_authority(
+            self,
+            attempt_id: str,
+            authorization_sha256: str,
+        ) -> object:
+            assert self.authorization is not None
+            assert self.authorization["attempt_id"] == attempt_id
+            assert (
+                self.authorization["pre_push_authorization_sha256"]
+                == authorization_sha256
+            )
+            return self._authority(self.authorization)
+
+    runtime = _ProductionPublicationRuntime(
+        repo_root=repo,
+        implementation_manifest={
+            "implementation_manifest_sha256": "a" * 64,
+            "implementation_commit": "b" * 40,
+        },
+        store=Store(),
+        executable_pins={
+            "git_executable_path": (
+                "C:/Program Files/Git/mingw64/bin/git.exe"
+            ),
+        },
+        dependency_closure_sha256="9" * 64,
+        host_environment_values={"host": "value"},
+        pin_verifier=pin_verifier,
+        kernel_factory=kernel_factory,
+        restart_verifier=lambda owner: {
+            "prior_owner_process_dead": True,
+            "owner_mutex_unowned": True,
+            "job_object_active_process_count": 0,
+            "recorded_git_ssh_processes_alive_count": 0,
+        },
+        token_bytes=lambda size: b"x" * size,
+        _sentinel=_PUBLICATION_RUNTIME_SENTINEL,
+    )
+    return runtime, kernels, pin_checks
+
+
+def _run_test_publication_command(
+    runtime: _ProductionPublicationRuntime,
+    handle: object,
+    *,
+    push: bool = False,
+    source_object: str = "f" * 40,
+    cwd_name: str = "transport.git",
+):
+    import agent_benchmark.sec_gemma_online_risk_overlay_publisher as publisher
+
+    context = handle._context
+    ownership = handle.ownership_material
+    tag_ref = (
+        "refs/tags/sec-gemma-online-risk-overlay-v2-2/"
+        f"attempts/{DEVELOPMENT_ACQUISITION_ID}/terminal"
+    )
+    intent = {
+        "attempt_id": DEVELOPMENT_ACQUISITION_ID,
+        "publication_intent_sha256": context[
+            "publication_intent_sha256"
+        ],
+        "tag_ref": tag_ref,
+        "expected_tag_object_sha1": "f" * 40,
+    }
+    transport_hash = "7" * 64
+    transport = {
+        "attempt_id": DEVELOPMENT_ACQUISITION_ID,
+        "publication_intent_sha256": context[
+            "publication_intent_sha256"
+        ],
+        "operation_kind": context["operation_kind"],
+        "operation_sha256": context["operation_sha256"],
+        "isolated_transport_git_directory_manifest_sha256": transport_hash,
+    }
+    runtime._store.intent = intent
+    runtime._store.transport = transport
+    authorization_hash: str | None = None
+    if push:
+        authorization_hash = "8" * 64
+        runtime._store.authorization = {
+            "attempt_id": DEVELOPMENT_ACQUISITION_ID,
+            "publication_intent_sha256": context[
+                "publication_intent_sha256"
+            ],
+            "authorization_operation_kind": context["operation_kind"],
+            "authorization_operation_sha256": context["operation_sha256"],
+            "worker_ownership_sha256": ownership[
+                "worker_ownership_sha256"
+            ],
+            "tag_ref": tag_ref,
+            "expected_tag_object_sha1": "f" * 40,
+            "authorization_status": "push_authorized_once",
+            "push_command_limit": 1,
+            "pre_push_authorization_sha256": authorization_hash,
+        }
+    argv = (
+        (
+            "C:/Program Files/Git/mingw64/bin/git.exe",
+            "push",
+            "--porcelain",
+            "--no-verify",
+            publisher.ALLOWED_REMOTE_URL,
+            f"{source_object}:{tag_ref}",
+        )
+        if push
+        else (
+            "C:/Program Files/Git/mingw64/bin/git.exe",
+            "ls-remote",
+            "--tags",
+            publisher.ALLOWED_REMOTE_URL,
+            tag_ref,
+            f"{tag_ref}^{{}}",
+        )
+    )
+    return publisher._execution_from_executor(
+        runtime,
+        argv=argv,
+        cwd=handle.transport_root / cwd_name,
+        environment={"exact": "child"},
+        timeout_seconds=10.0,
+        profile_kind="push" if push else "readback",
+        transport_manifest_sha256=transport_hash,
+        publication_intent_sha256=context[
+            "publication_intent_sha256"
+        ],
+        operation_kind=context["operation_kind"],
+        operation_sha256=context["operation_sha256"],
+        worker_ownership_sha256=ownership["worker_ownership_sha256"],
+        pre_push_authorization_sha256=authorization_hash,
+        expected_tag_object_sha1="f" * 40,
+        tag_ref=tag_ref,
+    )
+
+
+def test_publication_runtime_binds_owner_executes_and_quiesces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, kernels, pin_checks = _test_publication_runtime(
+        tmp_path,
+        monkeypatch,
+    )
+    implementation = {
+        "implementation_manifest_sha256": "a" * 64,
+        "implementation_commit": "b" * 40,
+    }
+    handle = runtime.begin(
+        implementation_manifest=implementation,
+        store_instance_id="c" * 64,
+        store_session_nonce_sha256="d" * 64,
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        publication_intent_sha256="e" * 64,
+        operation_kind="normal_publication",
+        operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+    )
+
+    ownership = handle.ownership_material
+    assert tuple(ownership) == PUBLICATION_WORKER_OWNERSHIP_FIELDS
+    assert ownership["contract_version"] == CONTRACT_VERSION
+    assert ownership["contract_sha256"] == CONTRACT_SHA256
+    assert ownership["kill_on_parent_exit"] is True
+    assert ownership["child_assignment_before_resume_required"] is True
+    assert ownership["worker_ownership_sha256"] == canonical_sha256(
+        {
+            key: value
+            for key, value in ownership.items()
+            if key != "worker_ownership_sha256"
+        }
+    )
+    assert handle.source_object_directory == (
+        tmp_path.resolve() / ".git" / "objects"
+    )
+    runtime._store.material = copy.deepcopy(ownership)
+    result = _run_test_publication_command(
+        runtime,
+        handle,
+    )
+
+    assert result.process_exit_status == "exited"
+    assert len(pin_checks) == 2
+    assert len(kernels) == 1
+    assert len(kernels[0].executions) == 1
+    quiescence = handle.quiesce(
+        worker_ownership_sha256=ownership[
+            "worker_ownership_sha256"
+        ]
+    )
+    assert tuple(quiescence) == PUBLICATION_WORKER_QUIESCENCE_FIELDS
+    assert quiescence["verification_mode"] == (
+        "same_session_clean_release"
+    )
+    assert quiescence["job_object_active_process_count"] == 0
+    assert kernels[0].quiesce_count == 1
+    assert runtime._active_handle is None
+
+
+def test_publication_runtime_aborts_uncommitted_owner_without_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, kernels, _ = _test_publication_runtime(
+        tmp_path,
+        monkeypatch,
+    )
+    handle = runtime.begin(
+        implementation_manifest={
+            "implementation_manifest_sha256": "a" * 64,
+            "implementation_commit": "b" * 40,
+        },
+        store_instance_id="c" * 64,
+        store_session_nonce_sha256="d" * 64,
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        publication_intent_sha256="e" * 64,
+        operation_kind="normal_publication",
+        operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+    )
+
+    handle.abort_uncommitted()
+
+    assert kernels[0].abort_count == 1
+    assert kernels[0].executions == []
+    assert runtime._active_handle is None
+
+
+def test_publication_runtime_forbids_child_before_durable_owner_and_raw_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, kernels, _ = _test_publication_runtime(
+        tmp_path,
+        monkeypatch,
+    )
+    handle = runtime.begin(
+        implementation_manifest={
+            "implementation_manifest_sha256": "a" * 64,
+            "implementation_commit": "b" * 40,
+        },
+        store_instance_id="c" * 64,
+        store_session_nonce_sha256="d" * 64,
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        publication_intent_sha256="e" * 64,
+        operation_kind="normal_publication",
+        operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+    )
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="lacks exact durable command authorities",
+    ):
+        _run_test_publication_command(runtime, handle)
+    runtime._store.material = handle.ownership_material
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="Raw publication process execution is forbidden",
+    ):
+        runtime(
+            argv=(
+                "C:/Program Files/Git/mingw64/bin/git.exe",
+                "--version",
+            ),
+            cwd=handle.transport_root / "transport.git",
+            env={"exact": "child"},
+            timeout_seconds=10.0,
+        )
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="request changed",
+    ):
+        _run_test_publication_command(
+            runtime,
+            handle,
+            push=True,
+            source_object="a" * 40,
+        )
+    assert kernels[0].executions == []
+    handle.abort_uncommitted()
+
+
+def test_publication_runtime_consumes_exact_durable_push_authorization_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, kernels, _ = _test_publication_runtime(
+        tmp_path,
+        monkeypatch,
+    )
+    handle = runtime.begin(
+        implementation_manifest={
+            "implementation_manifest_sha256": "a" * 64,
+            "implementation_commit": "b" * 40,
+        },
+        store_instance_id="c" * 64,
+        store_session_nonce_sha256="d" * 64,
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        publication_intent_sha256="e" * 64,
+        operation_kind="normal_publication",
+        operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+    )
+    runtime._store.material = handle.ownership_material
+
+    result = _run_test_publication_command(
+        runtime,
+        handle,
+        push=True,
+    )
+
+    assert result.process_exit_status == "exited"
+    assert len(kernels[0].executions) == 1
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="changed or was reused",
+    ):
+        _run_test_publication_command(
+            runtime,
+            handle,
+            push=True,
+        )
+    assert len(kernels[0].executions) == 1
+    handle.abort_uncommitted()
+
+
+def test_publication_kernel_guards_cleanup_for_arbitrary_base_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Kernel32:
+        terminate_calls = 0
+
+        def TerminateJobObject(
+            self,
+            job: object,
+            exit_code: int,
+        ) -> bool:
+            del job, exit_code
+            self.terminate_calls += 1
+            raise RuntimeError("cleanup job failure")
+
+    class Process:
+        pid = 123
+        returncode = None
+
+        def __init__(self) -> None:
+            self.communicate_calls = 0
+            self.kill_calls = 0
+            self.close_calls = 0
+
+        def communicate(self, timeout: float):
+            del timeout
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                raise SystemExit("original failure")
+            raise RuntimeError("cleanup communicate failure")
+
+        def poll(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+            raise RuntimeError("cleanup kill failure")
+
+        def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("cleanup close failure")
+
+    kernel32 = Kernel32()
+    process = Process()
+    kernel = object.__new__(production._WindowsPublicationKernel)
+    kernel._kernel32 = kernel32
+    kernel._job = object()
+    kernel._mutex = object()
+    kernel._closed = False
+    kernel._terminated = False
+    kernel._recorded_processes = []
+    monkeypatch.setattr(
+        production,
+        "_create_atomic_publication_process",
+        lambda **kwargs: process,
+    )
+    monkeypatch.setattr(
+        production._WindowsPublicationKernel,
+        "_process_creation_filetime_hex",
+        lambda self, child: "0x1",
+    )
+
+    with pytest.raises(SystemExit, match="original failure"):
+        kernel.execute(
+            argv=("C:/real/git.exe", "--version"),
+            cwd=Path("C:/transport.git"),
+            env={"exact": "child"},
+            timeout_seconds=1.0,
+        )
+
+    assert kernel32.terminate_calls == 1
+    assert process.communicate_calls == 2
+    assert process.kill_calls == 1
+    assert process.close_calls == 1
+    assert kernel._terminated is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_publication_kernel_atomically_starts_child_inside_exact_job(
+    tmp_path: Path,
+) -> None:
+    token = hashlib.sha256(
+        f"membership:{time.time_ns()}".encode("ascii")
+    ).hexdigest()
+    job_name = f"Local\\CodexPublicationJob-{token}"
+    mutex_name = f"Local\\CodexPublicationMutex-{token}"
+    kernel = production._WindowsPublicationKernel(
+        job_name=job_name,
+        mutex_name=mutex_name,
+    )
+    script = (
+        "import ctypes;"
+        "from ctypes import wintypes;"
+        "k=ctypes.WinDLL('kernel32',use_last_error=True);"
+        "k.OpenJobObjectW.argtypes=[wintypes.DWORD,wintypes.BOOL,"
+        "wintypes.LPCWSTR];"
+        "k.OpenJobObjectW.restype=wintypes.HANDLE;"
+        "k.GetCurrentProcess.restype=wintypes.HANDLE;"
+        "k.IsProcessInJob.argtypes=[wintypes.HANDLE,wintypes.HANDLE,"
+        "ctypes.POINTER(wintypes.BOOL)];"
+        "k.IsProcessInJob.restype=wintypes.BOOL;"
+        f"j=k.OpenJobObjectW(4,False,{job_name!r});"
+        "inside=wintypes.BOOL();"
+        "ok=bool(j) and bool(k.IsProcessInJob("
+        "k.GetCurrentProcess(),j,ctypes.byref(inside)));"
+        "print(int(ok and inside.value),flush=True)"
+    )
+    try:
+        result = kernel.execute(
+            argv=(sys.executable, "-c", script),
+            cwd=tmp_path.resolve(),
+            env=dict(os.environ),
+            timeout_seconds=10.0,
+        )
+        assert result.process_exit_status == "exited"
+        assert result.process_exit_code == 0
+        assert result.stdout.strip() == b"1"
+        assert kernel._active_process_count() == 0
+        assert kernel.quiesce() == (0, 0)
+    finally:
+        if not kernel._closed:
+            kernel.close_uncommitted()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_publication_kernel_timeout_kills_descendant_tree(
+    tmp_path: Path,
+) -> None:
+    token = hashlib.sha256(
+        f"timeout:{time.time_ns()}".encode("ascii")
+    ).hexdigest()
+    kernel = production._WindowsPublicationKernel(
+        job_name=f"Local\\CodexPublicationJob-{token}",
+        mutex_name=f"Local\\CodexPublicationMutex-{token}",
+    )
+    pid_file = (tmp_path / "descendant.pid").resolve()
+    child_script = (
+        "import pathlib,subprocess,sys,time;"
+        "p=subprocess.Popen([sys.executable,'-c','import time;"
+        "time.sleep(60)']);"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid));"
+        "time.sleep(60)"
+    )
+    try:
+        result = kernel.execute(
+            argv=(sys.executable, "-c", child_script),
+            cwd=tmp_path.resolve(),
+            env=dict(os.environ),
+            timeout_seconds=1.0,
+        )
+        assert result.process_exit_status == "deadline"
+        assert pid_file.is_file()
+        descendant_pid = int(pid_file.read_text(encoding="utf-8"))
+        kernel32 = production.ctypes.WinDLL(
+            "kernel32",
+            use_last_error=True,
+        )
+        kernel32.OpenProcess.argtypes = [
+            production.wintypes.DWORD,
+            production.wintypes.BOOL,
+            production.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = production.wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [
+            production.wintypes.HANDLE,
+            production.wintypes.DWORD,
+        ]
+        kernel32.WaitForSingleObject.restype = production.wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [production.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = production.wintypes.BOOL
+        descendant = kernel32.OpenProcess(
+            0x00100000,
+            False,
+            descendant_pid,
+        )
+        if descendant:
+            try:
+                assert kernel32.WaitForSingleObject(descendant, 0) == (
+                    production._WindowsPublicationKernel._WAIT_OBJECT_0
+                )
+            finally:
+                kernel32.CloseHandle(descendant)
+        assert kernel._active_process_count() == 0
+        assert kernel.quiesce() == (0, 0)
+    finally:
+        if not kernel._closed:
+            kernel.close_uncommitted()
+
+
+def test_publication_runtime_builds_restart_only_quiescence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _, _ = _test_publication_runtime(tmp_path, monkeypatch)
+    handle = runtime.begin(
+        implementation_manifest={
+            "implementation_manifest_sha256": "a" * 64,
+            "implementation_commit": "b" * 40,
+        },
+        store_instance_id="c" * 64,
+        store_session_nonce_sha256="d" * 64,
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        publication_intent_sha256="e" * 64,
+        operation_kind="normal_publication",
+        operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+    )
+    ownership = handle.ownership_material
+    handle.abort_uncommitted()
+
+    material = runtime.restarted_quiescence_material(
+        ownership=ownership,
+        current_store_session_nonce_sha256="f" * 64,
+    )
+
+    assert tuple(material) == PUBLICATION_WORKER_QUIESCENCE_FIELDS
+    assert material["verification_mode"] == (
+        "post_restart_prior_owner_dead"
+    )
+    assert material["store_session_nonce_sha256"] == "f" * 64
+    assert material["worker_ownership_sha256"] == ownership[
+        "worker_ownership_sha256"
+    ]
+    assert material["worker_quiescence_sha256"] == canonical_sha256(
+        {
+            key: value
+            for key, value in material.items()
+            if key != "worker_quiescence_sha256"
+        }
+    )
+
+
+def test_adapter_rehydrates_pending_report_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_benchmark.sec_gemma_online_risk_overlay_acquisition as acquisition
+
+    report_payload = {
+        "validation_sha256": "a" * 64,
+    }
+
+    class Report:
+        def as_dict(self) -> dict[str, str]:
+            return copy.deepcopy(report_payload)
+
+    report = Report()
+
+    class Execution:
+        verified_report = report
+
+    class Ledger:
+        def __init__(self) -> None:
+            self._executions: dict[str, object] = {}
+            self.recorded: list[tuple[str, object]] = []
+
+        def predecessors(self, stage: str) -> tuple[object, ...]:
+            assert stage == "development"
+            return ()
+
+        def record(self, stage: str, execution: object) -> None:
+            self._executions[stage] = execution
+            self.recorded.append((stage, execution))
+
+    class Store:
+        def pending_acquisition_phase_evidence(
+            self,
+            attempt_id: str,
+        ) -> dict[str, object]:
+            assert attempt_id == DEVELOPMENT_ACQUISITION_ID
+            return {
+                "verified_acquisition_report": copy.deepcopy(
+                    report_payload
+                )
+            }
+
+    ledger = Ledger()
+    adapter = object.__new__(_ProductionAcquisitionAdapter)
+    adapter._store = Store()
+    adapter._vault = object()
+    adapter._ledger = ledger
+    calls: list[dict[str, object]] = []
+
+    def fake_rehydrate(**kwargs: object) -> Execution:
+        calls.append(copy.deepcopy(kwargs))
+        return Execution()
+
+    monkeypatch.setattr(
+        acquisition,
+        "_rehydrate_one_production_acquisition",
+        fake_rehydrate,
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "is_verified_acquisition_report",
+        lambda value: value is report,
+    )
+
+    observed = adapter.rehydrate_pending_acquisition_report(
+        attempt_id=DEVELOPMENT_ACQUISITION_ID
+    )
+
+    assert observed is report
+    assert len(calls) == 1
+    assert len(ledger.recorded) == 1
+    assert ledger.recorded[0][0] == "development"
+    assert ledger.recorded[0][1] is ledger._executions["development"]
+
+
+def _pending_publication_recovery_output() -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": (
+            "aapl-sec-gemma-online-risk-overlay-v2-2-"
+            "publication-pending-result-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "command": "development_acquisition",
+        "attempt_id": DEVELOPMENT_ACQUISITION_ID,
+        "result_status": "publication_pending",
+        "publication_intent_sha256": "a" * 64,
+        "publication_intent_store_receipt_sha256": "b" * 64,
+        "semantic_result_released": False,
+        "next_stage_authority_blocked": True,
+        "publication_recovery_required": True,
+        "external_cost_usd": 0,
+    }
+    return {
+        **body,
+        "publication_pending_result_sha256": canonical_sha256(body),
+    }
+
+
+def test_public_recovery_clock_is_sampled_at_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    expected = _pending_publication_recovery_output()
+
+    def fake_entry(**kwargs: object) -> dict[str, object]:
+        captured.append(kwargs)
+        return copy.deepcopy(expected)
+
+    monkeypatch.setattr(production.time, "monotonic", lambda: 42.5)
+    monkeypatch.setattr(
+        production,
+        "_recover_production_publication_from_entry",
+        fake_entry,
+    )
+
+    observed = production.recover_production_publication(
+        repo_root=Path(production.__file__).resolve().parents[1],
+        implementation_manifest={},
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        sec_user_agent="Private private@example.com",
+    )
+
+    assert observed == expected
+    assert len(captured) == 1
+    assert captured[0]["invocation_started_at"] == 42.5
+
+
+def test_supervised_recovery_authority_is_source_bound_and_one_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorities = object.__new__(VerifiedProductionAuthorities)
+    authorities._sentinel = _AUTHORITIES_SENTINEL
+    root = Path(production.__file__).resolve().parents[1]
+    manifest = {"implementation_manifest_sha256": "a" * 64}
+    start = 100.0
+    deadline = start + 300.0
+    monkeypatch.setattr(
+        production,
+        "_publication_owner_process_identity",
+        lambda: (222, "0x333"),
+    )
+    monkeypatch.setattr(
+        production,
+        "_current_process_is_in_recovery_job",
+        lambda name: name.endswith("c" * 64),
+    )
+    monkeypatch.setattr(
+        production,
+        "_windows_prior_process_is_dead",
+        lambda process_id, creation: False,
+    )
+    monkeypatch.setattr(production.time, "monotonic", lambda: 101.0)
+    authority = (
+        production.VerifiedSupervisedPublicationRecoveryWorkerAuthority(
+            repo_root=root,
+            implementation_manifest=manifest,
+            production_authorities=authorities,
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+            invocation_nonce_sha256="c" * 64,
+            job_name=(
+                "Local\\CodexPublicationRecoveryJob-" + "c" * 64
+            ),
+            supervisor_started_at=start,
+            supervisor_deadline=deadline,
+            supervisor_process_id=111,
+            supervisor_process_creation_filetime_hex="0x222",
+            worker_process_id=222,
+            worker_process_creation_filetime_hex="0x333",
+            _sentinel=production._RECOVERY_WORKER_AUTHORITY_SENTINEL,
+        )
+    )
+
+    assert (
+        authority.authorize_runner_recovery(
+            repo_root=root,
+            implementation_manifest=manifest,
+            production_authorities=authorities,
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+            worker_entry_monotonic=101.0,
+            worker_deadline_monotonic=401.0,
+        )
+        == (start, deadline)
+    )
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="expired, reused",
+    ):
+        authority.authorize_runner_recovery(
+            repo_root=root,
+            implementation_manifest=manifest,
+            production_authorities=authorities,
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+            worker_entry_monotonic=101.0,
+            worker_deadline_monotonic=401.0,
+        )
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="cannot be forged",
+    ):
+        production.VerifiedSupervisedPublicationRecoveryWorkerAuthority(
+            repo_root=root,
+            implementation_manifest=manifest,
+            production_authorities=authorities,
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+            invocation_nonce_sha256="c" * 64,
+            job_name=(
+                "Local\\CodexPublicationRecoveryJob-" + "c" * 64
+            ),
+            supervisor_started_at=start,
+            supervisor_deadline=deadline,
+            supervisor_process_id=111,
+            supervisor_process_creation_filetime_hex="0x222",
+            worker_process_id=222,
+            worker_process_creation_filetime_hex="0x333",
+            _sentinel=object(),
+        )
+
+
+def test_recovery_supervisor_uses_private_stdin_and_accepts_only_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = time.monotonic()
+    deadline = start + 300.0
+    root = Path(production.__file__).resolve().parents[1]
+    request = production._build_publication_recovery_worker_request(
+        repo_root=root,
+        implementation_manifest={},
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        sec_user_agent="Private private@example.com",
+        supervisor_started_at=start,
+        supervisor_deadline=deadline,
+    )
+    pending = _pending_publication_recovery_output()
+    encoded_output = canonical_json_bytes(
+        {"status": "ok", "payload": pending}
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeSupervisor:
+        def __init__(self, *, job_name: str) -> None:
+            self.job_name = job_name
+            self.closed = False
+
+        def run(self, **kwargs: object) -> bytes:
+            calls.append(kwargs)
+            return encoded_output
+
+        def close(self) -> None:
+            self.closed = True
+
+    created: list[FakeSupervisor] = []
+
+    def factory(*, job_name: str) -> FakeSupervisor:
+        supervisor = FakeSupervisor(job_name=job_name)
+        created.append(supervisor)
+        return supervisor
+
+    observed = production._supervise_publication_recovery_worker(
+        request,
+        supervisor_deadline=deadline,
+        supervisor_factory=factory,
+    )
+
+    assert observed == pending
+    assert len(calls) == 1
+    assert created[0].closed is True
+    assert calls[0]["deadline_monotonic"] == deadline
+    assert calls[0]["argv"][-1] == "--publication-recovery-worker"
+    assert b"private@example.com" in calls[0]["input_bytes"]
+    assert "private@example.com" not in repr(calls[0]["argv"])
+    assert "private@example.com" not in repr(calls[0]["env"])
+
+    changed = copy.deepcopy(pending)
+    changed["semantic_result_released"] = True
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="invalid pending result",
+    ):
+        production._decode_publication_recovery_worker_output(
+            canonical_json_bytes(
+                {"status": "ok", "payload": changed}
+            ),
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        )
+
+
+def test_recovery_request_and_output_require_exact_canonical_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = {"value": "private"}
+    noncanonical_request = json.dumps(
+        request,
+        indent=2,
+    ).encode("utf-8")
+    monkeypatch.setattr(
+        production.sys,
+        "stdin",
+        type(
+            "PrivateStdin",
+            (),
+            {"buffer": io.BytesIO(noncanonical_request)},
+        )(),
+    )
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="not canonical JSON",
+    ):
+        production._read_stdio_worker_request(
+            require_canonical=True
+        )
+
+    pending = _pending_publication_recovery_output()
+    noncanonical_output = json.dumps(
+        {"status": "ok", "payload": pending},
+        indent=2,
+    ).encode("utf-8")
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="not canonical JSON",
+    ):
+        production._decode_publication_recovery_worker_output(
+            noncanonical_output,
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        )
+
+
+def test_recovery_decoder_accepts_canonical_envelope_just_over_16_mib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_payload = {"padding": "x" * (16 * 1024 * 1024)}
+    encoded = canonical_json_bytes(
+        {"status": "ok", "payload": worker_payload}
+    )
+    assert 16 * 1024 * 1024 < len(encoded)
+    assert len(encoded) < production._STDIO_WORKER_MAX_RESPONSE_BYTES
+    expected = {"accepted": True}
+    observed_validation: list[tuple[dict[str, object], str]] = []
+
+    def validate(
+        payload: object,
+        *,
+        attempt_id: str,
+    ) -> dict[str, bool]:
+        assert type(payload) is dict
+        observed_validation.append((payload, attempt_id))
+        return expected
+
+    monkeypatch.setattr(
+        production,
+        "_validate_publication_recovery_output",
+        validate,
+    )
+
+    assert production._decode_publication_recovery_worker_output(
+        encoded,
+        attempt_id=DEVELOPMENT_ACQUISITION_ID,
+    ) is expected
+    assert observed_validation == [
+        (worker_payload, DEVELOPMENT_ACQUISITION_ID)
+    ]
+
+
+def test_recovery_decoder_uses_named_worker_response_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded = canonical_json_bytes(
+        {"status": "ok", "payload": {"small": True}}
+    )
+    monkeypatch.setattr(
+        production,
+        "_STDIO_WORKER_MAX_RESPONSE_BYTES",
+        len(encoded) - 1,
+    )
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="absent or oversized",
+    ):
+        production._decode_publication_recovery_worker_output(
+            encoded,
+            attempt_id=DEVELOPMENT_ACQUISITION_ID,
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows recovery environment")
+def test_recovery_private_request_restores_exact_git_host_environment(
+    tmp_path: Path,
+) -> None:
+    host_environment = (
+        production._publication_recovery_host_environment()
+    )
+    sanitized = {
+        "SYSTEMROOT": host_environment["SystemRoot"],
+        "WINDIR": host_environment["WINDIR"],
+    }
+    script = (
+        "import json,sys;"
+        "from pathlib import Path;"
+        "from agent_benchmark.sec_gemma_online_risk_overlay_production "
+        "import _install_publication_recovery_host_environment as install;"
+        "install(json.loads(sys.stdin.buffer.read().decode('utf-8')));"
+        "print(Path.home(),flush=True)"
+    )
+
+    completed = subprocess.run(
+        (sys.executable, "-c", script),
+        cwd=Path(production.__file__).resolve().parents[1],
+        env=sanitized,
+        input=canonical_json_bytes(host_environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=30.0,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert Path(
+        completed.stdout.decode("utf-8").strip()
+    ).resolve(strict=True) == Path(
+        host_environment["USERPROFILE"]
+    ).resolve(strict=True)
+
+
+def test_recovery_supervisor_timeout_terminates_outer_job_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Kernel32:
+        def __init__(self) -> None:
+            self.terminate_calls: list[tuple[object, int]] = []
+
+        def TerminateJobObject(
+            self,
+            job: object,
+            exit_code: int,
+        ) -> bool:
+            self.terminate_calls.append((job, exit_code))
+            return True
+
+        def CloseHandle(self, job: object) -> bool:
+            del job
+            return True
+
+    class Process:
+        returncode = None
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def communicate(self, timeout: float) -> tuple[bytes, bytes]:
+            raise subprocess.TimeoutExpired("recovery-child", timeout)
+
+        def close(self) -> None:
+            self.closed = True
+
+    kernel32 = Kernel32()
+    process = Process()
+    supervisor = object.__new__(
+        production._WindowsPublicationRecoverySupervisor
+    )
+    supervisor._kernel32 = kernel32
+    supervisor._job = object()
+    supervisor._job_name = (
+        "Local\\CodexPublicationRecoveryJob-" + "d" * 64
+    )
+    supervisor._closed = False
+    supervisor._terminated = False
+    calls: list[dict[str, object]] = []
+
+    def create(**kwargs: object) -> Process:
+        calls.append(kwargs)
+        return process
+
+    monkeypatch.setattr(
+        production,
+        "_create_atomic_publication_process",
+        create,
+    )
+    active_counts = [1, 0, 0]
+    monkeypatch.setattr(
+        production._WindowsPublicationRecoverySupervisor,
+        "_active_process_count",
+        lambda self: active_counts.pop(0),
+    )
+    monkeypatch.setattr(
+        production,
+        "_windows_job_process_ids",
+        lambda **kwargs: (),
+    )
+    active_counts.extend((0, 0, 0))
+    monkeypatch.setattr(production.time, "monotonic", lambda: 1.0)
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="300-second deadline",
+    ):
+        supervisor.run(
+            argv=("C:/Python/python.exe", "-c", "pass"),
+            cwd=Path("C:/repo"),
+            env={},
+            input_bytes=b'{"private":"request"}',
+            deadline_monotonic=301.0,
+        )
+
+    assert calls[0]["input_bytes"] == b'{"private":"request"}'
+    assert kernel32.terminate_calls == [(supervisor._job, 124)]
+    assert supervisor._terminated is True
+    assert process.closed is True
+    supervisor.close()
+    assert supervisor._closed is True
+    assert active_counts == []
+
+
+def test_recovery_cleanup_failure_is_authoritative_over_worker_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Kernel32:
+        def TerminateJobObject(
+            self,
+            job: object,
+            exit_code: int,
+        ) -> bool:
+            del job, exit_code
+            return True
+
+    class Process:
+        returncode = None
+
+        def communicate(self, timeout: float) -> tuple[bytes, bytes]:
+            raise subprocess.TimeoutExpired("recovery-child", timeout)
+
+        def close(self) -> None:
+            return None
+
+    supervisor = object.__new__(
+        production._WindowsPublicationRecoverySupervisor
+    )
+    supervisor._kernel32 = Kernel32()
+    supervisor._job = object()
+    supervisor._job_name = (
+        "Local\\CodexPublicationRecoveryJob-" + "e" * 64
+    )
+    supervisor._cleanup_deadline = None
+    supervisor._closed = False
+    supervisor._terminated = False
+    monkeypatch.setattr(
+        production,
+        "_create_atomic_publication_process",
+        lambda **kwargs: Process(),
+    )
+    monkeypatch.setattr(
+        production._WindowsPublicationRecoverySupervisor,
+        "_active_process_count",
+        lambda self: 1,
+    )
+    observed_times = iter((1.0, 1.0, 301.0))
+    monkeypatch.setattr(
+        production.time,
+        "monotonic",
+        lambda: next(observed_times),
+    )
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="did not become quiescent",
+    ) as failure:
+        supervisor.run(
+            argv=("C:/Python/python.exe", "-c", "pass"),
+            cwd=Path("C:/repo"),
+            env={},
+            input_bytes=b'{"private":"request"}',
+            deadline_monotonic=301.0,
+        )
+
+    assert failure.value.__cause__ is not None
+    assert "300-second deadline" in str(failure.value.__cause__)
+
+
+def test_recovery_zero_active_must_be_observed_before_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = object.__new__(
+        production._WindowsPublicationRecoverySupervisor
+    )
+    supervisor._job = object()
+    monkeypatch.setattr(
+        production._WindowsPublicationRecoverySupervisor,
+        "_active_process_count",
+        lambda self: 0,
+    )
+    monkeypatch.setattr(production.time, "monotonic", lambda: 301.0)
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayProductionError,
+        match="did not become quiescent",
+    ):
+        supervisor._wait_for_zero_active(deadline_monotonic=301.0)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_atomic_recovery_child_reads_exact_private_stdin(
+    tmp_path: Path,
+) -> None:
+    token = hashlib.sha256(
+        f"recovery-stdin:{time.time_ns()}".encode("ascii")
+    ).hexdigest()
+    supervisor = production._WindowsPublicationRecoverySupervisor(
+        job_name=(
+            "Local\\CodexPublicationRecoveryJob-" + token
+        )
+    )
+    payload = b'{"private":"recovery request"}'
+    script = (
+        "import hashlib,sys;"
+        "data=sys.stdin.buffer.read();"
+        "print(hashlib.sha256(data).hexdigest(),flush=True)"
+    )
+    process = None
+    try:
+        process = production._create_atomic_publication_process(
+            kernel32=supervisor._kernel32,
+            job_handle=supervisor._job,
+            argv=(sys.executable, "-c", script),
+            cwd=tmp_path.resolve(),
+            env=dict(os.environ),
+            input_bytes=payload,
+        )
+        stdout, stderr = process.communicate(timeout=10.0)
+        assert process.returncode == 0
+        assert stderr == b""
+        assert stdout.strip() == hashlib.sha256(payload).hexdigest().encode(
+            "ascii"
+        )
+        accounting_deadline = time.monotonic() + 1.0
+        while (
+            supervisor._active_process_count()
+            and time.monotonic() < accounting_deadline
+        ):
+            time.sleep(0.01)
+        assert supervisor._active_process_count() == 0
+    finally:
+        if process is not None:
+            process.close()
+        supervisor.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_recovery_supervisor_bounds_stdout_while_child_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    token = hashlib.sha256(
+        f"recovery-output-cap:{time.time_ns()}".encode("ascii")
+    ).hexdigest()
+    supervisor = production._WindowsPublicationRecoverySupervisor(
+        job_name=(
+            "Local\\CodexPublicationRecoveryJob-" + token
+        )
+    )
+    monkeypatch.setattr(
+        production,
+        "_STDIO_WORKER_MAX_RESPONSE_BYTES",
+        64 * 1024,
+    )
+    script = (
+        "import sys,time;"
+        "sys.stdout.buffer.write(b'x'*(128*1024));"
+        "sys.stdout.buffer.flush();"
+        "time.sleep(60)"
+    )
+    closed = False
+    try:
+        with pytest.raises(
+            SecGemmaOnlineRiskOverlayProductionError,
+            match="stdout exceeded its fixed byte cap",
+        ):
+            supervisor.run(
+                argv=(sys.executable, "-c", script),
+                cwd=tmp_path.resolve(),
+                env=dict(os.environ),
+                input_bytes=b'{"private":"request"}',
+                deadline_monotonic=time.monotonic() + 10.0,
+            )
+        assert supervisor._active_process_count() == 0
+        supervisor.close()
+        closed = True
+    finally:
+        if not closed:
+            supervisor.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_recovery_supervisor_real_timeout_kills_descendant_tree(
+    tmp_path: Path,
+) -> None:
+    token = hashlib.sha256(
+        f"recovery-timeout:{time.time_ns()}".encode("ascii")
+    ).hexdigest()
+    supervisor = production._WindowsPublicationRecoverySupervisor(
+        job_name=(
+            "Local\\CodexPublicationRecoveryJob-" + token
+        )
+    )
+    pid_file = (tmp_path / "recovery-descendant.pid").resolve()
+    script = (
+        "import pathlib,subprocess,sys,time;"
+        "p=subprocess.Popen([sys.executable,'-c','import time;"
+        "time.sleep(60)']);"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid));"
+        "time.sleep(60)"
+    )
+    closed = False
+    try:
+        with pytest.raises(
+            SecGemmaOnlineRiskOverlayProductionError,
+            match="300-second deadline",
+        ):
+            supervisor.run(
+                argv=(sys.executable, "-c", script),
+                cwd=tmp_path.resolve(),
+                env=dict(os.environ),
+                input_bytes=b'{"private":"request"}',
+                deadline_monotonic=time.monotonic() + 6.0,
+            )
+        assert supervisor._active_process_count() == 0
+        supervisor.close()
+        closed = True
+        assert pid_file.is_file()
+        descendant_pid = int(pid_file.read_text(encoding="utf-8"))
+        kernel32 = production.ctypes.WinDLL(
+            "kernel32",
+            use_last_error=True,
+        )
+        kernel32.OpenProcess.argtypes = [
+            production.wintypes.DWORD,
+            production.wintypes.BOOL,
+            production.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = production.wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [
+            production.wintypes.HANDLE,
+            production.wintypes.DWORD,
+        ]
+        kernel32.WaitForSingleObject.restype = production.wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [production.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = production.wintypes.BOOL
+        descendant = kernel32.OpenProcess(
+            0x00100000,
+            False,
+            descendant_pid,
+        )
+        if descendant:
+            try:
+                wait_deadline = time.monotonic() + 2.0
+                wait = kernel32.WaitForSingleObject(descendant, 0)
+                while (
+                    wait
+                    != production._WindowsPublicationKernel._WAIT_OBJECT_0
+                    and time.monotonic() < wait_deadline
+                ):
+                    time.sleep(0.01)
+                    wait = kernel32.WaitForSingleObject(descendant, 0)
+                assert wait == (
+                    production._WindowsPublicationKernel._WAIT_OBJECT_0
+                )
+            finally:
+                kernel32.CloseHandle(descendant)
+    finally:
+        if not closed:
+            supervisor.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows nested Job contract")
+def test_recovery_outer_job_kills_nested_publication_job_tree(
+    tmp_path: Path,
+) -> None:
+    token = hashlib.sha256(
+        f"nested-recovery:{time.time_ns()}".encode("ascii")
+    ).hexdigest()
+    supervisor = production._WindowsPublicationRecoverySupervisor(
+        job_name=(
+            "Local\\CodexPublicationRecoveryJob-" + token
+        )
+    )
+    pid_file = (tmp_path / "nested-publication.pid").resolve()
+    worker_script = (
+        "import hashlib,os,sys,time;"
+        "from pathlib import Path;"
+        "from agent_benchmark.sec_gemma_online_risk_overlay_production "
+        "import _WindowsPublicationKernel;"
+        "token=hashlib.sha256(str(time.time_ns()).encode()).hexdigest();"
+        "kernel=_WindowsPublicationKernel("
+        "job_name='Local\\\\NestedPublicationJob-'+token,"
+        "mutex_name='Local\\\\NestedPublicationMutex-'+token);"
+        f"child=\"import os,time;from pathlib import Path;"
+        f"Path({pid_file.as_posix()!r}).write_text(str(os.getpid()));"
+        "time.sleep(60)\";"
+        "kernel.execute(argv=(sys.executable,'-c',child),"
+        "cwd=Path.cwd(),env=dict(os.environ),timeout_seconds=60.0)"
+    )
+    try:
+        with pytest.raises(
+            SecGemmaOnlineRiskOverlayProductionError,
+            match="300-second deadline",
+        ):
+            supervisor.run(
+                argv=(sys.executable, "-c", worker_script),
+                cwd=Path(production.__file__).resolve().parents[1],
+                env=dict(os.environ),
+                input_bytes=b'{"private":"request"}',
+                deadline_monotonic=time.monotonic() + 6.0,
+            )
+        supervisor.close()
+        assert pid_file.is_file()
+        nested_pid = int(pid_file.read_text(encoding="utf-8"))
+        kernel32 = production.ctypes.WinDLL(
+            "kernel32",
+            use_last_error=True,
+        )
+        kernel32.OpenProcess.argtypes = [
+            production.wintypes.DWORD,
+            production.wintypes.BOOL,
+            production.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = production.wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [
+            production.wintypes.HANDLE,
+            production.wintypes.DWORD,
+        ]
+        kernel32.WaitForSingleObject.restype = production.wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [production.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = production.wintypes.BOOL
+        nested = kernel32.OpenProcess(
+            0x00100000,
+            False,
+            nested_pid,
+        )
+        if nested:
+            try:
+                assert kernel32.WaitForSingleObject(nested, 0) == (
+                    production._WindowsPublicationKernel._WAIT_OBJECT_0
+                )
+            finally:
+                kernel32.CloseHandle(nested)
+    finally:
+        if not supervisor._closed:
+            supervisor.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_final_registry_atomic_runner_round_trips_private_input(
+    tmp_path: Path,
+) -> None:
+    runner = production._WindowsFinalRegistrySubprocessRunner()
+    payload = b"private-final-registry-input"
+    script = (
+        "import hashlib,sys;"
+        "data=sys.stdin.buffer.read();"
+        "print(hashlib.sha256(data).hexdigest(),flush=True)"
+    )
+
+    completed = runner(
+        (sys.executable, "-c", script),
+        cwd=tmp_path.resolve(),
+        env=dict(os.environ),
+        input=payload,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10.0,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == b""
+    assert completed.stdout.strip() == hashlib.sha256(payload).hexdigest().encode(
+        "ascii"
+    )
+
+
+def test_job_process_id_query_retries_successful_truncated_list() -> None:
+    class Kernel32:
+        calls = 0
+
+        def QueryInformationJobObject(
+            self,
+            job: object,
+            information_class: int,
+            buffer: object,
+            buffer_size: int,
+            returned: object,
+        ) -> bool:
+            del job
+            assert information_class == (
+                production._WINDOWS_JOB_OBJECT_BASIC_PROCESS_ID_LIST
+            )
+            self.calls += 1
+            listed_ids = (101,) if self.calls == 1 else (101, 202)
+            header = production.ctypes.cast(
+                buffer,
+                production.ctypes.POINTER(
+                    production._JobObjectBasicProcessIdList
+                ),
+            ).contents
+            header.NumberOfAssignedProcesses = 2
+            header.NumberOfProcessIdsInList = len(listed_ids)
+            ids = (
+                production.ctypes.c_size_t * len(listed_ids)
+            ).from_address(
+                production.ctypes.addressof(buffer)
+                + production._JobObjectBasicProcessIdList.ProcessIdList.offset
+            )
+            for index, process_id in enumerate(listed_ids):
+                ids[index] = process_id
+            returned._obj.value = min(
+                buffer_size,
+                production._JobObjectBasicProcessIdList.ProcessIdList.offset
+                + (
+                    len(listed_ids)
+                    * production.ctypes.sizeof(production.ctypes.c_size_t)
+                ),
+            )
+            return True
+
+    kernel32 = Kernel32()
+
+    assert production._windows_job_process_ids(
+        kernel32=kernel32,
+        job=object(),
+    ) == (101, 202)
+    assert kernel32.calls == 2
+
+
+def test_final_registry_waits_for_late_child_process_object_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Kernel32:
+        def __init__(self) -> None:
+            self.terminate_calls: list[tuple[object, int]] = []
+            self.open_calls: list[int] = []
+            self.wait_calls: list[int] = []
+            self.closed_handles: list[int] = []
+            self.late_child_waits = 0
+
+        def OpenProcess(
+            self,
+            access: int,
+            inherit: bool,
+            process_id: int,
+        ) -> int:
+            assert access == (
+                production._WINDOWS_SYNCHRONIZE
+                | production._WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION
+            )
+            assert inherit is False
+            self.open_calls.append(process_id)
+            return process_id + 10_000
+
+        @staticmethod
+        def IsProcessInJob(
+            handle: int,
+            job: object,
+            inside: object,
+        ) -> bool:
+            del handle, job
+            inside._obj.value = True
+            return True
+
+        def TerminateJobObject(
+            self,
+            job: object,
+            exit_code: int,
+        ) -> bool:
+            self.terminate_calls.append((job, exit_code))
+            return True
+
+        def WaitForSingleObject(
+            self,
+            handle: int,
+            milliseconds: int,
+        ) -> int:
+            assert milliseconds == 0
+            self.wait_calls.append(handle)
+            if handle == 10_202:
+                self.late_child_waits += 1
+                if self.late_child_waits == 1:
+                    return production._WindowsPublicationKernel._WAIT_TIMEOUT
+            return production._WindowsPublicationKernel._WAIT_OBJECT_0
+
+        def CloseHandle(self, handle: int) -> bool:
+            self.closed_handles.append(handle)
+            return True
+
+    kernel32 = Kernel32()
+    runner = object.__new__(
+        production._WindowsFinalRegistrySubprocessRunner
+    )
+    runner._kernel32 = kernel32
+    job = object()
+    snapshots = iter(
+        (
+            (101,),
+            (101, 202),
+            (101, 202),
+            (101, 202),
+            (101, 202),
+        )
+    )
+
+    def process_ids(**kwargs: object) -> tuple[int, ...]:
+        assert kwargs == {"kernel32": kernel32, "job": job}
+        return next(snapshots)
+
+    active_counts = iter((0, 0, 0, 0))
+    monkeypatch.setattr(
+        production,
+        "_windows_job_process_ids",
+        process_ids,
+    )
+    monkeypatch.setattr(
+        production._WindowsFinalRegistrySubprocessRunner,
+        "_active_process_count",
+        lambda self, observed_job: next(active_counts),
+    )
+    monkeypatch.setattr(production.time, "monotonic", lambda: 1.0)
+    monkeypatch.setattr(production.time, "sleep", lambda seconds: None)
+
+    runner._terminate_and_wait(
+        job,
+        exit_code=124,
+        deadline_monotonic=10.0,
+    )
+
+    assert kernel32.terminate_calls == [(job, 124)]
+    assert kernel32.open_calls == [101, 202]
+    assert kernel32.late_child_waits == 2
+    assert kernel32.closed_handles == [10_101, 10_202]
+
+
+def test_final_registry_closes_process_witness_on_termination_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Kernel32:
+        closed_handles: list[int] = []
+
+        @staticmethod
+        def OpenProcess(
+            access: int,
+            inherit: bool,
+            process_id: int,
+        ) -> int:
+            del access, inherit
+            return process_id + 20_000
+
+        @staticmethod
+        def IsProcessInJob(
+            handle: int,
+            job: object,
+            inside: object,
+        ) -> bool:
+            del handle, job
+            inside._obj.value = True
+            return True
+
+        @staticmethod
+        def TerminateJobObject(job: object, exit_code: int) -> bool:
+            del job, exit_code
+            return False
+
+        def CloseHandle(self, handle: int) -> bool:
+            self.closed_handles.append(handle)
+            return True
+
+    kernel32 = Kernel32()
+    runner = object.__new__(
+        production._WindowsFinalRegistrySubprocessRunner
+    )
+    runner._kernel32 = kernel32
+    monkeypatch.setattr(
+        production,
+        "_windows_job_process_ids",
+        lambda **kwargs: (303,),
+    )
+    monkeypatch.setattr(production.time, "monotonic", lambda: 1.0)
+
+    with pytest.raises(
+        OSError,
+        match="could not be terminated",
+    ):
+        runner._terminate_and_wait(
+            object(),
+            exit_code=125,
+            deadline_monotonic=10.0,
+        )
+
+    assert kernel32.closed_handles == [20_303]
+
+
+def test_final_registry_zero_active_must_be_observed_before_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Kernel32:
+        @staticmethod
+        def TerminateJobObject(job: object, exit_code: int) -> bool:
+            del job, exit_code
+            return True
+
+    runner = object.__new__(
+        production._WindowsFinalRegistrySubprocessRunner
+    )
+    runner._kernel32 = Kernel32()
+    monkeypatch.setattr(
+        production._WindowsFinalRegistrySubprocessRunner,
+        "_active_process_count",
+        lambda self, job: 0,
+    )
+    monkeypatch.setattr(production.time, "monotonic", lambda: 10.0)
+
+    with pytest.raises(
+        OSError,
+        match="did not become quiescent",
+    ):
+        runner._terminate_and_wait(
+            object(),
+            exit_code=125,
+            deadline_monotonic=10.0,
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_final_registry_atomic_runner_bounds_stdout_while_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = production._WindowsFinalRegistrySubprocessRunner()
+    monkeypatch.setattr(
+        production,
+        "_FINAL_REGISTRY_MAX_COMMAND_IO_BYTES",
+        64 * 1024,
+    )
+    script = (
+        "import sys,time;"
+        "sys.stdout.buffer.write(b'x'*(128*1024));"
+        "sys.stdout.buffer.flush();"
+        "time.sleep(60)"
+    )
+
+    with pytest.raises(
+        OSError,
+        match="output is malformed or oversized",
+    ) as failure:
+        runner(
+            (sys.executable, "-c", script),
+            cwd=tmp_path.resolve(),
+            env=dict(os.environ),
+            input=None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=10.0,
+        )
+    assert isinstance(
+        failure.value.__cause__,
+        SecGemmaOnlineRiskOverlayProductionError,
+    )
+    assert "stdout exceeded its fixed byte cap" in str(
+        failure.value.__cause__
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+@pytest.mark.parametrize("_repetition", range(5))
+def test_final_registry_atomic_runner_timeout_kills_descendant_tree(
+    tmp_path: Path,
+    _repetition: int,
+) -> None:
+    runner = production._WindowsFinalRegistrySubprocessRunner()
+    pid_file = (
+        tmp_path / f"final-registry-descendant-{_repetition}.pid"
+    ).resolve()
+    script = (
+        "import pathlib,subprocess,sys,time;"
+        "p=subprocess.Popen([sys.executable,'-c','import time;"
+        "time.sleep(60)']);"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid));"
+        "time.sleep(60)"
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner(
+            (sys.executable, "-c", script),
+            cwd=tmp_path.resolve(),
+            env=dict(os.environ),
+            input=None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=6.0,
+        )
+
+    assert pid_file.is_file()
+    descendant_pid = int(pid_file.read_text(encoding="utf-8"))
+    kernel32 = production.ctypes.WinDLL(
+        "kernel32",
+        use_last_error=True,
+    )
+    kernel32.OpenProcess.argtypes = [
+        production.wintypes.DWORD,
+        production.wintypes.BOOL,
+        production.wintypes.DWORD,
+    ]
+    kernel32.OpenProcess.restype = production.wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [
+        production.wintypes.HANDLE,
+        production.wintypes.DWORD,
+    ]
+    kernel32.WaitForSingleObject.restype = production.wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [production.wintypes.HANDLE]
+    kernel32.CloseHandle.restype = production.wintypes.BOOL
+    descendant = kernel32.OpenProcess(
+        0x00100000,
+        False,
+        descendant_pid,
+    )
+    if descendant:
+        try:
+            assert kernel32.WaitForSingleObject(descendant, 0) == (
+                production._WindowsPublicationKernel._WAIT_OBJECT_0
+            )
+        finally:
+            kernel32.CloseHandle(descendant)

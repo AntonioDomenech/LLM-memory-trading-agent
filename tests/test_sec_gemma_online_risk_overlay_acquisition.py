@@ -696,7 +696,7 @@ def test_real_frozen_aapl_session_counts_are_exact() -> None:
     assert sum(x <= "2026-07-10" for x in REAL_MARKET_SESSIONS) == 7173
 
 
-def test_plans_are_v2_1_exact_stage_bound_and_prefix_linked() -> None:
+def test_plans_are_v2_2_exact_stage_bound_and_prefix_linked() -> None:
     plans = {stage: build_acquisition_plan(stage) for stage in STAGES}
     assert [plans[stage]["attempt_kind"] for stage in STAGES] == [
         DEVELOPMENT_ACQUISITION,
@@ -715,7 +715,7 @@ def test_plans_are_v2_1_exact_stage_bound_and_prefix_linked() -> None:
         CONFIRMATION
     ]["acquisition_plan_sha256"]
     for stage, plan in plans.items():
-        assert "v2-1" in plan["schema_version"]
+        assert "v2-2" in plan["schema_version"]
         assert validate_acquisition_plan(plan, expected_stage=stage) == plan
         assert len(plan["market"]["requests"]) == 6
 

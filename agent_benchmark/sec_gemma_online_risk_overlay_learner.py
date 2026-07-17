@@ -44,19 +44,19 @@ from agent_benchmark.sec_filing_gemma_learner import (
 
 
 LEARNER_ADAPTER_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-learner-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-learner-v1"
 )
 LESSON_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-lesson-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-lesson-row-v1"
 )
 FIT_AUDIT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-fit-audit-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-fit-audit-v1"
 )
 PREDICTION_AUDIT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-prediction-audit-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-prediction-audit-v1"
 )
 GATE_AUDIT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-gate-audit-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-gate-audit-v1"
 )
 FEATURE_ARMS: Final[tuple[str, ...]] = (
     "semantic",

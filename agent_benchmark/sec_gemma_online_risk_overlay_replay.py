@@ -45,13 +45,13 @@ from agent_benchmark.sec_gemma_online_risk_overlay_policy import (
 
 
 CHRONOLOGICAL_REPLAY_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-chronological-replay-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-chronological-replay-v1"
 )
 LABEL_INTENT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-label-intent-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-label-intent-v1"
 )
 FIT_CHECKPOINT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-fit-checkpoint-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-fit-checkpoint-v1"
 )
 ALLOWED_REPLAY_COST_BPS: Final[tuple[int, ...]] = (5, 10)
 PORTFOLIO_GENESIS_SESSION: Final[str] = "2000-01-03"

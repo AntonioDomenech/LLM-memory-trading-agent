@@ -33,6 +33,8 @@ from agent_benchmark.sec_gemma_online_risk_overlay_publisher import (
     SCORED_PASS,
     TERMINAL_PASS,
     ExternalGitTagPublisher,
+    _issue_verified_external_publication,
+    prepare_external_publication,
 )
 from agent_benchmark.sec_gemma_online_risk_overlay_registry import (
     FINAL_REGISTRY_AUTHORIZATION_SCHEMA_VERSION,
@@ -172,6 +174,8 @@ def _local_remote(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     _git(work, "init")
     _git(work, "config", "user.name", "Registry Test")
     _git(work, "config", "user.email", "registry@example.invalid")
+    _git(work, "config", "core.autocrlf", "false")
+    _git(work, "config", "core.longpaths", "true")
     (work / "tracked.txt").write_text("frozen\n", encoding="utf-8")
     source_pin = (
         WORKSPACE_ROOT
@@ -222,14 +226,21 @@ def _confirmation_binding(
         repo_root=work,
         implementation_manifest=manifest,
         test_only_allow_url_rewrite=True,
+        test_only_url_rewrite_target=(
+            work.parent / "remote.git"
+        ).resolve(strict=True),
     )
-    receipt = publisher.publish(
+    prepared = prepare_external_publication(
+        implementation_manifest=manifest,
         attempt_id=CONFIRMATION_ATTEMPT_ID,
         terminal_status=TERMINAL_PASS,
         report_kind=SCORED_PASS,
         artifact_sha256=_digest("confirmation joint report"),
         predecessor_publication_sha256=PUBLICATION_GENESIS_SHA256,
-        deadline_monotonic=10**12,
+    )
+    receipt = _issue_verified_external_publication(
+        prepared.expected_publication,
+        implementation_manifest=manifest,
     )
     binding = {
         "terminal_evidence": {
@@ -242,6 +253,26 @@ def _confirmation_binding(
         "external_publication": receipt.publication,
         "artifact_receipt": {
             "payload_sha256": _digest("confirmation artifact"),
+        },
+        "terminal_reconstruction_material": {
+            "terminal_reconstruction_material_sha256": _digest(
+                "confirmation reconstruction"
+            ),
+        },
+        "publication_intent": {
+            "publication_intent_sha256": _digest(
+                "confirmation publication intent"
+            ),
+        },
+        "publication_receipt": {
+            "publication_receipt_sha256": _digest(
+                "confirmation publication receipt"
+            ),
+        },
+        "terminalization_claim": {
+            "terminalization_claim_sha256": _digest(
+                "confirmation terminalization claim"
+            ),
         },
     }
     return FakeTerminalAnchorStore(binding), publisher
@@ -341,7 +372,7 @@ def test_authorizer_recovers_exact_successor_after_publish_crash_window(
     predecessor_publication_sha256 = store.binding[
         "external_publication"
     ]["publication_sha256"]
-    published_before_crash = publisher.publish(
+    published_before_crash = publisher.publish_or_recover_final_registry(
         attempt_id=FINAL_ATTEMPT_ID,
         terminal_status=REGISTERED_UNRUN,
         report_kind=FINAL_REGISTRY_SUCCESSOR,

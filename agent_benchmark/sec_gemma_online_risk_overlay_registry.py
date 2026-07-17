@@ -1,4 +1,4 @@
-"""Verified v2.1 final-registry successor authorization.
+"""Verified v2.2 final-registry successor authorization.
 
 The frozen predecessor is the exact repository pin file named by the contract.
 This module validates those bytes, appends exactly one ``registered_unrun``
@@ -44,13 +44,13 @@ from agent_benchmark.sec_gemma_online_risk_overlay_publisher import (
 
 
 FINAL_REGISTRY_SUCCESSOR_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-final-registry-successor-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-final-registry-successor-v1"
 )
 FINAL_REGISTRY_AUTHORIZATION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-final-registry-authorization-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-final-registry-authorization-v1"
 )
 FINAL_REGISTRY_VERIFIER_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-final-registry-verifier-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-final-registry-verifier-v1"
 )
 INITIAL_PIN_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-initial-external-registry-pin-v1"
@@ -123,7 +123,7 @@ def _frozen_final_access() -> dict[str, Any]:
 
 
 def validate_predecessor_registry_pin(value: Any) -> dict[str, Any]:
-    """Validate the exact legacy pin material frozen into v2.1."""
+    """Validate the exact legacy pin material frozen into v2.2."""
 
     observed = _mapping(value, "predecessor registry pin file")
     if set(observed) != {
@@ -182,7 +182,7 @@ def validate_predecessor_registry_pin(value: Any) -> dict[str, Any]:
         or tip_hash != access["predecessor_registry_tip_sha256"]
     ):
         raise SecGemmaOnlineRiskOverlayRegistryError(
-            "Predecessor registry pin differs from the frozen v2.1 migration"
+            "Predecessor registry pin differs from the frozen v2.2 migration"
         )
     return {
         "contract_version": PREDECESSOR_CONTRACT_VERSION,
@@ -602,6 +602,10 @@ class FinalRegistryAuthorizer:
             "terminal_evidence",
             "external_publication",
             "artifact_receipt",
+            "terminal_reconstruction_material",
+            "publication_intent",
+            "publication_receipt",
+            "terminalization_claim",
         }:
             raise SecGemmaOnlineRiskOverlayRegistryError(
                 "Confirmation terminal anchor binding fields changed"

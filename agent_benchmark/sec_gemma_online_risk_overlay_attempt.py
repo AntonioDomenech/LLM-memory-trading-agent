@@ -1,4 +1,4 @@
-"""Pure attempt and implementation bindings for the SEC/Gemma overlay v2.1.
+"""Pure attempt and implementation bindings for the SEC/Gemma overlay v2.2.
 
 This module deliberately performs no filesystem, Git, clock, network, market,
 SEC, model, or database I/O.  It defines the only four effectful attempts,
@@ -13,6 +13,7 @@ import copy
 import hashlib
 import hmac
 import json
+import math
 import re
 from typing import Any, Final, Mapping, Sequence
 
@@ -29,6 +30,8 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
     EXTERNAL_PUBLICATION_FIELDS,
     FINAL_ATTEMPT_ID,
     FINAL_REGISTRY_AUTHORIZATION_FIELDS,
+    PUBLICATION_INTENT_FIELDS,
+    PUBLICATION_RECEIPT_FIELDS,
     SCORED_TERMINAL_EVIDENCE_FIELDS,
     SOURCE_PIN_FILES,
     SOURCE_PINS,
@@ -50,31 +53,31 @@ from agent_benchmark.sec_gemma_online_risk_overlay_source_verifier import (
 
 
 IMPLEMENTATION_MANIFEST_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-implementation-manifest-v2"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-implementation-manifest-v2"
 )
 ATTEMPT_PLAN_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-attempt-plan-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-attempt-plan-v1"
 )
 ATTEMPT_TRANSITION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-attempt-transition-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-attempt-transition-v1"
 )
 ACQUISITION_TERMINAL_EVIDENCE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-terminal-evidence-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-terminal-evidence-v1"
 )
 ACQUISITION_TERMINAL_EVIDENCE_VERIFIER_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-terminal-verifier-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-terminal-verifier-v1"
 )
 SCORED_TERMINAL_EVIDENCE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-scored-terminal-evidence-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-scored-terminal-evidence-v1"
 )
 SCORED_TERMINAL_EVIDENCE_VERIFIER_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-scored-terminal-verifier-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-scored-terminal-verifier-v1"
 )
 DETERMINISTIC_EVALUATION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-deterministic-evaluation-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-deterministic-evaluation-v1"
 )
 JOINT_STAGE_REPORT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-joint-stage-report-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-joint-stage-report-v1"
 )
 
 DEVELOPMENT_ACQUISITION: Final[str] = "development_acquisition"
@@ -1085,7 +1088,7 @@ def _final_registry_authorization_material(
         )
     ):
         raise SecGemmaOnlineRiskOverlayAttemptError(
-            "Final registry authorization is not canonical v2.1 evidence"
+            "Final registry authorization is not canonical v2.2 evidence"
         )
     try:
         return validate_final_registry_authorization(
@@ -1620,7 +1623,7 @@ def store_record_receipt_sha256(value: Any) -> str:
 
 
 def _publication_material(value: Any) -> dict[str, Any]:
-    """Require the publisher's exact opaque v2.1 receipt."""
+    """Require the publisher's exact opaque v2.2 receipt."""
 
     try:
         from agent_benchmark.sec_gemma_online_risk_overlay_publisher import (
@@ -1660,7 +1663,7 @@ def _publication_material(value: Any) -> dict[str, Any]:
         or canonical_sha256(body) != publication_hash
     ):
         raise SecGemmaOnlineRiskOverlayAttemptError(
-            "External publication is not the canonical v2.1 receipt"
+            "External publication is not the canonical v2.2 receipt"
         )
     _git_commit(
         observed["implementation_commit"],
@@ -1703,6 +1706,272 @@ def _publication_material(value: Any) -> dict[str, Any]:
             "External publication must report exactly zero external cost"
         )
     return observed
+
+
+def _publication_intent_binding(
+    value: Any,
+    *,
+    implementation_manifest: Mapping[str, Any],
+    attempt_plan: Mapping[str, Any],
+    terminal_status: str,
+    report_kind: str,
+    artifact_sha256: str,
+    artifact_store_receipt_sha256: str,
+    record_counts: Mapping[str, int],
+    record_commitment_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Require the exact opaque durable publication intent and its receipt."""
+
+    try:
+        from agent_benchmark.sec_gemma_online_risk_overlay_store import (
+            VerifiedPublicationIntent,
+        )
+    except ImportError as exc:  # pragma: no cover - import cycle guard
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Publication-intent authority is unavailable"
+        ) from exc
+    if type(value) is not VerifiedPublicationIntent:
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Terminal evidence requires an opaque durable publication intent"
+        )
+    raw = value.as_dict()
+    observed = _mapping(raw, "publication intent")
+    _expect_keys(
+        observed,
+        set(PUBLICATION_INTENT_FIELDS),
+        "publication intent",
+    )
+    body = {
+        key: observed[key]
+        for key in observed
+        if key != "publication_intent_sha256"
+    }
+    intent_sha256 = _sha256(
+        observed["publication_intent_sha256"],
+        "publication intent hash",
+    )
+    receipt = store_record_receipt_material(value.store_receipt)
+    counts = _record_counts(record_counts, "publication intent record counts")
+    predecessor = observed["predecessor_publication_sha256"]
+    if predecessor is not None:
+        _sha256(predecessor, "publication intent predecessor")
+    for field in (
+        "implementation_manifest_sha256",
+        "attempt_plan_sha256",
+        "artifact_sha256",
+        "artifact_store_receipt_sha256",
+        "terminal_reconstruction_material_sha256",
+        "terminal_reconstruction_material_store_receipt_sha256",
+        "record_commitment_sha256",
+        "store_instance_id",
+        "store_journal_tip_sha256",
+        "tag_message_sha256",
+        "expected_publication_sha256",
+    ):
+        _sha256(observed[field], f"publication intent {field}")
+    _git_commit(
+        observed["implementation_commit"],
+        "publication intent implementation commit",
+    )
+    _git_commit(
+        observed["tag_target_commit"],
+        "publication intent tag target",
+    )
+    _git_commit(
+        observed["expected_peeled_commit"],
+        "publication intent expected peeled commit",
+    )
+    _git_commit(
+        observed["expected_tag_object_sha1"],
+        "publication intent expected tag object",
+    )
+    elapsed = observed["normal_attempt_elapsed_at_intent_prepare_hex"]
+    try:
+        elapsed_value = float.fromhex(elapsed)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Publication intent elapsed value must be exact binary64 hexadecimal"
+        ) from exc
+    if (
+        observed["schema_version"]
+        != (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-intent-v1"
+        )
+        or observed["intent_verifier_id"]
+        != (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-intent-verifier-v1"
+        )
+        or observed["contract_version"] != CONTRACT_VERSION
+        or observed["contract_sha256"] != CONTRACT_SHA256
+        or observed["implementation_manifest_sha256"]
+        != implementation_manifest["implementation_manifest_sha256"]
+        or observed["implementation_commit"]
+        != implementation_manifest["implementation_commit"]
+        or observed["attempt_id"] != attempt_plan["attempt_id"]
+        or observed["attempt_kind"] != attempt_plan["attempt_kind"]
+        or observed["attempt_plan_sha256"]
+        != attempt_plan["attempt_plan_sha256"]
+        or observed["terminal_status"] != terminal_status
+        or observed["report_kind"] != report_kind
+        or observed["artifact_sha256"] != artifact_sha256
+        or observed["artifact_store_receipt_sha256"]
+        != artifact_store_receipt_sha256
+        or observed["record_counts"] != counts
+        or observed["record_commitment_sha256"]
+        != record_commitment_sha256
+        or observed["tag_target_commit"]
+        != implementation_manifest["implementation_commit"]
+        or observed["expected_peeled_commit"]
+        != implementation_manifest["implementation_commit"]
+        or observed["intent_status"] != "publication_pending"
+        or observed["research_effect_authority_invalidated"] is not True
+        or observed["semantic_result_release_blocked"] is not True
+        or observed["next_stage_authority_blocked"] is not True
+        or type(observed["external_cost_usd"]) not in {int, float}
+        or observed["external_cost_usd"] != 0
+        or type(observed["store_journal_sequence"]) is not int
+        or observed["store_journal_sequence"] < 1
+        or type(elapsed) is not str
+        or not math.isfinite(elapsed_value)
+        or elapsed_value < 0
+        or elapsed_value >= 3600
+        or elapsed != elapsed_value.hex()
+        or canonical_sha256(body) != intent_sha256
+        or receipt["table"] != "publication_intents"
+        or receipt["attempt_id"] != attempt_plan["attempt_id"]
+        or receipt["payload_sha256"] != canonical_sha256(observed)
+    ):
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Publication intent lost its exact durable attempt binding"
+        )
+    for field in ("tag_ref", "remote_name", "remote_url"):
+        if type(observed[field]) is not str or not observed[field]:
+            raise SecGemmaOnlineRiskOverlayAttemptError(
+                f"Publication intent {field} is invalid"
+            )
+    return observed, receipt
+
+
+def _durable_publication_binding(
+    value: Any,
+    *,
+    implementation_manifest: Mapping[str, Any],
+    attempt_plan: Mapping[str, Any],
+    terminal_status: str,
+    report_kind: str,
+    artifact_sha256: str,
+    publication_intent: Mapping[str, Any],
+    publication_intent_store_receipt: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any]:
+    """Require the exact durable receipt and its opaque external publication."""
+
+    try:
+        from agent_benchmark.sec_gemma_online_risk_overlay_store import (
+            VerifiedDurablePublicationReceipt,
+        )
+    except ImportError as exc:  # pragma: no cover - import cycle guard
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Durable publication-receipt authority is unavailable"
+        ) from exc
+    if type(value) is not VerifiedDurablePublicationReceipt:
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Terminal evidence requires an opaque durable publication receipt"
+        )
+    observed = _mapping(value.as_dict(), "durable publication receipt")
+    _expect_keys(
+        observed,
+        set(PUBLICATION_RECEIPT_FIELDS),
+        "durable publication receipt",
+    )
+    body = {
+        key: observed[key]
+        for key in observed
+        if key != "publication_receipt_sha256"
+    }
+    receipt_sha256 = _sha256(
+        observed["publication_receipt_sha256"],
+        "durable publication receipt hash",
+    )
+    store_receipt = store_record_receipt_material(value.store_receipt)
+    external_publication = value.external_publication
+    publication = _validate_publication_binding(
+        external_publication,
+        implementation_manifest=implementation_manifest,
+        attempt_id=attempt_plan["attempt_id"],
+        terminal_status=terminal_status,
+        report_kind=report_kind,
+        artifact_sha256=artifact_sha256,
+    )
+    for field in (
+        "implementation_manifest_sha256",
+        "store_instance_id",
+        "publication_intent_sha256",
+        "publication_intent_store_receipt_sha256",
+        "publication_remote_observation_sha256",
+        "recovery_invocation_completion_sha256",
+        "pre_push_authorization_sha256",
+        "external_publication_sha256",
+        "pre_receipt_store_journal_tip_sha256",
+    ):
+        _sha256(observed[field], f"durable publication receipt {field}")
+    _git_commit(
+        observed["implementation_commit"],
+        "durable publication receipt implementation commit",
+    )
+    _git_commit(
+        observed["remote_tag_object_sha1"],
+        "durable publication receipt remote tag object",
+    )
+    _git_commit(
+        observed["remote_peeled_commit"],
+        "durable publication receipt remote peeled commit",
+    )
+    if (
+        observed["schema_version"]
+        != (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-receipt-v1"
+        )
+        or observed["receipt_verifier_id"]
+        != (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-receipt-verifier-v1"
+        )
+        or observed["contract_version"] != CONTRACT_VERSION
+        or observed["contract_sha256"] != CONTRACT_SHA256
+        or observed["implementation_manifest_sha256"]
+        != implementation_manifest["implementation_manifest_sha256"]
+        or observed["implementation_commit"]
+        != implementation_manifest["implementation_commit"]
+        or observed["store_instance_id"]
+        != publication_intent["store_instance_id"]
+        or observed["attempt_id"] != attempt_plan["attempt_id"]
+        or observed["publication_intent_sha256"]
+        != publication_intent["publication_intent_sha256"]
+        or observed["publication_intent_store_receipt_sha256"]
+        != canonical_sha256(publication_intent_store_receipt)
+        or observed["external_publication_sha256"]
+        != publication["publication_sha256"]
+        or observed["remote_tag_object_sha1"]
+        != publication["remote_tag_object_sha1"]
+        or observed["remote_peeled_commit"]
+        != publication["remote_peeled_commit"]
+        or type(observed["pre_receipt_store_journal_sequence"]) is not int
+        or observed["pre_receipt_store_journal_sequence"] < 1
+        or observed["receipt_status"] != "publication_verified"
+        or observed["publication_capability_invalidated"] is not True
+        or observed["terminalization_capability_required"] is not True
+        or canonical_sha256(body) != receipt_sha256
+        or store_receipt["table"] != "publication_receipts"
+        or store_receipt["attempt_id"] != attempt_plan["attempt_id"]
+        or store_receipt["payload_sha256"] != canonical_sha256(observed)
+    ):
+        raise SecGemmaOnlineRiskOverlayAttemptError(
+            "Durable publication receipt lost its exact intent or remote binding"
+        )
+    return observed, store_receipt, publication, external_publication
 
 
 def _validate_publication_binding(
@@ -1826,7 +2095,7 @@ def _acquisition_report_payload(
         or observed["validation_sha256"] != canonical_sha256(body)
     ):
         raise SecGemmaOnlineRiskOverlayAttemptError(
-            "Acquisition validation is not an exact v2.1 pass"
+            "Acquisition validation is not an exact v2.2 pass"
         )
     return observed
 
@@ -1980,7 +2249,8 @@ class VerifiedAcquisitionTerminalEvidence:
         "_canonical_bytes",
         "_artifact_payload_bytes",
         "_artifact_receipt",
-        "_external_publication",
+        "_publication_intent",
+        "_publication_receipt",
         "_sentinel",
     )
 
@@ -1991,7 +2261,8 @@ class VerifiedAcquisitionTerminalEvidence:
         acquisition_report: Any,
         artifact_payload: Mapping[str, Any],
         artifact_receipt: Any,
-        external_publication: Any,
+        publication_intent: Any,
+        publication_receipt: Any,
         _sentinel: object,
     ) -> None:
         if _sentinel is not _VERIFIED_ACQUISITION_TERMINAL_EVIDENCE_SENTINEL:
@@ -2006,7 +2277,8 @@ class VerifiedAcquisitionTerminalEvidence:
             _mapping(artifact_payload, "acquisition terminal artifact")
         )
         self._artifact_receipt = artifact_receipt
-        self._external_publication = external_publication
+        self._publication_intent = publication_intent
+        self._publication_receipt = publication_receipt
         self._sentinel = _sentinel
 
     @property
@@ -2026,8 +2298,16 @@ class VerifiedAcquisitionTerminalEvidence:
         return self._artifact_receipt
 
     @property
+    def publication_intent(self) -> Any:
+        return self._publication_intent
+
+    @property
+    def publication_receipt(self) -> Any:
+        return self._publication_receipt
+
+    @property
     def external_publication(self) -> Any:
-        return self._external_publication
+        return self._publication_receipt.external_publication
 
     @property
     def terminal_evidence_sha256(self) -> str:
@@ -2044,7 +2324,8 @@ class VerifiedScoredTerminalEvidence:
         "_canonical_bytes",
         "_artifact_payload_bytes",
         "_artifact_receipt",
-        "_external_publication",
+        "_publication_intent",
+        "_publication_receipt",
         "_sentinel",
     )
 
@@ -2054,7 +2335,8 @@ class VerifiedScoredTerminalEvidence:
         evidence: Mapping[str, Any],
         artifact_payload: Mapping[str, Any],
         artifact_receipt: Any,
-        external_publication: Any,
+        publication_intent: Any,
+        publication_receipt: Any,
         _sentinel: object,
     ) -> None:
         if _sentinel is not _VERIFIED_SCORED_TERMINAL_EVIDENCE_SENTINEL:
@@ -2068,7 +2350,8 @@ class VerifiedScoredTerminalEvidence:
             _mapping(artifact_payload, "scored terminal artifact")
         )
         self._artifact_receipt = artifact_receipt
-        self._external_publication = external_publication
+        self._publication_intent = publication_intent
+        self._publication_receipt = publication_receipt
         self._sentinel = _sentinel
 
     @property
@@ -2084,8 +2367,16 @@ class VerifiedScoredTerminalEvidence:
         return self._artifact_receipt
 
     @property
+    def publication_intent(self) -> Any:
+        return self._publication_intent
+
+    @property
+    def publication_receipt(self) -> Any:
+        return self._publication_receipt
+
+    @property
     def external_publication(self) -> Any:
-        return self._external_publication
+        return self._publication_receipt.external_publication
 
     @property
     def terminal_evidence_sha256(self) -> str:
@@ -2102,7 +2393,8 @@ def issue_verified_acquisition_terminal_evidence(
     acquisition_report: Any,
     report_material: Mapping[str, Any],
     acquisition_artifact_receipt: Any,
-    external_publication: Any,
+    publication_intent: Any,
+    publication_receipt: Any,
 ) -> VerifiedAcquisitionTerminalEvidence:
     implementation = validate_implementation_manifest(
         implementation_manifest
@@ -2135,13 +2427,29 @@ def issue_verified_acquisition_terminal_evidence(
         raise SecGemmaOnlineRiskOverlayAttemptError(
             "Acquisition terminal material crossed its plan or stored artifact"
         )
-    publication = _validate_publication_binding(
-        external_publication,
+    artifact_receipt_sha256 = canonical_sha256(receipt)
+    intent, intent_store_receipt = _publication_intent_binding(
+        publication_intent,
         implementation_manifest=implementation,
-        attempt_id=plan["attempt_id"],
+        attempt_plan=plan,
         terminal_status=TERMINAL_PASS,
         report_kind="acquisition_pass",
         artifact_sha256=report["validation_sha256"],
+        artifact_store_receipt_sha256=artifact_receipt_sha256,
+        record_counts=material["record_counts"],
+        record_commitment_sha256=material["record_commitment_sha256"],
+    )
+    durable_receipt, durable_store_receipt, publication, _external = (
+        _durable_publication_binding(
+            publication_receipt,
+            implementation_manifest=implementation,
+            attempt_plan=plan,
+            terminal_status=TERMINAL_PASS,
+            report_kind="acquisition_pass",
+            artifact_sha256=report["validation_sha256"],
+            publication_intent=intent,
+            publication_intent_store_receipt=intent_store_receipt,
+        )
     )
     body = {
         "schema_version": ACQUISITION_TERMINAL_EVIDENCE_SCHEMA_VERSION,
@@ -2160,7 +2468,17 @@ def issue_verified_acquisition_terminal_evidence(
         "record_commitment_sha256": material[
             "record_commitment_sha256"
         ],
-        "acquisition_artifact_receipt_sha256": canonical_sha256(receipt),
+        "acquisition_artifact_receipt_sha256": artifact_receipt_sha256,
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "publication_intent_store_receipt_sha256": canonical_sha256(
+            intent_store_receipt
+        ),
+        "publication_receipt_sha256": durable_receipt[
+            "publication_receipt_sha256"
+        ],
+        "publication_receipt_store_receipt_sha256": canonical_sha256(
+            durable_store_receipt
+        ),
         "external_publication_sha256": publication["publication_sha256"],
     }
     evidence = {
@@ -2177,7 +2495,8 @@ def issue_verified_acquisition_terminal_evidence(
         acquisition_report=acquisition_report,
         artifact_payload=report,
         artifact_receipt=acquisition_artifact_receipt,
-        external_publication=external_publication,
+        publication_intent=publication_intent,
+        publication_receipt=publication_receipt,
         _sentinel=_VERIFIED_ACQUISITION_TERMINAL_EVIDENCE_SENTINEL,
     )
 
@@ -2190,7 +2509,8 @@ def issue_verified_scored_terminal_evidence(
     report_material: Mapping[str, Any],
     joint_artifact_receipt: Any,
     gate_checks: Mapping[str, bool],
-    external_publication: Any,
+    publication_intent: Any,
+    publication_receipt: Any,
 ) -> VerifiedScoredTerminalEvidence:
     implementation = validate_implementation_manifest(
         implementation_manifest
@@ -2224,13 +2544,29 @@ def issue_verified_scored_terminal_evidence(
     terminal_status = TERMINAL_PASS if not failed else TERMINAL_FAIL
     verdict = "pass" if not failed else "failed_gate"
     report_kind = "scored_pass" if not failed else "scored_failed_gate"
-    publication = _validate_publication_binding(
-        external_publication,
+    artifact_receipt_sha256 = canonical_sha256(receipt)
+    intent, intent_store_receipt = _publication_intent_binding(
+        publication_intent,
         implementation_manifest=implementation,
-        attempt_id=plan["attempt_id"],
+        attempt_plan=plan,
         terminal_status=terminal_status,
         report_kind=report_kind,
         artifact_sha256=joint["joint_stage_report_sha256"],
+        artifact_store_receipt_sha256=artifact_receipt_sha256,
+        record_counts=material["record_counts"],
+        record_commitment_sha256=material["record_commitment_sha256"],
+    )
+    durable_receipt, durable_store_receipt, publication, _external = (
+        _durable_publication_binding(
+            publication_receipt,
+            implementation_manifest=implementation,
+            attempt_plan=plan,
+            terminal_status=terminal_status,
+            report_kind=report_kind,
+            artifact_sha256=joint["joint_stage_report_sha256"],
+            publication_intent=intent,
+            publication_intent_store_receipt=intent_store_receipt,
+        )
     )
     body = {
         "schema_version": SCORED_TERMINAL_EVIDENCE_SCHEMA_VERSION,
@@ -2262,10 +2598,20 @@ def issue_verified_scored_terminal_evidence(
         "record_commitment_sha256": material[
             "record_commitment_sha256"
         ],
-        "joint_artifact_receipt_sha256": canonical_sha256(receipt),
+        "joint_artifact_receipt_sha256": artifact_receipt_sha256,
         "gate_checks": supplied_checks,
         "gate_check_set_sha256": canonical_sha256(supplied_checks),
         "failed_gate_names": failed,
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "publication_intent_store_receipt_sha256": canonical_sha256(
+            intent_store_receipt
+        ),
+        "publication_receipt_sha256": durable_receipt[
+            "publication_receipt_sha256"
+        ],
+        "publication_receipt_store_receipt_sha256": canonical_sha256(
+            durable_store_receipt
+        ),
         "external_publication_sha256": publication["publication_sha256"],
     }
     evidence = {
@@ -2281,7 +2627,8 @@ def issue_verified_scored_terminal_evidence(
         evidence=evidence,
         artifact_payload=joint["joint_stage_report"],
         artifact_receipt=joint_artifact_receipt,
-        external_publication=external_publication,
+        publication_intent=publication_intent,
+        publication_receipt=publication_receipt,
         _sentinel=_VERIFIED_SCORED_TERMINAL_EVIDENCE_SENTINEL,
     )
 
@@ -2321,13 +2668,34 @@ def validate_acquisition_terminal_evidence(
         value.artifact_payload, require_opaque=False
     )
     receipt = store_record_receipt_material(value.artifact_receipt)
-    publication = _validate_publication_binding(
-        value.external_publication,
+    artifact_receipt_sha256 = canonical_sha256(receipt)
+    intent_raw = value.publication_intent.as_dict()
+    intent_counts = _record_counts(
+        intent_raw.get("record_counts"),
+        "acquisition publication intent record counts",
+    )
+    intent, intent_store_receipt = _publication_intent_binding(
+        value.publication_intent,
         implementation_manifest=implementation,
-        attempt_id=plan["attempt_id"],
+        attempt_plan=plan,
         terminal_status=TERMINAL_PASS,
         report_kind="acquisition_pass",
         artifact_sha256=artifact["validation_sha256"],
+        artifact_store_receipt_sha256=artifact_receipt_sha256,
+        record_counts=intent_counts,
+        record_commitment_sha256=observed["record_commitment_sha256"],
+    )
+    durable_receipt, durable_store_receipt, publication, _external = (
+        _durable_publication_binding(
+            value.publication_receipt,
+            implementation_manifest=implementation,
+            attempt_plan=plan,
+            terminal_status=TERMINAL_PASS,
+            report_kind="acquisition_pass",
+            artifact_sha256=artifact["validation_sha256"],
+            publication_intent=intent,
+            publication_intent_store_receipt=intent_store_receipt,
+        )
     )
     if (
         plan["attempt_kind"] != DEVELOPMENT_ACQUISITION
@@ -2353,7 +2721,15 @@ def validate_acquisition_terminal_evidence(
         or receipt["attempt_id"] != plan["attempt_id"]
         or receipt["payload_sha256"] != canonical_sha256(artifact)
         or observed["acquisition_artifact_receipt_sha256"]
-        != canonical_sha256(receipt)
+        != artifact_receipt_sha256
+        or observed["publication_intent_sha256"]
+        != intent["publication_intent_sha256"]
+        or observed["publication_intent_store_receipt_sha256"]
+        != canonical_sha256(intent_store_receipt)
+        or observed["publication_receipt_sha256"]
+        != durable_receipt["publication_receipt_sha256"]
+        or observed["publication_receipt_store_receipt_sha256"]
+        != canonical_sha256(durable_store_receipt)
         or observed["external_publication_sha256"]
         != publication["publication_sha256"]
     ):
@@ -2397,18 +2773,34 @@ def validate_scored_terminal_evidence(
     )
     joint = _scored_joint_material(value.artifact_payload, plan=plan)
     receipt = store_record_receipt_material(value.artifact_receipt)
+    artifact_receipt_sha256 = canonical_sha256(receipt)
     checks = _stage_gate_checks(observed["stage"], observed["gate_checks"])
     failed = [name for name in _CONTRACT_GATES[observed["stage"]] if not checks[name]]
     terminal_status = TERMINAL_PASS if not failed else TERMINAL_FAIL
     verdict = "pass" if not failed else "failed_gate"
     report_kind = "scored_pass" if not failed else "scored_failed_gate"
-    publication = _validate_publication_binding(
-        value.external_publication,
+    intent, intent_store_receipt = _publication_intent_binding(
+        value.publication_intent,
         implementation_manifest=implementation,
-        attempt_id=plan["attempt_id"],
+        attempt_plan=plan,
         terminal_status=terminal_status,
         report_kind=report_kind,
         artifact_sha256=joint["joint_stage_report_sha256"],
+        artifact_store_receipt_sha256=artifact_receipt_sha256,
+        record_counts=observed["record_counts"],
+        record_commitment_sha256=observed["record_commitment_sha256"],
+    )
+    durable_receipt, durable_store_receipt, publication, _external = (
+        _durable_publication_binding(
+            value.publication_receipt,
+            implementation_manifest=implementation,
+            attempt_plan=plan,
+            terminal_status=terminal_status,
+            report_kind=report_kind,
+            artifact_sha256=joint["joint_stage_report_sha256"],
+            publication_intent=intent,
+            publication_intent_store_receipt=intent_store_receipt,
+        )
     )
     if (
         observed["schema_version"]
@@ -2441,10 +2833,18 @@ def validate_scored_terminal_evidence(
         or receipt["payload_sha256"]
         != canonical_sha256(joint["joint_stage_report"])
         or observed["joint_artifact_receipt_sha256"]
-        != canonical_sha256(receipt)
+        != artifact_receipt_sha256
         or checks != joint["gate_checks"]
         or observed["gate_check_set_sha256"] != canonical_sha256(checks)
         or observed["failed_gate_names"] != failed
+        or observed["publication_intent_sha256"]
+        != intent["publication_intent_sha256"]
+        or observed["publication_intent_store_receipt_sha256"]
+        != canonical_sha256(intent_store_receipt)
+        or observed["publication_receipt_sha256"]
+        != durable_receipt["publication_receipt_sha256"]
+        or observed["publication_receipt_store_receipt_sha256"]
+        != canonical_sha256(durable_store_receipt)
         or observed["external_publication_sha256"]
         != publication["publication_sha256"]
     ):

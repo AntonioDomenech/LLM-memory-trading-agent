@@ -678,31 +678,47 @@ load_allowed_requests()
     assert not marker.exists()
 
 
-def test_allowed_requests_loader_rejects_preloaded_chardet() -> None:
+def test_allowed_requests_loader_isolates_preloaded_chardet() -> None:
     result = _isolated_python(
         """
+import sys
 import chardet
+ambient_chardet = chardet
 from agent_benchmark.sec_gemma_online_risk_overlay_source_verifier import load_allowed_requests
-load_allowed_requests()
+requests = load_allowed_requests()
+assert ambient_chardet.__name__ == "chardet"
+assert requests.compat.chardet.__name__ == "charset_normalizer"
+assert sys.modules["requests"] is requests
+assert not any(
+    name == "chardet" or name.startswith("chardet.")
+    for name in sys.modules
+)
 """
     )
 
-    assert result.returncode != 0
-    assert "Chardet was loaded before" in result.stderr
+    assert result.returncode == 0, result.stderr
 
 
-def test_allowed_requests_loader_rejects_preloaded_wrong_requests() -> None:
+def test_allowed_requests_loader_replaces_preloaded_wrong_requests() -> None:
     result = _isolated_python(
         """
+import sys
 import requests
 assert requests.compat.chardet.__name__ == "chardet"
+ambient_requests = requests
 from agent_benchmark.sec_gemma_online_risk_overlay_source_verifier import load_allowed_requests
-load_allowed_requests()
+verified_requests = load_allowed_requests()
+assert verified_requests is not ambient_requests
+assert sys.modules["requests"] is verified_requests
+assert verified_requests.compat.chardet.__name__ == "charset_normalizer"
+assert not any(
+    name == "chardet" or name.startswith("chardet.")
+    for name in sys.modules
+)
 """
     )
 
-    assert result.returncode != 0
-    assert "Chardet was loaded before" in result.stderr
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -733,10 +749,37 @@ assert not any(
 
 def test_allowed_requests_loader_is_idempotent() -> None:
     first = load_allowed_requests()
+    import chardet
+
     second = load_allowed_requests()
 
     assert first is second
     assert first.compat.chardet.__name__ == "charset_normalizer"
+    assert chardet.__name__ == "chardet"
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "agent_benchmark.sec_gemma_online_risk_overlay_acquisition",
+        "agent_benchmark.sec_gemma_online_risk_overlay_production",
+    ],
+)
+def test_production_module_import_is_independent_of_ambient_requests_order(
+    module_name: str,
+) -> None:
+    result = _isolated_python(
+        f"""
+import importlib
+import requests as ambient_requests
+assert ambient_requests.compat.chardet.__name__ == "chardet"
+module = importlib.import_module({module_name!r})
+assert module.requests is not ambient_requests
+assert module.requests.compat.chardet.__name__ == "charset_normalizer"
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_preregistration_must_be_an_ancestor(

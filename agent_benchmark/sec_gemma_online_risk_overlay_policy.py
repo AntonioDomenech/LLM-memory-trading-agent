@@ -19,16 +19,16 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
 
 
 POLICY_REPLAY_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-policy-replay-v2"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-policy-replay-v2"
 )
 POLICY_ACTION_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-policy-action-row-v2"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-policy-action-row-v2"
 )
 POLICY_OVERLAY_SCHEDULE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-schedule-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-schedule-row-v1"
 )
 POLICY_PREFIX_OBSERVATION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-prefix-observation-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-prefix-observation-row-v1"
 )
 
 

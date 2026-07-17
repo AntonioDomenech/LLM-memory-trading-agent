@@ -1,4 +1,4 @@
-"""Durable opaque quarantine vault for the SEC/Gemma v2.1 overlay.
+"""Durable opaque quarantine vault for the SEC/Gemma v2.2 overlay.
 
 The vault deliberately has no public raw-read method.  Acquisition code seals
 one exact recursive value and receives an opaque :class:`VaultHandle`; detached
@@ -34,10 +34,10 @@ from agent_benchmark.sec_gemma_online_risk_overlay_store import (
 
 
 VAULT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-vault-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-vault-v1"
 )
 VAULT_HANDLE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-vault-handle-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-vault-handle-v1"
 )
 PRODUCTION_VAULT_RELATIVE_PATH: Final[Path] = (
     STATE_RELATIVE_DIRECTORY / "quarantine.sqlite3"

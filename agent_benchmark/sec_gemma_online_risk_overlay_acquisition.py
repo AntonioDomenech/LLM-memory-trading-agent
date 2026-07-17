@@ -113,34 +113,34 @@ from agent_benchmark.sec_session_calendar import (
 
 
 ACQUISITION_PLAN_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-plan-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-plan-v1"
 )
 ACQUISITION_BUNDLE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-bundle-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-bundle-v1"
 )
 ACQUISITION_MANIFEST_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-manifest-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-manifest-v1"
 )
 ACQUISITION_VALIDATION_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-validation-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-validation-v1"
 )
 ACQUISITION_VALIDATION_VERIFIER_ID: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-acquisition-validator-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-acquisition-validator-v1"
 )
 ACQUISITION_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-request-receipt-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-request-receipt-v1"
 )
 BLINDED_MODEL_REQUEST_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-blinded-model-request-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-blinded-model-request-v1"
 )
 STAGE_SLICE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-stage-slice-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-stage-slice-v1"
 )
 ACQUISITION_PUBLIC_SUMMARY_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-public-summary-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-public-summary-v1"
 )
 ACQUISITION_REQUEST_ACCOUNTING_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-request-accounting-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-request-accounting-v1"
 )
 
 DEVELOPMENT: Final[str] = "development"

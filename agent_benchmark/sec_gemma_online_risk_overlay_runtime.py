@@ -29,7 +29,7 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
 
 
 RUNTIME_RECEIPT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-runtime-receipt-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-runtime-receipt-v1"
 )
 OLLAMA_VERSION_RESPONSE_SHA256: Final[str] = (
     "2bd89ec9b983123a225f3df0381c737a45302bb7417e345bf9ef92304e4388cf"

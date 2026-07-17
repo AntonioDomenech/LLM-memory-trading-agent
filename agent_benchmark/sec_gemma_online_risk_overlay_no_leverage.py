@@ -27,13 +27,13 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
 
 
 PROOF_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-no-leverage-proof-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-no-leverage-proof-v1"
 )
 _LEDGER_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-ledger-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-ledger-v1"
 )
 _LEDGER_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-ledger-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-ledger-row-v1"
 )
 _INITIAL_CASH: Final[float] = 1_000.0
 _ALLOWED_COST_BPS: Final[frozenset[int]] = frozenset({5, 10})

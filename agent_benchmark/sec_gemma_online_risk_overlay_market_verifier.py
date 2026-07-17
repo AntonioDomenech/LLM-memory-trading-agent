@@ -46,7 +46,7 @@ MARKET_ANOMALY_VERIFIER_RECEIPT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-online-overlay-market-anomaly-verifier-v1"
 )
 MARKET_UNAVAILABLE_PROOF_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-market-unavailable-proof-v2"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-market-unavailable-proof-v2"
 )
 
 MARKET_SYMBOLS: Final[tuple[str, ...]] = (

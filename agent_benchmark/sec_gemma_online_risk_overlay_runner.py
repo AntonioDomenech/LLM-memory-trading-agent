@@ -53,11 +53,13 @@ from agent_benchmark.sec_gemma_online_risk_overlay_attempt import (
     build_implementation_manifest,
     issue_verified_acquisition_terminal_evidence,
     issue_verified_scored_terminal_evidence,
+    store_record_receipt_material,
     validate_attempt_history,
     validate_attempt_plan,
     validate_implementation_manifest,
 )
 from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
+    ACQUISITION_TERMINAL_RECONSTRUCTION_FIELDS,
     CONTRACT_SHA256,
     CONTRACT_VERSION,
     DEVELOPMENT_BLOCKS,
@@ -65,11 +67,21 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
     MAX_MARKET_REQUESTS_PER_STAGE,
     MAX_MARKET_SECONDS,
     MAX_MODEL_SECONDS,
+    MAX_PUBLICATION_RECOVERY_SECONDS,
     MAX_SEC_BYTES,
     MAX_SEC_REQUESTS,
     MAX_SEC_SECONDS,
     MAX_TOTAL_RUNTIME_SECONDS,
     ACQUISITION_TERMINAL_EVIDENCE_FIELDS,
+    PUBLICATION_NORMAL_NO_RECOVERY_COMPLETION_SHA256,
+    PUBLICATION_NORMAL_OPERATION_SHA256,
+    PUBLICATION_NO_PRIOR_PUSH_COMMAND_SHA256,
+    PUBLICATION_RECOVERY_COMPLETION_GENESIS_SHA256,
+    PUBLICATION_RECOVERY_INVOCATION_COMPLETION_FIELDS,
+    PUBLICATION_RECOVERY_INVOCATION_START_FIELDS,
+    PUBLICATION_RECOVERY_NO_REMOTE_OBSERVATION_SHA256,
+    PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256,
+    SCORED_TERMINAL_RECONSTRUCTION_FIELDS,
     SCORED_TERMINAL_EVIDENCE_FIELDS,
     build_contract_manifest,
     canonical_sha256,
@@ -98,15 +110,33 @@ from agent_benchmark.sec_gemma_online_risk_overlay_runtime import (
 from agent_benchmark.sec_gemma_online_risk_overlay_source_verifier import (
     verify_live_source_tree,
 )
+from agent_benchmark.sec_gemma_online_risk_overlay_store import (
+    pre_push_authorization_material,
+    publication_intent_material,
+    remote_observation_material,
+    transport_manifest_material,
+    worker_ownership_material,
+)
 from agent_benchmark.sec_gemma_online_risk_overlay_publisher import (
     ACQUISITION_PASS,
+    NORMAL_PUBLICATION,
+    POST_PUSH,
+    PRE_PUSH,
+    PUBLICATION_RECOVERY,
     PUBLICATION_GENESIS_SHA256,
     SCORED_FAILED_GATE,
     SCORED_PASS,
     TERMINAL_FAIL as PUBLICATION_TERMINAL_FAIL,
     TERMINAL_PASS as PUBLICATION_TERMINAL_PASS,
+    ExternalGitTagPublisher,
+    PreparedExternalPublication,
+    PreparedPublicationTransport,
     VerifiedExternalPublication,
     is_verified_external_publication,
+    issue_verified_external_publication_from_observation,
+    prepare_external_publication,
+    prepare_isolated_publication_transport,
+    reconstruct_prepared_external_publication,
     validate_external_publication,
 )
 from agent_benchmark.sec_gemma_online_risk_overlay_registry import (
@@ -116,16 +146,16 @@ from agent_benchmark.sec_gemma_online_risk_overlay_registry import (
 
 
 RUNNER_PLAN_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-runner-plan-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-runner-plan-v1"
 )
 PHASE_OUTPUT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-phase-output-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-phase-output-v1"
 )
 PHASE_BUDGET_REPORT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-phase-budget-report-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-phase-budget-report-v1"
 )
 STAGE_INPUT_BUNDLE_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-stage-input-bundle-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-stage-input-bundle-v1"
 )
 DETERMINISTIC_EVALUATION_SCHEMA_VERSION: Final[str] = (
     ATTEMPT_EVALUATION_SCHEMA
@@ -134,10 +164,10 @@ JOINT_STAGE_REPORT_SCHEMA_VERSION: Final[str] = (
     ATTEMPT_JOINT_SCHEMA
 )
 SEALED_STAGE_RESULT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-sealed-stage-result-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-sealed-stage-result-v1"
 )
 VERIFY_RESULT_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-verify-result-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-verify-result-v1"
 )
 
 LOCAL_PREFLIGHT: Final[str] = "local_preflight"
@@ -170,6 +200,10 @@ _SCORING_COMMANDS: Final[frozenset[str]] = frozenset(
     _COMMAND_TO_METRIC_STAGE
 )
 _EFFECTFUL_COMMANDS: Final[frozenset[str]] = frozenset(_COMMAND_TO_KIND)
+_ATTEMPT_ID_TO_COMMAND: Final[dict[str, str]] = {
+    ATTEMPT_ID_BY_KIND[kind]: command
+    for command, kind in _COMMAND_TO_KIND.items()
+}
 
 _PHASES: Final[dict[str, tuple[str, ...]]] = {
     LOCAL_PREFLIGHT: ("runtime_identity",),
@@ -225,6 +259,10 @@ _GOVERNANCE_CONTINGENCY_SECONDS: Final[int] = (
     - MAX_DETERMINISTIC_SECONDS
     - 1
 )
+_INTENT_PREPARATION_SECONDS: Final[int] = 89
+_NORMAL_PUBLICATION_SECONDS: Final[int] = 90
+_TERMINAL_FINALIZATION_SECONDS: Final[int] = 60
+_PUBLICATION_QUIESCENCE_RESERVE_SECONDS: Final[float] = 15.0
 _MODEL_CALL_CAPS: Final[dict[str, int]] = {
     DEVELOPMENT_COMMAND: 80,
     CONFIRMATION_COMMAND: 20,
@@ -296,6 +334,12 @@ class SecGemmaOnlineRiskOverlayRunnerIndeterminate(
 
 
 class StageStore(Protocol):
+    @property
+    def store_instance_id(self) -> str: ...
+
+    @property
+    def store_session_nonce_sha256(self) -> str: ...
+
     def register_attempt(self, attempt_plan: Mapping[str, Any]) -> Any: ...
 
     def consume_attempt(self, attempt_id: str) -> Any: ...
@@ -364,6 +408,131 @@ class StageStore(Protocol):
         self, attempt_id: str
     ) -> Mapping[str, Any]: ...
 
+    def commit_terminal_reconstruction_material(
+        self, capability: Any, material: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_publication_intent(
+        self, capability: Any, intent: Mapping[str, Any]
+    ) -> Any: ...
+
+    def attempt_plan(self, attempt_id: str) -> Mapping[str, Any]: ...
+
+    def governance_records(
+        self, table: str, *, attempt_id: str | None = None
+    ) -> list[dict[str, Any]]: ...
+
+    def terminal_reconstruction_authority(
+        self, attempt_id: str
+    ) -> Any: ...
+
+    def publication_intent_authority(
+        self, attempt_id: str
+    ) -> Any: ...
+
+    def publication_receipt_authority(
+        self, attempt_id: str, external_publication: Any
+    ) -> Any: ...
+
+    def remote_observation_authority(
+        self, attempt_id: str, remote_observation_sha256: str
+    ) -> Any: ...
+
+    def publication_worker_ownership_authority(
+        self, attempt_id: str, worker_ownership_sha256: str
+    ) -> Any: ...
+
+    def pre_push_authorization_authority(
+        self, attempt_id: str, pre_push_authorization_sha256: str
+    ) -> Any: ...
+
+    def recovery_completion_authority(
+        self,
+        attempt_id: str,
+        recovery_invocation_completion_sha256: str,
+    ) -> Any: ...
+
+    def reconcile_publication_recovery_state(
+        self, attempt_id: str
+    ) -> None: ...
+
+    def terminalization_claim_authority(
+        self, attempt_id: str
+    ) -> Any: ...
+
+    def terminal_artifact_payload_and_receipt(
+        self, attempt_id: str
+    ) -> tuple[dict[str, Any], Any]: ...
+
+    def pending_acquisition_phase_evidence(
+        self, attempt_id: str
+    ) -> dict[str, Any]: ...
+
+    def issue_publication_recovery_capability(
+        self,
+        attempt_id: str,
+        *,
+        operation_kind: str,
+        operation_sha256: str | None = None,
+    ) -> Any: ...
+
+    def commit_recovery_start(
+        self, capability: Any, start: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_transport_manifest(
+        self, capability: Any, manifest: Mapping[str, Any]
+    ) -> Any: ...
+
+    def claim_publication_worker_ownership(
+        self, capability: Any, ownership: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_worker_quiescence(
+        self, capability: Any, quiescence: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_remote_observation(
+        self,
+        capability: Any,
+        readback_evidence: Mapping[str, Any],
+        observation: Mapping[str, Any],
+    ) -> Any: ...
+
+    def commit_pre_push_authorization(
+        self, capability: Any, authorization: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_publication_conflict(
+        self, capability: Any, conflict: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_recovery_completion(
+        self, capability: Any, completion: Mapping[str, Any]
+    ) -> Any: ...
+
+    def commit_publication_receipt(
+        self,
+        capability: Any,
+        receipt: Mapping[str, Any],
+        external_publication: Any,
+    ) -> Any: ...
+
+    def release_publication_capability(self, capability: Any) -> None: ...
+
+    def issue_terminalization_capability(self, attempt_id: str) -> Any: ...
+
+    def commit_terminalization_claim(
+        self,
+        capability: Any,
+        terminal_evidence: Any,
+        terminal_status: str,
+    ) -> Any: ...
+
+    def complete_terminalized_attempt(
+        self, claim: Any, verified_terminal_evidence: Any
+    ) -> Any: ...
+
     def predecessor_feature_rows(
         self, stage: str
     ) -> list[dict[str, Any]]: ...
@@ -423,16 +592,110 @@ class AcquisitionAdapter(Protocol):
 
 
 class ExternalReportPublisher(Protocol):
-    def publish(
+    def read_remote(
         self,
         *,
+        prepared_publication: PreparedExternalPublication,
+        transport: PreparedPublicationTransport,
+        durable_transport_manifest: Any,
+        transport_manifest_validator: Callable[
+            [Any], Mapping[str, Any]
+        ],
+        worker_ownership: Any,
+        worker_ownership_validator: Callable[
+            [Any], Mapping[str, Any]
+        ],
+        store_instance_id: str,
+        store_session_nonce_sha256: str,
+        publication_intent_sha256: str,
+        operation_kind: str,
+        operation_sha256: str,
+        observation_ordinal: int,
+        observation_phase: str,
+        prior_push_command_sha256: str,
+        pre_observation_store_journal_sequence: int,
+        pre_observation_store_journal_tip_sha256: str,
+        timeout_seconds: float,
+    ) -> Any: ...
+
+    def push_once(
+        self,
+        *,
+        prepared_publication: PreparedExternalPublication,
+        transport: PreparedPublicationTransport,
+        pre_push_authorization: Any,
+        authorization_validator: Callable[
+            [Any], Mapping[str, Any]
+        ],
+        absent_remote_observation: Any,
+        observation_validator: Callable[
+            [Any], Mapping[str, Any]
+        ],
+        timeout_seconds: float,
+    ) -> Any: ...
+
+
+class PublicationWorkerHandle(Protocol):
+    @property
+    def transport_root(self) -> Path: ...
+
+    @property
+    def source_object_directory(self) -> Path: ...
+
+    @property
+    def executable_pins(self) -> Mapping[str, Any]: ...
+
+    @property
+    def host_environment_values(self) -> Mapping[str, str]: ...
+
+    @property
+    def ownership_material(self) -> Mapping[str, Any]: ...
+
+    def verify_executable_pins(
+        self, pins: Mapping[str, Any]
+    ) -> None: ...
+
+    def abort_uncommitted(self) -> None: ...
+
+    def quiesce(
+        self, *, worker_ownership_sha256: str
+    ) -> Mapping[str, Any]: ...
+
+
+class PublicationWorkerRuntime(Protocol):
+    def begin(
+        self,
+        *,
+        implementation_manifest: Mapping[str, Any],
+        store_instance_id: str,
+        store_session_nonce_sha256: str,
         attempt_id: str,
-        terminal_status: str,
-        report_kind: str,
-        artifact_sha256: str,
-        predecessor_publication_sha256: str,
-        deadline_monotonic: float,
-    ) -> VerifiedExternalPublication: ...
+        publication_intent_sha256: str,
+        operation_kind: str,
+        operation_sha256: str,
+    ) -> PublicationWorkerHandle: ...
+
+
+class SupervisedPublicationRecoveryWorkerAuthority(Protocol):
+    """Opaque proof that this runner is executing in the supervised child.
+
+    The production implementation binds this authority to the verified source
+    tree, the identity-equal production composition, one preregistered attempt,
+    the isolated worker process, and the supervisor's original deadline.  The
+    returned supervisor window includes outer spawn and bootstrap time and may
+    tighten, but never extend, the worker's local 300-second deadline.
+    """
+
+    def authorize_runner_recovery(
+        self,
+        *,
+        repo_root: Path,
+        implementation_manifest: Mapping[str, Any],
+        production_authorities: Any,
+        attempt_id: str,
+        worker_entry_monotonic: float,
+        worker_deadline_monotonic: float,
+    ) -> tuple[float, float]: ...
 
 
 class FinalRegistryAuthority(Protocol):
@@ -2352,22 +2615,56 @@ def _extend_deterministic_phase_receipt(
     return fixed
 
 
-def _terminal_budget_deadline(
+@dataclass(frozen=True, slots=True)
+class _GovernanceDeadlines:
+    intent_prepare: float
+    publication: float
+    finalization: float
+
+
+def _governance_deadlines(
     *,
     start: float,
     strict_parent_deadline: float,
     receipts: Sequence[Mapping[str, Any]],
-) -> float:
+) -> _GovernanceDeadlines:
     phase_elapsed = _receipt_elapsed_seconds(receipts)
-    conservative = (
-        start + phase_elapsed + _GOVERNANCE_CONTINGENCY_SECONDS
+    governance_start = start + phase_elapsed
+    intent_prepare = min(
+        strict_parent_deadline,
+        governance_start + _INTENT_PREPARATION_SECONDS,
     )
-    deadline = min(strict_parent_deadline, conservative)
-    if deadline <= start or deadline - start >= MAX_TOTAL_RUNTIME_SECONDS:
+    publication = min(
+        strict_parent_deadline,
+        governance_start
+        + _INTENT_PREPARATION_SECONDS
+        + _NORMAL_PUBLICATION_SECONDS,
+    )
+    finalization = min(
+        strict_parent_deadline,
+        governance_start
+        + _INTENT_PREPARATION_SECONDS
+        + _NORMAL_PUBLICATION_SECONDS
+        + _TERMINAL_FINALIZATION_SECONDS,
+    )
+    if (
+        _INTENT_PREPARATION_SECONDS
+        + _NORMAL_PUBLICATION_SECONDS
+        + _TERMINAL_FINALIZATION_SECONDS
+        != _GOVERNANCE_CONTINGENCY_SECONDS
+        or intent_prepare <= governance_start
+        or publication <= intent_prepare
+        or finalization <= publication
+        or finalization - start >= MAX_TOTAL_RUNTIME_SECONDS
+    ):
         raise SecGemmaOnlineRiskOverlayRunnerIndeterminate(
-            "Conservative terminal budget is outside the frozen parent cap"
+            "Governance partition deadlines are outside the frozen parent cap"
         )
-    return deadline
+    return _GovernanceDeadlines(
+        intent_prepare=intent_prepare,
+        publication=publication,
+        finalization=finalization,
+    )
 
 
 def _budget_report(
@@ -2485,6 +2782,36 @@ def _receipt_dict(value: Any) -> dict[str, Any]:
     return result
 
 
+def _with_self_hash(
+    body: Mapping[str, Any], hash_field: str
+) -> dict[str, Any]:
+    fixed = copy.deepcopy(dict(body))
+    if hash_field in fixed:
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            f"{hash_field} must not be caller supplied"
+        )
+    return {**fixed, hash_field: canonical_sha256(fixed)}
+
+
+def _receipt_sha256(value: Any) -> str:
+    try:
+        material = store_record_receipt_material(value)
+    except Exception as exc:
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Store receipt authority changed"
+        ) from exc
+    return canonical_sha256(material)
+
+
+def _opaque_material(value: Any) -> dict[str, Any]:
+    method = getattr(value, "as_dict", None)
+    if not callable(method):
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Opaque durable authority exposes no validated material"
+        )
+    return _mapping(method(), "opaque durable authority")
+
+
 def _append_phase_evidence(
     *,
     store: StageStore,
@@ -2493,8 +2820,9 @@ def _append_phase_evidence(
     phase_outputs: Mapping[str, Mapping[str, Any]],
     phase_receipts: Sequence[Mapping[str, Any]],
     runtime_receipt: Mapping[str, Any] | None,
-) -> None:
+) -> dict[str, dict[str, Any]]:
     by_phase = {item["phase"]: item for item in phase_receipts}
+    persisted: dict[str, dict[str, Any]] = {}
     attempt_id = _identity(
         getattr(capability, "attempt_id", None),
         "phase evidence attempt",
@@ -2532,12 +2860,18 @@ def _append_phase_evidence(
             )
         if phase == "runtime_identity":
             evidence["runtime_receipt"] = copy.deepcopy(runtime_receipt)
-        store.append_evidence(
+        receipt = store.append_evidence(
             capability=capability,
             effect=effect,
             identity=f"phase:{attempt_id}:{phase}",
             payload=evidence,
         )
+        persisted[phase] = {
+            "payload": copy.deepcopy(evidence),
+            "payload_sha256": canonical_sha256(evidence),
+            "store_receipt_sha256": _receipt_sha256(receipt),
+        }
+    return persisted
 
 
 def _iter_predictions(
@@ -2707,6 +3041,682 @@ def _joint_report(
         ),
     }
     return {**body, "joint_stage_report_sha256": canonical_sha256(body)}
+
+
+def _build_terminal_reconstruction_material(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_plan: Mapping[str, Any],
+    terminal_status: str,
+    report_kind: str,
+    terminal_artifact: Mapping[str, Any],
+    terminal_artifact_receipt: Any,
+    report_material: Mapping[str, Any],
+    persisted_phase_evidence: Mapping[str, Mapping[str, Any]],
+    acquisition_execution: AcquisitionExecutionResult | None = None,
+    gate_checks: Mapping[str, bool] | None = None,
+) -> dict[str, Any]:
+    implementation = validate_implementation_manifest(
+        implementation_manifest
+    )
+    plan = validate_attempt_plan(
+        attempt_plan,
+        implementation_manifest=implementation,
+    )
+    artifact = _mapping(
+        terminal_artifact, "terminal reconstruction artifact"
+    )
+    receipt = store_record_receipt_material(
+        terminal_artifact_receipt
+    )
+    receipt_sha256 = canonical_sha256(receipt)
+    material = _mapping(
+        report_material, "terminal reconstruction record commitment"
+    )
+    common = {
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": implementation[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": plan["attempt_id"],
+        "attempt_kind": plan["attempt_kind"],
+        "attempt_plan_sha256": plan["attempt_plan_sha256"],
+    }
+    if plan["attempt_kind"] == DEVELOPMENT_ACQUISITION:
+        if report_kind != ACQUISITION_PASS or gate_checks is not None:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Acquisition reconstruction report kind changed"
+            )
+        acquisition_evidence = _mapping(
+            persisted_phase_evidence.get("acquisition"),
+            "sealed acquisition phase evidence",
+        )
+        if acquisition_execution is not None:
+            handle = acquisition_execution.vault_handle
+            seal_sha256 = handle.seal_sha256
+        else:
+            seal_sha256 = canonical_sha256(
+                {
+                    "test_only_acquisition_report_sha256": artifact[
+                        "validation_sha256"
+                    ]
+                }
+            )
+        vault_commitments = {
+            "bundle_sha256": artifact["bundle_sha256"],
+            "manifest_sha256": artifact["manifest_sha256"],
+            "private_index_sha256": artifact[
+                "private_index_sha256"
+            ],
+            "seal_sha256": seal_sha256,
+        }
+        body = {
+            "schema_version": (
+                "sec-gemma-online-risk-overlay-v2-2-"
+                "acquisition-terminal-reconstruction-v1"
+            ),
+            "reconstruction_verifier_id": (
+                "sec-gemma-online-risk-overlay-v2-2-"
+                "runner-terminal-reconstruction-verifier-v1"
+            ),
+            **common,
+            "stage": "development",
+            "terminal_status": terminal_status,
+            "report_kind": report_kind,
+            "terminal_artifact_sha256": receipt["payload_sha256"],
+            "terminal_artifact_store_receipt_sha256": receipt_sha256,
+            "acquisition_validation_sha256": artifact[
+                "validation_sha256"
+            ],
+            "bundle_sha256": artifact["bundle_sha256"],
+            "manifest_sha256": artifact["manifest_sha256"],
+            "private_index_sha256": artifact[
+                "private_index_sha256"
+            ],
+            "check_set_sha256": artifact["check_set_sha256"],
+            "record_counts": copy.deepcopy(
+                material["record_counts"]
+            ),
+            "record_commitment_sha256": material[
+                "record_commitment_sha256"
+            ],
+            "acquisition_artifact_receipt_sha256": receipt_sha256,
+            "sealed_acquisition_phase_evidence_sha256": (
+                canonical_sha256(acquisition_evidence)
+            ),
+            "sealed_vault_commitments_sha256": canonical_sha256(
+                vault_commitments
+            ),
+        }
+        result = _with_self_hash(
+            body, "terminal_reconstruction_material_sha256"
+        )
+        if tuple(result) != ACQUISITION_TERMINAL_RECONSTRUCTION_FIELDS:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Acquisition reconstruction fields changed"
+            )
+        return result
+
+    checks = _mapping(
+        gate_checks, "scored reconstruction gate checks"
+    )
+    evaluation = _mapping(
+        artifact["deterministic_evaluation"],
+        "scored reconstruction deterministic evaluation",
+    )
+    failed = [
+        name for name, passed in checks.items() if passed is not True
+    ]
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "scored-terminal-reconstruction-v1"
+        ),
+        "reconstruction_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "runner-terminal-reconstruction-verifier-v1"
+        ),
+        **common,
+        "stage": artifact["metric_stage"],
+        "terminal_status": terminal_status,
+        "report_kind": report_kind,
+        "terminal_artifact_sha256": receipt["payload_sha256"],
+        "terminal_artifact_store_receipt_sha256": receipt_sha256,
+        "stage_input_bundle_sha256": evaluation[
+            "stage_input_bundle_sha256"
+        ],
+        "deterministic_evaluation_sha256": evaluation[
+            "deterministic_evaluation_sha256"
+        ],
+        "stage_metrics_input_sha256": evaluation[
+            "metrics_input_sha256"
+        ],
+        "stage_metrics_sha256": evaluation["stage_metrics_sha256"],
+        "gate_report_sha256": evaluation["gate_report_sha256"],
+        "no_leverage_proofs_sha256": evaluation[
+            "no_leverage_proofs_sha256"
+        ],
+        "joint_stage_report_sha256": artifact[
+            "joint_stage_report_sha256"
+        ],
+        "joint_artifact_receipt_sha256": receipt_sha256,
+        "record_counts": copy.deepcopy(material["record_counts"]),
+        "record_commitment_sha256": material[
+            "record_commitment_sha256"
+        ],
+        "gate_checks": checks,
+        "gate_check_set_sha256": canonical_sha256(checks),
+        "failed_gate_names": failed,
+    }
+    result = _with_self_hash(
+        body, "terminal_reconstruction_material_sha256"
+    )
+    if tuple(result) != SCORED_TERMINAL_RECONSTRUCTION_FIELDS:
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Scored reconstruction fields changed"
+        )
+    return result
+
+
+def _build_publication_intent(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_plan: Mapping[str, Any],
+    terminal_status: str,
+    report_kind: str,
+    artifact_sha256: str,
+    artifact_receipt: Any,
+    reconstruction: Any,
+    report_material: Mapping[str, Any],
+    elapsed_seconds: float,
+    predecessor_publication_sha256: str,
+    prepared_publication: PreparedExternalPublication,
+) -> dict[str, Any]:
+    snapshot = _mapping(
+        store.snapshot(), "publication intent store snapshot"
+    )
+    reconstruction_material = _opaque_material(reconstruction)
+    prepared = _mapping(
+        prepared_publication.intent_material,
+        "prepared publication intent material",
+    )
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-intent-v1"
+        ),
+        "intent_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-intent-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation_manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": implementation_manifest[
+            "implementation_commit"
+        ],
+        "attempt_id": attempt_plan["attempt_id"],
+        "attempt_kind": attempt_plan["attempt_kind"],
+        "attempt_plan_sha256": attempt_plan["attempt_plan_sha256"],
+        "terminal_status": terminal_status,
+        "report_kind": report_kind,
+        "artifact_sha256": artifact_sha256,
+        "artifact_store_receipt_sha256": _receipt_sha256(
+            artifact_receipt
+        ),
+        "terminal_reconstruction_material_sha256": (
+            reconstruction_material[
+                "terminal_reconstruction_material_sha256"
+            ]
+        ),
+        "terminal_reconstruction_material_store_receipt_sha256": (
+            _receipt_sha256(reconstruction.store_receipt)
+        ),
+        "record_counts": copy.deepcopy(
+            report_material["record_counts"]
+        ),
+        "record_commitment_sha256": report_material[
+            "record_commitment_sha256"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_journal_sequence": snapshot["journal_entry_count"],
+        "store_journal_tip_sha256": snapshot["journal_tip_sha256"],
+        "normal_attempt_elapsed_at_intent_prepare_hex": (
+            elapsed_seconds.hex()
+        ),
+        "predecessor_publication_sha256": (
+            predecessor_publication_sha256
+        ),
+        **prepared,
+        "intent_status": "publication_pending",
+        "research_effect_authority_invalidated": True,
+        "semantic_result_release_blocked": True,
+        "next_stage_authority_blocked": True,
+        "external_cost_usd": 0,
+    }
+    return _with_self_hash(body, "publication_intent_sha256")
+
+
+def _publication_pending_result(
+    *,
+    command: str,
+    attempt_id: str,
+    publication_intent: Any,
+) -> dict[str, Any]:
+    intent = _opaque_material(publication_intent)
+    body = {
+        "schema_version": (
+            "aapl-sec-gemma-online-risk-overlay-v2-2-"
+            "publication-pending-result-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "command": command,
+        "attempt_id": attempt_id,
+        "result_status": "publication_pending",
+        "publication_intent_sha256": intent[
+            "publication_intent_sha256"
+        ],
+        "publication_intent_store_receipt_sha256": _receipt_sha256(
+            publication_intent.store_receipt
+        ),
+        "semantic_result_released": False,
+        "next_stage_authority_blocked": True,
+        "publication_recovery_required": True,
+        "external_cost_usd": 0,
+    }
+    return {
+        **body,
+        "publication_pending_result_sha256": canonical_sha256(body),
+    }
+
+
+def _build_pre_push_authorization(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_id: str,
+    publication_intent_sha256: str,
+    capability: Any,
+    worker_ownership: Any,
+    remote_observation: Any,
+    operation_ordinal: int | None = None,
+) -> dict[str, Any]:
+    owner = _opaque_material(worker_ownership)
+    observation = _opaque_material(remote_observation)
+    if capability.operation_kind == NORMAL_PUBLICATION:
+        fixed_operation_ordinal = 0
+    else:
+        if type(operation_ordinal) is not int or operation_ordinal < 1:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Recovery push authorization requires its exact invocation ordinal"
+            )
+        fixed_operation_ordinal = operation_ordinal
+    marker_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-pre-push-authorization-v1"
+        ),
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": (
+            store.store_session_nonce_sha256
+        ),
+        "attempt_id": attempt_id,
+        "publication_intent_sha256": publication_intent_sha256,
+        "authorization_operation_kind": capability.operation_kind,
+        "authorization_operation_sha256": capability.operation_sha256,
+        "authorization_operation_ordinal": fixed_operation_ordinal,
+        "worker_ownership_sha256": owner[
+            "worker_ownership_sha256"
+        ],
+    }
+    body = {
+        "schema_version": marker_body["schema_version"],
+        "authorization_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-pre-push-authorization-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation_manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": (
+            store.store_session_nonce_sha256
+        ),
+        "attempt_id": attempt_id,
+        "publication_intent_sha256": publication_intent_sha256,
+        "authorization_operation_kind": capability.operation_kind,
+        "authorization_operation_sha256": capability.operation_sha256,
+        "authorization_operation_ordinal": fixed_operation_ordinal,
+        "worker_ownership_sha256": owner[
+            "worker_ownership_sha256"
+        ],
+        "pre_push_authorization_marker_key": canonical_sha256(
+            marker_body
+        ),
+        "remote_observation_sha256": observation[
+            "publication_remote_observation_sha256"
+        ],
+        "tag_ref": observation["tag_ref"],
+        "expected_tag_object_sha1": observation[
+            "expected_tag_object_sha1"
+        ],
+        "authorization_status": "push_authorized_once",
+        "push_command_limit": 1,
+    }
+    return _with_self_hash(body, "pre_push_authorization_sha256")
+
+
+def _build_publication_conflict(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_id: str,
+    publication_intent_sha256: str,
+    capability: Any,
+    worker_ownership: Any,
+    remote_observation: Any,
+) -> dict[str, Any]:
+    owner = _opaque_material(worker_ownership)
+    observation = _opaque_material(remote_observation)
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-conflict-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation_manifest[
+            "implementation_manifest_sha256"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": attempt_id,
+        "publication_intent_sha256": publication_intent_sha256,
+        "observation_operation_kind": capability.operation_kind,
+        "observation_operation_sha256": capability.operation_sha256,
+        "tag_ref": observation["tag_ref"],
+        "remote_observation_sha256": observation[
+            "publication_remote_observation_sha256"
+        ],
+        "conflict_reason": "durable_remote_ref_conflict",
+        "poisoned": True,
+        "prior_governance_record_sha256": owner[
+            "worker_ownership_sha256"
+        ],
+    }
+    return _with_self_hash(body, "publication_conflict_sha256")
+
+
+def _build_publication_receipt(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_id: str,
+    publication_intent: Any,
+    remote_observation: Any,
+    pre_push_authorization: Any | None,
+    external_publication: VerifiedExternalPublication,
+    recovery_completion: Any | None = None,
+) -> dict[str, Any]:
+    snapshot = _mapping(
+        store.snapshot(), "publication receipt store snapshot"
+    )
+    intent = _opaque_material(publication_intent)
+    observation = _opaque_material(remote_observation)
+    publication = external_publication.publication
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-receipt-v1"
+        ),
+        "receipt_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-receipt-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation_manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": attempt_id,
+        "publication_intent_sha256": intent[
+            "publication_intent_sha256"
+        ],
+        "publication_intent_store_receipt_sha256": _receipt_sha256(
+            publication_intent.store_receipt
+        ),
+        "publication_remote_observation_sha256": observation[
+            "publication_remote_observation_sha256"
+        ],
+        "recovery_invocation_completion_sha256": (
+            PUBLICATION_NORMAL_NO_RECOVERY_COMPLETION_SHA256
+            if recovery_completion is None
+            else _opaque_material(recovery_completion)[
+                "recovery_invocation_completion_sha256"
+            ]
+        ),
+        "pre_push_authorization_sha256": (
+            PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256
+            if pre_push_authorization is None
+            else _opaque_material(pre_push_authorization)[
+                "pre_push_authorization_sha256"
+            ]
+        ),
+        "external_publication_sha256": publication[
+            "publication_sha256"
+        ],
+        "remote_tag_object_sha1": publication[
+            "remote_tag_object_sha1"
+        ],
+        "remote_peeled_commit": publication["remote_peeled_commit"],
+        "pre_receipt_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_receipt_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+        "receipt_status": "publication_verified",
+        "publication_capability_invalidated": True,
+        "terminalization_capability_required": True,
+    }
+    return _with_self_hash(body, "publication_receipt_sha256")
+
+
+def _build_publication_recovery_start(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_id: str,
+    publication_intent: Any,
+) -> dict[str, Any]:
+    intent = _opaque_material(publication_intent)
+    starts = store.governance_records(
+        "publication_recovery_invocation_starts",
+        attempt_id=attempt_id,
+    )
+    completions = store.governance_records(
+        "publication_recovery_invocation_completions",
+        attempt_id=attempt_id,
+    )
+    if len(starts) != len(completions):
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Publication recovery start/completion chain was not reconciled"
+        )
+    if completions:
+        prior_completion = completions[-1]
+        prior_completion_sha256 = prior_completion[
+            "recovery_invocation_completion_sha256"
+        ]
+        prior_cumulative = prior_completion[
+            "cumulative_recovery_seconds"
+        ]
+    else:
+        prior_completion_sha256 = (
+            PUBLICATION_RECOVERY_COMPLETION_GENESIS_SHA256
+        )
+        prior_cumulative = "0x0.0p+0"
+    snapshot = _mapping(
+        store.snapshot(), "publication recovery start store snapshot"
+    )
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-start-v1"
+        ),
+        "start_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-start-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation_manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": (
+            store.store_session_nonce_sha256
+        ),
+        "attempt_id": attempt_id,
+        "publication_intent_sha256": intent[
+            "publication_intent_sha256"
+        ],
+        "invocation_ordinal": len(starts) + 1,
+        "prior_recovery_completion_sha256": prior_completion_sha256,
+        "prior_cumulative_recovery_seconds": prior_cumulative,
+        "start_status": "started",
+        "invocation_seconds_cap": MAX_PUBLICATION_RECOVERY_SECONDS,
+        "durable_pre_push_authorization_required": True,
+        "pre_start_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_start_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+    }
+    result = _with_self_hash(
+        body, "recovery_invocation_start_sha256"
+    )
+    if tuple(result) != PUBLICATION_RECOVERY_INVOCATION_START_FIELDS:
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Publication recovery start fields changed"
+        )
+    return result
+
+
+def _build_publication_recovery_completion(
+    *,
+    implementation_manifest: Mapping[str, Any],
+    store: StageStore,
+    attempt_id: str,
+    publication_intent: Any,
+    recovery_start: Any,
+    outcome: str,
+    remote_observation: Any | None,
+    pre_push_authorization: Any | None,
+    push_command_count_upper_bound: int,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    intent = _opaque_material(publication_intent)
+    start = _opaque_material(recovery_start)
+    if (
+        type(elapsed_seconds) not in {int, float}
+        or not math.isfinite(float(elapsed_seconds))
+        or float(elapsed_seconds) < 0.0
+        or float(elapsed_seconds) > MAX_PUBLICATION_RECOVERY_SECONDS
+    ):
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Publication recovery elapsed time exceeded its fixed cap"
+        )
+    elapsed = float(elapsed_seconds)
+    cumulative = (
+        float.fromhex(start["prior_cumulative_recovery_seconds"])
+        + elapsed
+    )
+    remote_hash = (
+        PUBLICATION_RECOVERY_NO_REMOTE_OBSERVATION_SHA256
+        if remote_observation is None
+        else _opaque_material(remote_observation)[
+            "publication_remote_observation_sha256"
+        ]
+    )
+    authorization_hash = (
+        PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256
+        if pre_push_authorization is None
+        else _opaque_material(pre_push_authorization)[
+            "pre_push_authorization_sha256"
+        ]
+    )
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-completion-v1"
+        ),
+        "completion_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-completion-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": implementation_manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": (
+            store.store_session_nonce_sha256
+        ),
+        "attempt_id": attempt_id,
+        "publication_intent_sha256": intent[
+            "publication_intent_sha256"
+        ],
+        "recovery_invocation_start_sha256": start[
+            "recovery_invocation_start_sha256"
+        ],
+        "invocation_ordinal": start["invocation_ordinal"],
+        "prior_recovery_completion_sha256": start[
+            "prior_recovery_completion_sha256"
+        ],
+        "pre_push_authorization_sha256": authorization_hash,
+        "completion_status": "completed",
+        "outcome": outcome,
+        "remote_observation_sha256": remote_hash,
+        "push_command_count_upper_bound": (
+            push_command_count_upper_bound
+        ),
+        "elapsed_seconds": elapsed.hex(),
+        "cumulative_recovery_seconds": cumulative.hex(),
+    }
+    result = _with_self_hash(
+        body, "recovery_invocation_completion_sha256"
+    )
+    if tuple(result) != PUBLICATION_RECOVERY_INVOCATION_COMPLETION_FIELDS:
+        raise SecGemmaOnlineRiskOverlayRunnerError(
+            "Publication recovery completion fields changed"
+        )
+    return result
 
 
 def _failure_result(
@@ -3029,6 +4039,7 @@ class SecGemmaOnlineRiskOverlayRunner:
         phase_executor: PhaseExecutor,
         acquisition_adapter: AcquisitionAdapter | None,
         report_publisher: ExternalReportPublisher,
+        publication_runtime: PublicationWorkerRuntime,
         final_registry_authority: FinalRegistryAuthority | None = None,
         production_authorities: Any | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -3047,6 +4058,7 @@ class SecGemmaOnlineRiskOverlayRunner:
         self._executor = phase_executor
         self._acquisition_adapter = acquisition_adapter
         self._publisher = report_publisher
+        self._publication_runtime = publication_runtime
         self._final_registry_authority = final_registry_authority
         self._production_authorities = production_authorities
         self._clock = clock
@@ -3068,6 +4080,8 @@ class SecGemmaOnlineRiskOverlayRunner:
             or authority.phase_executor is not self._executor
             or authority.acquisition_adapter is not self._acquisition_adapter
             or authority.report_publisher is not self._publisher
+            or authority.publication_runtime
+            is not self._publication_runtime
             or authority.final_registry_authority
             is not self._final_registry_authority
             or authority.store is not self._store
@@ -3111,6 +4125,126 @@ class SecGemmaOnlineRiskOverlayRunner:
             raise SecGemmaOnlineRiskOverlayRunnerError(
                 "Production readiness returned mutable authority"
             )
+
+    def _verify_production_recovery_authorities(self) -> None:
+        try:
+            from agent_benchmark.sec_gemma_online_risk_overlay_production import (
+                is_verified_production_authorities,
+            )
+        except ImportError as exc:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Verified production recovery authorities are unavailable"
+            ) from exc
+        authority = self._production_authorities
+        if (
+            not is_verified_production_authorities(authority)
+            or authority.phase_executor is not self._executor
+            or authority.acquisition_adapter is not self._acquisition_adapter
+            or authority.report_publisher is not self._publisher
+            or authority.publication_runtime
+            is not self._publication_runtime
+            or authority.final_registry_authority
+            is not self._final_registry_authority
+            or authority.store is not self._store
+        ):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Runner publication-recovery authorities are foreign or incomplete"
+            )
+        evaluator = self._deps.evaluator
+        if (
+            self._clock is not time.monotonic
+            or self._deps.live_implementation_manifest
+            is not _default_live_implementation_manifest
+            or self._deps.runtime_verifier is not _default_runtime_verifier
+            or type(evaluator) is not DefaultDeterministicStageEvaluator
+            or getattr(evaluator, "__dict__", None) != {}
+            or self._deps.issue_acquisition_terminal_evidence_fn
+            is not issue_verified_acquisition_terminal_evidence
+            or self._deps.issue_scored_terminal_evidence_fn
+            is not issue_verified_scored_terminal_evidence
+        ):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Runner production recovery dependencies are injected or mutable"
+            )
+        try:
+            result = authority.reverify()
+        except Exception as exc:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Runner production recovery authority reverification failed"
+            ) from exc
+        if result is not None:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Production recovery reverification returned mutable authority"
+            )
+
+    def _authorize_supervised_publication_recovery_worker(
+        self,
+        *,
+        authority: SupervisedPublicationRecoveryWorkerAuthority | None,
+        attempt_id: str,
+        invocation_started_at: float,
+        local_deadline: float,
+    ) -> tuple[float, float]:
+        try:
+            from agent_benchmark.sec_gemma_online_risk_overlay_production import (
+                is_verified_supervised_publication_recovery_worker_authority
+                as verifier,
+            )
+        except ImportError:
+            verifier = None
+        if not callable(verifier) or not verifier(authority):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Production publication recovery requires an opaque "
+                "supervised-worker authority"
+            )
+        authorize = getattr(
+            authority,
+            "authorize_runner_recovery",
+            None,
+        )
+        if not callable(authorize):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Supervised publication-recovery worker authority is incomplete"
+            )
+        try:
+            supervised_window = authorize(
+                repo_root=self._repo_root,
+                implementation_manifest=self._implementation,
+                production_authorities=self._production_authorities,
+                attempt_id=attempt_id,
+                worker_entry_monotonic=invocation_started_at,
+                worker_deadline_monotonic=local_deadline,
+            )
+        except Exception as exc:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Supervised publication-recovery worker authority rejected "
+                "this runner"
+            ) from exc
+        if type(supervised_window) is not tuple or len(supervised_window) != 2:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Supervised publication-recovery window is invalid"
+            )
+        supervised_started_at, supervised_deadline = supervised_window
+        if (
+            type(supervised_started_at) is not float
+            or type(supervised_deadline) is not float
+            or not math.isfinite(supervised_started_at)
+            or not math.isfinite(supervised_deadline)
+            or supervised_started_at <= 0.0
+            or supervised_started_at > invocation_started_at
+            or supervised_deadline <= invocation_started_at
+            or supervised_deadline
+            != supervised_started_at + MAX_PUBLICATION_RECOVERY_SECONDS
+            or supervised_deadline > local_deadline
+        ):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Supervised publication-recovery window is invalid"
+            )
+        self._require_before_deadline(
+            supervised_deadline,
+            "after supervised publication-recovery worker authorization",
+        )
+        return supervised_started_at, supervised_deadline
 
     def _verify_live_implementation(self) -> None:
         observed = validate_implementation_manifest(
@@ -3379,6 +4513,7 @@ class SecGemmaOnlineRiskOverlayRunner:
         dict[str, dict[str, Any]],
         list[dict[str, Any]],
         Any | None,
+        AcquisitionExecutionResult | None,
         Mapping[str, Any] | None,
     ]:
         start = attempt_start
@@ -3549,6 +4684,7 @@ class SecGemmaOnlineRiskOverlayRunner:
             outputs,
             receipts,
             acquisition_report_authority,
+            acquisition_execution,
             runtime_receipt,
         )
 
@@ -3560,6 +4696,7 @@ class SecGemmaOnlineRiskOverlayRunner:
         (
             outputs,
             receipts,
+            _,
             _,
             runtime_receipt,
         ) = self._execute_phases(
@@ -3609,6 +4746,1462 @@ class SecGemmaOnlineRiskOverlayRunner:
             "passed": False,
         }
         return {**body, "verify_result_sha256": canonical_sha256(body)}
+
+    def _publication_timeout(
+        self, deadline_monotonic: float, location: str
+    ) -> float:
+        now = self._require_before_deadline(
+            deadline_monotonic, location
+        )
+        remaining = deadline_monotonic - now
+        if not math.isfinite(remaining) or remaining <= 0.0:
+            raise SecGemmaOnlineRiskOverlayRunnerIndeterminate(
+                f"{location} has no publication time remaining"
+            )
+        command_seconds = (
+            remaining - _PUBLICATION_QUIESCENCE_RESERVE_SECONDS
+        )
+        if command_seconds <= 0.0:
+            raise SecGemmaOnlineRiskOverlayRunnerIndeterminate(
+                f"{location} lacks the frozen publication quiescence reserve"
+            )
+        return min(command_seconds, 300.0)
+
+    def _commit_worker_quiescence(
+        self,
+        *,
+        capability: Any,
+        worker: PublicationWorkerHandle,
+        durable_ownership: Any,
+    ) -> Any:
+        ownership = _opaque_material(durable_ownership)
+        quiescence = worker.quiesce(
+            worker_ownership_sha256=ownership[
+                "worker_ownership_sha256"
+            ]
+        )
+        return self._store.commit_worker_quiescence(
+            capability, quiescence
+        )
+
+    def _authority_validator(
+        self, production_validator: Callable[[Any], Mapping[str, Any]]
+    ) -> Callable[[Any], Mapping[str, Any]]:
+        return (
+            _opaque_material
+            if self._test_only_allow_effects
+            else production_validator
+        )
+
+    def _read_publication_remote(
+        self,
+        *,
+        prepared: PreparedExternalPublication,
+        transport: PreparedPublicationTransport,
+        durable_transport: Any,
+        durable_ownership: Any,
+        publication_intent_sha256: str,
+        capability: Any,
+        ordinal: int,
+        phase: str,
+        prior_push_command_sha256: str,
+        deadline_monotonic: float,
+    ) -> Any:
+        snapshot = _mapping(
+            self._store.snapshot(),
+            "pre-publication-readback store snapshot",
+        )
+        return self._publisher.read_remote(
+            prepared_publication=prepared,
+            transport=transport,
+            durable_transport_manifest=durable_transport,
+            transport_manifest_validator=self._authority_validator(
+                transport_manifest_material
+            ),
+            store_instance_id=self._store.store_instance_id,
+            store_session_nonce_sha256=(
+                self._store.store_session_nonce_sha256
+            ),
+            publication_intent_sha256=publication_intent_sha256,
+            operation_kind=capability.operation_kind,
+            operation_sha256=capability.operation_sha256,
+            worker_ownership=durable_ownership,
+            worker_ownership_validator=self._authority_validator(
+                worker_ownership_material
+            ),
+            observation_ordinal=ordinal,
+            observation_phase=phase,
+            prior_push_command_sha256=prior_push_command_sha256,
+            pre_observation_store_journal_sequence=snapshot[
+                "journal_entry_count"
+            ],
+            pre_observation_store_journal_tip_sha256=snapshot[
+                "journal_tip_sha256"
+            ],
+            timeout_seconds=self._publication_timeout(
+                deadline_monotonic,
+                f"before publication {phase} readback",
+            ),
+        )
+
+    def _run_normal_publication(
+        self,
+        *,
+        attempt_id: str,
+        publication_intent: Any,
+        prepared: PreparedExternalPublication,
+        deadline_monotonic: float,
+    ) -> Any | None:
+        intent = _mapping(
+            self._authority_validator(publication_intent_material)(
+                publication_intent
+            ),
+            "validated publication intent",
+        )
+        capability = self._store.issue_publication_recovery_capability(
+            attempt_id,
+            operation_kind=NORMAL_PUBLICATION,
+            operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+        )
+        worker: PublicationWorkerHandle | None = None
+        durable_ownership: Any | None = None
+        quiescent = False
+        try:
+            worker = self._publication_runtime.begin(
+                implementation_manifest=self._implementation,
+                store_instance_id=self._store.store_instance_id,
+                store_session_nonce_sha256=(
+                    self._store.store_session_nonce_sha256
+                ),
+                attempt_id=attempt_id,
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                operation_kind=capability.operation_kind,
+                operation_sha256=capability.operation_sha256,
+            )
+            snapshot = _mapping(
+                self._store.snapshot(),
+                "pre-publication-transport store snapshot",
+            )
+            transport = prepare_isolated_publication_transport(
+                transport_root=worker.transport_root,
+                source_object_directory=(
+                    worker.source_object_directory
+                ),
+                prepared_publication=prepared,
+                executable_pins=worker.executable_pins,
+                host_environment_values=worker.host_environment_values,
+                identity_verifier=worker.verify_executable_pins,
+                store_instance_id=self._store.store_instance_id,
+                store_session_nonce_sha256=(
+                    self._store.store_session_nonce_sha256
+                ),
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                operation_kind=capability.operation_kind,
+                operation_sha256=capability.operation_sha256,
+                pre_transport_store_journal_sequence=snapshot[
+                    "journal_entry_count"
+                ],
+                pre_transport_store_journal_tip_sha256=snapshot[
+                    "journal_tip_sha256"
+                ],
+            )
+            durable_transport = self._store.commit_transport_manifest(
+                capability, transport.manifest
+            )
+            durable_ownership = (
+                self._store.claim_publication_worker_ownership(
+                    capability, worker.ownership_material
+                )
+            )
+            first = self._read_publication_remote(
+                prepared=prepared,
+                transport=transport,
+                durable_transport=durable_transport,
+                durable_ownership=durable_ownership,
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                capability=capability,
+                ordinal=1,
+                phase=PRE_PUSH,
+                prior_push_command_sha256=(
+                    PUBLICATION_NO_PRIOR_PUSH_COMMAND_SHA256
+                ),
+                deadline_monotonic=deadline_monotonic,
+            )
+            if first.observation is None:
+                self._commit_worker_quiescence(
+                    capability=capability,
+                    worker=worker,
+                    durable_ownership=durable_ownership,
+                )
+                quiescent = True
+                self._store.release_publication_capability(capability)
+                return None
+            durable_first = self._store.commit_remote_observation(
+                capability, first.evidence, first.observation
+            )
+            if first.observed_ref_state == "conflicting":
+                conflict = _build_publication_conflict(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_id=attempt_id,
+                    publication_intent_sha256=intent[
+                        "publication_intent_sha256"
+                    ],
+                    capability=capability,
+                    worker_ownership=durable_ownership,
+                    remote_observation=durable_first,
+                )
+                self._store.commit_publication_conflict(
+                    capability, conflict
+                )
+                self._commit_worker_quiescence(
+                    capability=capability,
+                    worker=worker,
+                    durable_ownership=durable_ownership,
+                )
+                quiescent = True
+                self._store.release_publication_capability(capability)
+                return None
+            authorization: Any | None = None
+            durable_exact = durable_first
+            if first.observed_ref_state == "absent":
+                authorization_material = _build_pre_push_authorization(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_id=attempt_id,
+                    publication_intent_sha256=intent[
+                        "publication_intent_sha256"
+                    ],
+                    capability=capability,
+                    worker_ownership=durable_ownership,
+                    remote_observation=durable_first,
+                )
+                authorization = (
+                    self._store.commit_pre_push_authorization(
+                        capability, authorization_material
+                    )
+                )
+                push = self._publisher.push_once(
+                    prepared_publication=prepared,
+                    transport=transport,
+                    pre_push_authorization=authorization,
+                    authorization_validator=self._authority_validator(
+                        pre_push_authorization_material
+                    ),
+                    absent_remote_observation=durable_first,
+                    observation_validator=self._authority_validator(
+                        remote_observation_material
+                    ),
+                    timeout_seconds=self._publication_timeout(
+                        deadline_monotonic,
+                        "before publication push",
+                    ),
+                )
+                second = self._read_publication_remote(
+                    prepared=prepared,
+                    transport=transport,
+                    durable_transport=durable_transport,
+                    durable_ownership=durable_ownership,
+                    publication_intent_sha256=intent[
+                        "publication_intent_sha256"
+                    ],
+                    capability=capability,
+                    ordinal=2,
+                    phase=POST_PUSH,
+                    prior_push_command_sha256=(
+                        push.push_command_sha256
+                    ),
+                    deadline_monotonic=deadline_monotonic,
+                )
+                if second.observation is None:
+                    self._commit_worker_quiescence(
+                        capability=capability,
+                        worker=worker,
+                        durable_ownership=durable_ownership,
+                    )
+                    quiescent = True
+                    self._store.release_publication_capability(
+                        capability
+                    )
+                    return None
+                durable_second = self._store.commit_remote_observation(
+                    capability, second.evidence, second.observation
+                )
+                if second.observed_ref_state == "conflicting":
+                    conflict = _build_publication_conflict(
+                        implementation_manifest=self._implementation,
+                        store=self._store,
+                        attempt_id=attempt_id,
+                        publication_intent_sha256=intent[
+                            "publication_intent_sha256"
+                        ],
+                        capability=capability,
+                        worker_ownership=durable_ownership,
+                        remote_observation=durable_second,
+                    )
+                    self._store.commit_publication_conflict(
+                        capability, conflict
+                    )
+                    self._commit_worker_quiescence(
+                        capability=capability,
+                        worker=worker,
+                        durable_ownership=durable_ownership,
+                    )
+                    quiescent = True
+                    self._store.release_publication_capability(
+                        capability
+                    )
+                    return None
+                if second.observed_ref_state != "exact_expected":
+                    self._commit_worker_quiescence(
+                        capability=capability,
+                        worker=worker,
+                        durable_ownership=durable_ownership,
+                    )
+                    quiescent = True
+                    self._store.release_publication_capability(
+                        capability
+                    )
+                    return None
+                durable_exact = durable_second
+            elif first.observed_ref_state != "exact_expected":
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Publication readback state changed"
+                )
+            self._commit_worker_quiescence(
+                capability=capability,
+                worker=worker,
+                durable_ownership=durable_ownership,
+            )
+            quiescent = True
+            external_publication = (
+                issue_verified_external_publication_from_observation(
+                    prepared_publication=prepared,
+                    durable_remote_observation=durable_exact,
+                    observation_validator=self._authority_validator(
+                        remote_observation_material
+                    ),
+                )
+            )
+            receipt_material = _build_publication_receipt(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+                remote_observation=durable_exact,
+                pre_push_authorization=authorization,
+                external_publication=external_publication,
+            )
+            return self._store.commit_publication_receipt(
+                capability,
+                receipt_material,
+                external_publication,
+            )
+        except Exception:
+            if (
+                worker is not None
+                and durable_ownership is not None
+                and not quiescent
+            ):
+                try:
+                    self._commit_worker_quiescence(
+                        capability=capability,
+                        worker=worker,
+                        durable_ownership=durable_ownership,
+                    )
+                    quiescent = True
+                except Exception:
+                    pass
+            elif worker is not None and durable_ownership is None:
+                try:
+                    worker.abort_uncommitted()
+                except Exception:
+                    pass
+            if quiescent or durable_ownership is None:
+                try:
+                    self._store.release_publication_capability(
+                        capability
+                    )
+                except Exception:
+                    pass
+            return None
+
+    def _run_recovery_publication(
+        self,
+        *,
+        attempt_id: str,
+        publication_intent: Any,
+        prepared: PreparedExternalPublication,
+        invocation_started_at: float,
+        deadline_monotonic: float,
+    ) -> Any | None:
+        intent = _mapping(
+            self._authority_validator(publication_intent_material)(
+                publication_intent
+            ),
+            "validated recovery publication intent",
+        )
+        start_material = _build_publication_recovery_start(
+            implementation_manifest=self._implementation,
+            store=self._store,
+            attempt_id=attempt_id,
+            publication_intent=publication_intent,
+        )
+        capability = self._store.issue_publication_recovery_capability(
+            attempt_id,
+            operation_kind=PUBLICATION_RECOVERY,
+            operation_sha256=start_material[
+                "recovery_invocation_start_sha256"
+            ],
+        )
+        recovery_start = self._store.commit_recovery_start(
+            capability, start_material
+        )
+        start = _opaque_material(recovery_start)
+        worker: PublicationWorkerHandle | None = None
+        durable_ownership: Any | None = None
+        quiescent = False
+        completion: Any | None = None
+        last_observation: Any | None = None
+        last_phase: str | None = None
+        last_state: str | None = None
+        authorization: Any | None = None
+        push_attempted = False
+        conflict_committed = False
+
+        def make_quiescent() -> None:
+            nonlocal quiescent
+            if quiescent:
+                return
+            if worker is None:
+                quiescent = True
+                return
+            if durable_ownership is None:
+                worker.abort_uncommitted()
+                quiescent = True
+                return
+            self._commit_worker_quiescence(
+                capability=capability,
+                worker=worker,
+                durable_ownership=durable_ownership,
+            )
+            quiescent = True
+
+        def finish_recovery(
+            *,
+            outcome: str,
+            observation: Any | None,
+            push_authorization: Any | None,
+            push_count: int,
+        ) -> Any:
+            nonlocal completion
+            make_quiescent()
+            now = self._require_before_deadline(
+                deadline_monotonic,
+                "before publication recovery completion",
+            )
+            elapsed = now - invocation_started_at
+            material = _build_publication_recovery_completion(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+                recovery_start=recovery_start,
+                outcome=outcome,
+                remote_observation=observation,
+                pre_push_authorization=push_authorization,
+                push_command_count_upper_bound=push_count,
+                elapsed_seconds=elapsed,
+            )
+            completion = self._store.commit_recovery_completion(
+                capability, material
+            )
+            return completion
+
+        try:
+            self._require_before_deadline(
+                deadline_monotonic,
+                "before publication recovery worker",
+            )
+            worker = self._publication_runtime.begin(
+                implementation_manifest=self._implementation,
+                store_instance_id=self._store.store_instance_id,
+                store_session_nonce_sha256=(
+                    self._store.store_session_nonce_sha256
+                ),
+                attempt_id=attempt_id,
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                operation_kind=capability.operation_kind,
+                operation_sha256=capability.operation_sha256,
+            )
+            snapshot = _mapping(
+                self._store.snapshot(),
+                "pre-recovery-transport store snapshot",
+            )
+            transport = prepare_isolated_publication_transport(
+                transport_root=worker.transport_root,
+                source_object_directory=worker.source_object_directory,
+                prepared_publication=prepared,
+                executable_pins=worker.executable_pins,
+                host_environment_values=worker.host_environment_values,
+                identity_verifier=worker.verify_executable_pins,
+                store_instance_id=self._store.store_instance_id,
+                store_session_nonce_sha256=(
+                    self._store.store_session_nonce_sha256
+                ),
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                operation_kind=capability.operation_kind,
+                operation_sha256=capability.operation_sha256,
+                pre_transport_store_journal_sequence=snapshot[
+                    "journal_entry_count"
+                ],
+                pre_transport_store_journal_tip_sha256=snapshot[
+                    "journal_tip_sha256"
+                ],
+            )
+            durable_transport = self._store.commit_transport_manifest(
+                capability, transport.manifest
+            )
+            durable_ownership = (
+                self._store.claim_publication_worker_ownership(
+                    capability, worker.ownership_material
+                )
+            )
+            first = self._read_publication_remote(
+                prepared=prepared,
+                transport=transport,
+                durable_transport=durable_transport,
+                durable_ownership=durable_ownership,
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                capability=capability,
+                ordinal=1,
+                phase=PRE_PUSH,
+                prior_push_command_sha256=(
+                    PUBLICATION_NO_PRIOR_PUSH_COMMAND_SHA256
+                ),
+                deadline_monotonic=deadline_monotonic,
+            )
+            if first.observation is None:
+                finish_recovery(
+                    outcome="remote_unavailable_before_observation",
+                    observation=None,
+                    push_authorization=None,
+                    push_count=0,
+                )
+                return None
+            last_observation = self._store.commit_remote_observation(
+                capability, first.evidence, first.observation
+            )
+            last_phase = PRE_PUSH
+            last_state = first.observed_ref_state
+            if last_state == "conflicting":
+                conflict = _build_publication_conflict(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_id=attempt_id,
+                    publication_intent_sha256=intent[
+                        "publication_intent_sha256"
+                    ],
+                    capability=capability,
+                    worker_ownership=durable_ownership,
+                    remote_observation=last_observation,
+                )
+                self._store.commit_publication_conflict(
+                    capability, conflict
+                )
+                conflict_committed = True
+                finish_recovery(
+                    outcome=(
+                        "remote_conflict_poisoned_without_push"
+                    ),
+                    observation=last_observation,
+                    push_authorization=None,
+                    push_count=0,
+                )
+                return None
+            if last_state == "exact_expected":
+                recovery_completion = finish_recovery(
+                    outcome="remote_exact_without_push",
+                    observation=last_observation,
+                    push_authorization=None,
+                    push_count=0,
+                )
+                external_publication = (
+                    issue_verified_external_publication_from_observation(
+                        prepared_publication=prepared,
+                        durable_remote_observation=last_observation,
+                        observation_validator=self._authority_validator(
+                            remote_observation_material
+                        ),
+                    )
+                )
+                receipt_material = _build_publication_receipt(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_id=attempt_id,
+                    publication_intent=publication_intent,
+                    remote_observation=last_observation,
+                    pre_push_authorization=None,
+                    external_publication=external_publication,
+                    recovery_completion=recovery_completion,
+                )
+                return self._store.commit_publication_receipt(
+                    capability,
+                    receipt_material,
+                    external_publication,
+                )
+            if last_state != "absent":
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Recovery pre-push readback state changed"
+                )
+            authorization_material = _build_pre_push_authorization(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_id=attempt_id,
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                capability=capability,
+                worker_ownership=durable_ownership,
+                remote_observation=last_observation,
+                operation_ordinal=start["invocation_ordinal"],
+            )
+            authorization = self._store.commit_pre_push_authorization(
+                capability, authorization_material
+            )
+            push_attempted = True
+            push = self._publisher.push_once(
+                prepared_publication=prepared,
+                transport=transport,
+                pre_push_authorization=authorization,
+                authorization_validator=self._authority_validator(
+                    pre_push_authorization_material
+                ),
+                absent_remote_observation=last_observation,
+                observation_validator=self._authority_validator(
+                    remote_observation_material
+                ),
+                timeout_seconds=self._publication_timeout(
+                    deadline_monotonic,
+                    "before publication recovery push",
+                ),
+            )
+            second = self._read_publication_remote(
+                prepared=prepared,
+                transport=transport,
+                durable_transport=durable_transport,
+                durable_ownership=durable_ownership,
+                publication_intent_sha256=intent[
+                    "publication_intent_sha256"
+                ],
+                capability=capability,
+                ordinal=2,
+                phase=POST_PUSH,
+                prior_push_command_sha256=push.push_command_sha256,
+                deadline_monotonic=deadline_monotonic,
+            )
+            if second.observation is None:
+                finish_recovery(
+                    outcome="push_issued_unconfirmed",
+                    observation=last_observation,
+                    push_authorization=authorization,
+                    push_count=1,
+                )
+                return None
+            last_observation = self._store.commit_remote_observation(
+                capability, second.evidence, second.observation
+            )
+            last_phase = POST_PUSH
+            last_state = second.observed_ref_state
+            if last_state == "conflicting":
+                conflict = _build_publication_conflict(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_id=attempt_id,
+                    publication_intent_sha256=intent[
+                        "publication_intent_sha256"
+                    ],
+                    capability=capability,
+                    worker_ownership=durable_ownership,
+                    remote_observation=last_observation,
+                )
+                self._store.commit_publication_conflict(
+                    capability, conflict
+                )
+                conflict_committed = True
+                finish_recovery(
+                    outcome="post_push_conflict_poisoned",
+                    observation=last_observation,
+                    push_authorization=authorization,
+                    push_count=1,
+                )
+                return None
+            if last_state == "absent":
+                finish_recovery(
+                    outcome="post_push_ref_absent",
+                    observation=last_observation,
+                    push_authorization=authorization,
+                    push_count=1,
+                )
+                return None
+            if last_state != "exact_expected":
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Recovery post-push readback state changed"
+                )
+            recovery_completion = finish_recovery(
+                outcome="published_exact_after_push",
+                observation=last_observation,
+                push_authorization=authorization,
+                push_count=1,
+            )
+            external_publication = (
+                issue_verified_external_publication_from_observation(
+                    prepared_publication=prepared,
+                    durable_remote_observation=last_observation,
+                    observation_validator=self._authority_validator(
+                        remote_observation_material
+                    ),
+                )
+            )
+            receipt_material = _build_publication_receipt(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+                remote_observation=last_observation,
+                pre_push_authorization=authorization,
+                external_publication=external_publication,
+                recovery_completion=recovery_completion,
+            )
+            return self._store.commit_publication_receipt(
+                capability,
+                receipt_material,
+                external_publication,
+            )
+        except Exception:
+            try:
+                make_quiescent()
+            except Exception:
+                return None
+            if completion is None:
+                try:
+                    if conflict_committed:
+                        outcome = (
+                            "post_push_conflict_poisoned"
+                            if last_phase == POST_PUSH
+                            else "remote_conflict_poisoned_without_push"
+                        )
+                        observation = last_observation
+                        push_count = 1 if last_phase == POST_PUSH else 0
+                    elif (
+                        last_state == "exact_expected"
+                        and last_phase == POST_PUSH
+                    ):
+                        outcome = "published_exact_after_push"
+                        observation = last_observation
+                        push_count = 1
+                    elif last_state == "exact_expected":
+                        outcome = "remote_exact_without_push"
+                        observation = last_observation
+                        push_count = 0
+                    elif last_phase == POST_PUSH and last_state == "absent":
+                        outcome = "post_push_ref_absent"
+                        observation = last_observation
+                        push_count = 1
+                    elif last_state == "absent" and authorization is None:
+                        outcome = (
+                            "remote_absent_authorization_not_committed"
+                        )
+                        observation = last_observation
+                        push_count = 0
+                    elif authorization is not None and push_attempted:
+                        outcome = "push_issued_unconfirmed"
+                        observation = last_observation
+                        push_count = 1
+                    elif authorization is not None:
+                        outcome = "authorized_push_not_issued"
+                        observation = last_observation
+                        push_count = 0
+                    else:
+                        outcome = "interrupted_before_completion"
+                        observation = None
+                        push_count = 0
+                    finish_recovery(
+                        outcome=outcome,
+                        observation=observation,
+                        push_authorization=authorization,
+                        push_count=push_count,
+                    )
+                except Exception:
+                    pass
+            if quiescent:
+                try:
+                    self._store.release_publication_capability(
+                        capability
+                    )
+                except Exception:
+                    pass
+            return None
+
+    def _reconcile_local_publication_receipt(
+        self,
+        *,
+        attempt_id: str,
+        publication_intent: Any,
+        prepared: PreparedExternalPublication,
+    ) -> Any | None:
+        receipt_rows = self._store.governance_records(
+            "publication_receipts", attempt_id=attempt_id
+        )
+        if len(receipt_rows) > 1:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Publication recovery found multiple durable receipts"
+            )
+        if receipt_rows:
+            material = receipt_rows[0]
+            observation = self._store.remote_observation_authority(
+                attempt_id,
+                material["publication_remote_observation_sha256"],
+            )
+            external_publication = (
+                issue_verified_external_publication_from_observation(
+                    prepared_publication=prepared,
+                    durable_remote_observation=observation,
+                    observation_validator=self._authority_validator(
+                        remote_observation_material
+                    ),
+                )
+            )
+            return self._store.publication_receipt_authority(
+                attempt_id, external_publication
+            )
+
+        conflicts = self._store.governance_records(
+            "publication_conflicts", attempt_id=attempt_id
+        )
+        if conflicts:
+            if len(conflicts) != 1:
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Publication recovery found multiple conflict poisons"
+                )
+            return None
+
+        observations = self._store.governance_records(
+            "publication_remote_observations", attempt_id=attempt_id
+        )
+        normal_conflicts = [
+            row
+            for row in observations
+            if row["observation_operation_kind"] == NORMAL_PUBLICATION
+            and row["observed_ref_state"] == "conflicting"
+        ]
+        if normal_conflicts:
+            if len(normal_conflicts) != 1:
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Normal publication has multiple terminal conflict observations"
+                )
+            if self._store.governance_records(
+                "publication_recovery_invocation_starts",
+                attempt_id=attempt_id,
+            ):
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Recovery action followed an authoritative normal conflict"
+                )
+            observation_material = normal_conflicts[0]
+            observation = self._store.remote_observation_authority(
+                attempt_id,
+                observation_material[
+                    "publication_remote_observation_sha256"
+                ],
+            )
+            ownership = (
+                self._store.publication_worker_ownership_authority(
+                    attempt_id,
+                    observation_material["worker_ownership_sha256"],
+                )
+            )
+            capability = (
+                self._store.issue_publication_recovery_capability(
+                    attempt_id,
+                    operation_kind=NORMAL_PUBLICATION,
+                    operation_sha256=PUBLICATION_NORMAL_OPERATION_SHA256,
+                )
+            )
+            conflict = _build_publication_conflict(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_id=attempt_id,
+                publication_intent_sha256=_opaque_material(
+                    publication_intent
+                )["publication_intent_sha256"],
+                capability=capability,
+                worker_ownership=ownership,
+                remote_observation=observation,
+            )
+            self._store.commit_publication_conflict(
+                capability, conflict
+            )
+            self._store.release_publication_capability(capability)
+            return None
+        normal_exact = [
+            row
+            for row in observations
+            if row["observation_operation_kind"] == NORMAL_PUBLICATION
+            and row["observed_ref_state"] == "exact_expected"
+        ]
+        if normal_exact:
+            if len(normal_exact) != 1:
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Normal publication has multiple exact terminal observations"
+                )
+            observation_material = normal_exact[0]
+            observation = self._store.remote_observation_authority(
+                attempt_id,
+                observation_material[
+                    "publication_remote_observation_sha256"
+                ],
+            )
+            authorizations = [
+                row
+                for row in self._store.governance_records(
+                    "publication_pre_push_authorizations",
+                    attempt_id=attempt_id,
+                )
+                if row["authorization_operation_kind"]
+                == NORMAL_PUBLICATION
+            ]
+            if len(authorizations) > 1:
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Normal publication has multiple push authorizations"
+                )
+            authorization = (
+                None
+                if not authorizations
+                else self._store.pre_push_authorization_authority(
+                    attempt_id,
+                    authorizations[0][
+                        "pre_push_authorization_sha256"
+                    ],
+                )
+            )
+            capability = (
+                self._store.issue_publication_recovery_capability(
+                    attempt_id,
+                    operation_kind=NORMAL_PUBLICATION,
+                    operation_sha256=(
+                        PUBLICATION_NORMAL_OPERATION_SHA256
+                    ),
+                )
+            )
+            external_publication = (
+                issue_verified_external_publication_from_observation(
+                    prepared_publication=prepared,
+                    durable_remote_observation=observation,
+                    observation_validator=self._authority_validator(
+                        remote_observation_material
+                    ),
+                )
+            )
+            receipt_material = _build_publication_receipt(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+                remote_observation=observation,
+                pre_push_authorization=authorization,
+                external_publication=external_publication,
+            )
+            return self._store.commit_publication_receipt(
+                capability,
+                receipt_material,
+                external_publication,
+            )
+
+        completions = self._store.governance_records(
+            "publication_recovery_invocation_completions",
+            attempt_id=attempt_id,
+        )
+        eligible = [
+            row
+            for row in completions
+            if row["outcome"]
+            in {
+                "remote_exact_without_push",
+                "published_exact_after_push",
+            }
+        ]
+        if not eligible:
+            return None
+        if len(eligible) != 1 or eligible[-1] != completions[-1]:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Publication recovery receipt eligibility is ambiguous"
+            )
+        completion_material = eligible[0]
+        completion = self._store.recovery_completion_authority(
+            attempt_id,
+            completion_material[
+                "recovery_invocation_completion_sha256"
+            ],
+        )
+        observation = self._store.remote_observation_authority(
+            attempt_id,
+            completion_material["remote_observation_sha256"],
+        )
+        authorization_hash = completion_material[
+            "pre_push_authorization_sha256"
+        ]
+        authorization = (
+            None
+            if authorization_hash
+            == PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256
+            else self._store.pre_push_authorization_authority(
+                attempt_id, authorization_hash
+            )
+        )
+        capability = self._store.issue_publication_recovery_capability(
+            attempt_id,
+            operation_kind=PUBLICATION_RECOVERY,
+            operation_sha256=completion_material[
+                "recovery_invocation_start_sha256"
+            ],
+        )
+        external_publication = (
+            issue_verified_external_publication_from_observation(
+                prepared_publication=prepared,
+                durable_remote_observation=observation,
+                observation_validator=self._authority_validator(
+                    remote_observation_material
+                ),
+            )
+        )
+        receipt_material = _build_publication_receipt(
+            implementation_manifest=self._implementation,
+            store=self._store,
+            attempt_id=attempt_id,
+            publication_intent=publication_intent,
+            remote_observation=observation,
+            pre_push_authorization=authorization,
+            external_publication=external_publication,
+            recovery_completion=completion,
+        )
+        return self._store.commit_publication_receipt(
+            capability,
+            receipt_material,
+            external_publication,
+        )
+
+    def _rehydrate_terminal_result(
+        self,
+        *,
+        command: str,
+        attempt_id: str,
+        terminal_transition: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        status = terminal_transition.get("status")
+        if status not in {TERMINAL_PASS, TERMINAL_FAIL}:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Only a semantic terminal result can be rehydrated"
+            )
+        binding = _mapping(
+            self._store.terminal_anchor_binding(attempt_id),
+            "rehydrated terminal anchor binding",
+        )
+        artifact, artifact_receipt = (
+            self._store.terminal_artifact_payload_and_receipt(
+                attempt_id
+            )
+        )
+        terminal_evidence = _mapping(
+            binding["terminal_evidence"],
+            "rehydrated terminal evidence",
+        )
+        publication = validate_external_publication(
+            binding["external_publication"],
+            implementation_manifest=self._implementation,
+        )
+        if status == TERMINAL_PASS:
+            return _success_result(
+                command=command,
+                attempt_id=attempt_id,
+                terminal_transition=terminal_transition,
+                terminal_evidence=terminal_evidence,
+                external_publication=publication,
+                terminal_artifact=artifact,
+                terminal_artifact_receipt=artifact_receipt,
+            )
+        if command not in _SCORING_COMMANDS:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Acquisition cannot rehydrate a semantic terminal failure"
+            )
+        return _failure_result(
+            command=command,
+            attempt_id=attempt_id,
+            terminal_status=TERMINAL_FAIL,
+            diagnostic_code="gate_failure_sealed",
+            terminal_transition=terminal_transition,
+            terminal_evidence=terminal_evidence,
+            external_publication=publication,
+            terminal_artifact=artifact,
+            terminal_artifact_receipt=artifact_receipt,
+        )
+
+    def _pending_acquisition_report_authority(
+        self, attempt_id: str
+    ) -> Any:
+        self._store.pending_acquisition_phase_evidence(attempt_id)
+        if self._test_only_allow_effects:
+            adapter_method = getattr(
+                self._acquisition_adapter,
+                "rehydrate_pending_acquisition_report",
+                None,
+            )
+            if not callable(adapter_method):
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Test recovery lacks an opaque pending acquisition report"
+                )
+            report = adapter_method(attempt_id=attempt_id)
+        else:
+            authority_method = getattr(
+                self._production_authorities,
+                "rehydrate_pending_acquisition_report",
+                None,
+            )
+            if not callable(authority_method):
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Production recovery lacks pending acquisition rehydration"
+                )
+            report = authority_method(attempt_id=attempt_id)
+        if not is_verified_acquisition_report(report):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Pending acquisition recovery returned foreign authority"
+            )
+        return report
+
+    def recover_publication(
+        self,
+        attempt_id: str,
+        *,
+        supervised_worker_authority: (
+            SupervisedPublicationRecoveryWorkerAuthority | None
+        ) = None,
+    ) -> dict[str, Any]:
+        """Enter one bounded recovery worker or the explicit test-only path.
+
+        A production caller cannot execute recovery silently in its own
+        process.  The public production supervisor must start a fresh isolated
+        worker and supply the opaque, source-bound worker authority minted for
+        that child.  Tests retain a direct path so deterministic recovery logic
+        can be exercised without spawning a process.
+        """
+        worker_entry_started_at = self._read_clock(
+            "publication recovery invocation entry"
+        )
+        local_deadline = (
+            worker_entry_started_at + MAX_PUBLICATION_RECOVERY_SECONDS
+        )
+        self._require_before_deadline(
+            local_deadline,
+            "at publication recovery invocation entry",
+        )
+        if type(attempt_id) is not str or attempt_id not in _ATTEMPT_ID_TO_COMMAND:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Publication recovery attempt is not preregistered"
+            )
+        if self._test_only_allow_effects:
+            if supervised_worker_authority is not None:
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Test publication recovery cannot claim a production "
+                    "supervised-worker authority"
+                )
+            recovery_started_at = worker_entry_started_at
+            invocation_deadline = local_deadline
+        else:
+            recovery_started_at, invocation_deadline = (
+                self._authorize_supervised_publication_recovery_worker(
+                    authority=supervised_worker_authority,
+                    attempt_id=attempt_id,
+                    invocation_started_at=worker_entry_started_at,
+                    local_deadline=local_deadline,
+                )
+            )
+        return self._recover_publication_in_supervised_worker(
+            attempt_id,
+            recovery_started_at=recovery_started_at,
+            invocation_deadline=invocation_deadline,
+        )
+
+    def _recover_publication_in_supervised_worker(
+        self,
+        attempt_id: str,
+        *,
+        recovery_started_at: float,
+        invocation_deadline: float,
+    ) -> dict[str, Any]:
+        """Run the frozen recovery body after the public isolation gate."""
+
+        command = _ATTEMPT_ID_TO_COMMAND[attempt_id]
+        self._verify_live_implementation()
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery implementation verification",
+        )
+        history = self._store.attempt_history(attempt_id)
+        attempt_plan = validate_attempt_plan(
+            self._store.attempt_plan(attempt_id),
+            implementation_manifest=self._implementation,
+        )
+        validated_history = validate_attempt_history(
+            attempt_plan=attempt_plan,
+            implementation_manifest=self._implementation,
+            transitions=history,
+        )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery attempt validation",
+        )
+        if validated_history[-1]["status"] in {
+            TERMINAL_PASS,
+            TERMINAL_FAIL,
+        }:
+            result = self._rehydrate_terminal_result(
+                command=command,
+                attempt_id=attempt_id,
+                terminal_transition=validated_history[-1],
+            )
+            self._require_before_deadline(
+                invocation_deadline,
+                "after terminal publication recovery rehydration",
+            )
+            return result
+        if (
+            len(validated_history) != 2
+            or validated_history[-1]["status"] != CONSUMED
+        ):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Publication recovery requires one consumed pending attempt"
+            )
+        if self._test_only_allow_effects:
+            if self._production_authorities is not None:
+                raise SecGemmaOnlineRiskOverlayRunnerError(
+                    "Test recovery cannot claim production authority"
+                )
+        else:
+            self._verify_production_recovery_authorities()
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery authority verification",
+        )
+
+        self._store.reconcile_publication_recovery_state(attempt_id)
+        self._require_before_deadline(
+            invocation_deadline,
+            "after local publication recovery reconciliation",
+        )
+        reconstruction = (
+            self._store.terminal_reconstruction_authority(attempt_id)
+        )
+        reconstruction_material = _opaque_material(reconstruction)
+        publication_intent = self._store.publication_intent_authority(
+            attempt_id
+        )
+        intent = _mapping(
+            self._authority_validator(publication_intent_material)(
+                publication_intent
+            ),
+            "validated pending publication intent",
+        )
+        if (
+            reconstruction_material["attempt_plan_sha256"]
+            != attempt_plan["attempt_plan_sha256"]
+            or intent["attempt_plan_sha256"]
+            != attempt_plan["attempt_plan_sha256"]
+            or intent["terminal_reconstruction_material_sha256"]
+            != reconstruction_material[
+                "terminal_reconstruction_material_sha256"
+            ]
+        ):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Pending publication crossed its frozen attempt reconstruction"
+            )
+        prepared = reconstruct_prepared_external_publication(
+            implementation_manifest=self._implementation,
+            publication_intent=publication_intent,
+            intent_validator=self._authority_validator(
+                publication_intent_material
+            ),
+        )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery reconstruction",
+        )
+        publication_receipt = self._reconcile_local_publication_receipt(
+            attempt_id=attempt_id,
+            publication_intent=publication_intent,
+            prepared=prepared,
+        )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after local publication receipt reconciliation",
+        )
+        conflicts = self._store.governance_records(
+            "publication_conflicts", attempt_id=attempt_id
+        )
+        if publication_receipt is None and not conflicts:
+            publication_receipt = self._run_recovery_publication(
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+                prepared=prepared,
+                invocation_started_at=recovery_started_at,
+                deadline_monotonic=invocation_deadline,
+            )
+            self._require_before_deadline(
+                invocation_deadline,
+                "after supervised publication recovery",
+            )
+            self._store.reconcile_publication_recovery_state(attempt_id)
+            self._require_before_deadline(
+                invocation_deadline,
+                "after same-session recovery reconciliation",
+            )
+            publication_receipt = (
+                self._reconcile_local_publication_receipt(
+                    attempt_id=attempt_id,
+                    publication_intent=publication_intent,
+                    prepared=prepared,
+                )
+            )
+            self._require_before_deadline(
+                invocation_deadline,
+                "after same-session publication receipt reconciliation",
+            )
+            conflicts = self._store.governance_records(
+                "publication_conflicts", attempt_id=attempt_id
+            )
+        if publication_receipt is None:
+            self._require_before_deadline(
+                invocation_deadline,
+                "before publication recovery pending handoff",
+            )
+            return _publication_pending_result(
+                command=command,
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+            )
+        publication = publication_receipt.external_publication
+        if not is_verified_external_publication(publication):
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Recovered receipt lost its opaque external publication"
+            )
+        artifact, artifact_receipt = (
+            self._store.terminal_artifact_payload_and_receipt(
+                attempt_id
+            )
+        )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery artifact rehydration",
+        )
+        report_material = {
+            "attempt_id": attempt_id,
+            "attempt_plan_sha256": attempt_plan[
+                "attempt_plan_sha256"
+            ],
+            "record_counts": copy.deepcopy(
+                reconstruction_material["record_counts"]
+            ),
+            "record_commitment_sha256": reconstruction_material[
+                "record_commitment_sha256"
+            ],
+        }
+        terminal_status = reconstruction_material["terminal_status"]
+        if attempt_plan["attempt_kind"] == DEVELOPMENT_ACQUISITION:
+            acquisition_report = (
+                self._pending_acquisition_report_authority(attempt_id)
+            )
+            terminal_evidence = (
+                self._deps.issue_acquisition_terminal_evidence_fn(
+                    implementation_manifest=self._implementation,
+                    attempt_plan=attempt_plan,
+                    acquisition_report=acquisition_report,
+                    report_material=report_material,
+                    acquisition_artifact_receipt=artifact_receipt,
+                    publication_intent=publication_intent,
+                    publication_receipt=publication_receipt,
+                )
+            )
+        else:
+            terminal_evidence = (
+                self._deps.issue_scored_terminal_evidence_fn(
+                    implementation_manifest=self._implementation,
+                    attempt_plan=attempt_plan,
+                    joint_stage_report=artifact,
+                    report_material=report_material,
+                    joint_artifact_receipt=artifact_receipt,
+                    gate_checks=reconstruction_material[
+                        "gate_checks"
+                    ],
+                    publication_intent=publication_intent,
+                    publication_receipt=publication_receipt,
+                )
+            )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery terminal evidence",
+        )
+        claims = self._store.governance_records(
+            "terminalization_claims", attempt_id=attempt_id
+        )
+        if len(claims) > 1:
+            raise SecGemmaOnlineRiskOverlayRunnerError(
+                "Publication recovery found multiple terminalization claims"
+            )
+        if claims:
+            claim = self._store.terminalization_claim_authority(
+                attempt_id
+            )
+        else:
+            terminalization = (
+                self._store.issue_terminalization_capability(attempt_id)
+            )
+            claim = self._store.commit_terminalization_claim(
+                terminalization,
+                terminal_evidence,
+                terminal_status,
+            )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery terminalization claim",
+        )
+        self._store.complete_terminalized_attempt(
+            claim, terminal_evidence
+        )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery terminal completion",
+        )
+        terminal = self._store.attempt_history(attempt_id)[-1]
+        result = self._rehydrate_terminal_result(
+            command=command,
+            attempt_id=attempt_id,
+            terminal_transition=terminal,
+        )
+        self._require_before_deadline(
+            invocation_deadline,
+            "after publication recovery sealed result",
+        )
+        return result
 
     def run(
         self,
@@ -3690,6 +6283,8 @@ class SecGemmaOnlineRiskOverlayRunner:
         )
         self._store.register_attempt(attempt_plan)
         capability: Any | None = None
+        publication_intent: Any | None = None
+        governance_deadlines: _GovernanceDeadlines | None = None
         terminal_committed = False
         try:
             self._verify_live_implementation()
@@ -3718,6 +6313,7 @@ class SecGemmaOnlineRiskOverlayRunner:
                 outputs,
                 receipts,
                 acquisition_report_authority,
+                acquisition_execution,
                 runtime_receipt,
             ) = (
                 self._execute_phases(
@@ -3738,7 +6334,7 @@ class SecGemmaOnlineRiskOverlayRunner:
 
             evaluation: Mapping[str, Any] | None = None
             if command == DEVELOPMENT_ACQUISITION_COMMAND:
-                terminal_deadline = _terminal_budget_deadline(
+                governance_deadlines = _governance_deadlines(
                     start=attempt_start,
                     strict_parent_deadline=attempt_deadline,
                     receipts=receipts,
@@ -3747,13 +6343,13 @@ class SecGemmaOnlineRiskOverlayRunner:
                     command=command,
                     receipts=receipts,
                     start=attempt_start,
-                    end=terminal_deadline,
+                    end=governance_deadlines.finalization,
                 )
                 self._require_before_deadline(
-                    terminal_deadline,
+                    governance_deadlines.intent_prepare,
                     "before acquisition evidence persistence",
                 )
-                _append_phase_evidence(
+                persisted_phase_evidence = _append_phase_evidence(
                     store=self._store,
                     capability=capability,
                     command=command,
@@ -3779,11 +6375,29 @@ class SecGemmaOnlineRiskOverlayRunner:
                 report_material = self._store.terminal_evidence_material(
                     capability
                 )
-                self._require_before_deadline(
-                    terminal_deadline,
-                    "before acquisition publication",
+                reconstruction_material = (
+                    _build_terminal_reconstruction_material(
+                        implementation_manifest=self._implementation,
+                        store=self._store,
+                        attempt_plan=attempt_plan,
+                        terminal_status=TERMINAL_PASS,
+                        report_kind=ACQUISITION_PASS,
+                        terminal_artifact=verified_acquisition,
+                        terminal_artifact_receipt=artifact_receipt,
+                        report_material=report_material,
+                        persisted_phase_evidence=(
+                            persisted_phase_evidence
+                        ),
+                        acquisition_execution=acquisition_execution,
+                    )
                 )
-                publication = self._publisher.publish(
+                reconstruction = (
+                    self._store.commit_terminal_reconstruction_material(
+                        capability, reconstruction_material
+                    )
+                )
+                prepared = prepare_external_publication(
+                    implementation_manifest=self._implementation,
                     attempt_id=attempt_id,
                     terminal_status=PUBLICATION_TERMINAL_PASS,
                     report_kind=ACQUISITION_PASS,
@@ -3793,11 +6407,86 @@ class SecGemmaOnlineRiskOverlayRunner:
                     predecessor_publication_sha256=(
                         predecessor_publication_sha256
                     ),
-                    deadline_monotonic=terminal_deadline,
                 )
+                elapsed_at_intent = (
+                    self._require_before_deadline(
+                        governance_deadlines.intent_prepare,
+                        "before acquisition publication intent",
+                    )
+                    - attempt_start
+                )
+                intent_material = _build_publication_intent(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_plan=attempt_plan,
+                    terminal_status=TERMINAL_PASS,
+                    report_kind=ACQUISITION_PASS,
+                    artifact_sha256=verified_acquisition[
+                        "validation_sha256"
+                    ],
+                    artifact_receipt=artifact_receipt,
+                    reconstruction=reconstruction,
+                    report_material=report_material,
+                    elapsed_seconds=elapsed_at_intent,
+                    predecessor_publication_sha256=(
+                        predecessor_publication_sha256
+                    ),
+                    prepared_publication=prepared,
+                )
+                publication_intent = self._store.commit_publication_intent(
+                    capability, intent_material
+                )
+                publication_started_at = self._require_before_deadline(
+                    governance_deadlines.intent_prepare,
+                    "after acquisition publication intent",
+                )
+                publication_deadline = min(
+                    governance_deadlines.publication,
+                    publication_started_at
+                    + _NORMAL_PUBLICATION_SECONDS,
+                )
+                governance_deadlines = _GovernanceDeadlines(
+                    intent_prepare=governance_deadlines.intent_prepare,
+                    publication=publication_deadline,
+                    finalization=min(
+                        governance_deadlines.finalization,
+                        publication_deadline
+                        + _TERMINAL_FINALIZATION_SECONDS,
+                    ),
+                )
+                publication_receipt = self._run_normal_publication(
+                    attempt_id=attempt_id,
+                    publication_intent=publication_intent,
+                    prepared=prepared,
+                    deadline_monotonic=governance_deadlines.publication,
+                )
+                finalization_started_at = self._require_before_deadline(
+                    governance_deadlines.publication,
+                    "after acquisition publication",
+                )
+                governance_deadlines = _GovernanceDeadlines(
+                    intent_prepare=governance_deadlines.intent_prepare,
+                    publication=governance_deadlines.publication,
+                    finalization=min(
+                        governance_deadlines.finalization,
+                        finalization_started_at
+                        + _TERMINAL_FINALIZATION_SECONDS,
+                    ),
+                )
+                if publication_receipt is None:
+                    self._require_before_deadline(
+                        governance_deadlines.finalization,
+                        "before acquisition pending handoff",
+                    )
+                    return _publication_pending_result(
+                        command=command,
+                        attempt_id=attempt_id,
+                        publication_intent=publication_intent,
+                    )
+                publication = publication_receipt.external_publication
                 if not is_verified_external_publication(publication):
                     raise SecGemmaOnlineRiskOverlayRunnerError(
-                        "Acquisition publisher returned no opaque receipt"
+                        "Acquisition publication receipt lost its remote authority"
                     )
                 terminal_evidence = (
                     self._deps.issue_acquisition_terminal_evidence_fn(
@@ -3806,17 +6495,26 @@ class SecGemmaOnlineRiskOverlayRunner:
                         acquisition_report=acquisition_report_authority,
                         report_material=report_material,
                         acquisition_artifact_receipt=artifact_receipt,
-                        external_publication=publication,
+                        publication_intent=publication_intent,
+                        publication_receipt=publication_receipt,
                     )
                 )
                 self._require_before_deadline(
-                    terminal_deadline,
+                    governance_deadlines.finalization,
                     "before acquisition terminal anchor",
                 )
-                self._store.finish_attempt(
-                    capability,
-                    terminal_status=TERMINAL_PASS,
-                    verified_terminal_evidence=terminal_evidence,
+                terminalization = (
+                    self._store.issue_terminalization_capability(
+                        attempt_id
+                    )
+                )
+                claim = self._store.commit_terminalization_claim(
+                    terminalization,
+                    terminal_evidence,
+                    TERMINAL_PASS,
+                )
+                self._store.complete_terminalized_attempt(
+                    claim, terminal_evidence
                 )
                 terminal_committed = True
                 terminal = self._store.attempt_history(attempt_id)[-1]
@@ -3830,7 +6528,7 @@ class SecGemmaOnlineRiskOverlayRunner:
                     terminal_artifact_receipt=artifact_receipt,
                 )
                 self._require_before_deadline(
-                    terminal_deadline,
+                    governance_deadlines.finalization,
                     "after sealed acquisition result",
                 )
                 return result
@@ -3849,7 +6547,7 @@ class SecGemmaOnlineRiskOverlayRunner:
                     receipts=receipts,
                     attempt_deadline=attempt_deadline,
                 )
-                terminal_deadline = _terminal_budget_deadline(
+                governance_deadlines = _governance_deadlines(
                     start=attempt_start,
                     strict_parent_deadline=attempt_deadline,
                     receipts=receipts,
@@ -3858,13 +6556,13 @@ class SecGemmaOnlineRiskOverlayRunner:
                     command=command,
                     receipts=receipts,
                     start=attempt_start,
-                    end=terminal_deadline,
+                    end=governance_deadlines.finalization,
                 )
                 self._require_before_deadline(
-                    terminal_deadline,
+                    governance_deadlines.intent_prepare,
                     "before scored evidence persistence",
                 )
-                _append_phase_evidence(
+                persisted_phase_evidence = _append_phase_evidence(
                     store=self._store,
                     capability=capability,
                     command=command,
@@ -3880,7 +6578,7 @@ class SecGemmaOnlineRiskOverlayRunner:
                     evaluation=evaluation,
                 )
                 self._require_before_deadline(
-                    terminal_deadline,
+                    governance_deadlines.intent_prepare,
                     "after scored evidence persistence",
                 )
                 governance_checks = {
@@ -3899,7 +6597,7 @@ class SecGemmaOnlineRiskOverlayRunner:
                 governance_checks=governance_checks,
             )
             self._require_before_deadline(
-                terminal_deadline,
+                governance_deadlines.intent_prepare,
                 "after joint report construction",
             )
             artifact_receipt = self._store.append_artifact(
@@ -3923,11 +6621,27 @@ class SecGemmaOnlineRiskOverlayRunner:
             report_kind = (
                 SCORED_PASS if gate_passed else SCORED_FAILED_GATE
             )
-            self._require_before_deadline(
-                terminal_deadline,
-                "before scored publication",
+            reconstruction_material = (
+                _build_terminal_reconstruction_material(
+                    implementation_manifest=self._implementation,
+                    store=self._store,
+                    attempt_plan=attempt_plan,
+                    terminal_status=terminal_status,
+                    report_kind=report_kind,
+                    terminal_artifact=joint,
+                    terminal_artifact_receipt=artifact_receipt,
+                    report_material=report_material,
+                    persisted_phase_evidence=persisted_phase_evidence,
+                    gate_checks=gate["checks"],
+                )
             )
-            publication = self._publisher.publish(
+            reconstruction = (
+                self._store.commit_terminal_reconstruction_material(
+                    capability, reconstruction_material
+                )
+            )
+            prepared = prepare_external_publication(
+                implementation_manifest=self._implementation,
                 attempt_id=attempt_id,
                 terminal_status=publication_status,
                 report_kind=report_kind,
@@ -3935,11 +6649,83 @@ class SecGemmaOnlineRiskOverlayRunner:
                 predecessor_publication_sha256=(
                     predecessor_publication_sha256
                 ),
-                deadline_monotonic=terminal_deadline,
             )
+            elapsed_at_intent = (
+                self._require_before_deadline(
+                    governance_deadlines.intent_prepare,
+                    "before scored publication intent",
+                )
+                - attempt_start
+            )
+            intent_material = _build_publication_intent(
+                implementation_manifest=self._implementation,
+                store=self._store,
+                attempt_plan=attempt_plan,
+                terminal_status=terminal_status,
+                report_kind=report_kind,
+                artifact_sha256=joint["joint_stage_report_sha256"],
+                artifact_receipt=artifact_receipt,
+                reconstruction=reconstruction,
+                report_material=report_material,
+                elapsed_seconds=elapsed_at_intent,
+                predecessor_publication_sha256=(
+                    predecessor_publication_sha256
+                ),
+                prepared_publication=prepared,
+            )
+            publication_intent = self._store.commit_publication_intent(
+                capability, intent_material
+            )
+            publication_started_at = self._require_before_deadline(
+                governance_deadlines.intent_prepare,
+                "after scored publication intent",
+            )
+            publication_deadline = min(
+                governance_deadlines.publication,
+                publication_started_at + _NORMAL_PUBLICATION_SECONDS,
+            )
+            governance_deadlines = _GovernanceDeadlines(
+                intent_prepare=governance_deadlines.intent_prepare,
+                publication=publication_deadline,
+                finalization=min(
+                    governance_deadlines.finalization,
+                    publication_deadline
+                    + _TERMINAL_FINALIZATION_SECONDS,
+                ),
+            )
+            publication_receipt = self._run_normal_publication(
+                attempt_id=attempt_id,
+                publication_intent=publication_intent,
+                prepared=prepared,
+                deadline_monotonic=governance_deadlines.publication,
+            )
+            finalization_started_at = self._require_before_deadline(
+                governance_deadlines.publication,
+                "after scored publication",
+            )
+            governance_deadlines = _GovernanceDeadlines(
+                intent_prepare=governance_deadlines.intent_prepare,
+                publication=governance_deadlines.publication,
+                finalization=min(
+                    governance_deadlines.finalization,
+                    finalization_started_at
+                    + _TERMINAL_FINALIZATION_SECONDS,
+                ),
+            )
+            if publication_receipt is None:
+                self._require_before_deadline(
+                    governance_deadlines.finalization,
+                    "before scored pending handoff",
+                )
+                return _publication_pending_result(
+                    command=command,
+                    attempt_id=attempt_id,
+                    publication_intent=publication_intent,
+                )
+            publication = publication_receipt.external_publication
             if not is_verified_external_publication(publication):
                 raise SecGemmaOnlineRiskOverlayRunnerError(
-                    "Scored publisher returned no opaque receipt"
+                    "Scored publication receipt lost its remote authority"
                 )
             terminal_evidence = (
                 self._deps.issue_scored_terminal_evidence_fn(
@@ -3949,17 +6735,26 @@ class SecGemmaOnlineRiskOverlayRunner:
                     report_material=report_material,
                     joint_artifact_receipt=artifact_receipt,
                     gate_checks=gate["checks"],
-                    external_publication=publication,
+                    publication_intent=publication_intent,
+                    publication_receipt=publication_receipt,
                 )
             )
             self._require_before_deadline(
-                terminal_deadline,
+                governance_deadlines.finalization,
                 "before scored terminal anchor",
             )
-            self._store.finish_attempt(
-                capability,
-                terminal_status=terminal_status,
-                verified_terminal_evidence=terminal_evidence,
+            terminalization = (
+                self._store.issue_terminalization_capability(
+                    attempt_id
+                )
+            )
+            claim = self._store.commit_terminalization_claim(
+                terminalization,
+                terminal_evidence,
+                terminal_status,
+            )
+            self._store.complete_terminalized_attempt(
+                claim, terminal_evidence
             )
             terminal_committed = True
             terminal = self._store.attempt_history(attempt_id)[-1]
@@ -3986,13 +6781,34 @@ class SecGemmaOnlineRiskOverlayRunner:
                     terminal_artifact_receipt=artifact_receipt,
                 )
             self._require_before_deadline(
-                terminal_deadline,
+                governance_deadlines.finalization,
                 "after sealed scored result",
             )
             return result
         except SecGemmaOnlineRiskOverlayRunnerIndeterminate:
             if capability is None or terminal_committed:
                 raise
+            if publication_intent is None:
+                try:
+                    publication_intent = (
+                        self._store.publication_intent_authority(
+                            attempt_id
+                        )
+                    )
+                except Exception:
+                    publication_intent = None
+            if publication_intent is not None:
+                if governance_deadlines is None:
+                    raise
+                self._require_before_deadline(
+                    governance_deadlines.finalization,
+                    "before exceptional publication-pending handoff",
+                )
+                return _publication_pending_result(
+                    command=command,
+                    attempt_id=attempt_id,
+                    publication_intent=publication_intent,
+                )
             self._store.finish_attempt(
                 capability,
                 terminal_status=TERMINAL_INDETERMINATE,
@@ -4008,6 +6824,27 @@ class SecGemmaOnlineRiskOverlayRunner:
         except Exception:
             if capability is None or terminal_committed:
                 raise
+            if publication_intent is None:
+                try:
+                    publication_intent = (
+                        self._store.publication_intent_authority(
+                            attempt_id
+                        )
+                    )
+                except Exception:
+                    publication_intent = None
+            if publication_intent is not None:
+                if governance_deadlines is None:
+                    raise
+                self._require_before_deadline(
+                    governance_deadlines.finalization,
+                    "before exceptional publication-pending handoff",
+                )
+                return _publication_pending_result(
+                    command=command,
+                    attempt_id=attempt_id,
+                    publication_intent=publication_intent,
+                )
             self._store.finish_attempt(
                 capability,
                 terminal_status=TERMINAL_INDETERMINATE,
@@ -4078,6 +6915,7 @@ __all__ = [
     "SecGemmaOnlineRiskOverlayRunnerError",
     "SecGemmaOnlineRiskOverlayRunnerIndeterminate",
     "StageStore",
+    "SupervisedPublicationRecoveryWorkerAuthority",
     "VERIFY_COMMAND",
     "VERIFY_RESULT_SCHEMA_VERSION",
     "build_phase_output",

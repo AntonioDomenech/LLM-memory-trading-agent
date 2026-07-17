@@ -30,7 +30,7 @@ from agent_benchmark.sec_gemma_online_risk_overlay_vault import (
 )
 
 
-ATTEMPT_ID = "aapl-sec-gemma-online-risk-overlay-v2-1-development-acquisition"
+ATTEMPT_ID = "aapl-sec-gemma-online-risk-overlay-v2-2-development-acquisition"
 
 
 def _capability(

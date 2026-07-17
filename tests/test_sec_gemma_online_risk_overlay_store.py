@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import subprocess
@@ -8,38 +8,29 @@ from typing import Any
 
 import pytest
 
-import agent_benchmark.sec_gemma_online_risk_overlay_publisher as publisher
-import agent_benchmark.sec_gemma_online_risk_overlay_vault as vault_module
 from agent_benchmark.sec_gemma_online_risk_overlay_attempt import (
     CONSUMED,
-    DETERMINISTIC_EVALUATION_SCHEMA_VERSION,
-    JOINT_STAGE_REPORT_SCHEMA_VERSION,
-    REPORT_RECORD_TABLES,
-    TERMINAL_FAIL,
-    TERMINAL_INDETERMINATE,
     TERMINAL_PASS,
     build_attempt_plan,
     build_implementation_manifest,
-    issue_verified_acquisition_terminal_evidence,
-    issue_verified_scored_terminal_evidence,
+    store_record_receipt_material,
 )
 from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
-    ACQUISITION_VALIDATION_CHECKS,
     BRANCH_NAME,
-    CONFIRMATION_ATTEMPT_ID,
     CONTRACT_SHA256,
     CONTRACT_VERSION,
     DEVELOPMENT_ACQUISITION_ID,
-    DEVELOPMENT_ATTEMPT_ID,
     EXTERNAL_TAG_REF_TEMPLATE,
-    build_contract_manifest,
+    PUBLICATION_NORMAL_NO_RECOVERY_COMPLETION_SHA256,
+    PUBLICATION_NORMAL_OPERATION_SHA256,
+    PUBLICATION_NO_PRIOR_PUSH_COMMAND_SHA256,
+    PUBLICATION_PUSH_COMMAND_PROFILE_SHA256,
+    PUBLICATION_RECOVERY_COMPLETION_GENESIS_SHA256,
+    PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256,
+    PUBLICATION_RECOVERY_NO_REMOTE_OBSERVATION_SHA256,
+    PUBLICATION_REMOTE_READBACK_COMMAND_PROFILE_SHA256,
+    PUBLICATION_REMOTE_REF_ABSENT_SENTINEL,
     canonical_sha256,
-)
-from agent_benchmark.sec_gemma_online_risk_overlay_features import (
-    FEATURE_ROW_SCHEMA_VERSION,
-)
-from agent_benchmark.sec_gemma_online_risk_overlay_runner import (
-    build_phase_output,
 )
 from agent_benchmark.sec_gemma_online_risk_overlay_source_verifier import (
     EXPECTED_ORIGIN_URL,
@@ -47,15 +38,25 @@ from agent_benchmark.sec_gemma_online_risk_overlay_source_verifier import (
     REQUIRED_NEW_SOURCE_PATHS,
     verify_live_source_tree,
 )
+from agent_benchmark.sec_gemma_online_risk_overlay_publisher import (
+    _issue_verified_external_publication,
+    prepare_external_publication,
+)
 from agent_benchmark.sec_gemma_online_risk_overlay_store import (
     ANCHOR_FILENAME,
     ANCHOR_RELATIVE_DIRECTORY,
     DATABASE_FILENAME,
+    GOVERNANCE_RECORD_TABLES,
     STATE_RELATIVE_DIRECTORY,
-    EffectCapability,
+    PublicationRecoveryCapability,
     SecGemmaOnlineRiskOverlayStore,
     SecGemmaOnlineRiskOverlayStoreConflict,
     SecGemmaOnlineRiskOverlayStoreError,
+    TerminalizationCapability,
+    VerifiedDurablePublicationReceipt,
+    VerifiedPublicationIntent,
+    VerifiedTerminalReconstructionMaterial,
+    VerifiedTerminalizationClaim,
 )
 
 
@@ -114,7 +115,7 @@ def _implementation_repo(destination: Path) -> Path:
 def repo_and_manifest(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> tuple[Path, dict[str, Any]]:
-    repo = _implementation_repo(tmp_path_factory.mktemp("store-v21") / "repo")
+    repo = _implementation_repo(tmp_path_factory.mktemp("store-v22") / "repo")
     manifest = build_implementation_manifest(
         verified_sources=verify_live_source_tree(repo)
     )
@@ -142,105 +143,12 @@ def _store(
     )
 
 
-def _publication(
-    manifest: dict[str, Any],
-    *,
-    attempt_id: str,
-    terminal_status: str,
-    report_kind: str,
-    artifact_sha256: str,
-    predecessor_publication_sha256: str = (
-        publisher.PUBLICATION_GENESIS_SHA256
-    ),
-) -> publisher.VerifiedExternalPublication:
-    message = publisher.build_external_tag_message(
-        implementation_manifest=manifest,
-        attempt_id=attempt_id,
-        terminal_status=terminal_status,
-        report_kind=report_kind,
-        artifact_sha256=artifact_sha256,
-        predecessor_publication_sha256=predecessor_publication_sha256,
-    )
-    tag_ref = EXTERNAL_TAG_REF_TEMPLATE.format(
-        attempt_id=attempt_id,
-        report_kind=report_kind,
-        artifact_sha256=artifact_sha256,
-    )
-    payload = publisher.build_external_publication(
-        implementation_manifest=manifest,
-        tag_message=message,
-        tag_ref=tag_ref,
-        remote_name="origin",
-        remote_url=manifest["origin_url"],
-        remote_tag_object_sha1="1" * 40,
-        remote_peeled_commit=manifest["implementation_commit"],
-    )
-    return publisher._issue_verified_external_publication(
-        payload,
-        implementation_manifest=manifest,
-    )
-
-
-def _acquisition_report(
-    store: SecGemmaOnlineRiskOverlayStore,
-    capability: EffectCapability,
-) -> Any:
-    import agent_benchmark.sec_gemma_online_risk_overlay_acquisition as acquisition
-
-    checks = {
-        name: canonical_sha256({"check": name})
-        for name in ACQUISITION_VALIDATION_CHECKS
-    }
-    body = {
-        "schema_version": acquisition.ACQUISITION_VALIDATION_SCHEMA_VERSION,
-        "verifier_id": acquisition.ACQUISITION_VALIDATION_VERIFIER_ID,
-        "verdict": "pass",
-        "stage": "development",
-        "attempt_id": DEVELOPMENT_ACQUISITION_ID,
-        "attempt_kind": "development_acquisition",
-        "acquisition_plan_sha256": acquisition.build_acquisition_plan(
-            "development"
-        )["acquisition_plan_sha256"],
-        "bundle_sha256": "3" * 64,
-        "manifest_sha256": "4" * 64,
-        "private_index_sha256": "5" * 64,
-        "predecessor_chain_bundle_sha256s": [],
-        "checks": checks,
-        "check_set_sha256": canonical_sha256(checks),
-    }
-    payload = {
-        **body,
-        "validation_sha256": canonical_sha256(body),
-    }
-    vault = vault_module.open_test_acquisition_vault(
-        store.path.parent / "test-quarantine.sqlite3"
-    )
-    handle = vault_module._seal_quarantine(
-        vault,
-        store=store,
-        capability=capability,
-        stage="development",
-        attempt_id=DEVELOPMENT_ACQUISITION_ID,
-        bundle_sha256=body["bundle_sha256"],
-        manifest_sha256=body["manifest_sha256"],
-        private_index_sha256=body["private_index_sha256"],
-        predecessor_handles=(),
-        quarantine={},
-    )
-    return acquisition.VerifiedAcquisitionReport(
-        payload,
-        vault=vault,
-        handle=handle,
-        _sentinel=acquisition._VERIFIED_REPORT_SENTINEL,
-    )
-
-
-def _first_consumed(
+def _consumed(
     repo_and_manifest: tuple[Path, dict[str, Any]],
 ) -> tuple[
     SecGemmaOnlineRiskOverlayStore,
     dict[str, Any],
-    EffectCapability,
+    Any,
 ]:
     manifest = repo_and_manifest[1]
     plan = build_attempt_plan(
@@ -252,917 +160,715 @@ def _first_consumed(
     return store, plan, store.consume_attempt(plan["attempt_id"])
 
 
-def _acquisition_phase_evidence(
-    report: dict[str, Any],
-    *,
-    command: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    import agent_benchmark.sec_gemma_online_risk_overlay_acquisition as acquisition
-
-    summary_body = {
-        "schema_version": acquisition.ACQUISITION_PUBLIC_SUMMARY_SCHEMA_VERSION,
-        "stage": report["stage"],
-        "attempt_id": report["attempt_id"],
-        "attempt_kind": report["attempt_kind"],
-        "acquisition_plan_sha256": report["acquisition_plan_sha256"],
-        "predecessor_bundle_sha256": (
-            report["predecessor_chain_bundle_sha256s"][-1]
-            if report["predecessor_chain_bundle_sha256s"]
-            else None
-        ),
-        "bundle_sha256": report["bundle_sha256"],
-        "manifest_sha256": report["manifest_sha256"],
-        "private_index_sha256": report["private_index_sha256"],
-        "sec_catalog_source_count": 1,
-        "sec_primary_document_count": 1,
-        "market_response_count": 6,
-        "model_request_count": 1,
-        "model_slice_sha256": "1" * 64,
-        "stage_slice_sha256": "2" * 64,
-        "market_elapsed_seconds_hex": (1.5).hex(),
-        "total_raw_byte_count": 160,
-        "complete_batch": True,
-        "quarantine_only": True,
-        "production_authority": True,
-    }
-    summary = {
-        **summary_body,
-        "public_summary_sha256": canonical_sha256(summary_body),
-    }
-    accounting_body = {
-        "schema_version": (
-            acquisition.ACQUISITION_REQUEST_ACCOUNTING_SCHEMA_VERSION
-        ),
-        "stage": report["stage"],
-        "attempt_id": report["attempt_id"],
-        "sec_request_count": 2,
-        "market_request_count": 6,
-        "sec_bytes": 100,
-        "market_bytes": 60,
-        "network_request_count": 8,
-        "retry_count": 0,
-        "redirect_count": 0,
-        "market_elapsed_seconds_hex": (1.5).hex(),
-    }
-    accounting = {
-        **accounting_body,
-        "accounting_sha256": canonical_sha256(accounting_body),
-    }
-    safe = {
-        "verified_acquisition_report": copy.deepcopy(report),
-        "public_summary": summary,
-        "request_accounting": accounting,
-    }
-    counters = {
-        "sec_request_count": 2,
-        "market_request_count": 6,
-        "model_call_count": 0,
-        "retry_count": 0,
-        "fallback_count": 0,
-        "model_pull_count": 0,
-        "paid_api_call_count": 0,
-    }
-    output = build_phase_output(
-        command=command,
-        phase="acquisition",
-        counters=counters,
-        payload=safe,
-    )
-    receipt_body = {
-        "phase": "acquisition",
-        "phase_output_sha256": output["phase_output_sha256"],
-        "payload_sha256": output["payload_sha256"],
-        "counters": counters,
-        "elapsed_seconds_hex": (1.0).hex(),
-        "market_elapsed_seconds_hex": (1.5).hex(),
-        "deadline_monotonic_hex": (10.0).hex(),
-    }
-    receipt = {
-        **receipt_body,
-        "phase_receipt_sha256": canonical_sha256(receipt_body),
-    }
-    evidence = {
-        "command": command,
-        "phase": "acquisition",
-        "phase_output_sha256": output["phase_output_sha256"],
-        "payload_sha256": output["payload_sha256"],
-        "phase_receipt": receipt,
-        **safe,
-    }
-    return safe, evidence
+def _self_hashed(body: dict[str, Any], field: str) -> dict[str, Any]:
+    return {**body, field: canonical_sha256(body)}
 
 
-def _fake_acquisition_report(
-    *,
-    stage: str,
-    attempt_id: str,
-    attempt_kind: str,
-    predecessor_bundles: list[str],
-) -> dict[str, Any]:
-    import agent_benchmark.sec_gemma_online_risk_overlay_acquisition as acquisition
-
-    marker = {
-        "confirmation": ("a", "b", "c"),
-        "final": ("d", "e", "f"),
-    }[stage]
-    checks = {
-        name: canonical_sha256(
-            {
-                "stage": stage,
-                "check": name,
-            }
-        )
-        for name in ACQUISITION_VALIDATION_CHECKS
-    }
-    body = {
-        "schema_version": acquisition.ACQUISITION_VALIDATION_SCHEMA_VERSION,
-        "verifier_id": acquisition.ACQUISITION_VALIDATION_VERIFIER_ID,
-        "verdict": "pass",
-        "stage": stage,
-        "attempt_id": attempt_id,
-        "attempt_kind": attempt_kind,
-        "acquisition_plan_sha256": acquisition.build_acquisition_plan(
-            stage
-        )["acquisition_plan_sha256"],
-        "bundle_sha256": marker[0] * 64,
-        "manifest_sha256": marker[1] * 64,
-        "private_index_sha256": marker[2] * 64,
-        "predecessor_chain_bundle_sha256s": list(predecessor_bundles),
-        "checks": checks,
-        "check_set_sha256": canonical_sha256(checks),
-    }
-    return {**body, "validation_sha256": canonical_sha256(body)}
-
-
-def _seal_acquisition(
-    store: SecGemmaOnlineRiskOverlayStore,
-    plan: dict[str, Any],
-    capability: EffectCapability,
-    manifest: dict[str, Any],
-) -> Any:
-    store.append_evidence(
-        capability=capability,
-        effect="official_sec_network",
-        identity=f"evidence:{plan['attempt_id']}",
-        payload={"request_count": 1},
-    )
-    report = _acquisition_report(store, capability)
-    _, phase_evidence = _acquisition_phase_evidence(
-        report.as_dict(),
-        command="development_acquisition",
-    )
-    store.append_evidence(
-        capability=capability,
-        effect="official_sec_network",
-        identity=f"phase:{plan['attempt_id']}:acquisition",
-        payload=phase_evidence,
-    )
-    receipt = store.append_artifact(
-        capability=capability,
-        effect="deterministic_private_quarantine",
-        identity=f"terminal_artifact:{plan['attempt_id']}",
-        payload=report.as_dict(),
-    )
-    material = store.terminal_evidence_material(capability)
-    publication_proof = _publication(
-        manifest,
-        attempt_id=plan["attempt_id"],
-        terminal_status=TERMINAL_PASS,
-        report_kind=publisher.ACQUISITION_PASS,
-        artifact_sha256=report["validation_sha256"],
-    )
-    evidence = issue_verified_acquisition_terminal_evidence(
-        implementation_manifest=manifest,
-        attempt_plan=plan,
-        acquisition_report=report,
-        report_material=material,
-        acquisition_artifact_receipt=receipt,
-        external_publication=publication_proof,
-    )
-    store.finish_attempt(
-        capability,
-        terminal_status=TERMINAL_PASS,
-        verified_terminal_evidence=evidence,
-    )
-    return evidence
-
-
-def _gate_checks(
-    *,
-    failed: bool,
-    stage: str = "development",
-) -> dict[str, bool]:
-    checks = {
-        name: True
-        for name in build_contract_manifest()["gates"][stage]
-    }
-    if failed:
-        checks[next(iter(checks))] = False
-    return checks
-
-
-def _joint_report(
-    plan: dict[str, Any],
-    *,
-    checks: dict[str, bool],
-    stage: str = "development",
-) -> dict[str, Any]:
-    failures = [name for name in checks if not checks[name]]
-    gate_body = {
-        "checks": copy.deepcopy(checks),
-        "passed": not failures,
-        "failed_checks": failures,
-    }
-    gate = {
-        **gate_body,
-        "gate_report_sha256": canonical_sha256(gate_body),
-    }
-    metrics_input = {"stage_metrics_input_sha256": "6" * 64}
-    metrics = {"stage_metrics_sha256": "7" * 64}
-    proofs = {"proof": {"proof_sha256": "8" * 64}}
-    evaluation_body = {
-        "schema_version": DETERMINISTIC_EVALUATION_SCHEMA_VERSION,
-        "contract_version": CONTRACT_VERSION,
-        "contract_sha256": CONTRACT_SHA256,
-        "stage": stage,
-        "stage_input_bundle_sha256": "9" * 64,
-        "metrics_input": metrics_input,
-        "metrics_input_sha256": metrics_input[
-            "stage_metrics_input_sha256"
-        ],
-        "stage_metrics": metrics,
-        "stage_metrics_sha256": metrics["stage_metrics_sha256"],
-        "gate_report": gate,
-        "gate_report_sha256": gate["gate_report_sha256"],
-        "no_leverage_proofs": proofs,
-        "no_leverage_proofs_sha256": canonical_sha256(proofs),
-    }
-    evaluation = {
-        **evaluation_body,
-        "deterministic_evaluation_sha256": canonical_sha256(
-            evaluation_body
-        ),
-    }
-    body = {
-        "schema_version": JOINT_STAGE_REPORT_SCHEMA_VERSION,
-        "contract_version": CONTRACT_VERSION,
-        "contract_sha256": CONTRACT_SHA256,
-        "metric_stage": stage,
-        "attempt_id": plan["attempt_id"],
-        "attempt_plan_sha256": plan["attempt_plan_sha256"],
-        "implementation_manifest_sha256": plan[
-            "implementation_manifest_sha256"
-        ],
-        "deterministic_evaluation": evaluation,
-        "deterministic_evaluation_sha256": evaluation[
-            "deterministic_evaluation_sha256"
-        ],
-    }
-    return {**body, "joint_stage_report_sha256": canonical_sha256(body)}
-
-
-def _second_consumed(
+def _sealed_reconstruction_and_intent(
     repo_and_manifest: tuple[Path, dict[str, Any]],
 ) -> tuple[
     SecGemmaOnlineRiskOverlayStore,
     dict[str, Any],
-    EffectCapability,
+    VerifiedTerminalReconstructionMaterial,
+    VerifiedPublicationIntent,
 ]:
+    store, plan, capability = _consumed(repo_and_manifest)
     manifest = repo_and_manifest[1]
-    store, first_plan, first_capability = _first_consumed(
-        repo_and_manifest
-    )
-    _seal_acquisition(
-        store,
-        first_plan,
-        first_capability,
-        manifest,
-    )
-    predecessor = store.attempt_history(first_plan["attempt_id"])[-1]
-    plan = build_attempt_plan(
-        implementation_manifest=manifest,
-        attempt_id=DEVELOPMENT_ATTEMPT_ID,
-        prerequisite_terminal_transition=predecessor,
-    )
-    store.register_attempt(plan)
-    return store, plan, store.consume_attempt(plan["attempt_id"])
-
-
-def _append_scored_minimums(
-    store: SecGemmaOnlineRiskOverlayStore,
-    capability: EffectCapability,
-) -> None:
     store.append_evidence(
         capability=capability,
-        effect="chronological_replay",
-        identity=f"evidence:{capability.attempt_id}",
-        payload={"complete": True},
+        effect="official_sec_network",
+        identity=f"evidence:{plan['attempt_id']}",
+        payload={"sealed": True},
     )
-    store.append_feature(
+    artifact = {"sealed_terminal_artifact": True}
+    artifact_receipt = store.append_artifact(
         capability=capability,
-        effect="chronological_replay",
-        identity=f"feature:{capability.attempt_id}",
-        payload={"complete": True},
+        effect="deterministic_private_quarantine",
+        identity=f"terminal_artifact:{plan['attempt_id']}",
+        payload=artifact,
     )
-    store.append_prediction(
-        capability=capability,
-        effect="chronological_replay",
-        identity=f"prediction:{capability.attempt_id}",
-        payload={"complete": True},
+    artifact_receipt_sha256 = canonical_sha256(
+        store_record_receipt_material(artifact_receipt)
     )
-    store.append_lesson(
-        capability=capability,
-        effect="chronological_replay",
-        identity=f"lesson:{capability.attempt_id}",
-        payload={"complete": True},
-    )
-    store.append_ledger(
-        capability=capability,
-        effect="chronological_replay",
-        identity=f"ledger:{capability.attempt_id}",
-        payload={"complete": True},
-    )
-
-
-def _feature_row(
-    *,
-    stage: str,
-    accession: str,
-    decision_session: str,
-    acceptance_datetime: str,
-) -> dict[str, Any]:
-    bindings = {
-        "stage": stage,
-        "accession": accession,
-    }
-    body = {
-        "schema_version": FEATURE_ROW_SCHEMA_VERSION,
+    evidence_material = store.terminal_evidence_material(capability)
+    reconstruction_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "acquisition-terminal-reconstruction-v1"
+        ),
+        "reconstruction_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-test-reconstructor-v1"
+        ),
         "contract_version": CONTRACT_VERSION,
         "contract_sha256": CONTRACT_SHA256,
-        "accession_number": accession,
-        "form": "10-Q",
-        "decision_session": decision_session,
-        "acceptance_datetime": acceptance_datetime,
-        "artifact_stage": stage,
-        "test_marker": True,
-        "upstream_bindings": bindings,
-        "upstream_bindings_sha256": canonical_sha256(bindings),
+        "implementation_manifest_sha256": manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": manifest["implementation_commit"],
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": plan["attempt_id"],
+        "attempt_kind": plan["attempt_kind"],
+        "attempt_plan_sha256": plan["attempt_plan_sha256"],
+        "stage": "development",
+        "terminal_status": TERMINAL_PASS,
+        "report_kind": "acquisition_pass",
+        "terminal_artifact_sha256": canonical_sha256(artifact),
+        "terminal_artifact_store_receipt_sha256": (
+            artifact_receipt_sha256
+        ),
+        "acquisition_validation_sha256": "1" * 64,
+        "bundle_sha256": "2" * 64,
+        "manifest_sha256": "3" * 64,
+        "private_index_sha256": "4" * 64,
+        "check_set_sha256": "5" * 64,
+        "record_counts": evidence_material["record_counts"],
+        "record_commitment_sha256": evidence_material[
+            "record_commitment_sha256"
+        ],
+        "acquisition_artifact_receipt_sha256": (
+            artifact_receipt_sha256
+        ),
+        "sealed_acquisition_phase_evidence_sha256": "6" * 64,
+        "sealed_vault_commitments_sha256": "7" * 64,
     }
-    return {**body, "feature_row_sha256": canonical_sha256(body)}
-
-
-def _append_scoped_scored_records(
-    store: SecGemmaOnlineRiskOverlayStore,
-    capability: EffectCapability,
-    *,
-    stage: str,
-    feature_rows: list[dict[str, Any]],
-    acquisition_phase_evidence: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    attempt_id = capability.attempt_id
-    if acquisition_phase_evidence is not None:
-        store.append_evidence(
-            capability=capability,
-            effect="official_sec_network",
-            identity=f"phase:{attempt_id}:acquisition",
-            payload=acquisition_phase_evidence,
-        )
-    store.append_evidence(
-        capability=capability,
-        effect="ollama_runtime_identity",
-        identity=f"phase:{attempt_id}:runtime_identity",
-        payload={
-            "stage": stage,
-            "runtime": "pinned",
-        },
-    )
-    for row in feature_rows:
-        store.append_feature(
-            capability=capability,
-            effect="chronological_replay",
-            identity=f"feature:{row['feature_row_sha256']}",
-            payload=row,
-        )
-    prediction = {
-        "stage": stage,
-        "prediction": "cash",
-    }
-    prediction_hash = canonical_sha256(prediction)
-    prediction_identity = (
-        f"prediction:{stage}:semantic-online:{prediction_hash}"
-    )
-    store.append_prediction(
-        capability=capability,
-        effect="chronological_replay",
-        identity=prediction_identity,
-        payload=prediction,
-    )
-    lesson = {
-        "stage": stage,
-        "lesson": "chronological",
-    }
-    lesson_hash = canonical_sha256(lesson)
-    lesson_identity = f"lesson:{stage}:{lesson_hash}"
-    store.append_lesson(
-        capability=capability,
-        effect="chronological_replay",
-        identity=lesson_identity,
-        payload=lesson,
-    )
-    ledger = {
-        "stage": stage,
-        "ledger_id": "semantic-online-5bps",
-    }
-    ledger_identity = f"ledger:{stage}:semantic-online-5bps"
-    store.append_ledger(
-        capability=capability,
-        effect="chronological_replay",
-        identity=ledger_identity,
-        payload=ledger,
-    )
-    return {
-        "prediction": prediction_identity,
-        "lesson": lesson_identity,
-        "ledger": ledger_identity,
-    }
-
-
-def _finish_scored_pass(
-    store: SecGemmaOnlineRiskOverlayStore,
-    plan: dict[str, Any],
-    capability: EffectCapability,
-    manifest: dict[str, Any],
-    *,
-    stage: str,
-) -> Any:
-    checks = _gate_checks(failed=False, stage=stage)
-    joint = _joint_report(plan, checks=checks, stage=stage)
-    receipt = store.append_artifact(
-        capability=capability,
-        effect="joint_report_seal",
-        identity=f"terminal_artifact:{plan['attempt_id']}",
-        payload=joint,
-    )
-    evidence = issue_verified_scored_terminal_evidence(
-        implementation_manifest=manifest,
-        attempt_plan=plan,
-        joint_stage_report=joint,
-        report_material=store.terminal_evidence_material(capability),
-        joint_artifact_receipt=receipt,
-        gate_checks=checks,
-        external_publication=_publication(
-            manifest,
-            attempt_id=plan["attempt_id"],
-            terminal_status=TERMINAL_PASS,
-            report_kind=publisher.SCORED_PASS,
-            artifact_sha256=joint["joint_stage_report_sha256"],
+    reconstruction = store.commit_terminal_reconstruction_material(
+        capability,
+        _self_hashed(
+            reconstruction_body,
+            "terminal_reconstruction_material_sha256",
         ),
     )
-    store.finish_attempt(
-        capability,
+    snapshot = store.snapshot()
+    prepared = prepare_external_publication(
+        implementation_manifest=manifest,
+        attempt_id=plan["attempt_id"],
         terminal_status=TERMINAL_PASS,
-        verified_terminal_evidence=evidence,
+        report_kind="acquisition_pass",
+        artifact_sha256=canonical_sha256(artifact),
+        predecessor_publication_sha256="8" * 64,
     )
-    return evidence
+    intent_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-publication-intent-v1"
+        ),
+        "intent_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-intent-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": manifest["implementation_commit"],
+        "attempt_id": plan["attempt_id"],
+        "attempt_kind": plan["attempt_kind"],
+        "attempt_plan_sha256": plan["attempt_plan_sha256"],
+        "terminal_status": TERMINAL_PASS,
+        "report_kind": "acquisition_pass",
+        "artifact_sha256": canonical_sha256(artifact),
+        "artifact_store_receipt_sha256": artifact_receipt_sha256,
+        "terminal_reconstruction_material_sha256": reconstruction[
+            "terminal_reconstruction_material_sha256"
+        ],
+        "terminal_reconstruction_material_store_receipt_sha256": (
+            canonical_sha256(
+                store_record_receipt_material(reconstruction.store_receipt)
+            )
+        ),
+        "record_counts": evidence_material["record_counts"],
+        "record_commitment_sha256": evidence_material[
+            "record_commitment_sha256"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_journal_sequence": snapshot["journal_entry_count"],
+        "store_journal_tip_sha256": snapshot["journal_tip_sha256"],
+        "normal_attempt_elapsed_at_intent_prepare_hex": (1.0).hex(),
+        "predecessor_publication_sha256": "8" * 64,
+        **prepared.intent_material,
+        "intent_status": "publication_pending",
+        "research_effect_authority_invalidated": True,
+        "semantic_result_release_blocked": True,
+        "next_stage_authority_blocked": True,
+        "external_cost_usd": 0,
+    }
+    intent = store.commit_publication_intent(
+        capability,
+        _self_hashed(intent_body, "publication_intent_sha256"),
+    )
+    return store, plan, reconstruction, intent
 
 
-def test_store_uses_v21_namespace_and_exclusive_lock(
+def _transport_manifest(
+    store: SecGemmaOnlineRiskOverlayStore,
+    plan: dict[str, Any],
+    intent: VerifiedPublicationIntent,
+    capability: PublicationRecoveryCapability,
+) -> dict[str, Any]:
+    snapshot = store.snapshot()
+    digest = lambda name: canonical_sha256({"transport": name})
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-transport-isolation-v1"
+        ),
+        "profile_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-transport-isolation-profile-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": store.store_session_nonce_sha256,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "operation_kind": capability.operation_kind,
+        "operation_sha256": capability.operation_sha256,
+        "isolated_git_directory_identity_sha256": digest("git-dir"),
+        "local_config_entries_sha256": digest("config"),
+        "empty_hooks_directory_path": "C:/isolated/empty-hooks",
+        "empty_hooks_directory_identity_sha256": digest("hooks-id"),
+        "empty_hooks_directory_listing_sha256": digest("hooks-listing"),
+        "alternates_file_bytes_sha256": digest("alternates"),
+        "alternate_object_directory_identity_sha256": digest("objects"),
+        "git_executable_path": "C:/Program Files/Git/cmd/git.exe",
+        "git_executable_sha256": digest("git"),
+        "git_version_stdout_sha256": digest("git-version"),
+        "git_exec_path": "C:/Program Files/Git/mingw64/libexec/git-core",
+        "git_exec_path_directory_manifest_sha256": digest("git-exec"),
+        "git_remote_https_executable_path": (
+            "C:/Program Files/Git/mingw64/libexec/git-core/"
+            "git-remote-https.exe"
+        ),
+        "git_remote_https_executable_sha256": digest("remote-https"),
+        "credential_helper_config_value": (
+            "!\"C:/Program Files/Git/mingw64/bin/"
+            "git-credential-manager.exe\""
+        ),
+        "credential_helper_executable_path": (
+            "C:/Program Files/Git/mingw64/bin/"
+            "git-credential-manager.exe"
+        ),
+        "credential_helper_executable_sha256": digest("gcm"),
+        "credential_helper_version_stdout_sha256": digest("gcm-version"),
+        "command_interpreter_executable_path": (
+            "C:/Program Files/Git/usr/bin/sh.exe"
+        ),
+        "command_interpreter_executable_sha256": digest("sh"),
+        "transport_executable_closure_manifest_sha256": digest("closure"),
+        "child_environment_policy_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-exact-child-environment-v1"
+        ),
+        "child_environment_sha256": digest("environment"),
+        "path_lookup_forbidden": True,
+        "remote_url": intent["remote_url"],
+        "remote_url_scheme": "https",
+        "readback_command_profile_sha256": (
+            PUBLICATION_REMOTE_READBACK_COMMAND_PROFILE_SHA256
+        ),
+        "push_command_profile_sha256": (
+            PUBLICATION_PUSH_COMMAND_PROFILE_SHA256
+        ),
+        "pre_transport_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_transport_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+    }
+    return _self_hashed(
+        body, "isolated_transport_git_directory_manifest_sha256"
+    )
+
+
+def _ownership(
+    store: SecGemmaOnlineRiskOverlayStore,
+    plan: dict[str, Any],
+    intent: VerifiedPublicationIntent,
+    capability: PublicationRecoveryCapability,
+) -> dict[str, Any]:
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-worker-ownership-v1"
+        ),
+        "owner_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-worker-owner-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": store.store_session_nonce_sha256,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "operation_kind": capability.operation_kind,
+        "operation_sha256": capability.operation_sha256,
+        "owner_nonce_sha256": canonical_sha256({"owner": "nonce"}),
+        "owner_process_id": 1234,
+        "owner_process_creation_filetime_hex": "0x1",
+        "job_object_name_sha256": canonical_sha256({"job": "name"}),
+        "owner_mutex_name_sha256": canonical_sha256({"mutex": "name"}),
+        "kill_on_parent_exit": True,
+        "child_assignment_before_resume_required": True,
+        "ownership_status": "claimed",
+    }
+    return _self_hashed(body, "worker_ownership_sha256")
+
+
+def _quiescence(
+    store: SecGemmaOnlineRiskOverlayStore,
+    plan: dict[str, Any],
+    intent: VerifiedPublicationIntent,
+    ownership: dict[str, Any],
+    *,
+    verification_mode: str = "same_session_clean_release",
+) -> dict[str, Any]:
+    body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-worker-quiescence-v1"
+        ),
+        "quiescence_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-worker-quiescence-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": store.store_session_nonce_sha256,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "worker_ownership_sha256": ownership["worker_ownership_sha256"],
+        "verification_mode": verification_mode,
+        "prior_owner_process_dead": True,
+        "owner_mutex_unowned": True,
+        "job_object_active_process_count": 0,
+        "recorded_git_ssh_processes_alive_count": 0,
+        "quiescence_status": "verified_no_live_owner_or_worker",
+    }
+    return _self_hashed(body, "worker_quiescence_sha256")
+
+
+def _readback_and_observation(
+    store: SecGemmaOnlineRiskOverlayStore,
+    plan: dict[str, Any],
+    intent: VerifiedPublicationIntent,
+    capability: PublicationRecoveryCapability,
+    ownership: dict[str, Any],
+    transport_manifest: dict[str, Any],
+    *,
+    observed_state: str,
+    exit_code: int = 0,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if observed_state == "absent":
+        ref_status = "absent"
+        raw = PUBLICATION_REMOTE_REF_ABSENT_SENTINEL
+        observed_object = raw
+        observed_peeled = raw
+        observed_message = raw
+    elif observed_state == "exact_expected":
+        ref_status = "present"
+        raw = intent["expected_tag_object_sha1"]
+        observed_object = intent["expected_tag_object_sha1"]
+        observed_peeled = intent["expected_peeled_commit"]
+        observed_message = intent["tag_message_sha256"]
+    else:
+        ref_status = "present"
+        raw = "f" * 40
+        observed_object = raw
+        observed_peeled = intent["expected_peeled_commit"]
+        observed_message = "e" * 64
+    common = {
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": store.store_session_nonce_sha256,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "observation_operation_kind": capability.operation_kind,
+        "observation_operation_sha256": capability.operation_sha256,
+        "worker_ownership_sha256": ownership["worker_ownership_sha256"],
+        "observation_ordinal": 1,
+        "observation_phase": "pre_push",
+        "prior_push_command_sha256": (
+            PUBLICATION_NO_PRIOR_PUSH_COMMAND_SHA256
+        ),
+        "tag_ref": intent["tag_ref"],
+        "remote_name": intent["remote_name"],
+        "remote_url": intent["remote_url"],
+    }
+    evidence_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-remote-readback-evidence-v1"
+        ),
+        "evidence_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-remote-readback-evidence-verifier-v1"
+        ),
+        **common,
+        "transport_isolation_profile_sha256": canonical_sha256(
+            {"profile": "frozen"}
+        ),
+        "isolated_transport_git_directory_manifest_sha256": (
+            transport_manifest[
+                "isolated_transport_git_directory_manifest_sha256"
+            ]
+        ),
+        "command_profile_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-remote-readback-command-profile-v1"
+        ),
+        "command_sequence_sha256": canonical_sha256({"command": "readback"}),
+        "process_exit_status": "exited",
+        "process_exit_code": exit_code,
+        "stdout_byte_count": 0,
+        "stdout_sha256": canonical_sha256(""),
+        "stderr_byte_count": 0,
+        "stderr_sha256": canonical_sha256(""),
+        "transport_status": "completed",
+        "ref_lookup_status": ref_status,
+        "raw_ref_object_value": raw,
+        "raw_peeled_value": (
+            PUBLICATION_REMOTE_REF_ABSENT_SENTINEL
+            if observed_state == "absent"
+            else observed_peeled
+        ),
+        "raw_tag_message_sha256": (
+            PUBLICATION_REMOTE_REF_ABSENT_SENTINEL
+            if observed_state == "absent"
+            else observed_message
+        ),
+    }
+    evidence = _self_hashed(
+        evidence_body, "remote_readback_evidence_sha256"
+    )
+    snapshot = store.snapshot()
+    observation_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-remote-observation-v1"
+        ),
+        "observation_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-remote-observation-verifier-v1"
+        ),
+        **common,
+        "expected_tag_object_sha1": intent["expected_tag_object_sha1"],
+        "expected_peeled_commit": intent["expected_peeled_commit"],
+        "observed_ref_state": observed_state,
+        "observed_tag_object_sha1": observed_object,
+        "observed_peeled_commit": observed_peeled,
+        "observed_tag_message_sha256": observed_message,
+        "remote_readback_evidence_sha256": evidence[
+            "remote_readback_evidence_sha256"
+        ],
+        "pre_observation_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_observation_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+    }
+    return evidence, _self_hashed(
+        observation_body, "publication_remote_observation_sha256"
+    )
+
+
+def test_store_uses_v22_namespace_schema_and_exclusive_lock(
     repo_and_manifest: tuple[Path, dict[str, Any]],
 ) -> None:
     repo = repo_and_manifest[0]
     store = _store(repo_and_manifest)
     try:
-        assert "v2_1" in STATE_RELATIVE_DIRECTORY.as_posix()
-        assert "v2_1" in ANCHOR_RELATIVE_DIRECTORY.as_posix()
+        assert "v2_2" in STATE_RELATIVE_DIRECTORY.as_posix()
+        assert "v2_2" in ANCHOR_RELATIVE_DIRECTORY.as_posix()
         assert store.path == repo / STATE_RELATIVE_DIRECTORY / DATABASE_FILENAME
         assert store.anchor_path == (
             repo / ANCHOR_RELATIVE_DIRECTORY / ANCHOR_FILENAME
         )
-        with pytest.raises(
-            SecGemmaOnlineRiskOverlayStoreError,
-            match="not preregistered",
-        ):
-            store.terminal_acquisition_phase_evidence(
-                DEVELOPMENT_ATTEMPT_ID
-            )
-        with pytest.raises(
-            SecGemmaOnlineRiskOverlayStoreError,
-            match="did not terminal-pass",
-        ):
-            store.terminal_acquisition_phase_evidence(
-                DEVELOPMENT_ACQUISITION_ID
-            )
-        with pytest.raises(
-            SecGemmaOnlineRiskOverlayStoreError,
-            match="not preregistered",
-        ):
-            store.predecessor_feature_rows("unknown")
+        assert set(GOVERNANCE_RECORD_TABLES) <= set(
+            store.snapshot()["table_counts"]
+        )
         with pytest.raises(SecGemmaOnlineRiskOverlayStoreConflict):
             _store(repo_and_manifest)
     finally:
         store.close()
 
 
-def test_terminal_pass_rejects_missing_or_bare_evidence(
+def test_intent_invalidates_research_and_survives_reopen(
     repo_and_manifest: tuple[Path, dict[str, Any]],
 ) -> None:
-    store, plan, capability = _first_consumed(repo_and_manifest)
-    try:
-        with pytest.raises(
-            SecGemmaOnlineRiskOverlayStoreError,
-            match="opaque verifier-issued",
-        ):
-            store.finish_attempt(
-                capability,
-                terminal_status=TERMINAL_PASS,
-            )
-        store.append_evidence(
-            capability=capability,
-            effect="official_sec_network",
-            identity="evidence:bare",
-            payload={"complete": True},
-        )
-        report = _acquisition_report(store, capability)
-        receipt = store.append_artifact(
-            capability=capability,
-            effect="deterministic_private_quarantine",
-            identity="terminal_artifact:bare",
-            payload=report.as_dict(),
-        )
-        evidence = issue_verified_acquisition_terminal_evidence(
-            implementation_manifest=repo_and_manifest[1],
-            attempt_plan=plan,
-            acquisition_report=report,
-            report_material=store.terminal_evidence_material(capability),
-            acquisition_artifact_receipt=receipt,
-            external_publication=_publication(
-                repo_and_manifest[1],
-                attempt_id=plan["attempt_id"],
-                terminal_status=TERMINAL_PASS,
-                report_kind=publisher.ACQUISITION_PASS,
-                artifact_sha256=report["validation_sha256"],
-            ),
-        )
-        with pytest.raises(
-            SecGemmaOnlineRiskOverlayStoreError,
-            match="opaque verifier-issued",
-        ):
-            store.finish_attempt(
-                capability,
-                terminal_status=TERMINAL_PASS,
-                verified_terminal_evidence=evidence.evidence,  # type: ignore[arg-type]
-            )
-    finally:
-        store.close()
-
-
-def test_acquisition_pass_anchor_binds_entire_evidence_publication_and_receipt(
-    repo_and_manifest: tuple[Path, dict[str, Any]],
-) -> None:
-    store, plan, capability = _first_consumed(repo_and_manifest)
-    evidence = _seal_acquisition(
-        store,
-        plan,
-        capability,
-        repo_and_manifest[1],
+    store, plan, reconstruction, intent = (
+        _sealed_reconstruction_and_intent(repo_and_manifest)
     )
-    binding = store.terminal_anchor_binding(plan["attempt_id"])
-    assert binding["terminal_evidence"] == evidence.evidence
-    assert (
-        binding["external_publication"]
-        == evidence.external_publication.publication
-    )
-    assert binding["artifact_receipt"]["payload_sha256"] == (
-        evidence.artifact_receipt.payload_sha256
-    )
-    assert store.attempt_history(plan["attempt_id"])[-1]["status"] == (
-        TERMINAL_PASS
-    )
-    recovered = store.terminal_acquisition_phase_evidence(
-        plan["attempt_id"]
-    )
-    assert set(recovered) == {
-        "verified_acquisition_report",
-        "public_summary",
-        "request_accounting",
-    }
-    assert (
-        recovered["verified_acquisition_report"]["validation_sha256"]
-        == binding["terminal_evidence"]["acquisition_validation_sha256"]
-    )
-    recovered["public_summary"]["complete_batch"] = False
-    assert store.terminal_acquisition_phase_evidence(plan["attempt_id"])[
-        "public_summary"
-    ]["complete_batch"] is True
     with pytest.raises(SecGemmaOnlineRiskOverlayStoreError, match="stale"):
-        store.authorize_effect(capability, "official_sec_network")
-    store.close()
-
-
-def test_scoped_stage_records_and_predecessor_rows_survive_reopen(
-    repo_and_manifest: tuple[Path, dict[str, Any]],
-) -> None:
-    manifest = repo_and_manifest[1]
-    store, development_plan, development_capability = _second_consumed(
-        repo_and_manifest
-    )
-    development_rows = [
-        _feature_row(
-            stage="development",
-            accession="0000320193-10-000001",
-            decision_session="2010-01-04",
-            acceptance_datetime="20100104120000",
-        ),
-        _feature_row(
-            stage="development",
-            accession="0000320193-15-000001",
-            decision_session="2015-01-05",
-            acceptance_datetime="20150105120000",
-        ),
-    ]
-    development_identities = _append_scoped_scored_records(
-        store,
-        development_capability,
-        stage="development",
-        feature_rows=development_rows,
-    )
-    _finish_scored_pass(
-        store,
-        development_plan,
-        development_capability,
-        manifest,
-        stage="development",
-    )
-    development_acquisition = (
-        store.terminal_acquisition_phase_evidence(
-            DEVELOPMENT_ACQUISITION_ID
+        store.authorize_effect(
+            next(iter(store._active_capabilities.values()), object()),
+            "official_sec_network",
         )
-    )
-
-    confirmation_plan = build_attempt_plan(
-        implementation_manifest=manifest,
-        attempt_id=CONFIRMATION_ATTEMPT_ID,
-        prerequisite_terminal_transition=store.attempt_history(
-            DEVELOPMENT_ATTEMPT_ID
-        )[-1],
-    )
-    store.register_attempt(confirmation_plan)
-    confirmation_capability = store.consume_attempt(
-        CONFIRMATION_ATTEMPT_ID
-    )
-    confirmation_report = _fake_acquisition_report(
-        stage="confirmation",
-        attempt_id=CONFIRMATION_ATTEMPT_ID,
-        attempt_kind="confirmation_scoring",
-        predecessor_bundles=[
-            development_acquisition["verified_acquisition_report"][
-                "bundle_sha256"
-            ]
-        ],
-    )
-    confirmation_safe, confirmation_phase = (
-        _acquisition_phase_evidence(
-            confirmation_report,
-            command="confirmation",
-        )
-    )
-    confirmation_rows = [
-        _feature_row(
-            stage="confirmation",
-            accession="0000320193-20-000001",
-            decision_session="2020-01-06",
-            acceptance_datetime="20200106120000",
-        )
-    ]
-    confirmation_identities = _append_scoped_scored_records(
-        store,
-        confirmation_capability,
-        stage="confirmation",
-        feature_rows=confirmation_rows,
-        acquisition_phase_evidence=confirmation_phase,
-    )
-    _finish_scored_pass(
-        store,
-        confirmation_plan,
-        confirmation_capability,
-        manifest,
-        stage="confirmation",
-    )
+    assert isinstance(reconstruction, VerifiedTerminalReconstructionMaterial)
+    assert isinstance(intent, VerifiedPublicationIntent)
+    assert store.attempt_history(plan["attempt_id"])[-1]["status"] == CONSUMED
     store.close()
 
     with _store(repo_and_manifest) as reopened:
-        assert reopened.predecessor_feature_rows("development") == []
-        assert reopened.predecessor_feature_rows(
-            "confirmation"
-        ) == development_rows
-        final_rows = reopened.predecessor_feature_rows("final")
-        assert final_rows == development_rows + confirmation_rows
-        final_rows[0]["artifact_stage"] = "changed"
-        assert reopened.predecessor_feature_rows("final")[0][
-            "artifact_stage"
-        ] == "development"
-
-        recovered_confirmation = (
-            reopened.terminal_acquisition_phase_evidence(
-                CONFIRMATION_ATTEMPT_ID
+        assert reopened.attempt_plan(plan["attempt_id"]) == plan
+        assert reopened.attempt_history(plan["attempt_id"])[-1][
+            "status"
+        ] == CONSUMED
+        assert len(
+            reopened.governance_records(
+                "terminal_reconstruction_materials",
+                attempt_id=plan["attempt_id"],
+            )
+        ) == 1
+        assert len(
+            reopened.governance_records(
+                "publication_intents", attempt_id=plan["attempt_id"]
+            )
+        ) == 1
+        assert reopened.terminal_reconstruction_authority(
+            plan["attempt_id"]
+        ).material == reconstruction.material
+        assert reopened.publication_intent_authority(
+            plan["attempt_id"]
+        ).material == intent.material
+        artifact, artifact_receipt = (
+            reopened.terminal_artifact_payload_and_receipt(
+                plan["attempt_id"]
             )
         )
-        assert recovered_confirmation == confirmation_safe
-        assert set(recovered_confirmation) == {
-            "verified_acquisition_report",
-            "public_summary",
-            "request_accounting",
-        }
-
-        for table in ("predictions", "lessons", "ledgers"):
-            development_receipt = reopened.record_receipt(
-                table,
-                development_identities[table[:-1]],
-            )
-            confirmation_receipt = reopened.record_receipt(
-                table,
-                confirmation_identities[table[:-1]],
-            )
-            assert development_receipt.identity != (
-                confirmation_receipt.identity
-            )
-            assert development_receipt.attempt_id == (
-                DEVELOPMENT_ATTEMPT_ID
-            )
-            assert confirmation_receipt.attempt_id == (
-                CONFIRMATION_ATTEMPT_ID
-            )
+        assert artifact == {"sealed_terminal_artifact": True}
+        assert artifact_receipt.payload_sha256 == canonical_sha256(artifact)
 
 
-def test_terminal_evidence_fails_after_current_record_commitment_changes(
+def test_same_session_reconciliation_closes_exact_orphan_observation(
     repo_and_manifest: tuple[Path, dict[str, Any]],
 ) -> None:
-    store, plan, capability = _first_consumed(repo_and_manifest)
-    manifest = repo_and_manifest[1]
-    store.append_evidence(
-        capability=capability,
-        effect="official_sec_network",
-        identity="evidence:first",
-        payload={"complete": True},
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
     )
-    report = _acquisition_report(store, capability)
-    receipt = store.append_artifact(
-        capability=capability,
-        effect="deterministic_private_quarantine",
-        identity="terminal_artifact:stale",
-        payload=report.as_dict(),
-    )
-    evidence = issue_verified_acquisition_terminal_evidence(
-        implementation_manifest=manifest,
-        attempt_plan=plan,
-        acquisition_report=report,
-        report_material=store.terminal_evidence_material(capability),
-        acquisition_artifact_receipt=receipt,
-        external_publication=_publication(
-            manifest,
-            attempt_id=plan["attempt_id"],
-            terminal_status=TERMINAL_PASS,
-            report_kind=publisher.ACQUISITION_PASS,
-            artifact_sha256=report["validation_sha256"],
+    snapshot = store.snapshot()
+    start_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-start-v1"
         ),
-    )
-    store.append_evidence(
-        capability=capability,
-        effect="market_network",
-        identity="evidence:after-evidence",
-        payload={"complete": True},
-    )
-    try:
-        with pytest.raises(
-            SecGemmaOnlineRiskOverlayStoreError,
-            match="current post-consumption",
-        ):
-            store.finish_attempt(
-                capability,
-                terminal_status=TERMINAL_PASS,
-                verified_terminal_evidence=evidence,
-            )
-    finally:
-        store.close()
-
-
-def test_valid_failed_gate_is_anchored_and_invalid_failure_releases_nothing(
-    repo_and_manifest: tuple[Path, dict[str, Any]],
-) -> None:
-    manifest = repo_and_manifest[1]
-    store, plan, capability = _second_consumed(repo_and_manifest)
-    _append_scored_minimums(store, capability)
-    checks = _gate_checks(failed=True)
-    joint = _joint_report(plan, checks=checks)
-    receipt = store.append_artifact(
-        capability=capability,
-        effect="joint_report_seal",
-        identity=f"terminal_artifact:{plan['attempt_id']}",
-        payload=joint,
-    )
-    evidence = issue_verified_scored_terminal_evidence(
-        implementation_manifest=manifest,
-        attempt_plan=plan,
-        joint_stage_report=joint,
-        report_material=store.terminal_evidence_material(capability),
-        joint_artifact_receipt=receipt,
-        gate_checks=checks,
-        external_publication=_publication(
-            manifest,
-            attempt_id=plan["attempt_id"],
-            terminal_status=TERMINAL_FAIL,
-            report_kind=publisher.SCORED_FAILED_GATE,
-            artifact_sha256=joint["joint_stage_report_sha256"],
+        "start_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-start-verifier-v1"
         ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": store.store_session_nonce_sha256,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "invocation_ordinal": 1,
+        "prior_recovery_completion_sha256": (
+            PUBLICATION_RECOVERY_COMPLETION_GENESIS_SHA256
+        ),
+        "prior_cumulative_recovery_seconds": "0x0.0p+0",
+        "start_status": "started",
+        "invocation_seconds_cap": 300,
+        "durable_pre_push_authorization_required": True,
+        "pre_start_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_start_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+    }
+    start = _self_hashed(
+        start_body, "recovery_invocation_start_sha256"
     )
-    store.finish_attempt(
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="publication_recovery",
+        operation_sha256=start["recovery_invocation_start_sha256"],
+    )
+    store.commit_recovery_start(capability, start)
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    evidence, observation = _readback_and_observation(
+        store,
+        plan,
+        intent,
         capability,
-        terminal_status=TERMINAL_FAIL,
-        verified_terminal_evidence=evidence,
+        ownership,
+        transport,
+        observed_state="exact_expected",
     )
-    binding = store.terminal_anchor_binding(plan["attempt_id"])
-    assert binding["terminal_evidence"]["verdict"] == "failed_gate"
-    assert binding["terminal_evidence"]["failed_gate_names"]
+    durable = store.commit_remote_observation(
+        capability, evidence, observation
+    )
+    store.commit_worker_quiescence(
+        capability,
+        _quiescence(store, plan, intent, ownership),
+    )
+    store.release_publication_capability(capability)
+
+    store.reconcile_publication_recovery_state(plan["attempt_id"])
+
+    completions = store.governance_records(
+        "publication_recovery_invocation_completions",
+        attempt_id=plan["attempt_id"],
+    )
+    assert len(completions) == 1
+    assert completions[0]["outcome"] == "remote_exact_without_push"
+    assert completions[0]["remote_observation_sha256"] == durable[
+        "publication_remote_observation_sha256"
+    ]
     store.close()
 
-    shutil.rmtree(
-        repo_and_manifest[0] / STATE_RELATIVE_DIRECTORY,
-        ignore_errors=True,
-    )
-    shutil.rmtree(
-        repo_and_manifest[0] / ANCHOR_RELATIVE_DIRECTORY,
-        ignore_errors=True,
-    )
-    store, plan, capability = _second_consumed(repo_and_manifest)
-    with pytest.raises(
-        SecGemmaOnlineRiskOverlayStoreError,
-        match="Terminal-fail requires opaque scored failed-gate evidence",
-    ):
-        store.finish_attempt(
-            capability,
-            terminal_status=TERMINAL_FAIL,
-        )
-    store.finish_attempt(
-        capability,
-        terminal_status=TERMINAL_INDETERMINATE,
-    )
-    with pytest.raises(
-        SecGemmaOnlineRiskOverlayStoreError,
-        match="no releasable evidence",
-    ):
-        store.terminal_anchor_binding(plan["attempt_id"])
-    store.close()
 
-
-def test_indeterminate_never_accepts_or_releases_terminal_evidence(
-    repo_and_manifest: tuple[Path, dict[str, Any]],
-) -> None:
-    store, plan, capability = _first_consumed(repo_and_manifest)
-    store.finish_attempt(
-        capability,
-        terminal_status=TERMINAL_INDETERMINATE,
-    )
-    assert store.attempt_history(plan["attempt_id"])[-1]["status"] == (
-        TERMINAL_INDETERMINATE
-    )
-    with pytest.raises(SecGemmaOnlineRiskOverlayStoreError):
-        store.terminal_anchor_binding(plan["attempt_id"])
-    store.close()
-
-
-def test_reopen_completes_exact_evidence_bearing_terminal_intent(
+def test_reopen_completes_exact_intent_row_after_committed_anchor_crash(
     repo_and_manifest: tuple[Path, dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, plan, capability = _first_consumed(repo_and_manifest)
+    store, plan, capability = _consumed(repo_and_manifest)
     manifest = repo_and_manifest[1]
-    store.append_evidence(
-        capability=capability,
-        effect="official_sec_network",
-        identity="evidence:recovery",
-        payload={"complete": True},
-    )
-    report = _acquisition_report(store, capability)
-    receipt = store.append_artifact(
+    artifact = {"sealed_terminal_artifact": True}
+    artifact_receipt = store.append_artifact(
         capability=capability,
         effect="deterministic_private_quarantine",
-        identity="terminal_artifact:recovery",
-        payload=report.as_dict(),
+        identity=f"terminal_artifact:{plan['attempt_id']}",
+        payload=artifact,
     )
-    evidence = issue_verified_acquisition_terminal_evidence(
-        implementation_manifest=manifest,
-        attempt_plan=plan,
-        acquisition_report=report,
-        report_material=store.terminal_evidence_material(capability),
-        acquisition_artifact_receipt=receipt,
-        external_publication=_publication(
-            manifest,
-            attempt_id=plan["attempt_id"],
-            terminal_status=TERMINAL_PASS,
-            report_kind=publisher.ACQUISITION_PASS,
-            artifact_sha256=report["validation_sha256"],
+    material = store.terminal_evidence_material(capability)
+    artifact_receipt_hash = canonical_sha256(
+        store_record_receipt_material(artifact_receipt)
+    )
+    reconstruction_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "acquisition-terminal-reconstruction-v1"
+        ),
+        "reconstruction_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-test-reconstructor-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": manifest["implementation_commit"],
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": plan["attempt_id"],
+        "attempt_kind": plan["attempt_kind"],
+        "attempt_plan_sha256": plan["attempt_plan_sha256"],
+        "stage": "development",
+        "terminal_status": TERMINAL_PASS,
+        "report_kind": "acquisition_pass",
+        "terminal_artifact_sha256": canonical_sha256(artifact),
+        "terminal_artifact_store_receipt_sha256": artifact_receipt_hash,
+        "acquisition_validation_sha256": "1" * 64,
+        "bundle_sha256": "2" * 64,
+        "manifest_sha256": "3" * 64,
+        "private_index_sha256": "4" * 64,
+        "check_set_sha256": "5" * 64,
+        "record_counts": material["record_counts"],
+        "record_commitment_sha256": material["record_commitment_sha256"],
+        "acquisition_artifact_receipt_sha256": artifact_receipt_hash,
+        "sealed_acquisition_phase_evidence_sha256": "6" * 64,
+        "sealed_vault_commitments_sha256": "7" * 64,
+    }
+    reconstruction = store.commit_terminal_reconstruction_material(
+        capability,
+        _self_hashed(
+            reconstruction_body,
+            "terminal_reconstruction_material_sha256",
         ),
     )
+    snapshot = store.snapshot()
+    intent_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-publication-intent-v1"
+        ),
+        "intent_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-intent-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": manifest[
+            "implementation_manifest_sha256"
+        ],
+        "implementation_commit": manifest["implementation_commit"],
+        "attempt_id": plan["attempt_id"],
+        "attempt_kind": plan["attempt_kind"],
+        "attempt_plan_sha256": plan["attempt_plan_sha256"],
+        "terminal_status": TERMINAL_PASS,
+        "report_kind": "acquisition_pass",
+        "artifact_sha256": canonical_sha256(artifact),
+        "artifact_store_receipt_sha256": artifact_receipt_hash,
+        "terminal_reconstruction_material_sha256": reconstruction[
+            "terminal_reconstruction_material_sha256"
+        ],
+        "terminal_reconstruction_material_store_receipt_sha256": (
+            canonical_sha256(
+                store_record_receipt_material(reconstruction.store_receipt)
+            )
+        ),
+        "record_counts": material["record_counts"],
+        "record_commitment_sha256": material["record_commitment_sha256"],
+        "store_instance_id": store.store_instance_id,
+        "store_journal_sequence": snapshot["journal_entry_count"],
+        "store_journal_tip_sha256": snapshot["journal_tip_sha256"],
+        "normal_attempt_elapsed_at_intent_prepare_hex": (1.0).hex(),
+        "predecessor_publication_sha256": "8" * 64,
+        "tag_ref": EXTERNAL_TAG_REF_TEMPLATE.format(
+            attempt_id=plan["attempt_id"]
+        ),
+        "tag_target_commit": manifest["implementation_commit"],
+        "tag_message_sha256": "9" * 64,
+        "expected_tag_object_sha1": "a" * 40,
+        "expected_peeled_commit": manifest["implementation_commit"],
+        "expected_publication_sha256": "b" * 64,
+        "remote_name": "origin",
+        "remote_url": manifest["origin_url"],
+        "intent_status": "publication_pending",
+        "research_effect_authority_invalidated": True,
+        "semantic_result_release_blocked": True,
+        "next_stage_authority_blocked": True,
+        "external_cost_usd": 0,
+    }
+    intent = _self_hashed(intent_body, "publication_intent_sha256")
     original = store._append_anchor
 
     def fail_committed(
@@ -1172,9 +878,9 @@ def test_reopen_completes_exact_evidence_bearing_terminal_intent(
         attempt_id: str | None,
         event_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        if event == "terminal_committed":
+        if event == "publication_intent_committed":
             raise SecGemmaOnlineRiskOverlayStoreError(
-                "injected terminal commit crash"
+                "injected intent anchor crash"
             )
         return original(
             event,
@@ -1186,18 +892,549 @@ def test_reopen_completes_exact_evidence_bearing_terminal_intent(
     monkeypatch.setattr(store, "_append_anchor", fail_committed)
     with pytest.raises(
         SecGemmaOnlineRiskOverlayStoreError,
-        match="injected terminal commit crash",
+        match="injected intent anchor crash",
     ):
-        store.finish_attempt(
-            capability,
-            terminal_status=TERMINAL_PASS,
-            verified_terminal_evidence=evidence,
-        )
+        store.commit_publication_intent(capability, intent)
     store._close_resources(recover=False)
 
     with _store(repo_and_manifest) as reopened:
-        binding = reopened.terminal_anchor_binding(plan["attempt_id"])
-        assert binding["terminal_evidence"] == evidence.evidence
+        assert reopened.governance_records(
+            "publication_intents", attempt_id=plan["attempt_id"]
+        ) == [intent]
         assert reopened.attempt_history(plan["attempt_id"])[-1][
             "status"
-        ] == TERMINAL_PASS
+        ] == CONSUMED
+        events = [entry["event"] for entry in reopened._anchor_entries()]
+        assert events.count("publication_intent_prepare") == 1
+        assert events.count("publication_intent_committed") == 1
+
+
+def test_failed_readback_cannot_masquerade_as_absent(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    pre_owner = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    store.release_publication_capability(pre_owner)
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    evidence, observation = _readback_and_observation(
+        store,
+        plan,
+        intent,
+        capability,
+        ownership,
+        transport,
+        observed_state="absent",
+        exit_code=1,
+    )
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayStoreError,
+        match="cannot create an observation",
+    ):
+        store.commit_remote_observation(
+            capability, evidence, observation
+        )
+    assert store.governance_records(
+        "publication_remote_observations",
+        attempt_id=plan["attempt_id"],
+    ) == []
+    store._close_resources(recover=False)
+
+
+@dataclass(frozen=True)
+class _ExternalPublication:
+    publication: dict[str, Any]
+
+
+def test_exact_remote_receipt_issues_single_use_terminalization_claim(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    evidence, observation = _readback_and_observation(
+        store,
+        plan,
+        intent,
+        capability,
+        ownership,
+        transport,
+        observed_state="exact_expected",
+    )
+    durable_observation = store.commit_remote_observation(
+        capability, evidence, observation
+    )
+    store.commit_worker_quiescence(
+        capability,
+        _quiescence(store, plan, intent, ownership),
+    )
+    prepared = prepare_external_publication(
+        implementation_manifest=store._implementation_manifest,
+        attempt_id=plan["attempt_id"],
+        terminal_status=intent["terminal_status"],
+        report_kind=intent["report_kind"],
+        artifact_sha256=intent["artifact_sha256"],
+        predecessor_publication_sha256=(
+            intent["predecessor_publication_sha256"]
+        ),
+    )
+    publication = prepared.expected_publication
+    opaque_publication = _issue_verified_external_publication(
+        publication,
+        implementation_manifest=store._implementation_manifest,
+    )
+    snapshot = store.snapshot()
+    intent_receipt = intent.store_receipt
+    receipt_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-publication-receipt-v1"
+        ),
+        "receipt_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-receipt-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "publication_intent_store_receipt_sha256": canonical_sha256(
+            store_record_receipt_material(intent_receipt)
+        ),
+        "publication_remote_observation_sha256": durable_observation[
+            "publication_remote_observation_sha256"
+        ],
+        "recovery_invocation_completion_sha256": (
+            PUBLICATION_NORMAL_NO_RECOVERY_COMPLETION_SHA256
+        ),
+        "pre_push_authorization_sha256": (
+            PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256
+        ),
+        "external_publication_sha256": publication["publication_sha256"],
+        "remote_tag_object_sha1": intent["expected_tag_object_sha1"],
+        "remote_peeled_commit": intent["expected_peeled_commit"],
+        "pre_receipt_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_receipt_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+        "receipt_status": "publication_verified",
+        "publication_capability_invalidated": True,
+        "terminalization_capability_required": True,
+    }
+    receipt_material = _self_hashed(
+        receipt_body, "publication_receipt_sha256"
+    )
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayStoreError,
+        match="opaque external publication",
+    ):
+        store.commit_publication_receipt(
+            capability,
+            receipt_material,
+            _ExternalPublication(publication),
+        )
+    durable_receipt = store.commit_publication_receipt(
+        capability,
+        receipt_material,
+        opaque_publication,
+    )
+    assert isinstance(durable_receipt, VerifiedDurablePublicationReceipt)
+    reissued_receipt = store.publication_receipt_authority(
+        plan["attempt_id"],
+        opaque_publication,
+    )
+    assert reissued_receipt.material == durable_receipt.material
+    terminalization = store.issue_terminalization_capability(
+        plan["attempt_id"]
+    )
+    assert isinstance(terminalization, TerminalizationCapability)
+    terminal_body = {
+        "terminal_status": TERMINAL_PASS,
+        "attempt_id": plan["attempt_id"],
+    }
+    terminal_evidence = _self_hashed(
+        terminal_body, "terminal_evidence_sha256"
+    )
+    claim = store.commit_terminalization_claim(
+        terminalization,
+        terminal_evidence,
+        TERMINAL_PASS,
+    )
+    assert isinstance(claim, VerifiedTerminalizationClaim)
+    with pytest.raises(SecGemmaOnlineRiskOverlayStoreConflict):
+        store.issue_terminalization_capability(plan["attempt_id"])
+    store.close()
+
+
+def test_quiescent_normal_capability_can_be_released_for_recovery(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayStoreError,
+        match="requires exact committed worker quiescence",
+    ):
+        store.release_publication_capability(capability)
+    store.commit_worker_quiescence(
+        capability,
+        _quiescence(store, plan, intent, ownership),
+    )
+    store.release_publication_capability(capability)
+    recovery_operation = canonical_sha256({"recovery": 1})
+    recovery = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="publication_recovery",
+        operation_sha256=recovery_operation,
+    )
+    assert recovery.operation_sha256 == recovery_operation
+    store._close_resources(recover=False)
+
+
+def test_normal_conflict_is_poisoned_before_quiescent_release(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    evidence, observation = _readback_and_observation(
+        store,
+        plan,
+        intent,
+        capability,
+        ownership,
+        transport,
+        observed_state="conflicting",
+    )
+    durable = store.commit_remote_observation(
+        capability, evidence, observation
+    )
+    conflict_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-publication-conflict-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "observation_operation_kind": capability.operation_kind,
+        "observation_operation_sha256": capability.operation_sha256,
+        "tag_ref": intent["tag_ref"],
+        "remote_observation_sha256": durable[
+            "publication_remote_observation_sha256"
+        ],
+        "conflict_reason": "durable_remote_ref_conflict",
+        "poisoned": True,
+        "prior_governance_record_sha256": ownership[
+            "worker_ownership_sha256"
+        ],
+    }
+    store.commit_publication_conflict(
+        capability,
+        _self_hashed(conflict_body, "publication_conflict_sha256"),
+    )
+    store.commit_worker_quiescence(
+        capability,
+        _quiescence(store, plan, intent, ownership),
+    )
+    store.release_publication_capability(capability)
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayStoreError,
+        match="Receipt or conflict forbids",
+    ):
+        store.issue_publication_recovery_capability(
+            plan["attempt_id"],
+            operation_kind="publication_recovery",
+            operation_sha256=canonical_sha256({"recovery": "poisoned"}),
+        )
+    store.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("conflict_reason", "remote_conflict"),
+        ("tag_ref", "refs/tags/foreign-terminal"),
+    ),
+)
+def test_conflict_poison_requires_exact_reason_and_observation_tag(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+    field: str,
+    value: str,
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    evidence, observation = _readback_and_observation(
+        store,
+        plan,
+        intent,
+        capability,
+        ownership,
+        transport,
+        observed_state="conflicting",
+    )
+    durable = store.commit_remote_observation(
+        capability, evidence, observation
+    )
+    conflict_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-publication-conflict-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "store_instance_id": store.store_instance_id,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "observation_operation_kind": capability.operation_kind,
+        "observation_operation_sha256": capability.operation_sha256,
+        "tag_ref": intent["tag_ref"],
+        "remote_observation_sha256": durable[
+            "publication_remote_observation_sha256"
+        ],
+        "conflict_reason": "durable_remote_ref_conflict",
+        "poisoned": True,
+        "prior_governance_record_sha256": ownership[
+            "worker_ownership_sha256"
+        ],
+    }
+    conflict_body[field] = value
+
+    with pytest.raises(
+        SecGemmaOnlineRiskOverlayStoreError,
+        match="exact durable conflict proof",
+    ):
+        store.commit_publication_conflict(
+            capability,
+            _self_hashed(
+                conflict_body, "publication_conflict_sha256"
+            ),
+        )
+
+    assert store.governance_records(
+        "publication_conflicts", attempt_id=plan["attempt_id"]
+    ) == []
+    store._close_resources(recover=False)
+
+
+def test_reopen_can_prove_prior_owner_quiescent_before_new_capability(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="normal_publication",
+    )
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership_material = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(
+        capability, ownership_material
+    )
+    store._close_resources(recover=False)
+
+    with _store(repo_and_manifest) as reopened:
+        unresolved = (
+            reopened.unresolved_publication_worker_ownership_authorities(
+                plan["attempt_id"]
+            )
+        )
+        assert len(unresolved) == 1
+        with pytest.raises(
+            SecGemmaOnlineRiskOverlayStoreError,
+            match="not quiescent",
+        ):
+            reopened.issue_publication_recovery_capability(
+                plan["attempt_id"],
+                operation_kind="publication_recovery",
+                operation_sha256=canonical_sha256({"recovery": "blocked"}),
+            )
+        rehydrated_intent = reopened.publication_intent_authority(
+            plan["attempt_id"]
+        )
+        restarted_quiescence = _quiescence(
+            reopened,
+            plan,
+            rehydrated_intent,
+            unresolved[0].material,
+            verification_mode="post_restart_prior_owner_dead",
+        )
+        reopened.commit_restarted_worker_quiescence(
+            unresolved[0], restarted_quiescence
+        )
+        recovery_hash = canonical_sha256({"recovery": "unblocked"})
+        recovery = reopened.issue_publication_recovery_capability(
+            plan["attempt_id"],
+            operation_kind="publication_recovery",
+            operation_sha256=recovery_hash,
+        )
+        assert recovery.operation_sha256 == recovery_hash
+
+
+def test_reopen_closes_stale_recovery_start_without_research(
+    repo_and_manifest: tuple[Path, dict[str, Any]],
+) -> None:
+    store, plan, _, intent = _sealed_reconstruction_and_intent(
+        repo_and_manifest
+    )
+    snapshot = store.snapshot()
+    start_body = {
+        "schema_version": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-start-v1"
+        ),
+        "start_verifier_id": (
+            "sec-gemma-online-risk-overlay-v2-2-"
+            "publication-recovery-start-verifier-v1"
+        ),
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": CONTRACT_SHA256,
+        "implementation_manifest_sha256": (
+            store._implementation_manifest["implementation_manifest_sha256"]
+        ),
+        "implementation_commit": store._implementation_manifest[
+            "implementation_commit"
+        ],
+        "store_instance_id": store.store_instance_id,
+        "store_session_nonce_sha256": store.store_session_nonce_sha256,
+        "attempt_id": plan["attempt_id"],
+        "publication_intent_sha256": intent["publication_intent_sha256"],
+        "invocation_ordinal": 1,
+        "prior_recovery_completion_sha256": (
+            PUBLICATION_RECOVERY_COMPLETION_GENESIS_SHA256
+        ),
+        "prior_cumulative_recovery_seconds": "0x0.0p+0",
+        "start_status": "started",
+        "invocation_seconds_cap": 300,
+        "durable_pre_push_authorization_required": True,
+        "pre_start_store_journal_sequence": snapshot[
+            "journal_entry_count"
+        ],
+        "pre_start_store_journal_tip_sha256": snapshot[
+            "journal_tip_sha256"
+        ],
+    }
+    start = _self_hashed(
+        start_body, "recovery_invocation_start_sha256"
+    )
+    capability = store.issue_publication_recovery_capability(
+        plan["attempt_id"],
+        operation_kind="publication_recovery",
+        operation_sha256=start["recovery_invocation_start_sha256"],
+    )
+    store.commit_recovery_start(capability, start)
+    transport = _transport_manifest(store, plan, intent, capability)
+    store.commit_transport_manifest(capability, transport)
+    ownership = _ownership(store, plan, intent, capability)
+    store.claim_publication_worker_ownership(capability, ownership)
+    store._close_resources(recover=False)
+
+    with _store(repo_and_manifest) as reopened:
+        assert reopened.governance_records(
+            "publication_recovery_invocation_completions",
+            attempt_id=plan["attempt_id"],
+        ) == []
+        unresolved = (
+            reopened.unresolved_publication_worker_ownership_authorities(
+                plan["attempt_id"]
+            )
+        )
+        assert len(unresolved) == 1
+        reopened_intent = reopened.publication_intent_authority(
+            plan["attempt_id"]
+        )
+        reopened.commit_restarted_worker_quiescence(
+            unresolved[0],
+            _quiescence(
+                reopened,
+                plan,
+                reopened_intent,
+                unresolved[0].material,
+                verification_mode="post_restart_prior_owner_dead",
+            ),
+        )
+        completions = reopened.governance_records(
+            "publication_recovery_invocation_completions",
+            attempt_id=plan["attempt_id"],
+        )
+        assert len(completions) == 1
+        assert completions[0]["outcome"] == "interrupted_before_completion"
+        assert completions[0]["remote_observation_sha256"] == (
+            PUBLICATION_RECOVERY_NO_REMOTE_OBSERVATION_SHA256
+        )
+        assert completions[0]["pre_push_authorization_sha256"] == (
+            PUBLICATION_RECOVERY_NO_PRE_PUSH_AUTHORIZATION_SHA256
+        )
+        assert completions[0]["push_command_count_upper_bound"] == 0
+        assert completions[0]["elapsed_seconds"] == (
+            "0x1.2c00000000000p+8"
+        )
+        reissued = reopened.recovery_completion_authority(
+            plan["attempt_id"],
+            completions[0]["recovery_invocation_completion_sha256"],
+        )
+        assert reissued.material == completions[0]
+        assert reopened.attempt_history(plan["attempt_id"])[-1][
+            "status"
+        ] == CONSUMED

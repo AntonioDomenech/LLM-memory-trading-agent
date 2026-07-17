@@ -28,10 +28,10 @@ from agent_benchmark.sec_gemma_online_risk_overlay_ledger import (
 
 
 BASELINE_INPUT_ROW_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-baseline-input-row-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-baseline-input-row-v1"
 )
 BASELINE_BATCH_SCHEMA_VERSION: Final[str] = (
-    "aapl-sec-gemma-online-risk-overlay-v2-1-baseline-signal-batch-v1"
+    "aapl-sec-gemma-online-risk-overlay-v2-2-baseline-signal-batch-v1"
 )
 BASELINE_INPUT_FIELDS: Final[tuple[str, ...]] = (
     "aapl_raw_open",
