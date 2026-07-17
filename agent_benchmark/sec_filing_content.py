@@ -30,6 +30,14 @@ from .sec_point_in_time import (
 CONTRACT_VERSION = "aapl-sec-filing-content-audit-v1"
 MINIMUM_USABLE_TEXT_CHARACTERS = 500
 EASTERN = ZoneInfo("America/New_York")
+LEGACY_FILENAME_LAST_DATE = date(2000, 5, 26)
+LEGACY_PRIMARY_DOCUMENT_IDENTITY = "legacy-sequence-1-no-filename"
+_LEGACY_DOCUMENT_IDENTITY_RE = re.compile(
+    r"legacy-sequence-[1-9][0-9]*-no-filename\Z"
+)
+_SAFE_ARCHIVE_FILENAME_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._~-]{0,255}\Z"
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,7 @@ class SGMLHeader:
     acceptance_datetime: str | None
     form: str
     filing_date: str
+    date_of_filing_date_change: str | None
     filer_cik: str
     filer_company: str
     subject_cik: str
@@ -51,10 +60,14 @@ class SGMLHeader:
 class SGMLDocument:
     document_type: str
     sequence: int
-    filename: str
+    filename: str | None
+    document_identity: str
+    ordinal: int
     description: str
     text: str
     text_sha256: str
+    text_start_byte: int
+    text_end_byte: int
 
     def to_dict(self, *, include_text: bool = True) -> dict[str, Any]:
         result = asdict(self)
@@ -146,6 +159,7 @@ def _safe_filename(value: Any, *, field_name: str) -> str:
     name = str(value or "").strip()
     if (
         not name
+        or _SAFE_ARCHIVE_FILENAME_RE.fullmatch(name) is None
         or PurePosixPath(name).name != name
         or "\\" in name
         or name in {".", ".."}
@@ -271,6 +285,32 @@ def _parse_header(
     except ValueError as exc:
         raise SecPointInTimeError("SGML header filing date is invalid") from exc
 
+    change_matches = {
+        value
+        for pattern in (
+            r"<DATE-OF-FILING-DATE-CHANGE>\s*([0-9]{8})(?=\s|<|$)",
+            r"^\s*DATE AS OF CHANGE:\s*([0-9]{8})\s*$",
+        )
+        for value in re.findall(
+            pattern,
+            header_text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+    }
+    if len(change_matches) > 1:
+        raise SecPointInTimeError("SGML header has ambiguous DATE AS OF CHANGE")
+    if change_matches:
+        try:
+            change_date = datetime.strptime(
+                next(iter(change_matches)), "%Y%m%d"
+            ).date().isoformat()
+        except ValueError as exc:
+            raise SecPointInTimeError(
+                "SGML header DATE AS OF CHANGE is invalid"
+            ) from exc
+    else:
+        change_date = None
+
     entities = _header_entities(header_text)
     filer = entities.get("filed_by") or entities.get("filer") or entities.get(
         "reporting_owner"
@@ -289,6 +329,7 @@ def _parse_header(
         ),
         form=form,
         filing_date=filing_date,
+        date_of_filing_date_change=change_date,
         filer_cik=filer[0],
         filer_company=filer[1],
         subject_cik=subject[0],
@@ -343,24 +384,28 @@ def parse_complete_submission(
         raise SecPointInTimeError(
             "SEC-DOCUMENT accession does not match the SGML header"
         )
-    document_blocks = re.findall(
+    document_matches = list(
+        re.finditer(
         r"<DOCUMENT>(.*?)</DOCUMENT>",
         text,
         flags=re.IGNORECASE | re.DOTALL,
+        )
     )
-    if not document_blocks:
+    if not document_matches:
         raise SecPointInTimeError("Complete submission contains no DOCUMENT sections")
     if len(re.findall(r"<DOCUMENT>", text, flags=re.IGNORECASE)) != len(
-        document_blocks
+        document_matches
     ) or len(re.findall(r"</DOCUMENT>", text, flags=re.IGNORECASE)) != len(
-        document_blocks
+        document_matches
     ):
         raise SecPointInTimeError("Complete submission has unbalanced DOCUMENT sections")
 
     documents: list[SGMLDocument] = []
     sequences: set[int] = set()
     filenames: set[str] = set()
-    for block in document_blocks:
+    filing_date = date.fromisoformat(header.filing_date)
+    for ordinal, document_match in enumerate(document_matches, start=1):
+        block = document_match.group(1)
         text_matches = list(
             re.finditer(
                 r"<TEXT>(.*?)</TEXT>",
@@ -368,7 +413,11 @@ def parse_complete_submission(
                 flags=re.IGNORECASE | re.DOTALL,
             )
         )
-        if len(text_matches) != 1:
+        if (
+            len(text_matches) != 1
+            or len(re.findall(r"<TEXT>", block, flags=re.IGNORECASE)) != 1
+            or len(re.findall(r"</TEXT>", block, flags=re.IGNORECASE)) != 1
+        ):
             raise SecPointInTimeError("DOCUMENT must contain one unambiguous TEXT section")
         metadata_block = block[: text_matches[0].start()]
         document_type = _canonical_form(
@@ -378,28 +427,60 @@ def parse_complete_submission(
         if not sequence_raw.isdigit() or int(sequence_raw) < 1:
             raise SecPointInTimeError("DOCUMENT SEQUENCE must be a positive integer")
         sequence = int(sequence_raw)
-        filename = _safe_filename(
-            _document_field(metadata_block, "FILENAME", required=True),
-            field_name="DOCUMENT filename",
+        filename_field_count = len(
+            re.findall(
+                r"^\s*<FILENAME>[^\r\n<]*$",
+                metadata_block,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
         )
+        if filename_field_count > 1:
+            raise SecPointInTimeError("DOCUMENT has ambiguous or missing FILENAME")
+        raw_filename = _document_field(metadata_block, "FILENAME", required=False)
+        if raw_filename:
+            filename: str | None = _safe_filename(
+                raw_filename,
+                field_name="DOCUMENT filename",
+            )
+            if _LEGACY_DOCUMENT_IDENTITY_RE.fullmatch(filename) is not None:
+                raise SecPointInTimeError(
+                    "DOCUMENT filename collides with a reserved legacy identity"
+                )
+            document_identity = filename
+        else:
+            if filing_date > LEGACY_FILENAME_LAST_DATE:
+                raise SecPointInTimeError("DOCUMENT has ambiguous or missing FILENAME")
+            filename = None
+            document_identity = f"legacy-sequence-{sequence}-no-filename"
         description = _document_field(metadata_block, "DESCRIPTION", required=False)
         document_text = text_matches[0].group(1)
-        if sequence in sequences or filename in filenames:
+        if sequence in sequences or (filename is not None and filename in filenames):
             raise SecPointInTimeError("DOCUMENT sequences and filenames must be unique")
         sequences.add(sequence)
-        filenames.add(filename)
+        if filename is not None:
+            filenames.add(filename)
+        text_start = document_match.start(1) + text_matches[0].start(1)
+        text_end = document_match.start(1) + text_matches[0].end(1)
+        text_start_byte = len(text[:text_start].encode(source_encoding))
+        text_end_byte = len(text[:text_end].encode(source_encoding))
         encoded_text = document_text.encode(source_encoding)
         documents.append(
             SGMLDocument(
                 document_type=document_type,
                 sequence=sequence,
                 filename=filename,
+                document_identity=document_identity,
+                ordinal=ordinal,
                 description=description,
                 text=document_text,
                 text_sha256=content_sha256(encoded_text),
+                text_start_byte=text_start_byte,
+                text_end_byte=text_end_byte,
             )
         )
-    documents.sort(key=lambda document: (document.sequence, document.filename))
+    documents.sort(
+        key=lambda document: (document.sequence, document.document_identity)
+    )
     return CompleteSubmission(
         header=header,
         documents=tuple(documents),
@@ -490,6 +571,87 @@ def select_primary_document(
     if items[0].size <= 0:
         raise SecPointInTimeError("Primary document index size must be positive")
     return documents[0], items[0]
+
+
+@dataclass(frozen=True)
+class SequenceOnePrimarySelection:
+    document: SGMLDocument
+    sec_filename: str | None
+    document_identity: str
+    submissions_filename_missing: bool
+    sgml_filename_missing: bool
+
+    def to_dict(self, *, include_text: bool = False) -> dict[str, Any]:
+        return {
+            "document": self.document.to_dict(include_text=include_text),
+            "sec_filename": self.sec_filename,
+            "document_identity": self.document_identity,
+            "submissions_filename_missing": self.submissions_filename_missing,
+            "sgml_filename_missing": self.sgml_filename_missing,
+        }
+
+
+def select_sequence_one_primary_document(
+    record: FilingRecord,
+    submission: CompleteSubmission,
+) -> SequenceOnePrimarySelection:
+    """Select the sole sequence-1 document and reconcile its filename identity."""
+
+    if not isinstance(record, FilingRecord):
+        raise TypeError("record must be a FilingRecord")
+    sequence_one = [
+        document for document in submission.documents if document.sequence == 1
+    ]
+    if len(sequence_one) != 1:
+        raise SecPointInTimeError(
+            "Complete submission must contain one sequence-1 document"
+        )
+    selected = sequence_one[0]
+    raw_submissions = record.primary_document
+    if not isinstance(raw_submissions, str):
+        raise SecPointInTimeError("Submissions primaryDocument must remain text")
+    submissions_name = raw_submissions.strip()
+    if submissions_name:
+        submissions_name = _safe_filename(
+            submissions_name,
+            field_name="Submissions primaryDocument",
+        )
+        if _LEGACY_DOCUMENT_IDENTITY_RE.fullmatch(submissions_name) is not None:
+            raise SecPointInTimeError(
+                "Submissions primaryDocument collides with a reserved legacy identity"
+            )
+    sgml_name = selected.filename
+    if submissions_name and sgml_name and submissions_name != sgml_name:
+        raise SecPointInTimeError(
+            "Submissions primaryDocument and SGML FILENAME do not reconcile"
+        )
+    sec_filename = submissions_name or sgml_name
+    if sec_filename:
+        identity = sec_filename
+    else:
+        filing_dates = {
+            date.fromisoformat(record.filing_date),
+            date.fromisoformat(submission.header.filing_date),
+        }
+        if len(filing_dates) != 1 or next(iter(filing_dates)) > LEGACY_FILENAME_LAST_DATE:
+            raise SecPointInTimeError(
+                "Missing primary filename is not eligible for the legacy rule"
+            )
+        identity = LEGACY_PRIMARY_DOCUMENT_IDENTITY
+    expected_sgml_identity = (
+        sgml_name
+        if sgml_name is not None
+        else f"legacy-sequence-{selected.sequence}-no-filename"
+    )
+    if selected.document_identity != expected_sgml_identity:
+        raise SecPointInTimeError("Selected primary document identity does not reconcile")
+    return SequenceOnePrimarySelection(
+        document=selected,
+        sec_filename=sec_filename or None,
+        document_identity=identity,
+        submissions_filename_missing=not bool(submissions_name),
+        sgml_filename_missing=sgml_name is None,
+    )
 
 
 class _VisibleTextParser(HTMLParser):
@@ -836,6 +998,8 @@ def normalize_document_text(value: str) -> NormalizedText:
 
 __all__ = [
     "CONTRACT_VERSION",
+    "LEGACY_FILENAME_LAST_DATE",
+    "LEGACY_PRIMARY_DOCUMENT_IDENTITY",
     "MINIMUM_USABLE_TEXT_CHARACTERS",
     "CompleteSubmission",
     "NormalizedText",
@@ -843,6 +1007,7 @@ __all__ = [
     "SECIndexItem",
     "SGMLDocument",
     "SGMLHeader",
+    "SequenceOnePrimarySelection",
     "audit_filing_content",
     "conservative_availability_session",
     "normalize_filing_text",
@@ -852,4 +1017,5 @@ __all__ = [
     "parse_sec_index_json",
     "reconcile_filing_content",
     "select_primary_document",
+    "select_sequence_one_primary_document",
 ]

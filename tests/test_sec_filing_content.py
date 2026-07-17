@@ -18,6 +18,7 @@ from agent_benchmark.sec_filing_content import (
     parse_sec_index_json,
     reconcile_filing_content,
     select_primary_document,
+    select_sequence_one_primary_document,
 )
 from agent_benchmark.sec_point_in_time import (
     AAPL_CIK,
@@ -181,7 +182,7 @@ def test_header_filer_fallback_handles_self_filed_submission() -> None:
 
 def test_iso_submissions_acceptance_reconciles_to_sgml_eastern_instant() -> None:
     result = audit_filing_content(
-        _record(acceptance_datetime="2016-10-26T20:42:16Z"),
+        _record(acceptance_datetime="2016-10-26T16:42:16Z"),
         _master(),
         _submission_payload(),
         _index_payload(),
@@ -262,6 +263,277 @@ def test_tagged_header_variant_is_parsed() -> None:
     assert tagged_parsed.header.form == "10-K"
     assert tagged_parsed.header.filing_date == FILED
     assert tagged_parsed.header.subject_cik == AAPL_CIK
+
+
+def test_header_preserves_exact_date_as_of_change() -> None:
+    payload = _submission_payload().replace(
+        "FILED AS OF DATE: 20161026",
+        "FILED AS OF DATE: 20161026\nDATE AS OF CHANGE: 20161028",
+    )
+    parsed = parse_complete_submission(payload)
+    assert parsed.header.date_of_filing_date_change == "2016-10-28"
+
+    conflicting = payload.replace(
+        "DATE AS OF CHANGE: 20161028",
+        "DATE AS OF CHANGE: 20161028\n<DATE-OF-FILING-DATE-CHANGE>20161029",
+    )
+    with pytest.raises(SecPointInTimeError, match="ambiguous DATE AS OF CHANGE"):
+        parse_complete_submission(conflicting)
+
+
+def test_pre_edgar7_missing_filenames_use_reserved_sequence_identity() -> None:
+    accession = "0000912057-00-023442"
+    payload = (
+        _submission_payload(
+            accession=accession,
+            accepted="20000511163000",
+            form="10-Q",
+            filed="20000511",
+            filer_cik="0000912057",
+            primary="legacy.htm",
+        )
+        .replace("<FILENAME>legacy.htm\n", "")
+        .replace("<FILENAME>exhibit99.htm\n", "")
+    ).encode("latin-1")
+    parsed = parse_complete_submission(payload)
+    assert all(document.filename is None for document in parsed.documents)
+    assert [document.document_identity for document in parsed.documents] == [
+        "legacy-sequence-1-no-filename",
+        "legacy-sequence-2-no-filename",
+    ]
+    primary = parsed.documents[0]
+    assert payload[primary.text_start_byte : primary.text_end_byte] == primary.text.encode(
+        "latin-1"
+    )
+    selection = select_sequence_one_primary_document(
+        _record(
+            accession_number=accession,
+            acceptance_datetime="20000511163000",
+            form="10-Q",
+            primary_document="",
+            filing_date="2000-05-11",
+            report_date="2000-03-31",
+        ),
+        parsed,
+    )
+    assert selection.sec_filename is None
+    assert selection.document_identity == "legacy-sequence-1-no-filename"
+    assert selection.submissions_filename_missing is True
+    assert selection.sgml_filename_missing is True
+
+
+def test_legacy_primary_filename_reconciles_when_only_one_source_supplies_it() -> None:
+    accession = "0000912057-00-023442"
+    base_payload = _submission_payload(
+        accession=accession,
+        accepted="20000511163000",
+        form="10-Q",
+        filed="20000511",
+        filer_cik="0000912057",
+        primary="legacy.htm",
+    )
+    base_record = _record(
+        accession_number=accession,
+        acceptance_datetime="20000511163000",
+        form="10-Q",
+        primary_document="legacy.htm",
+        filing_date="2000-05-11",
+        report_date="2000-03-31",
+    )
+
+    sgml_missing = parse_complete_submission(
+        base_payload.replace("<FILENAME>legacy.htm\n", "")
+    )
+    submissions_only = select_sequence_one_primary_document(
+        base_record,
+        sgml_missing,
+    )
+    assert submissions_only.sec_filename == "legacy.htm"
+    assert submissions_only.document_identity == "legacy.htm"
+    assert submissions_only.submissions_filename_missing is False
+    assert submissions_only.sgml_filename_missing is True
+    assert (
+        submissions_only.document.document_identity
+        == "legacy-sequence-1-no-filename"
+    )
+
+    submissions_missing = select_sequence_one_primary_document(
+        replace(base_record, primary_document=""),
+        parse_complete_submission(base_payload),
+    )
+    assert submissions_missing.sec_filename == "legacy.htm"
+    assert submissions_missing.document_identity == "legacy.htm"
+    assert submissions_missing.submissions_filename_missing is True
+    assert submissions_missing.sgml_filename_missing is False
+    assert submissions_missing.document.document_identity == "legacy.htm"
+
+
+def test_primary_filename_reconciliation_rejects_conflict_and_bad_names() -> None:
+    accession = "0000912057-00-023442"
+    payload = _submission_payload(
+        accession=accession,
+        accepted="20000511163000",
+        form="10-Q",
+        filed="20000511",
+        filer_cik="0000912057",
+        primary="legacy.htm",
+    )
+    submission = parse_complete_submission(payload)
+    record = _record(
+        accession_number=accession,
+        acceptance_datetime="20000511163000",
+        form="10-Q",
+        primary_document="different.htm",
+        filing_date="2000-05-11",
+        report_date="2000-03-31",
+    )
+    with pytest.raises(SecPointInTimeError, match="do not reconcile"):
+        select_sequence_one_primary_document(record, submission)
+
+    for unsafe_name in (
+        "../legacy.htm",
+        "folder/legacy.htm",
+        r"folder\legacy.htm",
+        "legacy.htm:stream",
+        "legacy name.htm",
+    ):
+        with pytest.raises(SecPointInTimeError, match="safe archive filename"):
+            select_sequence_one_primary_document(
+                replace(record, primary_document=unsafe_name),
+                submission,
+            )
+    with pytest.raises(SecPointInTimeError, match="reserved legacy identity"):
+        select_sequence_one_primary_document(
+            replace(
+                record,
+                primary_document="legacy-sequence-1-no-filename",
+            ),
+            submission,
+        )
+
+
+def test_sgml_filenames_must_be_safe_nonreserved_and_singular() -> None:
+    for unsafe_name in (
+        "../escape.htm",
+        "folder/escape.htm",
+        r"folder\escape.htm",
+        "escape.htm:stream",
+        "escape name.htm",
+    ):
+        with pytest.raises(SecPointInTimeError, match="safe archive filename"):
+            parse_complete_submission(_submission_payload(primary=unsafe_name))
+
+    with pytest.raises(SecPointInTimeError, match="reserved legacy identity"):
+        parse_complete_submission(
+            _submission_payload(primary="legacy-sequence-1-no-filename")
+        )
+
+    duplicate_across_documents = _submission_payload().replace(
+        "<FILENAME>exhibit99.htm",
+        f"<FILENAME>{PRIMARY}",
+    )
+    with pytest.raises(SecPointInTimeError, match="unique"):
+        parse_complete_submission(duplicate_across_documents)
+
+    duplicate_in_one_document = _submission_payload().replace(
+        f"<FILENAME>{PRIMARY}",
+        f"<FILENAME>{PRIMARY}\n<FILENAME>{PRIMARY}",
+        1,
+    )
+    with pytest.raises(SecPointInTimeError, match="ambiguous or missing FILENAME"):
+        parse_complete_submission(duplicate_in_one_document)
+
+
+def test_sequence_one_selection_fails_closed() -> None:
+    no_sequence_one = parse_complete_submission(
+        _submission_payload().replace("<SEQUENCE>1", "<SEQUENCE>3", 1)
+    )
+    with pytest.raises(SecPointInTimeError, match="sequence-1 document"):
+        select_sequence_one_primary_document(_record(), no_sequence_one)
+
+    duplicate_sequence_one = _submission_payload().replace(
+        "<SEQUENCE>2",
+        "<SEQUENCE>1",
+        1,
+    )
+    with pytest.raises(SecPointInTimeError, match="sequences and filenames must be unique"):
+        parse_complete_submission(duplicate_sequence_one)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        _submission_payload().replace("<TEXT>", "<BODY>", 1),
+        _submission_payload().replace("</TEXT>", "</BODY>", 1),
+        _submission_payload().replace(
+            "</TEXT>\n</DOCUMENT>",
+            "</TEXT>\n<TEXT>second section</TEXT>\n</DOCUMENT>",
+            1,
+        ),
+        _submission_payload(
+            primary_text="<html><body><TEXT>unmatched opening</body></html>"
+        ),
+        _submission_payload(
+            primary_text="<html><body>unmatched closing</TEXT></body></html>"
+        ),
+    ),
+)
+def test_document_text_boundaries_must_be_exactly_one_balanced_pair(
+    payload: str,
+) -> None:
+    with pytest.raises(SecPointInTimeError, match="unambiguous TEXT"):
+        parse_complete_submission(payload)
+
+
+def test_latin1_offsets_and_response_extracted_normalized_hashes_are_independent() -> None:
+    payload = _submission_payload(
+        primary_text=_long_html().replace(
+            "Annual Report",
+            "Annual Caf\u00e9 Report",
+        )
+    ).encode("latin-1")
+    parsed = parse_complete_submission(payload)
+
+    search_from = 0
+    for document in sorted(parsed.documents, key=lambda item: item.ordinal):
+        opening = payload.index(b"<TEXT>", search_from)
+        expected_start = opening + len(b"<TEXT>")
+        expected_end = payload.index(b"</TEXT>", expected_start)
+        assert document.text_start_byte == expected_start
+        assert document.text_end_byte == expected_end
+        extracted = payload[expected_start:expected_end]
+        assert extracted == document.text.encode("latin-1")
+        assert document.text_sha256 == content_sha256(extracted)
+        assert document.text_end_byte - document.text_start_byte == len(extracted)
+        search_from = expected_end + len(b"</TEXT>")
+
+    primary = parsed.documents[0]
+    normalized = normalize_filing_text(primary.text)
+    assert parsed.submission_sha256 == content_sha256(payload)
+    assert normalized.sha256 == content_sha256(normalized.text.encode("utf-8"))
+    assert len(
+        {
+            parsed.submission_sha256,
+            primary.text_sha256,
+            normalized.sha256,
+        }
+    ) == 3
+
+    exhibit_only_change = payload.replace(
+        b"Short exhibit.",
+        b"Changed exhibit only.",
+    )
+    changed = parse_complete_submission(exhibit_only_change)
+    changed_normalized = normalize_filing_text(changed.documents[0].text)
+    assert changed.submission_sha256 != parsed.submission_sha256
+    assert changed.documents[0].text_sha256 == primary.text_sha256
+    assert changed_normalized.sha256 == normalized.sha256
+
+
+def test_missing_filename_after_edgar7_boundary_rejects() -> None:
+    payload = _submission_payload().replace("<FILENAME>exhibit99.htm\n", "")
+    with pytest.raises(SecPointInTimeError, match="missing FILENAME"):
+        parse_complete_submission(payload)
 
 
 def test_complete_submission_fails_closed_on_ambiguity_or_unbalanced_sections() -> None:

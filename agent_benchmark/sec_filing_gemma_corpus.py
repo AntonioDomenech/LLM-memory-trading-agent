@@ -73,7 +73,7 @@ _HISTORICAL_NAME_RE = re.compile(
 )
 _PRIMARY_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
 _ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
-_AAPL_ACCESSION_RE = re.compile(rf"{AAPL_CIK}-[0-9]{{2}}-[0-9]{{6}}\Z")
+_AAPL_ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 _AUTHENTICATED_PRIMARY_PATH_RE = re.compile(
     r"/Archives/edgar/data/320193/(?P<accession>[0-9]{18})/"
     r"(?P<filename>[A-Za-z0-9][A-Za-z0-9._~-]{0,255})\Z"
@@ -1143,13 +1143,12 @@ def _deduplicate_columns(
         identity_json = _canonical_json_bytes(_typed_json_identity(raw_row))
         identity = (identity_json, _bare_sha256(identity_json))
         prior = by_accession.get(accession)
-        if prior is None:
-            by_accession[accession] = identity
-            retained.append(position)
-        elif prior[0] != identity_json:
+        if prior is not None:
             raise SecFilingGemmaCorpusError(
-                "Conflicting metadata exists for a duplicate accession"
+                "Duplicate accession exists inside one Submissions source"
             )
+        by_accession[accession] = identity
+        retained.append(position)
     return (
         {key: [values[index] for index in retained] for key, values in arrays.items()},
         size,
@@ -1219,10 +1218,7 @@ def _universe_record(
 ) -> tuple[dict[str, Any] | None, str]:
     if record.subject_cik != AAPL_CIK:
         raise SecFilingGemmaCorpusError("Catalog row subject CIK is not Apple")
-    if (
-        _ACCESSION_RE.fullmatch(record.accession_number) is None
-        or not record.accession_number.startswith(f"{AAPL_CIK}-")
-    ):
+    if _ACCESSION_RE.fullmatch(record.accession_number) is None:
         raise SecFilingGemmaCorpusError(
             "Apple Submissions row has a non-Apple accession"
         )
@@ -1358,6 +1354,7 @@ def acquire_official_sec_catalog(
         records, raw_count, unique_count = _records_from_columns(
             columns, source_name=name
         )
+        range_evidence: dict[str, Any] | None = None
         if name != MAIN_SUBMISSIONS_NAME:
             reference = reference_by_name[name]
             if raw_count != reference["filing_count"]:
@@ -1365,14 +1362,32 @@ def acquire_official_sec_catalog(
                     "Historical Submissions row count differs from its main reference"
                 )
             filing_dates = [item.record.filing_date for item in records]
-            if not filing_dates or min(filing_dates) != reference["filing_from"]:
+            if not filing_dates or any(
+                filing_date < reference["filing_from"]
+                or filing_date > reference["filing_to"]
+                for filing_date in filing_dates
+            ):
                 raise SecFilingGemmaCorpusError(
-                    "Historical Submissions minimum filing date differs from filingFrom"
+                    "Historical Submissions filing date falls outside its inclusive bounds"
                 )
-            if max(filing_dates) != reference["filing_to"]:
-                raise SecFilingGemmaCorpusError(
-                    "Historical Submissions maximum filing date differs from filingTo"
-                )
+            observed_min = min(filing_dates)
+            observed_max = max(filing_dates)
+            range_evidence = {
+                "filing_from": reference["filing_from"],
+                "filing_to": reference["filing_to"],
+                "observed_min_filing_date": observed_min,
+                "observed_max_filing_date": observed_max,
+                "filing_from_attained": observed_min == reference["filing_from"],
+                "filing_to_attained": observed_max == reference["filing_to"],
+                "lower_bound_slack_days": (
+                    date.fromisoformat(observed_min)
+                    - date.fromisoformat(reference["filing_from"])
+                ).days,
+                "upper_bound_slack_days": (
+                    date.fromisoformat(reference["filing_to"])
+                    - date.fromisoformat(observed_max)
+                ).days,
+            }
         source_hash = _bare_sha256(body)
         for item in records:
             sourced_records.append((item, url, source_hash))
@@ -1402,21 +1417,19 @@ def acquire_official_sec_catalog(
                 "raw_record_count": raw_count,
                 "unique_record_count": unique_count,
                 "raw_row_set_sha256": canonical_sha256(row_set),
+                "historical_range_evidence": range_evidence,
                 "request_receipt_sha256": receipt["request_receipt_sha256"],
             }
         )
 
     by_accession: dict[str, tuple[_ParsedCatalogRow, str, str]] = {}
-    global_exact_duplicates = 0
     for item, source_url, source_hash in sourced_records:
         prior = by_accession.get(item.record.accession_number)
         if prior is None:
             by_accession[item.record.accession_number] = (item, source_url, source_hash)
-        elif prior[0].raw_identity_json == item.raw_identity_json:
-            global_exact_duplicates += 1
         else:
             raise SecFilingGemmaCorpusError(
-                "Conflicting metadata exists for an accession across Submissions sources"
+                "Duplicate accession exists across Submissions sources"
             )
 
     eligible: list[dict[str, Any]] = []
@@ -1462,7 +1475,7 @@ def acquire_official_sec_catalog(
         "main_submissions_url": MAIN_SUBMISSIONS_URL,
         "historical_reference_names": [item["name"] for item in references],
         "historical_reference_policy": (
-            "experiment_strict_required_fields_and_exact_downloaded_min_max_not_sec_wide_claim"
+            "inclusive_bounds_exact_count_and_zero_duplicate_accessions"
         ),
         "source_count": len(source_objects),
         "sources": source_summaries,
@@ -1472,7 +1485,7 @@ def acquire_official_sec_catalog(
         "within_source_exact_duplicate_count": sum(
             item.raw_record_count - item.unique_record_count for item in source_objects
         ),
-        "cross_source_exact_duplicate_count": global_exact_duplicates,
+        "cross_source_exact_duplicate_count": 0,
         "catalog_eligible_record_count": len(eligible),
         "exclusion_counts": exclusion_counts,
         "eligible_records": eligible,
@@ -1602,7 +1615,16 @@ def validate_detached_catalog_replay(
         )
 
     parsed_sources: list[
-        tuple[str, str, bytes, dict[str, Any], tuple[_ParsedCatalogRow, ...], int, int]
+        tuple[
+            str,
+            str,
+            bytes,
+            dict[str, Any],
+            tuple[_ParsedCatalogRow, ...],
+            int,
+            int,
+            dict[str, Any] | None,
+        ]
     ] = []
     user_agent_hash: str | None = None
     reference_by_name = {item["name"]: item for item in references}
@@ -1656,6 +1678,7 @@ def validate_detached_catalog_replay(
         records, raw_count, unique_count = _records_from_columns(
             columns, source_name=name
         )
+        range_evidence: dict[str, Any] | None = None
         if name != MAIN_SUBMISSIONS_NAME:
             reference = reference_by_name[name]
             filing_dates = [item.record.filing_date for item in records]
@@ -1663,16 +1686,43 @@ def validate_detached_catalog_replay(
                 raise SecFilingGemmaCorpusError(
                     "Historical Submissions row count differs from its main reference"
                 )
-            if not filing_dates or min(filing_dates) != reference["filing_from"]:
+            if not filing_dates or any(
+                filing_date < reference["filing_from"]
+                or filing_date > reference["filing_to"]
+                for filing_date in filing_dates
+            ):
                 raise SecFilingGemmaCorpusError(
-                    "Historical Submissions minimum filing date differs from filingFrom"
+                    "Historical Submissions filing date falls outside its inclusive bounds"
                 )
-            if max(filing_dates) != reference["filing_to"]:
-                raise SecFilingGemmaCorpusError(
-                    "Historical Submissions maximum filing date differs from filingTo"
-                )
+            observed_min = min(filing_dates)
+            observed_max = max(filing_dates)
+            range_evidence = {
+                "filing_from": reference["filing_from"],
+                "filing_to": reference["filing_to"],
+                "observed_min_filing_date": observed_min,
+                "observed_max_filing_date": observed_max,
+                "filing_from_attained": observed_min == reference["filing_from"],
+                "filing_to_attained": observed_max == reference["filing_to"],
+                "lower_bound_slack_days": (
+                    date.fromisoformat(observed_min)
+                    - date.fromisoformat(reference["filing_from"])
+                ).days,
+                "upper_bound_slack_days": (
+                    date.fromisoformat(reference["filing_to"])
+                    - date.fromisoformat(observed_max)
+                ).days,
+            }
         parsed_sources.append(
-            (name, url, payload, receipt, records, raw_count, unique_count)
+            (
+                name,
+                url,
+                payload,
+                receipt,
+                records,
+                raw_count,
+                unique_count,
+                range_evidence,
+            )
         )
 
     receipts = [item[3] for item in parsed_sources]
@@ -1687,7 +1737,16 @@ def validate_detached_catalog_replay(
 
     sourced_records: list[tuple[_ParsedCatalogRow, str, str]] = []
     source_summaries: list[dict[str, Any]] = []
-    for name, url, payload, receipt, records, raw_count, unique_count in parsed_sources:
+    for (
+        name,
+        url,
+        payload,
+        receipt,
+        records,
+        raw_count,
+        unique_count,
+        range_evidence,
+    ) in parsed_sources:
         payload_hash = _bare_sha256(payload)
         sourced_records.extend((record, url, payload_hash) for record in records)
         row_set = [
@@ -1706,12 +1765,12 @@ def validate_detached_catalog_replay(
                 "raw_record_count": raw_count,
                 "unique_record_count": unique_count,
                 "raw_row_set_sha256": canonical_sha256(row_set),
+                "historical_range_evidence": range_evidence,
                 "request_receipt_sha256": receipt["request_receipt_sha256"],
             }
         )
 
     by_accession: dict[str, tuple[_ParsedCatalogRow, str, str]] = {}
-    cross_source_duplicates = 0
     for item, source_url, source_hash in sourced_records:
         prior = by_accession.get(item.record.accession_number)
         if prior is None:
@@ -1720,11 +1779,9 @@ def validate_detached_catalog_replay(
                 source_url,
                 source_hash,
             )
-        elif prior[0].raw_identity_json == item.raw_identity_json:
-            cross_source_duplicates += 1
         else:
             raise SecFilingGemmaCorpusError(
-                "Conflicting metadata exists for an accession across Submissions sources"
+                "Duplicate accession exists across Submissions sources"
             )
 
     eligible: list[dict[str, Any]] = []
@@ -1790,7 +1847,7 @@ def validate_detached_catalog_replay(
         "main_submissions_url": MAIN_SUBMISSIONS_URL,
         "historical_reference_names": [item["name"] for item in references],
         "historical_reference_policy": (
-            "experiment_strict_required_fields_and_exact_downloaded_min_max_not_sec_wide_claim"
+            "inclusive_bounds_exact_count_and_zero_duplicate_accessions"
         ),
         "source_count": len(parsed_sources),
         "sources": source_summaries,
@@ -1799,7 +1856,7 @@ def validate_detached_catalog_replay(
         "within_source_exact_duplicate_count": sum(
             item[5] - item[6] for item in parsed_sources
         ),
-        "cross_source_exact_duplicate_count": cross_source_duplicates,
+        "cross_source_exact_duplicate_count": 0,
         "catalog_eligible_record_count": len(eligible),
         "exclusion_counts": exclusion_counts,
         "eligible_records": eligible,
@@ -1884,7 +1941,7 @@ def _primary_document_url(record: Mapping[str, Any]) -> str:
     if (
         not isinstance(accession, str)
         or _ACCESSION_RE.fullmatch(accession) is None
-        or not accession.startswith(f"{AAPL_CIK}-")
+        or record.get("subject_cik") != AAPL_CIK
         or not isinstance(filename, str)
         or _PRIMARY_NAME_RE.fullmatch(filename) is None
     ):

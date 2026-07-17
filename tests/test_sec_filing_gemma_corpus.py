@@ -732,18 +732,22 @@ def test_catalog_fetches_main_and_every_reference_and_builds_universe_rows() -> 
     }
 
 
-def test_exact_duplicates_are_deduplicated_but_conflicts_fail_closed() -> None:
+def test_every_duplicate_accession_fails_closed() -> None:
     duplicate = _row(1, year=2001, form="10-Q")
     name = "CIK0000320193-submissions-001.json"
     main = _main([duplicate, deepcopy(duplicate)], [_reference(name, [duplicate])])
     historical = _json_bytes(_columns([deepcopy(duplicate)]))
-    result, _ = _catalog(
-        {MAIN_SUBMISSIONS_URL: main, _historical_url(name): historical}
-    )
-    assert result.catalog_total_record_count == 1
-    assert result.catalog_eligible_record_count == 1
-    assert result.artifact["within_source_exact_duplicate_count"] == 1
-    assert result.artifact["cross_source_exact_duplicate_count"] == 1
+    with pytest.raises(SecFilingGemmaCorpusError, match="inside one"):
+        _catalog({MAIN_SUBMISSIONS_URL: main, _historical_url(name): historical})
+
+    cross_source = _main([duplicate], [_reference(name, [duplicate])])
+    with pytest.raises(SecFilingGemmaCorpusError, match="across Submissions"):
+        _catalog(
+            {
+                MAIN_SUBMISSIONS_URL: cross_source,
+                _historical_url(name): historical,
+            }
+        )
 
     conflict = deepcopy(duplicate)
     conflict["primaryDocument"] = "conflicting.htm"
@@ -751,7 +755,7 @@ def test_exact_duplicates_are_deduplicated_but_conflicts_fail_closed() -> None:
         MAIN_SUBMISSIONS_URL: _main([duplicate], [_reference(name, [conflict])]),
         _historical_url(name): _json_bytes(_columns([conflict])),
     }
-    with pytest.raises(SecFilingGemmaCorpusError, match="Conflicting metadata"):
+    with pytest.raises(SecFilingGemmaCorpusError, match="across Submissions"):
         _catalog(bad_payloads)
 
 
@@ -775,7 +779,7 @@ def test_cross_source_raw_rows_preserve_extra_columns_and_exact_types(
             },
         }
     )
-    with pytest.raises(SecFilingGemmaCorpusError, match="Conflicting metadata"):
+    with pytest.raises(SecFilingGemmaCorpusError, match="across Submissions"):
         _catalog(
             {
                 MAIN_SUBMISSIONS_URL: main,
@@ -784,17 +788,13 @@ def test_cross_source_raw_rows_preserve_extra_columns_and_exact_types(
         )
 
     historical_columns["newExtraColumn"] = [main_extra]
-    result, _ = _catalog(
-        {
-            MAIN_SUBMISSIONS_URL: main,
-            _historical_url(name): _json_bytes(historical_columns),
-        }
-    )
-    assert result.artifact["cross_source_exact_duplicate_count"] == 1
-    assert all(
-        len(source["raw_row_set_sha256"]) == 64
-        for source in result.artifact["sources"]
-    )
+    with pytest.raises(SecFilingGemmaCorpusError, match="across Submissions"):
+        _catalog(
+            {
+                MAIN_SUBMISSIONS_URL: main,
+                _historical_url(name): _json_bytes(historical_columns),
+            }
+        )
 
 
 def test_catalog_uses_acceptance_filing_and_change_dates_at_contract_boundaries() -> None:
@@ -858,7 +858,7 @@ def test_catalog_normalizes_timezone_qualified_submissions_acceptance_to_et() ->
         acceptance="2025-04-04T16:00:00.000Z",
     )
     result, _ = _catalog({MAIN_SUBMISSIONS_URL: _main([row])})
-    assert result.universe_records[0]["acceptance_datetime"] == "20250404120000"
+    assert result.universe_records[0]["acceptance_datetime"] == "20250404160000"
 
 
 def test_historical_reference_count_range_and_subject_claim_are_checked() -> None:
@@ -883,22 +883,28 @@ def test_historical_reference_count_range_and_subject_claim_are_checked() -> Non
             }
         )
 
-    exact_reference = _reference(name, [row])
-    exact_reference["filingFrom"] = "2001-04-03"
-    with pytest.raises(SecFilingGemmaCorpusError, match="minimum filing date"):
-        _catalog(
-            {
-                MAIN_SUBMISSIONS_URL: _main([], [exact_reference]),
-                _historical_url(name): _json_bytes(_columns([row])),
-            }
-        )
+    inclusive_reference = _reference(name, [row])
+    inclusive_reference["filingFrom"] = "2001-04-03"
+    inclusive_reference["filingTo"] = "2001-04-05"
+    result, _ = _catalog(
+        {
+            MAIN_SUBMISSIONS_URL: _main([], [inclusive_reference]),
+            _historical_url(name): _json_bytes(_columns([row])),
+        }
+    )
+    range_evidence = result.artifact["sources"][1]["historical_range_evidence"]
+    assert range_evidence["filing_from_attained"] is False
+    assert range_evidence["filing_to_attained"] is False
+    assert range_evidence["lower_bound_slack_days"] == 1
+    assert range_evidence["upper_bound_slack_days"] == 1
 
-    exact_reference = _reference(name, [row])
-    exact_reference["filingTo"] = "2001-04-05"
-    with pytest.raises(SecFilingGemmaCorpusError, match="maximum filing date"):
+    outside_reference = _reference(name, [row])
+    outside_reference["filingFrom"] = "2001-04-02"
+    outside_reference["filingTo"] = "2001-04-03"
+    with pytest.raises(SecFilingGemmaCorpusError, match="inclusive bounds"):
         _catalog(
             {
-                MAIN_SUBMISSIONS_URL: _main([], [exact_reference]),
+                MAIN_SUBMISSIONS_URL: _main([], [outside_reference]),
                 _historical_url(name): _json_bytes(_columns([row])),
             }
         )
@@ -961,16 +967,6 @@ def test_main_apple_submissions_requires_nonempty_files_array(
     ("recent", "cik", "match"),
     [
         ([_row(1, year=2001)], 123456, "not Apple"),
-        (
-            [_row(1, year=2001, accession_prefix="0000000001")],
-            320193,
-            "non-Apple accession",
-        ),
-        (
-            [_row(1, year=2001, form="8-K", accession_prefix="0000000001")],
-            320193,
-            "non-Apple accession",
-        ),
         ([_row(1, year=2001, form="10-q")], 320193, "form spelling"),
         (
             [_row(1, year=2001, filing_date="2001-02-30")],
@@ -989,6 +985,13 @@ def test_catalog_rejects_subject_form_date_and_primary_identity_attacks(
 ) -> None:
     with pytest.raises(SecFilingGemmaCorpusError, match=match):
         _catalog({MAIN_SUBMISSIONS_URL: _main(recent, cik=cik)})
+
+
+def test_catalog_accepts_third_party_submitter_accession_for_apple_subject() -> None:
+    row = _row(1, year=2001, accession_prefix="0000000001")
+    result, _ = _catalog({MAIN_SUBMISSIONS_URL: _main([row], cik=320193)})
+    assert result.universe_records[0]["accession_number"] == row["accessionNumber"]
+    assert result.universe_records[0]["subject_cik"] == "0000320193"
 
 
 @pytest.mark.parametrize(

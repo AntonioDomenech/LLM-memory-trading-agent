@@ -177,7 +177,7 @@ LABEL_ENTRY_OFFSET: Final[int] = 1
 LABEL_MATURITY_OFFSET: Final[int] = HORIZON_SESSIONS + 1
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+_ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 _ACCEPTANCE_RE = re.compile(r"[0-9]{14}\Z")
 _MARKET_OBSERVATION_KEYS = {
     "available",

@@ -251,7 +251,7 @@ _PUNCTUATION_TRANSLATION: Final[Mapping[int, str]] = MappingProxyType(
 _WORD_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]+")
 _BARE_SHA256_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 _AAPL_ACCESSION_RE: Final[re.Pattern[str]] = re.compile(
-    r"0000320193-[0-9]{2}-[0-9]{6}\Z"
+    r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z"
 )
 _NORMALIZED_SOURCE_PATH_RE: Final[re.Pattern[str]] = re.compile(
     r"(?P<kind>document|carry-in)-(?P<ordinal>[0-9]{4})\.normalized\.txt\Z"

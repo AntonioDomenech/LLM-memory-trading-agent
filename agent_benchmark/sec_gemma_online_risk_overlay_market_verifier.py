@@ -99,7 +99,7 @@ _STAGE_WINDOW_KEY: Final[dict[str, str]] = {
 }
 _SHA256_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 _ACCESSION_RE: Final[re.Pattern[str]] = re.compile(
-    r"0000320193-[0-9]{2}-[0-9]{6}\Z"
+    r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z"
 )
 
 _SOURCE_KEYS: Final[frozenset[str]] = frozenset(

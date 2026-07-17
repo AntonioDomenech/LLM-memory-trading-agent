@@ -280,7 +280,7 @@ _STRICT_TRANSPORT_FLAGS: Final[dict[str, bool | int]] = {
 }
 _SHA256_RE: Final[re.Pattern[str]] = re.compile(r"(?:sha256:)?[0-9a-f]{64}\Z")
 _ACCESSION_RE: Final[re.Pattern[str]] = re.compile(
-    r"0000320193-[0-9]{2}-[0-9]{6}\Z"
+    r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z"
 )
 _PRIMARY_URL_RE: Final[re.Pattern[str]] = re.compile(
     r"https://www\.sec\.gov/Archives/edgar/data/320193/"

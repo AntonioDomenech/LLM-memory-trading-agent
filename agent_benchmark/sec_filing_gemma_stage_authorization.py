@@ -188,7 +188,7 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _OUTPUT_NAMESPACE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
-_AAPL_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+_AAPL_ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 _ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 STAGE_RUNNER_REPOSITORY_PATH: Final[str] = (
     "agent_benchmark/sec_filing_gemma_stage_runner.py"

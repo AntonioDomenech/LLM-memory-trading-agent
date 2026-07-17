@@ -135,7 +135,7 @@ DOCUMENT_QUALITY_RISK: Final[dict[str, float]] = {
 }
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+_ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 _ACCEPTANCE_RE = re.compile(r"[0-9]{14}\Z")
 _SENTENCE_ID_RE = re.compile(r"[CP][0-9]{4}\Z")
 _MARKET_OBSERVATION_KEYS = {

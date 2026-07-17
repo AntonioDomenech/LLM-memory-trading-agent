@@ -2117,7 +2117,6 @@ def build_corpus_universe_manifest(
         if (
             not isinstance(accession, str)
             or _ACCESSION_RE.fullmatch(accession) is None
-            or not accession.startswith("0000320193-")
             or accession in accessions
         ):
             raise SecFilingGemmaContractError("Universe accession is not a unique Apple accession")
@@ -3375,7 +3374,6 @@ def validate_live_lessons(
             if (
                 not isinstance(accession, str)
                 or _ACCESSION_RE.fullmatch(accession) is None
-                or not accession.startswith("0000320193-")
             ):
                 raise SecFilingGemmaContractError(
                     f"{location} contains a non-Apple accession"
@@ -3509,7 +3507,6 @@ def validate_live_lessons(
         if (
             not isinstance(accession, str)
             or _ACCESSION_RE.fullmatch(accession) is None
-            or not accession.startswith("0000320193-")
         ):
             raise SecFilingGemmaContractError("Live lesson is not bound to an Apple filing")
         decision = _iso_date(lesson["decision_session"], "decision_session")

@@ -77,7 +77,7 @@ _STAGE_PREREQUISITES: Final[dict[str, str]] = {
     "final": "intermediate",
 }
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+_ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 _ATTEMPT_RE = re.compile(
     rf"{re.escape(CONTRACT_VERSION)}-attempt-(?P<sequence>[0-9]{{3}})\Z"
 )

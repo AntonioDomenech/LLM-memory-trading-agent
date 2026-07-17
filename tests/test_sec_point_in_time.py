@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import asdict, replace
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -20,6 +21,7 @@ from agent_benchmark.sec_point_in_time import (
     content_sha256,
     parse_acceptance_datetime,
     parse_master_idx,
+    parse_submissions_acceptance_datetime,
     parse_submissions_rows,
     validate_sec_user_agent,
 )
@@ -91,7 +93,7 @@ def _filing(**overrides: object) -> FilingRecord:
 
 
 def test_user_agent_validation_returns_only_hash_and_never_contact() -> None:
-    private = "Antonio Research antonio-private@antoniodomenech.dev"
+    private = "Alder Research sec-private@alder-research-739184.com"
     audit = validate_sec_user_agent(private)
     expected = "sha256:" + hashlib.sha256(private.encode()).hexdigest()
     assert audit.sha256 == expected
@@ -99,8 +101,8 @@ def test_user_agent_validation_returns_only_hash_and_never_contact() -> None:
     serialized = json.dumps(asdict(audit), sort_keys=True)
     combined = repr(audit) + audit.redacted + serialized
     assert private not in combined
-    assert "antonio-private" not in combined
-    assert "antoniodomenech.dev" not in combined
+    assert "sec-private" not in combined
+    assert "alder-research-739184.com" not in combined
 
 
 @pytest.mark.parametrize(
@@ -111,7 +113,7 @@ def test_user_agent_validation_returns_only_hash_and_never_contact() -> None:
         "contact@example.com",
         "Sample Company Name AdminContact@sample-company.com",
         "Research Bot <person@real-domain.com>",
-        " Antonio Research antonio-private@antoniodomenech.dev ",
+        " Alder Research sec-private@alder-research-739184.com ",
     ),
 )
 def test_user_agent_rejects_blank_or_placeholder_without_echo(value: str) -> None:
@@ -252,6 +254,64 @@ def test_submissions_parser_accepts_timezone_iso_and_validates_change_date() -> 
     broken = {"cik": AAPL_CIK, "filings": {"recent": _columns(row), "files": []}}
     with pytest.raises(SecPointInTimeError, match="dateOfFilingDateChange"):
         parse_submissions_rows(broken)
+
+
+def test_submissions_acceptance_z_preserves_sec_eastern_display_digits() -> None:
+    parsed = parse_submissions_acceptance_datetime("2024-11-01T06:01:36.000Z")
+    assert parsed == datetime(
+        2024,
+        11,
+        1,
+        6,
+        1,
+        36,
+        tzinfo=ZoneInfo("America/New_York"),
+    )
+    assert parsed.strftime("%Y%m%d%H%M%S") == "20241101060136"
+    assert parse_submissions_acceptance_datetime("20241101060136") == parsed
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "2024-11-01T06:01:36.0Z",
+        "2024-11-01T06:01:36.000000000Z",
+    ),
+)
+def test_submissions_acceptance_allows_only_zero_fraction(value: str) -> None:
+    assert parse_submissions_acceptance_datetime(value).strftime(
+        "%Y%m%d%H%M%S"
+    ) == "20241101060136"
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "2024-11-01T06:01:36.001Z",
+        "2024-11-01T06:01:36+00:00",
+        "2024-11-01T06:01:36Zextra",
+        "2024-11-01t06:01:36Z",
+        "2024-11-01T06:01:36.0000000000Z",
+    ),
+)
+def test_submissions_acceptance_rejects_noncanonical_iso(value: str) -> None:
+    with pytest.raises(SecPointInTimeError, match="acceptanceDateTime"):
+        parse_submissions_acceptance_datetime(value)
+
+
+@pytest.mark.parametrize(
+    "value,word",
+    (
+        ("2024-03-10T02:30:00.000Z", "nonexistent"),
+        ("2024-11-03T01:30:00.000Z", "ambiguous"),
+    ),
+)
+def test_submissions_acceptance_rejects_dst_gap_or_fold(
+    value: str,
+    word: str,
+) -> None:
+    with pytest.raises(SecPointInTimeError, match=word):
+        parse_submissions_acceptance_datetime(value)
 
 
 def test_parse_master_idx_preserves_aapl_and_third_party_accessions() -> None:

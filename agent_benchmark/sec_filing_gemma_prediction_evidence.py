@@ -78,7 +78,7 @@ FINAL_FOLD_ID: Final[str] = "final_frozen_through_2023"
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TAGGED_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_ACCESSION_RE = re.compile(r"0000320193-[0-9]{2}-[0-9]{6}\Z")
+_ACCESSION_RE = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}\Z")
 
 _FOLD_CONTEXT_KEYS = {
     "fold_train_cutoff_session",

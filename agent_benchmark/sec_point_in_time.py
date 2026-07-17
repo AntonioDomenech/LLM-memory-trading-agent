@@ -22,6 +22,11 @@ _ACCESSION_RE = re.compile(r"\d{10}-\d{2}-\d{6}\Z")
 _ACCEPTANCE_RE = re.compile(
     rb"<ACCEPTANCE-DATETIME>\s*([0-9]{14})(?=\s|<|$)", re.IGNORECASE
 )
+_SUBMISSIONS_ACCEPTANCE_RE = re.compile(
+    r"(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})T"
+    r"(?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?P<fraction>\.[0-9]{1,9})?Z\Z"
+)
 _EMAIL_RE = re.compile(
     r"(?<![A-Z0-9._%+-])([A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,}))(?![A-Z0-9._%+-])",
     re.IGNORECASE,
@@ -121,38 +126,56 @@ def _validate_iso_date(value: str, name: str, *, allow_empty: bool) -> None:
         raise SecPointInTimeError(f"{name} must be a canonical ISO date")
 
 
-def _parse_submissions_acceptance(value: str) -> datetime:
-    """Validate SEC's exact SGML digits or timezone-qualified JSON datetime."""
+def _eastern_wall_clock(value: str) -> datetime:
+    """Localize one validated 14-digit SEC wall clock without guessing a fold."""
 
-    if re.fullmatch(r"[0-9]{14}", value):
-        try:
-            return datetime.strptime(value, "%Y%m%d%H%M%S").replace(
-                tzinfo=_EASTERN
-            )
-        except ValueError as exc:
-            raise SecPointInTimeError(
-                "acceptanceDateTime is not a valid 14-digit timestamp"
-            ) from exc
-    if "T" not in value:
-        raise SecPointInTimeError(
-            "acceptanceDateTime must be 14 digits or timezone-qualified ISO datetime"
-        )
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = datetime.fromisoformat(normalized)
+        naive = datetime.strptime(value, "%Y%m%d%H%M%S")
     except ValueError as exc:
         raise SecPointInTimeError(
-            "acceptanceDateTime must be 14 digits or timezone-qualified ISO datetime"
+            "acceptanceDateTime is not a valid 14-digit timestamp"
         ) from exc
-    if parsed.tzinfo is None:
+    candidates: list[datetime] = []
+    for fold in (0, 1):
+        candidate = naive.replace(tzinfo=_EASTERN, fold=fold)
+        round_trip = candidate.astimezone(timezone.utc).astimezone(_EASTERN)
+        if round_trip.replace(tzinfo=None) == naive:
+            candidates.append(candidate)
+    unique_offsets = {candidate.utcoffset() for candidate in candidates}
+    if not candidates:
         raise SecPointInTimeError(
-            "ISO acceptanceDateTime must contain an explicit timezone"
+            "acceptanceDateTime is a nonexistent America/New_York wall clock"
         )
-    return parsed
+    if len(unique_offsets) != 1:
+        raise SecPointInTimeError(
+            "acceptanceDateTime is an ambiguous America/New_York wall clock"
+        )
+    return candidates[0].replace(fold=0)
+
+
+def _parse_submissions_acceptance(value: str) -> datetime:
+    """Parse SEC display digits as an exact Eastern wall-clock label."""
+
+    if re.fullmatch(r"[0-9]{14}", value):
+        return _eastern_wall_clock(value)
+    matched = _SUBMISSIONS_ACCEPTANCE_RE.fullmatch(value)
+    if matched is None:
+        raise SecPointInTimeError(
+            "acceptanceDateTime must be 14 digits or an exact SEC Z spelling"
+        )
+    fraction = matched.group("fraction")
+    if fraction is not None and set(fraction[1:]) != {"0"}:
+        raise SecPointInTimeError(
+            "acceptanceDateTime fractional digits must all be zero"
+        )
+    digits = (matched.group("date") + matched.group("time")).replace("-", "").replace(
+        ":", ""
+    )
+    return _eastern_wall_clock(digits)
 
 
 def parse_submissions_acceptance_datetime(value: str) -> datetime:
-    """Return a timezone-aware instant from SEC Submissions metadata."""
+    """Return SEC's displayed digits localized as an Eastern wall clock."""
 
     if not isinstance(value, str):
         raise SecPointInTimeError("SEC acceptance datetime must remain text")
