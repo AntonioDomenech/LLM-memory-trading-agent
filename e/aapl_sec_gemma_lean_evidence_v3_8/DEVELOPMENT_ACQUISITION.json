@@ -1,0 +1,253 @@
+{
+  "acquisition_sha256": "d72059f39eb4b1019ce83799682eadc7eecf3fd77310f43bee8537433a20cb20",
+  "acquisition_sha256_basis": "sha256 of ASCII canonical JSON without acquisition_sha256",
+  "completion_boundary": {
+    "acquisition_process_exit_code": 0,
+    "all_planned_roles_opened": true,
+    "all_planned_roles_sealed": true,
+    "checkpoint_created": true,
+    "checkpoint_file_sha256": "cd2896d627d0694c9efc202c2c8579569265fb4f61f5f74bb9d7db875fbc981e",
+    "checkpoint_logical_sha256": "704a4a9554444201ec9468e74f8c77abe82a3e3320acce29cac0c7ace11dd6fc",
+    "complete_source_replay_authority_created": true,
+    "public_source_authority_created": true,
+    "terminal_code": "passed",
+    "terminal_event_sequence": 609,
+    "terminal_event_sha256": "d3eac9ffc6d8c756180619f65c5513041816c1ac609b5069804285508d6dc39c",
+    "terminal_status": "passed"
+  },
+  "effect_counts": {
+    "broker_actions": 0,
+    "complete_submission_requests": 97,
+    "confirmation_sources_opened": 0,
+    "final_sources_opened": 0,
+    "loopback_identity_requests": 2,
+    "loopback_show_requests": 1,
+    "loopback_tags_requests": 1,
+    "loopback_version_requests": 0,
+    "market_data_requests": 0,
+    "master_index_requests": 100,
+    "model_generation_calls": 0,
+    "official_sec_requests": 199,
+    "paid_api_calls": 0,
+    "performance_calculations": 0,
+    "performance_results_opened": 0,
+    "real_money_actions": 0,
+    "submissions_requests": 2,
+    "trading_actions": 0,
+    "yahoo_requests": 0
+  },
+  "execution_authorized": false,
+  "family_effect_counts": {
+    "basis": "v3 made 4, v3.1 made 2, v3.2 made 15, v3.3 made 103, v3.4 made 109, v3.5 made 134, v3.6 made 199, v3.7 made 199, and v3.8 made 199 official SEC requests",
+    "official_sec_requests_before_v3_8": 765,
+    "official_sec_requests_through_v3_8": 964,
+    "v3_8_official_sec_requests": 199
+  },
+  "finished_at_utc": "2026-07-18T03:47:56.318381Z",
+  "inventory": {
+    "aggregate_sha256": "850f3a022fcaca5b56156d7843f35b05d3bc5732bf480634bd9872bfac7194f2",
+    "aggregate_sha256_basis": "sha256 of ASCII canonical JSON over category, zero-based ordinal, raw file sha256, and byte count, ordered by category then ordinal",
+    "categories": {
+      "blob": {
+        "bytes": 605122012,
+        "file_count": 199
+      },
+      "checkpoint": {
+        "bytes": 1049,
+        "file_count": 1
+      },
+      "journal": {
+        "bytes": 557676,
+        "file_count": 609
+      },
+      "manifest": {
+        "bytes": 153945,
+        "file_count": 199
+      },
+      "parse_receipt": {
+        "bytes": 3160618,
+        "file_count": 199
+      },
+      "phase_receipt": {
+        "bytes": 2958738,
+        "file_count": 2
+      },
+      "public_authority": {
+        "bytes": 1843,
+        "file_count": 1
+      },
+      "run_lock": {
+        "bytes": 1,
+        "file_count": 1
+      },
+      "transport_receipt": {
+        "bytes": 645760,
+        "file_count": 199
+      }
+    },
+    "file_count": 1410,
+    "temporary_file_count": 0,
+    "total_bytes": 612601642
+  },
+  "journal_evidence": {
+    "accounting_complete": true,
+    "complete_submission_count": 97,
+    "cumulative_active_ms": 396581,
+    "decompressed_master_bytes": 1643705422,
+    "detached_journal_validation_passed": true,
+    "event_count": 609,
+    "event_type_counts": {
+      "invocation_clean_close": 4,
+      "invocation_open": 4,
+      "phase_plan": 3,
+      "response_complete": 199,
+      "role_failure": 0,
+      "role_intent": 199,
+      "role_seal": 199,
+      "terminal": 1
+    },
+    "formula_requests": 199,
+    "head_event_sha256": "d3eac9ffc6d8c756180619f65c5513041816c1ac609b5069804285508d6dc39c",
+    "historical_count": 1,
+    "http_200_responses": 199,
+    "invocation_count": 4,
+    "journal_source_authoritative": false,
+    "journal_source_authoritative_basis": "the journal proves complete request accounting; checkpoint validation plus detached reconstruction establish source authority",
+    "lifetime_intents": 199,
+    "lifetime_received_bytes": 605122012,
+    "no_open_invocation": true,
+    "no_open_role": true,
+    "phase_expansions": [
+      "historical_submissions",
+      "quarterly_master",
+      "complete_submission"
+    ],
+    "preterminal_head_sha256": "78f1f303a8427092b88582a4f983829bb876b4f98e1edcd3847427b43106fce2",
+    "quarterly_master_count": 100,
+    "request_effect_accounting_validated": true,
+    "resume_allowed": false,
+    "role_seals": 199,
+    "sealed_prefix_sha256": "1020495445133368accd43d93d9289262b5b90b8fa774d8ea539093a2cb334ad",
+    "successful_response_bytes": 605122012,
+    "terminal_code": "passed",
+    "terminal_status": "passed",
+    "terminal_unclean_active_ms": 0
+  },
+  "model_authorized": false,
+  "next_step": "commit and push the public v3.8 source authority, this terminal artifact, and the comparison update; then require a separate read-only pushed-evidence gate before any market, model, performance, confirmation, final, or trading effect",
+  "opened_source_roles": {
+    "all_http_200_response_bytes": 605122012,
+    "all_planned_roles_sealed": true,
+    "complete_submission_count": 97,
+    "failed_role_count": 0,
+    "historical_submissions_count": 1,
+    "opened_role_count": 199,
+    "quarterly_master_count": 100,
+    "sealed_role_count": 199,
+    "submissions_count": 2
+  },
+  "performance_results_opened": false,
+  "postpass_audit": {
+    "acquisition_called": false,
+    "existing_lock_preserved": true,
+    "files_created_or_modified": false,
+    "market_called": false,
+    "model_called": false,
+    "network_called": false,
+    "preflight_called": false,
+    "read_only": true,
+    "status": "passed"
+  },
+  "privacy": {
+    "absolute_private_paths_published": false,
+    "accession_ids_published": false,
+    "private_paths_published": false,
+    "public_authority_contains_contact_text": false,
+    "public_authority_contains_private_paths": false,
+    "raw_filing_text_published": false,
+    "raw_response_headers_published": false,
+    "raw_sec_bodies_published": false,
+    "raw_source_rows_published": false,
+    "readable_sec_contact_published": false,
+    "sec_contact_fingerprint_republished_in_this_artifact": false,
+    "serialized_contact_echo_found": false,
+    "serialized_contact_echo_scan_basis": "authenticated byte scan using withheld raw, JSON, HTML, lowercase, and percent-encoded contact needles",
+    "serialized_contact_echo_scanned_bytes": 612601642,
+    "serialized_contact_echo_scanned_files": 1410
+  },
+  "repository": {
+    "authorized_acquisition_head": "a0f971184ad26630478182be97f01c46c80498e1",
+    "authorized_acquisition_tree": "873035349429b448857d836c94b2d03198b6e328",
+    "branch": "codex/aapl-sec-gemma-lean-evidence-v3-8",
+    "implementation_commit": "2f0e0e293a1c6c5fd4303825ce13d50516bbe505",
+    "implementation_delta_manifest_sha256": "f6a042432393964018420fb396738facfd270e17ecb2f3184e805ed35a245dd2",
+    "implementation_delta_payload_sha256": "bcaa563aef8262a3ae88c861b17aeb7615bb06b3795b2731cf1345d6c4597c64",
+    "implementation_tree": "c38b5caf46c3d23d7d1f62bb6f1d0a44caa0b627",
+    "local_upstream_exact_match_at_postpass_audit": true,
+    "postpass_module_closure_file_count": 14,
+    "postpass_module_closure_sha256": "44aec4fc4e38eb110af0ae5241e16f92a12baeb7f9d8016ded9b2d9becfb5eac",
+    "preflight_artifact_blob": "2152fc55228f8b9a04ad5930e7ac602f9c94d2a6",
+    "preflight_artifact_file_sha256": "a78a2164308a7d4d58a4cef05a8640a8c38375ffc9d4bb4fe3e63959a6a21df9",
+    "preflight_evidence_commit": "a0f971184ad26630478182be97f01c46c80498e1",
+    "preflight_evidence_tree": "873035349429b448857d836c94b2d03198b6e328",
+    "preflight_sha256": "0e40606178092f8d3373eb161cee851e856e38c32261883875a8a6b303153a6e",
+    "preregistration_commit": "c8a1f2d2ad7ec22d4f50600180908e9d499520f4",
+    "preregistration_document_blob": "1740ddb65985fed0eb001623760c9a70425462ed",
+    "preregistration_document_sha256": "6d27fdc7f21668d0503a91b30c6b6e4699778031330f5c3a5205735b268102a2",
+    "preregistration_tree": "5eaf18fa8e6f4ee715a66df6af010a312f50454a",
+    "scientific_parent_commit": "efbc481c57e480d48303763163676e64e87df49d",
+    "tracked_worktree_clean_at_postpass_audit": true,
+    "v3_7_terminal_parent_commit": "8d84ca6b1d8a5ef50d790beb9b4b53e51812a542"
+  },
+  "schema_version": "aapl-sec-gemma-lean-evidence-v3-8-development-acquisition-v1",
+  "scientific_disposition": {
+    "confirmation_or_final_evidence_seen": false,
+    "development_filing_text_bodies_opened": true,
+    "development_filing_text_body_count": 97,
+    "development_source_authority_complete": true,
+    "later_stage_access_stopped": true,
+    "market_model_or_performance_evidence_seen": false,
+    "pushed_evidence_gate_passed": false,
+    "pushed_evidence_gate_required_before_science": true,
+    "source_only_evidence_seen": true,
+    "v3_8_acquisition_terminal": true
+  },
+  "source_authority": {
+    "checkpoint_file_bytes": 1049,
+    "checkpoint_file_sha256": "cd2896d627d0694c9efc202c2c8579569265fb4f61f5f74bb9d7db875fbc981e",
+    "checkpoint_sha256": "704a4a9554444201ec9468e74f8c77abe82a3e3320acce29cac0c7ace11dd6fc",
+    "compact_replay_sha256": "64a7b7776206b008c0dffe26d4a14be9a092281a7834d878332d4f741db05822",
+    "exact_public_reconstruction_match": true,
+    "exact_source_seal_match": true,
+    "fresh_network_provenance_claimed_by_detached_replay": false,
+    "peak_live_role_payload_count": 1,
+    "public_authority_file_bytes": 1843,
+    "public_authority_file_sha256": "d7f87ac22e58ac4b50033af95e6f768692f1e31a6890e9f50e49f20d59ff0d0a",
+    "role_manifest_count": 199,
+    "role_manifests_sha256": "b6c66fba0d7482ee9b1b1892351b0d68dcb43f4ce2a2916e3ea96a316fbc2ad7",
+    "source_authoritative": true,
+    "stage_source_seal_sha256": "0eb7c6a83de59d44b3a5ceeca5918b03070ff1f508cc6a5411cd81871368f413"
+  },
+  "stage": "development",
+  "stage_seal_evidence": {
+    "authoritative_calendar_receipt_sha256": "d065cb637b9cdb2f96978be3790f20c81df6b2cde39199607c7caa551a905007",
+    "counts": {
+      "D": 75,
+      "H": 1,
+      "I": 97,
+      "P": 97,
+      "Q": 100,
+      "U": 75,
+      "exact_acceptance_U": 75,
+      "successful_request_formula": 199
+    },
+    "exact_acceptance_rate_U": 1.0,
+    "main_parse_receipt_sha256": "da3ee5a9db814711d568fdfad2053ac36b1f6ccf159af4b78c71481934462983",
+    "master_reconciliation_sha256": "39f3499178916d63485b69900f144ba81c468416424cb871b378d3e9964ab2a0",
+    "reconciliation_receipt_sha256": "282b534d834cc1aa360c4ea459a612d43860f8864f9477932395836476b37638",
+    "role_plan_sha256": "6a03e4f8c2a444dd0612d7b1ff74cc605e026ace54941696a5ae180dd226110a",
+    "stage_source_seal_sha256": "0eb7c6a83de59d44b3a5ceeca5918b03070ff1f508cc6a5411cd81871368f413",
+    "submissions_receipt_sha256": "b3d916a5919b0f198d1447a24fafce521ed3cc39b25d75d0bb64e8006ea4ed2f"
+  },
+  "status": "passed"
+}

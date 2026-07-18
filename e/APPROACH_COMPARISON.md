@@ -1,7 +1,7 @@
 # AAPL long/cash approach comparison
 
-Updated through the SEC/Gemma lean evidence v3.7 development checkpoint-binding
-rejection on 2026-07-18 Europe/Madrid (2026-07-18 UTC). The three preceding
+Updated through the SEC/Gemma lean evidence v3.8 development source-authority
+pass on 2026-07-18 Europe/Madrid (2026-07-18 UTC). The three preceding
 SEC/Gemma entries stopped before
 official SEC, market-value, or generative-model effects. Lean v3 then made four
 fully journaled official SEC catalogue requests and stopped before market,
@@ -53,7 +53,17 @@ committed acquisition caller then omitted the required main parse-receipt hash
 when building the checkpoint, so terminal `source_rejected` followed with no
 checkpoint, complete-source replay authority, or public source authority.
 Market, Gemma, performance, paid-API, confirmation, final, and trading effects
-remained unopened. All eligible
+remained unopened. Lean v3.8 then made 199 newly journaled official SEC
+requests, all HTTP 200, and sealed the same complete role set. The exact
+preregistered checkpoint-call binding produced a checkpoint, a public source
+authority, and a checkpoint-backed detached replay whose reconstructed source
+seal matched exactly. A separate read-only post-pass audit authenticated all
+199 roles and 1,410 evidence files (612,601,642 bytes), found I=97, U=75, and
+D=75, and found no serialized private-contact echo. This is a source-only
+development pass, not a trading or performance result: market data, Gemma
+generation, performance calculation, paid APIs, confirmation, final, and
+trading remain unopened until the committed evidence passes a separate
+pushed-authority gate. All eligible
 approaches use 0% or 100% AAPL
 exposure, no shorting, no leverage, no negative cash, the same adjusted-open
 ledger as AAPL buy-and-hold, and no paid API. Published 2024-2026
@@ -134,6 +144,7 @@ final and no later period or real capital is authorized.
 | SEC/Gemma lean evidence v3.5 | Same lean source-first local Gemma filing learner with the family-neutral ASCII-horizontal-whitespace header repair and committed-blob proof | All 134 official SEC requests returned HTTP 200. Both Submissions files, all 100 quarterly masters, and 31 complete submissions sealed. The 32nd complete body, `complete/0000912057-02-030796`, remained unsealed because the frozen parser treated an exact UTC Submissions acceptance time and a 14-digit SGML New York wall-clock label as two New York wall clocks, creating a 14,400-second mismatch; terminal `parse_rejected` followed with `source_authoritative=false` | No | Development acquisition terminally rejected after 32 filing bodies but before market data, Gemma generation, performance calculation, paid API, confirmation, final, or trading effects. Any representation-aware timestamp correction requires a separately preregistered v3.6, proper `America/New_York` conversion rather than a fixed offset, and no special case for the observed accession, timestamp, offset, role, body shape, or hash |
 | SEC/Gemma lean evidence v3.6 | Same lean source-first local Gemma filing learner with representation-aware UTC-versus-New-York acceptance-time parsing and committed-blob proof | All 199 official SEC requests returned HTTP 200, and every planned role sealed: both Submissions files, all 100 quarterly masters, and all 97 complete submissions. Deterministic final source sealing then found D=97 outside the frozen 72-through-80 range; terminal `source_rejected` followed with no failed role, checkpoint, stage seal, or source authority | No | Development acquisition terminally rejected after the complete role set but before market data, Gemma generation, performance calculation, paid API, confirmation, final, or trading effects. Any cohort-cardinality correction requires a separately preregistered v3.7 tied to the general causal cohort and independent resource cap, with no special case for the observed count, accessions, forms, dates, rows, or hashes |
 | SEC/Gemma lean evidence v3.7 | Same lean source-first local Gemma filing learner with the exact left-boundary history-calendar/censor correction and committed-blob proof | All 199 official SEC requests returned HTTP 200 and every role sealed. Deterministic source finalization passed with I=97, U=75, and D=75 inside the frozen 72-through-80 range. The committed caller then omitted the required `main_parse_receipt_sha256` checkpoint argument; terminal `source_rejected` followed with no failed role, checkpoint, complete-source replay authority, or public source authority | No | Development acquisition terminally rejected after the complete role set but before market data, Gemma generation, performance calculation, paid API, confirmation, final, or trading effects. Any successor requires a separately committed and pushed preregistration based only on public source evidence and may not reuse, resume, or rerun the v3.7 attempt |
+| SEC/Gemma lean evidence v3.8 | Same lean source-first local Gemma filing learner with the exact general checkpoint-call binding preregistered from public v3.7 evidence | All 199 official SEC requests returned HTTP 200 and every role sealed. Checkpoint construction passed with the authenticated main parse-receipt hash; checkpoint-backed detached replay reconstructed the exact source seal with I=97, U=75, and D=75, and the redacted public source authority matched exactly | No | Development source acquisition passed as source-only evidence. Market data, Gemma generation, performance calculation, paid API, confirmation, final, and trading effects remain unopened; a separate read-only gate must authenticate the pushed authority before science can begin |
 
 ## Outside the current no-leverage contract
 
@@ -182,3 +193,5 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_sec_gemma_lean_evidence_v3_5/DEVELOPMENT_ACQUISITION.json`
 - `e/aapl_sec_gemma_lean_evidence_v3_6/DEVELOPMENT_ACQUISITION.json`
 - `e/aapl_sec_gemma_lean_evidence_v3_7/DEVELOPMENT_ACQUISITION.json`
+- `e/aapl_sec_gemma_lean_evidence_v3_8/DEVELOPMENT_ACQUISITION.json`
+- `e/aapl_sec_gemma_lean_evidence_v3_8/development/source-authority-d7f87ac22e58ac4b50033af95e6f768692f1e31a6890e9f50e49f20d59ff0d0a.json`
