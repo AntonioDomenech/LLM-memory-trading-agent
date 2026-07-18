@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -213,11 +215,83 @@ def test_dependency_identity_is_recomputed_from_frozen_closure() -> None:
 
 
 def test_runtime_modules_share_exact_verified_requests_identity() -> None:
-    verified_requests, ollama, production = lean._load_verified_runtime_modules()
+    repository_root = Path(lean.__file__).resolve(strict=True).parents[1]
+    child = r"""
+import json
+import os
+import sys
 
-    assert ollama.requests is verified_requests
-    assert production.requests is verified_requests
-    assert lean.sys.modules["requests"] is verified_requests
+import agent_benchmark.sec_gemma_lean_runner as lean
+
+
+def identity_report(verified_requests=None, ollama=None, production=None):
+    process_requests = sys.modules.get("requests")
+    return {
+        "python_dont_write_bytecode": os.environ.get(
+            "PYTHONDONTWRITEBYTECODE"
+        ),
+        "process_requests_id": (
+            None if process_requests is None else id(process_requests)
+        ),
+        "verified_requests_id": (
+            None if verified_requests is None else id(verified_requests)
+        ),
+        "ollama_requests_id": (
+            None
+            if ollama is None
+            else id(getattr(ollama, "requests", None))
+        ),
+        "production_requests_id": (
+            None
+            if production is None
+            else id(getattr(production, "requests", None))
+        ),
+    }
+
+
+try:
+    verified_requests, ollama, production = (
+        lean._load_verified_runtime_modules()
+    )
+except BaseException as error:
+    report = identity_report()
+    report["error_type"] = type(error).__name__
+    report["error"] = str(error)
+    print(json.dumps(report, sort_keys=True), file=sys.stderr)
+    raise
+
+checks = {
+    "sys_modules_requests": (
+        sys.modules.get("requests") is verified_requests
+    ),
+    "ollama_requests": ollama.requests is verified_requests,
+    "production_requests": production.requests is verified_requests,
+}
+if not all(checks.values()):
+    report = identity_report(verified_requests, ollama, production)
+    report["identity_checks"] = checks
+    print(json.dumps(report, sort_keys=True), file=sys.stderr)
+    raise SystemExit(17)
+"""
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "-c", child],
+        cwd=repository_root,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, (
+        "fresh runtime identity subprocess failed\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
 
 
 def test_execution_binding_rejects_a_different_checkout(tmp_path: Path) -> None:

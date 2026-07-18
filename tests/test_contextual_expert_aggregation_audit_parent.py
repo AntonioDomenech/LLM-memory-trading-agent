@@ -10,6 +10,14 @@ from agent_benchmark import contextual_expert_aggregation_audit_parent as parent
 
 ROOT = Path(__file__).resolve().parents[1]
 Error = parent.RejectedParentVerificationError
+_HISTORICAL_GITATTRIBUTES_SHA256 = (
+    "sha256:cb8b13701b4982d330494139defb21260d0d32ad96fe47c8e5346bb7a3503440"
+)
+_HISTORICAL_GITATTRIBUTES_BLOB = "1131dc857b36d18c2c9824f6a3c49eb083ec936d"
+_CURRENT_GITATTRIBUTES_SHA256 = (
+    "sha256:edd61a2af1285ea6a4c3acde2d90f2fea0843a0ca43143af0d06a0fbe26f9498"
+)
+_CURRENT_GITATTRIBUTES_BLOB = "ff1b62569a04f331566c37885fa82cc6b03bf57c"
 
 
 def _expected_semantics() -> parent._RegeneratedSemantics:
@@ -23,11 +31,13 @@ def _expected_semantics() -> parent._RegeneratedSemantics:
     )
 
 
-def test_exact_rejected_parent_returns_typed_lock_evidence_without_future_input(
+def test_exact_rejected_parent_at_frozen_identity_returns_typed_lock_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     opened: list[str] = []
+    adapted_live_paths: list[str] = []
     original_read_bytes = Path.read_bytes
+    original_tracked_file_identity = parent._experiment.tracked_file_identity
 
     def guarded_read_bytes(path: Path) -> bytes:
         normalized = path.as_posix()
@@ -36,7 +46,53 @@ def test_exact_rejected_parent_returns_typed_lock_evidence_without_future_input(
         opened.append(normalized)
         return original_read_bytes(path)
 
+    def tracked_file_identity_with_known_gitattributes_drift(
+        repo_root: Path,
+        path: Path,
+        *,
+        expected_sha256: str | None = None,
+        expected_git_blob: str | None = None,
+        require_literal_local_bytes: bool = False,
+        allow_crlf_equivalent: bool = False,
+    ) -> parent._experiment.TrackedFileIdentity:
+        relative = path.relative_to(repo_root).as_posix()
+        if relative != ".gitattributes":
+            return original_tracked_file_identity(
+                repo_root,
+                path,
+                expected_sha256=expected_sha256,
+                expected_git_blob=expected_git_blob,
+                require_literal_local_bytes=require_literal_local_bytes,
+                allow_crlf_equivalent=allow_crlf_equivalent,
+            )
+
+        # The production verifier still rejects this drift. This historical
+        # success-path test adapts only the one exact repository-wide EOL rule
+        # added after the rejected parent, while pinning both byte identities.
+        assert expected_sha256 == _HISTORICAL_GITATTRIBUTES_SHA256
+        assert expected_git_blob == _HISTORICAL_GITATTRIBUTES_BLOB
+        identity = original_tracked_file_identity(
+            repo_root,
+            path,
+            expected_sha256=_CURRENT_GITATTRIBUTES_SHA256,
+            expected_git_blob=_CURRENT_GITATTRIBUTES_BLOB,
+            require_literal_local_bytes=require_literal_local_bytes,
+            allow_crlf_equivalent=allow_crlf_equivalent,
+        )
+        assert identity == parent._experiment.TrackedFileIdentity(
+            path=".gitattributes",
+            sha256=_CURRENT_GITATTRIBUTES_SHA256,
+            git_blob=_CURRENT_GITATTRIBUTES_BLOB,
+        )
+        adapted_live_paths.append(relative)
+        return identity
+
     monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+    monkeypatch.setattr(
+        parent._experiment,
+        "tracked_file_identity",
+        tracked_file_identity_with_known_gitattributes_drift,
+    )
     monkeypatch.setattr(
         parent,
         "_regenerate_rejected_semantics",
@@ -63,6 +119,8 @@ def test_exact_rejected_parent_returns_typed_lock_evidence_without_future_input(
     )
     assert opened
     assert not any("aapl_spy_qqq_through_2023.csv" in value for value in opened)
+    assert adapted_live_paths
+    assert set(adapted_live_paths) == {".gitattributes"}
 
     lock = evidence.lock_payload()
     assert lock["verified"] is True

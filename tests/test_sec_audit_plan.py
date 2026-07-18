@@ -180,7 +180,7 @@ def test_cutoff_requires_both_filing_and_eastern_acceptance_by_2024() -> None:
                 "S-3",
                 "2024-12-31",
                 # Still 2024-12-31 in New York, so this remains admissible.
-                "2025-01-01T00:30:00+00:00",
+                "20241231193000",
             ),
             _record(
                 "0000320193-25-900002",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,7 @@ from agent_benchmark.sec_gemma_online_risk_overlay_contract import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+V22_PREREGISTRATION_REVISION = "a849b9d704ffd98547e570735a221b2b75f7db86"
 
 
 def test_manifest_is_exact_deterministic_and_detached() -> None:
@@ -161,10 +163,42 @@ def test_contract_requires_learning_and_semantics_to_change_actions() -> None:
 
 
 def test_bound_source_files_match_literal_sha256_pins() -> None:
-    assert set(SOURCE_PIN_FILES) == set(SOURCE_PINS)
+    source_roles = set(SOURCE_PIN_FILES)
+    pinned_roles = set(SOURCE_PINS)
+    source_paths = set(SOURCE_PIN_FILES.values())
+
+    assert source_roles == pinned_roles
+    assert len(source_paths) == len(SOURCE_PIN_FILES)
+
+    verified_roles: set[str] = set()
+    verified_paths: set[str] = set()
     for role, relative_path in SOURCE_PIN_FILES.items():
-        payload = (REPO_ROOT / relative_path).read_bytes()
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "show",
+                    f"{V22_PREREGISTRATION_REVISION}:{relative_path}",
+                ],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            pytest.fail(
+                "failed to read frozen v2.2 source blob "
+                f"for role {role!r} at path {relative_path!r}: {exc}",
+                pytrace=False,
+            )
+
+        payload = result.stdout
         assert hashlib.sha256(payload).hexdigest() == SOURCE_PINS[role]
+        verified_roles.add(role)
+        verified_paths.add(relative_path)
+
+    assert verified_roles == source_roles == pinned_roles
+    assert verified_paths == source_paths
 
 
 def test_final_reveal_registry_predecessor_pin_matches_literal_bytes() -> None:
