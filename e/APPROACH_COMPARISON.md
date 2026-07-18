@@ -1,11 +1,13 @@
 # AAPL long/cash approach comparison
 
-Updated through the SEC/Gemma lean science v3.9 offline-readiness rejection on
-2026-07-18 Europe/Madrid (2026-07-18 UTC). V3.9 made no external call and did
-not run its one-shot preflight: the frozen complete-suite command, run against
-the exact twelve-file draft, found four older shared-test failures, so the
-draft could not be promoted honestly as the preregistered passing
-implementation. The SEC/Gemma lean evidence v3.8
+Updated through the SEC/Gemma lean science v3.10 one-shot zero-effect preflight
+rejection on 2026-07-18 Europe/Madrid (2026-07-18 UTC). V3.10's exact
+twelve-file implementation passed all 167 latest-approach tests, authenticated
+the preserved V3.8 source, and then stopped with `legacy_record_invalid`. Two
+of the 75 valid source rows have no SEC filename, while the inherited universe
+requires a nonempty filename and the lossless bridge forbids inventing one.
+The preflight was consumed without a fresh SEC, Yahoo, Ollama, Gemma, market,
+performance, broker, or real-money effect. The SEC/Gemma lean evidence v3.8
 development source-authority pass remains the latest external source result.
 The three preceding
 SEC/Gemma entries stopped before
@@ -152,6 +154,7 @@ final and no later period or real capital is authorized.
 | SEC/Gemma lean evidence v3.7 | Same lean source-first local Gemma filing learner with the exact left-boundary history-calendar/censor correction and committed-blob proof | All 199 official SEC requests returned HTTP 200 and every role sealed. Deterministic source finalization passed with I=97, U=75, and D=75 inside the frozen 72-through-80 range. The committed caller then omitted the required `main_parse_receipt_sha256` checkpoint argument; terminal `source_rejected` followed with no failed role, checkpoint, complete-source replay authority, or public source authority | No | Development acquisition terminally rejected after the complete role set but before market data, Gemma generation, performance calculation, paid API, confirmation, final, or trading effects. Any successor requires a separately committed and pushed preregistration based only on public source evidence and may not reuse, resume, or rerun the v3.7 attempt |
 | SEC/Gemma lean evidence v3.8 | Same lean source-first local Gemma filing learner with the exact general checkpoint-call binding preregistered from public v3.7 evidence | All 199 official SEC requests returned HTTP 200 and every role sealed. Checkpoint construction passed with the authenticated main parse-receipt hash; checkpoint-backed detached replay reconstructed the exact source seal with I=97, U=75, and D=75, and the redacted public source authority matched exactly | No | Development source acquisition passed as source-only evidence. Market data, Gemma generation, performance calculation, paid API, confirmation, final, and trading effects remain unopened; a separate read-only gate must authenticate the pushed authority before science can begin |
 | SEC/Gemma lean science v3.9 | Proposed exact v3.8 source replay plus six frozen Yahoo development series and 75 local Gemma extraction calls, with pilot/pause controls and no confirmation/final access | Complete offline suite finished in 2:09:23 with 5,937 passed, 14 skipped, and four failures in older shared tests: one branch-bound historical verifier, one stale SEC timestamp fixture, one collection-order Requests identity mismatch, and one stale source-pin test covering five changed sources | No | Rejected at offline readiness before promotion as the preregistered passing implementation or any one-shot preflight. No SEC, Yahoo, Ollama, model, market-value, performance, paid-API, confirmation, final, broker, or trading effect occurred; shared baseline repairs require a separate branch and successor preregistration |
+| SEC/Gemma lean science v3.10 | Exact read-only replay of the authenticated V3.8 source, frozen 75-filing local Gemma plan, six Yahoo development series, latest-only qualification, and one-shot zero-effect preflight | The exact 12-file implementation passed 167/167 latest tests. One-shot source authentication passed over 1,410 preserved files, then the lossless bridge found two valid rows with no Submissions, SGML, or SEC filename. The inherited universe requires a nonempty filename and official URL, while V3.8 forbids treating its internal fallback identity as an SEC filename | No | Permanently rejected with `legacy_record_invalid` at consumed zero-effect preflight. No fresh SEC, Yahoo, Ollama, Gemma, market-value, prediction, performance, paid-API, confirmation, final, broker, or real-money effect occurred. A separately preregistered successor must represent missing filenames explicitly without dropping rows or fabricating URLs, and must strengthen runtime code binding |
 
 ## Outside the current no-leverage contract
 
@@ -204,3 +207,6 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_sec_gemma_lean_evidence_v3_8/development/source-authority-d7f87ac22e58ac4b50033af95e6f768692f1e31a6890e9f50e49f20d59ff0d0a.json`
 - `docs/aapl_sec_gemma_lean_science_v3_9_offline_readiness_rejection.md`
 - `codex/aapl-sec-gemma-lean-science-v3-9-offline-draft` at `030e30849364cd7f842c612b66ba68771dcfb7b1`
+- `e/aapl_sec_gemma_lean_science_v3_10/DEVELOPMENT_PREFLIGHT.json`
+- `docs/aapl_sec_gemma_lean_science_v3_10_preflight_rejection.md`
+- `codex/aapl-sec-gemma-lean-science-v3-10` implementation at `c2776bae573faa7963bd31f89f2e570ce704a207`
