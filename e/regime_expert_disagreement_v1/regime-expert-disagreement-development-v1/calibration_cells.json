@@ -1,0 +1,678 @@
+{
+  "choices": {
+    "not_risk_on": "contextual_only",
+    "risk_on": null
+  },
+  "diagnostics": {
+    "not_risk_on": {
+      "contextual_only": {
+        "eligible": true,
+        "episode_count": 20,
+        "mean_net_cash_log_edge_10bps": 0.009521413676136702,
+        "median_net_cash_log_edge_10bps": 0.010367856153439478,
+        "positive_calendar_year_count": 3,
+        "total_net_cash_log_edge_10bps": 0.19042827352273403,
+        "yearly_net_cash_log_edges_10bps": {
+          "2005": 0.020785678210756352,
+          "2006": 0.0,
+          "2007": -0.026986903881437957,
+          "2008": 0.19209405359116913,
+          "2009": 0.0,
+          "2010": 0.004535445602246498,
+          "2011": 0.0
+        }
+      },
+      "frozen_choice": "contextual_only",
+      "weak_trend_only": {
+        "eligible": true,
+        "episode_count": 11,
+        "mean_net_cash_log_edge_10bps": 0.0009024144716787655,
+        "median_net_cash_log_edge_10bps": 0.007711181110234838,
+        "positive_calendar_year_count": 3,
+        "total_net_cash_log_edge_10bps": 0.009926559188466421,
+        "yearly_net_cash_log_edges_10bps": {
+          "2005": 0.007711181110234838,
+          "2006": -0.014485389444267392,
+          "2007": 0.0,
+          "2008": 0.026848926227604316,
+          "2009": 0.0,
+          "2010": -0.027462498865161927,
+          "2011": 0.017314340160056584
+        }
+      }
+    },
+    "risk_on": {
+      "contextual_only": {
+        "eligible": false,
+        "episode_count": 8,
+        "mean_net_cash_log_edge_10bps": -0.017025986315187563,
+        "median_net_cash_log_edge_10bps": -0.014386055675041195,
+        "positive_calendar_year_count": 1,
+        "total_net_cash_log_edge_10bps": -0.1362078905215005,
+        "yearly_net_cash_log_edges_10bps": {
+          "2005": -0.02138931724548442,
+          "2006": 0.0053112786752900435,
+          "2007": 0.0,
+          "2008": 0.0,
+          "2009": -0.010236412012044702,
+          "2010": -0.006980395519943778,
+          "2011": -0.10291304441931767
+        }
+      },
+      "frozen_choice": null,
+      "weak_trend_only": {
+        "eligible": false,
+        "episode_count": 0,
+        "mean_net_cash_log_edge_10bps": null,
+        "median_net_cash_log_edge_10bps": null,
+        "positive_calendar_year_count": 0,
+        "total_net_cash_log_edge_10bps": 0.0,
+        "yearly_net_cash_log_edges_10bps": {
+          "2005": 0.0,
+          "2006": 0.0,
+          "2007": 0.0,
+          "2008": 0.0,
+          "2009": 0.0,
+          "2010": 0.0,
+          "2011": 0.0
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "decision_date": "2005-01-07",
+      "entry_date": "2005-01-10",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-01-11",
+      "net_cash_log_edge_10bps": 0.020886010130199716,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2005-01-31",
+      "entry_date": "2005-02-01",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-02-02",
+      "net_cash_log_edge_10bps": -0.013612641402231536,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2005-04-21",
+      "entry_date": "2005-04-22",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-04-25",
+      "net_cash_log_edge_10bps": 0.007546526241353532,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2005-05-04",
+      "entry_date": "2005-05-05",
+      "entry_year": 2005,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2005-05-06",
+      "net_cash_log_edge_10bps": 0.007711181110234838,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2005-07-05",
+      "entry_date": "2005-07-06",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-07-07",
+      "net_cash_log_edge_10bps": 0.02215594009699365,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2005-07-07",
+      "entry_date": "2005-07-08",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-07-11",
+      "net_cash_log_edge_10bps": -0.015116056426556702,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2005-08-12",
+      "entry_date": "2005-08-15",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-08-16",
+      "net_cash_log_edge_10bps": -0.02138931724548442,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2005-10-13",
+      "entry_date": "2005-10-14",
+      "entry_year": 2005,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2005-10-17",
+      "net_cash_log_edge_10bps": -0.0010741004290023082,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2006-01-30",
+      "entry_date": "2006-01-31",
+      "entry_year": 2006,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2006-02-01",
+      "net_cash_log_edge_10bps": 0.0053112786752900435,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2006-02-10",
+      "entry_date": "2006-02-13",
+      "entry_year": 2006,
+      "expert_membership": "both",
+      "maturity_date": "2006-02-14",
+      "net_cash_log_edge_10bps": 0.02123077549507893,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2006-02-14",
+      "entry_date": "2006-02-15",
+      "entry_year": 2006,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2006-02-16",
+      "net_cash_log_edge_10bps": -0.04213125729621099,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2006-06-01",
+      "entry_date": "2006-06-02",
+      "entry_year": 2006,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2006-06-05",
+      "net_cash_log_edge_10bps": 0.0276458678519436,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2006-06-08",
+      "entry_date": "2006-06-09",
+      "entry_year": 2006,
+      "expert_membership": "both",
+      "maturity_date": "2006-06-12",
+      "net_cash_log_edge_10bps": 0.0275257445352621,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2006-06-15",
+      "entry_date": "2006-06-16",
+      "entry_year": 2006,
+      "expert_membership": "both",
+      "maturity_date": "2006-06-19",
+      "net_cash_log_edge_10bps": 0.01735137659856552,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2007-02-28",
+      "entry_date": "2007-03-01",
+      "entry_year": 2007,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2007-03-02",
+      "net_cash_log_edge_10bps": -0.03408738315982903,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2007-03-12",
+      "entry_date": "2007-03-13",
+      "entry_year": 2007,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2007-03-14",
+      "net_cash_log_edge_10bps": 0.007100479278391076,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2007-08-21",
+      "entry_date": "2007-08-22",
+      "entry_year": 2007,
+      "expert_membership": "both",
+      "maturity_date": "2007-08-23",
+      "net_cash_log_edge_10bps": -0.016149769297645562,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2007-11-13",
+      "entry_date": "2007-11-14",
+      "entry_year": 2007,
+      "expert_membership": "both",
+      "maturity_date": "2007-11-15",
+      "net_cash_log_edge_10bps": 0.0607189474528448,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-01-09",
+      "entry_date": "2008-01-10",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-01-11",
+      "net_cash_log_edge_10bps": 0.006937182514350123,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-01-22",
+      "entry_date": "2008-01-23",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-01-24",
+      "net_cash_log_edge_10bps": -0.02951990773281946,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-01-31",
+      "entry_date": "2008-02-01",
+      "entry_year": 2008,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2008-02-04",
+      "net_cash_log_edge_10bps": 0.01301284436754235,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-02-08",
+      "entry_date": "2008-02-11",
+      "entry_year": 2008,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2008-02-12",
+      "net_cash_log_edge_10bps": -0.022796371571760003,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-03-11",
+      "entry_date": "2008-03-12",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-03-13",
+      "net_cash_log_edge_10bps": 0.021414778887000885,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-03-13",
+      "entry_date": "2008-03-14",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-03-17",
+      "net_cash_log_edge_10bps": 0.05609170455405911,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-03-17",
+      "entry_date": "2008-03-18",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-03-19",
+      "net_cash_log_edge_10bps": -0.03204467319889689,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-06-10",
+      "entry_date": "2008-06-11",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-06-12",
+      "net_cash_log_edge_10bps": 0.013581295884615494,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-06-16",
+      "entry_date": "2008-06-17",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-06-18",
+      "net_cash_log_edge_10bps": -0.01881424183440137,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-07-01",
+      "entry_date": "2008-07-02",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-07-03",
+      "net_cash_log_edge_10bps": 0.030543832430955275,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-07-22",
+      "entry_date": "2008-07-23",
+      "entry_year": 2008,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2008-07-24",
+      "net_cash_log_edge_10bps": 0.0020692400443573307,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-09-11",
+      "entry_date": "2008-09-12",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-09-15",
+      "net_cash_log_edge_10bps": 0.05864505186820568,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-09-16",
+      "entry_date": "2008-09-17",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-09-18",
+      "net_cash_log_edge_10bps": 0.056888717883768834,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-09-26",
+      "entry_date": "2008-09-29",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-09-30",
+      "net_cash_log_edge_10bps": 0.09787718666714085,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-09-30",
+      "entry_date": "2008-10-01",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-10-02",
+      "net_cash_log_edge_10bps": 0.03356018713941339,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-10-06",
+      "entry_date": "2008-10-07",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-10-08",
+      "net_cash_log_edge_10bps": 0.15465892478107865,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-10-08",
+      "entry_date": "2008-10-09",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-10-10",
+      "net_cash_log_edge_10bps": 0.08350349088140414,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-10-10",
+      "entry_date": "2008-10-13",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-10-14",
+      "net_cash_log_edge_10bps": -0.1081638533652366,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-10-24",
+      "entry_date": "2008-10-27",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-10-28",
+      "net_cash_log_edge_10bps": -0.005779892319283549,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-10-28",
+      "entry_date": "2008-10-29",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-10-30",
+      "net_cash_log_edge_10bps": -0.0725251486153044,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-11-13",
+      "entry_date": "2008-11-14",
+      "entry_year": 2008,
+      "expert_membership": "both",
+      "maturity_date": "2008-11-17",
+      "net_cash_log_edge_10bps": 0.05596168815791525,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-11-24",
+      "entry_date": "2008-11-25",
+      "entry_year": 2008,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2008-11-26",
+      "net_cash_log_edge_10bps": 0.049053857544348406,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2008-11-26",
+      "entry_date": "2008-11-28",
+      "entry_year": 2008,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2008-12-01",
+      "net_cash_log_edge_10bps": 0.03456321338746464,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2009-10-02",
+      "entry_date": "2009-10-05",
+      "entry_year": 2009,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2009-10-06",
+      "net_cash_log_edge_10bps": -0.010236412012044702,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2010-02-03",
+      "entry_date": "2010-02-04",
+      "entry_year": 2010,
+      "expert_membership": "both",
+      "maturity_date": "2010-02-05",
+      "net_cash_log_edge_10bps": 0.01906083373012256,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-02-05",
+      "entry_date": "2010-02-08",
+      "entry_year": 2010,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2010-02-09",
+      "net_cash_log_edge_10bps": -0.005723457814258162,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-02-11",
+      "entry_date": "2010-02-12",
+      "entry_year": 2010,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2010-02-16",
+      "net_cash_log_edge_10bps": -0.02114821889103631,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-05-11",
+      "entry_date": "2010-05-12",
+      "entry_year": 2010,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2010-05-13",
+      "net_cash_log_edge_10bps": -0.01723568925373318,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-05-21",
+      "entry_date": "2010-05-24",
+      "entry_year": 2010,
+      "expert_membership": "both",
+      "maturity_date": "2010-05-25",
+      "net_cash_log_edge_10bps": 0.030594561622226814,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-05-25",
+      "entry_date": "2010-05-26",
+      "entry_year": 2010,
+      "expert_membership": "both",
+      "maturity_date": "2010-05-27",
+      "net_cash_log_edge_10bps": -0.004076603069544002,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-06-10",
+      "entry_date": "2010-06-11",
+      "entry_year": 2010,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2010-06-14",
+      "net_cash_log_edge_10bps": -0.032665488934681144,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-07-07",
+      "entry_date": "2010-07-08",
+      "entry_year": 2010,
+      "expert_membership": "both",
+      "maturity_date": "2010-07-09",
+      "net_cash_log_edge_10bps": 0.019527643590613503,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-07-20",
+      "entry_date": "2010-07-21",
+      "entry_year": 2010,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2010-07-22",
+      "net_cash_log_edge_10bps": 0.02635120896055553,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-08-12",
+      "entry_date": "2010-08-13",
+      "entry_year": 2010,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2010-08-16",
+      "net_cash_log_edge_10bps": 0.014305406604712414,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-08-25",
+      "entry_date": "2010-08-26",
+      "entry_year": 2010,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2010-08-27",
+      "net_cash_log_edge_10bps": 0.013189186065525426,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2010-11-22",
+      "entry_date": "2010-11-23",
+      "entry_year": 2010,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2010-11-24",
+      "net_cash_log_edge_10bps": -0.006980395519943778,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2011-03-11",
+      "entry_date": "2011-03-14",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-03-15",
+      "net_cash_log_edge_10bps": 0.02987445720896582,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-04-18",
+      "entry_date": "2011-04-19",
+      "entry_year": 2011,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2011-04-20",
+      "net_cash_log_edge_10bps": -0.03277296196775637,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2011-05-17",
+      "entry_date": "2011-05-18",
+      "entry_year": 2011,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2011-05-19",
+      "net_cash_log_edge_10bps": -0.018535699338037687,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2011-05-23",
+      "entry_date": "2011-05-24",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-05-25",
+      "net_cash_log_edge_10bps": 0.004189079661691636,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-06-21",
+      "entry_date": "2011-06-22",
+      "entry_year": 2011,
+      "expert_membership": "weak_trend_only",
+      "maturity_date": "2011-06-23",
+      "net_cash_log_edge_10bps": 0.017314340160056584,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-06-23",
+      "entry_date": "2011-06-24",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-06-27",
+      "net_cash_log_edge_10bps": 0.009472968301165586,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-07-18",
+      "entry_date": "2011-07-19",
+      "entry_year": 2011,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2011-07-20",
+      "net_cash_log_edge_10bps": -0.04882283129037609,
+      "regime": "risk_on"
+    },
+    {
+      "decision_date": "2011-08-09",
+      "entry_date": "2011-08-10",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-08-11",
+      "net_cash_log_edge_10bps": -0.00030081375460803126,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-08-23",
+      "entry_date": "2011-08-24",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-08-25",
+      "net_cash_log_edge_10bps": 0.020720941167724754,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-08-25",
+      "entry_date": "2011-08-26",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-08-29",
+      "net_cash_log_edge_10bps": -0.046809017963647136,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-10-05",
+      "entry_date": "2011-10-06",
+      "entry_year": 2011,
+      "expert_membership": "both",
+      "maturity_date": "2011-10-07",
+      "net_cash_log_edge_10bps": -0.008540655361642203,
+      "regime": "not_risk_on"
+    },
+    {
+      "decision_date": "2011-12-20",
+      "entry_date": "2011-12-21",
+      "entry_year": 2011,
+      "expert_membership": "contextual_only",
+      "maturity_date": "2011-12-22",
+      "net_cash_log_edge_10bps": -0.00278155182314751,
+      "regime": "risk_on"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "base_5bps_episodes.csv": {
+    "bytes": 8335,
+    "sha256": "80dbf6248a20b347f60bcf8c0c8107aee09e730ec4e1c9a58b0135233ccb7a83"
+  },
+  "base_5bps_ledgers.csv": {
+    "bytes": 3465731,
+    "sha256": "6acb93a0cc084a70c3651958133e0c6ce2f3535b7a7e1d287fef045eb664ca44"
+  },
+  "calibration_cells.json": {
+    "bytes": 20604,
+    "sha256": "b775b67064c142a6eae9bc8e80d060449127c95f32daae878db3ee2e240a1b89"
+  },
+  "gate_report.json": {
+    "bytes": 881,
+    "sha256": "3b0c5794d7347c001713105bd88a688c9c149df14c9688032f5dc6ebf266b9a2"
+  },
+  "metrics.json": {
+    "bytes": 142306,
+    "sha256": "cfa8a55d174154f7cf606cddb15440fd927c9eb2e480923a1b2c8f42c3777b41"
+  },
+  "report.json": {
+    "bytes": 154381,
+    "sha256": "c7d6a986c874d32b31db29425ff29ebc32c740bce8900cd4dfccf2bf5a4287db"
+  },
+  "selector_forecast.csv": {
+    "bytes": 297793,
+    "sha256": "cf2fd457a75272f25a2e7e2eead2e2ec5df4c5ef2547dcbd46dc319c81541cb2"
+  },
+  "stress_10bps_episodes.csv": {
+    "bytes": 8344,
+    "sha256": "561347aa19dc0bf127602aca82135b4ce1b0ed64f0c4236fd1d57228d0e409ca"
+  },
+  "stress_10bps_ledgers.csv": {
+    "bytes": 3465245,
+    "sha256": "47dc1f9d6d4fa3b39d4f629333a711a1bab4f3fab69618ac812326ea82b549c3"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "failures": [
+    "base_incremental_above_0001",
+    "stress_incremental_above_0001",
+    "stress_at_least_four_positive_incremental_years",
+    "stress_incremental_positive_without_best_year"
+  ],
+  "gates": {
+    "all_ledgers_unleveraged_and_nonnegative": true,
+    "base_incremental_above_0001": false,
+    "base_selector_edge_positive": true,
+    "benchmark_comparison_present": true,
+    "benchmark_is_identical_across_policies": true,
+    "selector_cash_is_exact_union_subset": true,
+    "stress_at_least_25_selector_episodes": true,
+    "stress_at_least_four_positive_incremental_years": false,
+    "stress_incremental_above_0001": false,
+    "stress_incremental_positive_without_best_year": false,
+    "stress_positive_mean_selector_episode": true,
+    "stress_positive_median_selector_episode": true,
+    "stress_selector_edge_positive": true
+  },
+  "passed": false
+}
