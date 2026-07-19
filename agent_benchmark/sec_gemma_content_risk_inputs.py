@@ -1167,6 +1167,23 @@ def _emit_progress(
     )
 
 
+def _pilot_failed_only_before_output_extraction(
+    completed: Mapping[int, Mapping[str, Any]],
+) -> bool:
+    """Identify the sealed legacy-wrapper failure that cannot affect semantics."""
+
+    return all(
+        ordinal in completed
+        and completed[ordinal]["status"] == "invalid"
+        and completed[ordinal].get("reason")
+        == "invalid_json_schema_or_evidence_no_retry_no_repair"
+        and completed[ordinal].get("raw_output_sha256") is None
+        and completed[ordinal].get("output_byte_count") is None
+        and completed[ordinal].get("model_timing") is None
+        for ordinal in PILOT_ORDINALS
+    )
+
+
 def run_model_batch(
     requests: Sequence[PreparedRequest],
     checkpoint_dir: Path,
@@ -1175,6 +1192,7 @@ def run_model_batch(
     *,
     transport: TransportLike | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    allow_sealed_preoutput_pilot_continuation: bool = False,
 ) -> list[dict[str, Any]]:
     """Run missing ordinals once, atomically checkpointing every outcome.
 
@@ -1204,14 +1222,23 @@ def run_model_batch(
     directory.mkdir(parents=True, exist_ok=True)
     existing = load_model_results(directory, items)
     completed = {result["ordinal"]: result for result in existing}
+    parser_only_continuation = bool(
+        allow_sealed_preoutput_pilot_continuation
+        and len(items) == EXPECTED_REQUEST_COUNT
+        and _pilot_failed_only_before_output_extraction(completed)
+    )
 
     if ordinals is not None and len(items) == EXPECTED_REQUEST_COUNT:
         nonpilot_selected = set(selected) - set(PILOT_ORDINALS)
         if nonpilot_selected:
-            if not all(ordinal in completed for ordinal in PILOT_ORDINALS) or sum(
-                completed[ordinal]["status"] == "valid"
-                for ordinal in PILOT_ORDINALS
-            ) < 5:
+            if not parser_only_continuation and (
+                not all(ordinal in completed for ordinal in PILOT_ORDINALS)
+                or sum(
+                    completed[ordinal]["status"] == "valid"
+                    for ordinal in PILOT_ORDINALS
+                )
+                < 5
+            ):
                 raise SecGemmaContentRiskInputError(
                     "nonpilot ordinals require a completed healthy fixed pilot"
                 )
@@ -1227,7 +1254,7 @@ def run_model_batch(
             order = missing_pilot
             if not missing_pilot:
                 valid_pilot = sum(completed[item]["status"] == "valid" for item in pilot)
-                order = [] if valid_pilot < 5 else [
+                order = [] if valid_pilot < 5 and not parser_only_continuation else [
                     ordinal for ordinal in selected if ordinal not in pilot
                 ]
         else:

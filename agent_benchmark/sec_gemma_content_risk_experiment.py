@@ -181,6 +181,18 @@ def validate_sealed_model_batch(
         }
         for row in sorted(model_results, key=lambda item: int(item["ordinal"]))
     ]
+    completed_by_ordinal = {
+        int(row["ordinal"]): row for row in model_results
+    }
+    pilot_valid_count = sum(
+        completed_by_ordinal[ordinal]["status"] == "valid"
+        for ordinal in content_inputs.PILOT_ORDINALS
+    )
+    sealed_preoutput_continuation = (
+        content_inputs._pilot_failed_only_before_output_extraction(
+            completed_by_ordinal
+        )
+    )
     return {
         "passed": True,
         "request_count": len(requests),
@@ -193,6 +205,14 @@ def validate_sealed_model_batch(
         "model_results_commitment_sha256": _sha256(
             content_inputs.canonical_json_bytes(result_commitment_rows)
         ),
+        "pilot": {
+            "valid_count": int(pilot_valid_count),
+            "preregistered_five_of_six_gate_passed": pilot_valid_count >= 5,
+            "sealed_preoutput_parser_continuation_used": bool(
+                sealed_preoutput_continuation
+            ),
+            "pilot_calls_repeated": False,
+        },
         "model_identity": identity_proof,
     }, request_index
 

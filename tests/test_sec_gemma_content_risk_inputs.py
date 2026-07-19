@@ -508,6 +508,39 @@ def test_default_batch_continues_after_healthy_fixed_pilot(tmp_path: Path):
     assert all(row["status"] == "valid" for row in results)
 
 
+def test_sealed_preoutput_pilot_can_continue_without_repeating_pilot(tmp_path: Path):
+    requests = [_prepared(ordinal) for ordinal in range(1, 76)]
+    pilot_transport = _Transport(
+        [_extractor_output() for _ in range(6)],
+        message_extras={"thinking": "legacy wrapper extra"},
+    )
+    first = run_model_batch(
+        requests,
+        tmp_path,
+        progress=lambda event: None,
+        transport=pilot_transport,
+        clock=_Clock(),
+    )
+    assert len(first) == 6
+    assert all(row["status"] == "invalid" for row in first)
+    assert all(row["raw_output_sha256"] is None for row in first)
+
+    continuation_transport = _Transport(
+        [_extractor_output() for _ in range(69)]
+    )
+    results = run_model_batch(
+        requests,
+        tmp_path,
+        progress=lambda event: None,
+        transport=continuation_transport,
+        clock=_Clock(),
+        allow_sealed_preoutput_pilot_continuation=True,
+    )
+    assert continuation_transport.post_count == 69
+    assert len(results) == 75
+    assert sum(row["status"] == "valid" for row in results) == 69
+
+
 def test_explicit_nonpilot_cannot_bypass_fixed_pilot(tmp_path: Path):
     requests = [_prepared(ordinal) for ordinal in range(1, 76)]
     blocked_transport = _Transport([])
