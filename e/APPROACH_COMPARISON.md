@@ -1,14 +1,16 @@
 # AAPL long/cash approach comparison
 
-Updated through the SEC/Gemma lean science v3.11 preregistration rejection on
-2026-07-19 Europe/Madrid (2026-07-19 UTC). Its frozen shared qualification hash
-authenticates 655 collected and 655 case-sensitive unique node IDs, but the
-immutable document incorrectly requires 654 unique IDs and one duplicate. The
-error is reproduced by PowerShell's default case-insensitive grouping of two
-distinct URL parameter IDs. V3.11 stopped before an implementation commit,
-preflight, or external effect. V3.10 remains the latest consumed science
-preflight, and SEC/Gemma lean evidence v3.8 remains the latest external source
-result.
+Updated through the SEC/Gemma lean science v3.12 preregistration rejection on
+2026-07-19 Europe/Madrid (2026-07-19 UTC). Its inherited loaded-code encoder
+permits identity sentinels and locks only as module globals, while one exact
+shared module owns two sentinels, two weak registries, and one lock inside
+factory closures. A frozen slots dataclass also retains a distinct predecessor
+class with the exported class's same module and qualified name. V3.12 stopped
+before an implementation commit or official preflight. Read-only local replay
+confirmed the 75-row nullable SEC projection; no fresh SEC, Yahoo, Ollama,
+Gemma, market-value, performance, broker, or real-money effect occurred. V3.10
+remains the latest consumed science preflight, and SEC/Gemma lean evidence v3.8
+remains the latest external source result.
 The three preceding
 SEC/Gemma entries stopped before
 official SEC, market-value, or generative-model effects. Lean v3 then made four
@@ -156,6 +158,7 @@ final and no later period or real capital is authorized.
 | SEC/Gemma lean science v3.9 | Proposed exact v3.8 source replay plus six frozen Yahoo development series and 75 local Gemma extraction calls, with pilot/pause controls and no confirmation/final access | Complete offline suite finished in 2:09:23 with 5,937 passed, 14 skipped, and four failures in older shared tests: one branch-bound historical verifier, one stale SEC timestamp fixture, one collection-order Requests identity mismatch, and one stale source-pin test covering five changed sources | No | Rejected at offline readiness before promotion as the preregistered passing implementation or any one-shot preflight. No SEC, Yahoo, Ollama, model, market-value, performance, paid-API, confirmation, final, broker, or trading effect occurred; shared baseline repairs require a separate branch and successor preregistration |
 | SEC/Gemma lean science v3.10 | Exact read-only replay of the authenticated V3.8 source, frozen 75-filing local Gemma plan, six Yahoo development series, latest-only qualification, and one-shot zero-effect preflight | The exact 12-file implementation passed 167/167 latest tests. One-shot source authentication passed over 1,410 preserved files, then the lossless bridge found two valid rows with no Submissions, SGML, or SEC filename. The inherited universe requires a nonempty filename and official URL, while V3.8 forbids treating its internal fallback identity as an SEC filename | No | Permanently rejected with `legacy_record_invalid` at consumed zero-effect preflight. No fresh SEC, Yahoo, Ollama, Gemma, market-value, prediction, performance, paid-API, confirmation, final, broker, or real-money effect occurred. A separately preregistered successor must represent missing filenames explicitly without dropping rows or fabricating URLs, and must strengthen runtime code binding |
 | SEC/Gemma lean science v3.11 | V3.10 science plan with honest nullable filename/URL rows, repeated runtime binding, and multiplicity-aware latest-only qualification | Offline case-sensitive collection reproduced 655 nodes, 655 unique IDs, no duplicates, and the exact frozen SHA-256. The immutable preregistration instead requires 654 unique IDs and one duplicated uppercase-URL node because a case-insensitive grouping collapsed two distinct parameter IDs | No | Permanently rejected before implementation commit or preflight. No SEC, Yahoo, Ollama, Gemma, market-value, prediction, performance, paid-API, confirmation, final, broker, or real-money effect occurred. A minimal successor must freeze 655/655 with zero duplicates and implement the exact isolated bootstrap; no scientific rule changes |
+| SEC/Gemma lean science v3.12 | V3.11 science with exact 655/655 qualification, isolated bootstrap, runtime-authority creation, and the same 75-filing nullable bridge | Isolated dependency sealing reached 63 built-in/frozen modules, 365 module files, seven distributions, 58 binaries, and two timezone files, but the inherited loaded-code encoder cannot represent two closure sentinels, two weak registries, one closure lock, or the distinct predecessor class retained by a frozen slots dataclass | No | Permanently rejected before implementation commit or official preflight. Read-only preserved-source replay confirmed 75 rows with 73 filename/URL pairs and two honest null/null pairs. No fresh SEC, Yahoo, Ollama, Gemma, market-value, prediction, performance, paid-API, confirmation, final, broker, or real-money effect occurred. A process-only successor must explicitly freeze the real closure and slots-class encodings; no scientific rule changes |
 
 ## Outside the current no-leverage contract
 
@@ -212,3 +215,4 @@ short behavior and are excluded from the eligible table.
 - `docs/aapl_sec_gemma_lean_science_v3_10_preflight_rejection.md`
 - `codex/aapl-sec-gemma-lean-science-v3-10` implementation at `c2776bae573faa7963bd31f89f2e570ce704a207`
 - `docs/aapl_sec_gemma_lean_science_v3_11_rejection.md`
+- `docs/aapl_sec_gemma_lean_science_v3_12_rejection.md`
