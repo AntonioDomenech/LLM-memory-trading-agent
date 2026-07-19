@@ -10,6 +10,7 @@ from agent_benchmark.intraday_exhaustion_union_experiment import (
     _decision_dates_sha256,
     _episode_rows,
     apply_development_gates,
+    replay_intraday_ledger,
     simulate_intraday_only,
 )
 
@@ -62,6 +63,8 @@ def test_intraday_ledger_sells_at_open_and_buys_unconditionally_at_close():
     assert same_day["side"].tolist() == ["sell", "buy"]
     assert same_day.iloc[1]["cash_after"] == 0.0
     assert same_day.iloc[1]["shares_after"] > 0.0
+    assert int(cash_day["trade_executed"]) == 2
+    assert cash_day["slippage"] == pytest.approx(same_day["slippage"].sum())
     assert ledger["cash"].min() >= 0.0
     assert ledger["shares"].min() >= 0.0
     assert ledger["new_exposure_after_fill"].between(0.0, 1.0).all()
@@ -86,6 +89,7 @@ def test_intraday_cost_and_edge_formulas_reconcile():
     assert close_buy["shares_after"] == pytest.approx(expected_close_shares)
     next_open = ledger.loc[ledger["fill_date"] == "2005-01-05"].iloc[0]
     assert next_open["equity"] == pytest.approx(expected_close_shares * 100.0)
+    assert replay_intraday_ledger(ledger, events)["passed"] is True
 
     episodes = _episode_rows(
         frame, _signal(frame), cost_bps=10.0, mode="intraday"
@@ -145,19 +149,25 @@ def _passing_metrics() -> dict:
         "base_5bps": {
             "candidate": dict(policy),
             "candidate_vs_union": dict(incremental),
+            "ledger_reconstruction": {
+                "candidate": {"passed": True},
+                "union": {"passed": True},
+                "benchmark": {"passed": True},
+            },
         },
         "stress_10bps": {
             "candidate": dict(policy),
             "candidate_vs_union": dict(incremental),
+            "ledger_reconstruction": {
+                "candidate": {"passed": True},
+                "union": {"passed": True},
+                "benchmark": {"passed": True},
+            },
         },
         "integrity": {
             "candidate_and_union_signal_dates_identical": True,
-            "physical_later_rows_opened": False,
-            "network_calls": 0,
-            "api_calls": 0,
-            "llm_calls": 0,
-            "broker_actions": 0,
-            "real_money_actions": 0,
+            "input_rows": 4986,
+            "input_last_session": "2018-12-31",
         },
     }
 
@@ -171,4 +181,3 @@ def test_gates_require_trading_improvement_not_runtime_bookkeeping():
     report = apply_development_gates(metrics)
     assert report["passed"] is False
     assert "candidate_beats_union_by_0001_10bps" in report["failures"]
-

@@ -8,6 +8,7 @@ import json
 import math
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -16,10 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .chronological_exhaustion_experiment import load_bounded_prices
-from .chronological_exhaustion_expert import (
-    build_fixed_expert_signals,
-    canonicalize_one_session_signals,
-)
+from .chronological_exhaustion_expert import build_fixed_expert_signals
 from .deterministic_aapl import (
     CostAssumptions,
     EvaluationPeriod,
@@ -102,12 +100,11 @@ def build_account_union_signal(frame: pd.DataFrame) -> pd.Series:
     """Return the inherited development-account union with its frozen cooldown."""
 
     signals = build_fixed_expert_signals(frame)
-    candidate = (
-        signals["unfiltered_union_candidate_signal"].astype(bool)
+    accepted = (
+        signals["unfiltered_union_signal"].astype(bool)
         & signals["stage_outcome_available"].astype(bool)
     )
-    candidate.loc[candidate.index < ACCOUNT_START] = False
-    accepted = canonicalize_one_session_signals(candidate)
+    accepted.loc[accepted.index < ACCOUNT_START] = False
     accepted.name = "union_cash_signal"
     return accepted
 
@@ -116,6 +113,220 @@ def _decision_dates_sha256(signal: pd.Series) -> str:
     dates = pd.DatetimeIndex(signal.index[signal.to_numpy(dtype=bool)])
     payload = "".join(f"{date.date().isoformat()}\n" for date in dates).encode("ascii")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _assert_close(observed: float, expected: float, label: str) -> None:
+    tolerance = 1e-8 * max(1.0, abs(observed), abs(expected))
+    if not math.isfinite(observed) or abs(observed - expected) > tolerance:
+        raise IntradayExhaustionUnionError(
+            f"Ledger reconstruction mismatch for {label}: {observed} != {expected}"
+        )
+
+
+def replay_open_ledger(ledger: pd.DataFrame) -> dict[str, Any]:
+    """Independently reconstruct a conventional open-only ledger."""
+
+    cash = float(INITIAL_CASH)
+    shares = 0.0
+    order_count = 0
+    for row_number, row in ledger.reset_index(drop=True).iterrows():
+        reference = float(row["reference_price"])
+        equity_before = cash + shares * reference
+        _assert_close(float(row["equity_before_fill"]), equity_before, "open equity before")
+        delta = float(row["signed_share_delta"])
+        fees = float(row["fees"])
+        fill = float(row["fill_price"])
+        expected_slippage = abs(delta) * abs(fill - reference)
+        expected_turnover = abs(delta) * reference / equity_before
+        cash -= delta * fill + fees
+        shares += delta
+        if abs(cash) <= 1e-10:
+            cash = 0.0
+        if abs(shares) <= 1e-12:
+            shares = 0.0
+        equity_after = cash + shares * reference
+        _assert_close(float(row["cash"]), cash, "open cash")
+        _assert_close(float(row["shares"]), shares, "open shares")
+        _assert_close(float(row["equity"]), equity_after, "open equity after")
+        _assert_close(float(row["slippage"]), expected_slippage, "open slippage")
+        _assert_close(float(row["turnover"]), expected_turnover, "open turnover")
+        expected_orders = int(abs(delta) > 1e-12)
+        if int(row["trade_executed"]) != expected_orders:
+            raise IntradayExhaustionUnionError("Open order count does not reconstruct")
+        order_count += expected_orders
+        if row_number and float(row["margin_interest"]) != 0.0:
+            raise IntradayExhaustionUnionError("Unexpected margin interest")
+    return {
+        "passed": True,
+        "orders": order_count,
+        "final_cash": cash,
+        "final_shares": shares,
+        "final_equity": float(ledger.iloc[-1]["equity"]),
+    }
+
+
+def replay_intraday_ledger(
+    ledger: pd.DataFrame, events: pd.DataFrame
+) -> dict[str, Any]:
+    """Reconstruct every open and closing-auction event and carried position."""
+
+    cash = float(INITIAL_CASH)
+    shares = 0.0
+    consumed: set[int] = set()
+    order_count = 0
+    for _, row in ledger.reset_index(drop=True).iterrows():
+        date = str(row["fill_date"])
+        reference_open = float(row["reference_price"])
+        equity_before = cash + shares * reference_open
+        _assert_close(float(row["equity_before_fill"]), equity_before, "candidate open equity before")
+        day_events = events.loc[events["event_date"].astype(str) == date]
+        open_events = day_events.loc[day_events["event_time"] == "open"]
+        close_events = day_events.loc[day_events["event_time"] == "close"]
+        delta = float(row["signed_share_delta"])
+        expected_open_orders = int(abs(delta) > 1e-12)
+        if len(open_events) != expected_open_orders:
+            raise IntradayExhaustionUnionError("Candidate open events do not match ledger")
+        open_slippage = 0.0
+        open_turnover = 0.0
+        if expected_open_orders:
+            event = open_events.iloc[0]
+            consumed.add(int(event.name))
+            _assert_close(float(event["signed_share_delta"]), delta, "candidate open delta")
+            _assert_close(float(event["reference_price"]), reference_open, "candidate open reference")
+            _assert_close(float(event["fill_price"]), float(row["fill_price"]), "candidate open fill")
+            open_slippage = abs(delta) * abs(float(row["fill_price"]) - reference_open)
+            open_turnover = abs(delta) * reference_open / equity_before
+        cash -= delta * float(row["fill_price"]) + float(row["fees"])
+        shares += delta
+        if abs(cash) <= 1e-10:
+            cash = 0.0
+        if abs(shares) <= 1e-12:
+            shares = 0.0
+        equity_after_open = cash + shares * reference_open
+        _assert_close(float(row["cash"]), cash, "candidate cash after open")
+        _assert_close(float(row["shares"]), shares, "candidate shares after open")
+        _assert_close(float(row["equity"]), equity_after_open, "candidate equity after open")
+
+        close_slippage = 0.0
+        close_turnover = 0.0
+        if len(close_events) > 1:
+            raise IntradayExhaustionUnionError("More than one close buy exists")
+        if len(close_events):
+            event = close_events.iloc[0]
+            consumed.add(int(event.name))
+            reference_close = float(event["reference_price"])
+            close_equity_before = cash + shares * reference_close
+            close_delta = float(event["signed_share_delta"])
+            close_fill = float(event["fill_price"])
+            close_slippage = abs(close_delta) * abs(close_fill - reference_close)
+            close_turnover = abs(close_delta) * reference_close / close_equity_before
+            cash -= close_delta * close_fill
+            shares += close_delta
+            if abs(cash) <= 1e-10:
+                cash = 0.0
+            _assert_close(float(event["cash_after"]), cash, "candidate close cash")
+            _assert_close(float(event["shares_after"]), shares, "candidate close shares")
+            _assert_close(
+                float(event["equity_at_reference_after"]),
+                cash + shares * reference_close,
+                "candidate close equity",
+            )
+        expected_orders = expected_open_orders + len(close_events)
+        if int(row["trade_executed"]) != expected_orders:
+            raise IntradayExhaustionUnionError("Candidate daily order count is incomplete")
+        _assert_close(
+            float(row["slippage"]),
+            open_slippage + close_slippage,
+            "candidate daily slippage",
+        )
+        _assert_close(
+            float(row["turnover"]),
+            open_turnover + close_turnover,
+            "candidate daily turnover",
+        )
+        order_count += expected_orders
+    if len(consumed) != len(events):
+        raise IntradayExhaustionUnionError("Unconsumed candidate event rows remain")
+    return {
+        "passed": True,
+        "orders": order_count,
+        "final_cash": cash,
+        "final_shares": shares,
+        "final_equity": float(ledger.iloc[-1]["equity"]),
+        "event_rows": int(len(events)),
+    }
+
+
+def verify_buy_hold_closed_form(
+    ledger: pd.DataFrame, *, cost_bps: float
+) -> dict[str, Any]:
+    """Prove the benchmark independently from one initial all-in purchase."""
+
+    first_open = float(ledger.iloc[0]["reference_price"])
+    cost = float(cost_bps) / 10_000.0
+    expected_shares = INITIAL_CASH / (first_open * (1.0 + cost))
+    for row_number, row in ledger.reset_index(drop=True).iterrows():
+        reference = float(row["reference_price"])
+        _assert_close(float(row["cash"]), 0.0, "buy-hold cash")
+        _assert_close(float(row["shares"]), expected_shares, "buy-hold shares")
+        _assert_close(float(row["equity"]), expected_shares * reference, "buy-hold equity")
+        if int(row["trade_executed"]) != int(row_number == 0):
+            raise IntradayExhaustionUnionError("Buy-hold order pattern is wrong")
+    return {
+        "passed": True,
+        "orders": 1,
+        "shares": expected_shares,
+        "final_equity": expected_shares * float(ledger.iloc[-1]["reference_price"]),
+    }
+
+
+def _git_authority(root: Path) -> dict[str, Any]:
+    """Bind the run to the clean pushed implementation that actually executes."""
+
+    def git(*args: str) -> str:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    status = git("status", "--porcelain", "--untracked-files=all")
+    if status:
+        raise IntradayExhaustionUnionError("Development must start from a clean worktree")
+    branch = git("branch", "--show-current")
+    if branch != "codex/aapl-intraday-exhaustion-union-v1":
+        raise IntradayExhaustionUnionError("Development is on the wrong branch")
+    head = git("rev-parse", "HEAD")
+    upstream = git("rev-parse", "@{upstream}")
+    if head != upstream:
+        raise IntradayExhaustionUnionError("Development commit is not pushed")
+    bound_paths = (
+        "docs/aapl_intraday_exhaustion_union_v1.md",
+        "agent_benchmark/intraday_exhaustion_union_experiment.py",
+        "tests/test_intraday_exhaustion_union_experiment.py",
+        "agent_benchmark/chronological_exhaustion_expert.py",
+        "agent_benchmark/chronological_exhaustion_experiment.py",
+        "agent_benchmark/unleveraged_aapl.py",
+        "agent_benchmark/deterministic_aapl.py",
+    )
+    files: dict[str, Any] = {}
+    for name in bound_paths:
+        path = root / name
+        git("ls-files", "--error-unmatch", "--", name)
+        files[name] = {
+            "git_blob": _git_blob_oid(path),
+            "literal_sha256": _file_sha256(path),
+        }
+    return {
+        "branch": branch,
+        "commit": head,
+        "upstream_commit": upstream,
+        "clean_before_run": True,
+        "files": files,
+    }
 
 
 def _finalize_open_ledger(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -250,9 +461,17 @@ def simulate_intraday_only(
             close_fill = reference_close * (1.0 + cost)
             close_delta = cash / close_fill
             close_slippage = close_delta * (close_fill - reference_close)
+            close_turnover = close_delta * reference_close / close_equity_before
             cash = 0.0
             shares = close_delta
             close_equity_after = shares * reference_close
+            open_rows[-1]["turnover"] = float(
+                open_rows[-1]["turnover"] + close_turnover
+            )
+            open_rows[-1]["slippage"] = float(
+                open_rows[-1]["slippage"] + close_slippage
+            )
+            open_rows[-1]["trade_executed"] = 2
             event_rows.append(
                 {
                     "decision_date": decision_date.date().isoformat(),
@@ -453,6 +672,16 @@ def evaluate_development(
             raise IntradayExhaustionUnionError("Candidate and union signals differ")
         candidate_summary = _policy_summary(candidate, benchmark, candidate_episodes)
         union_summary = _policy_summary(union, benchmark, union_episodes)
+        reconstruction = {
+            "candidate_events_to_open_ledger": replay_intraday_ledger(
+                candidate, events
+            ),
+            "open_to_open_union": replay_open_ledger(union),
+            "aapl_buy_hold_open_ledger": replay_open_ledger(benchmark),
+            "aapl_buy_hold_closed_form": verify_buy_hold_closed_form(
+                benchmark, cost_bps=cost_bps
+            ),
+        }
         incremental_folds = {
             name: float(candidate_summary["fold_edges"][name] - union_summary["fold_edges"][name])
             for name in candidate_summary["fold_edges"]
@@ -476,6 +705,7 @@ def evaluate_development(
                     incremental_total - max(incremental_folds.values())
                 ),
             },
+            "ledger_reconstruction": reconstruction,
         }
         ledgers[cost_name] = {
             "candidate_open": candidate,
@@ -491,12 +721,8 @@ def evaluate_development(
         "candidate_and_union_signal_dates_identical": True,
         "candidate_and_benchmark_open_dates_identical": True,
         "candidate_episode_count": int(cash_signal.sum()),
-        "physical_later_rows_opened": False,
-        "network_calls": 0,
-        "api_calls": 0,
-        "llm_calls": 0,
-        "broker_actions": 0,
-        "real_money_actions": 0,
+        "input_rows": int(len(data)),
+        "input_last_session": data.index.max().date().isoformat(),
     }
     return metrics, ledgers, episodes
 
@@ -520,6 +746,10 @@ def apply_development_gates(metrics: Mapping[str, Any]) -> dict[str, Any]:
             and candidate["maximum_positive_year_share"] <= 0.5
         )
         gates[f"unleveraged_and_nonnegative_{suffix}"] = candidate["no_leverage_proof"]["passed"] is True
+        gates[f"all_ledgers_reconstruct_{suffix}"] = all(
+            proof["passed"] is True
+            for proof in metrics[cost_name]["ledger_reconstruction"].values()
+        )
     stress = metrics["stress_10bps"]["candidate"]
     gates.update(
         {
@@ -532,16 +762,10 @@ def apply_development_gates(metrics: Mapping[str, Any]) -> dict[str, Any]:
             "stress_no_episode_over_half_positive_edge": stress["maximum_positive_episode_share"] is not None
             and stress["maximum_positive_episode_share"] <= 0.5,
             "candidate_and_union_signal_dates_identical": metrics["integrity"]["candidate_and_union_signal_dates_identical"] is True,
-            "no_later_data_or_external_actions": all(
-                metrics["integrity"][name] in (False, 0)
-                for name in (
-                    "physical_later_rows_opened",
-                    "network_calls",
-                    "api_calls",
-                    "llm_calls",
-                    "broker_actions",
-                    "real_money_actions",
-                )
+            "physical_input_is_exactly_bounded_through_2018": (
+                metrics["integrity"]["input_rows"] == INPUT_ROWS
+                and metrics["integrity"]["input_last_session"]
+                == INPUT_LAST.date().isoformat()
             ),
         }
     )
@@ -575,6 +799,7 @@ def run_development(
     root = repo_root.resolve()
     if not RUN_ID_PATTERN.fullmatch(run_id):
         raise IntradayExhaustionUnionError("Invalid run_id")
+    git_authority = _git_authority(root)
     source = price_artifact if price_artifact.is_absolute() else root / price_artifact
     destination = output_dir if output_dir.is_absolute() else root / output_dir
     if source.stat().st_size != INPUT_BYTE_COUNT or _file_sha256(source) != INPUT_LITERAL_SHA256:
@@ -614,6 +839,7 @@ def run_development(
         "stage": "repeated_historical_development_diagnostic",
         "globally_unseen_holdout": False,
         "period": {"start": "2005-01-01", "end": "2018-12-31"},
+        "implementation_authority": git_authority,
         "input_provenance": provenance,
         "signal_identity": {
             "expert_source_git_blob": EXPERT_SOURCE_GIT_BLOB,
@@ -627,6 +853,11 @@ def run_development(
             "buyback": "precommitted adjusted close t+1",
             "decision_uses_t_plus_1_value": False,
             "exposure_values": [0.0, 1.0],
+            "historical_close_fill_proxy": "adjusted close as official-auction proxy",
+            "execution_feasibility": (
+                "idealized cash-notional fractional market-on-close order; "
+                "broker support must be verified before prospective execution"
+            ),
         },
         "metrics": metrics,
         "development_gate_report": gate_report,
@@ -636,6 +867,14 @@ def run_development(
             "paid_api_calls": 0,
             "llm_calls": 0,
             "broker_actions": 0,
+        },
+        "external_action_declarations": {
+            "network_calls": 0,
+            "paid_api_calls": 0,
+            "llm_calls": 0,
+            "broker_actions": 0,
+            "real_money_actions": 0,
+            "note": "Declarations describe this local runner; trading gates rely on bounded input and ledger reconstruction instead.",
         },
         "later_period_opened": False,
         "real_money_authorized": False,

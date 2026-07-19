@@ -67,6 +67,13 @@ close. The experiment may not cancel, delay or condition the buyback on any
 other `t+1` observation. Auction rejection or a missing/non-positive close must
 fail the experiment; the ledger may not invent another fill.
 
+For this historical development test, cash-notional fractional MOC is an
+explicit idealized execution assumption, not a claim about support at the
+user's broker. Even a historical pass cannot enter prospective paper trading
+until a separate preregistration verifies a specific zero-cost broker/order
+path, its cutoff, fractional/notional support and rejection handling. This
+feasibility limitation does not permit changing the historical fill formula.
+
 Target exposure is exactly 0% or 100% AAPL. Shorting, leverage, borrowing,
 negative cash and interest on cash are forbidden. Fractional shares are
 allowed. Adjusted open is `raw open * adjusted close / raw close`; adjusted
