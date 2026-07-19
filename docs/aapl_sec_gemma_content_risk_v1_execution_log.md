@@ -58,3 +58,32 @@ temperature, seed, trading rule, dates, costs, and gates are unchanged. The
 corrected request hashes make these new requests distinct from the truncated
 old requests. They use a fresh checkpoint directory and the ordinary fixed
 five-valid-of-six pilot gate.
+
+## Terminal corrected-pilot rejection
+
+The earlier plan to continue the remaining 69 old-request calls is superseded
+by the completion-budget diagnosis and the fresh corrected pilot below. The old
+512-token checkpoints remain sealed and were not reused or repeated.
+
+The corrected 8,192-context / 1,024-output pilot made exactly the six fixed
+calls at ordinals `1, 15, 30, 45, 60, 75`. All six completed normally in
+17.331759 through 22.259392 seconds. Each recorded a raw-output hash, output
+byte count, and model timing; the before/after Ollama version, model manifest,
+and semantic runtime fingerprint matched exactly. There were zero transport
+failures and zero output-cap failures.
+
+Nevertheless, all six outputs returned
+`invalid_json_schema_or_evidence_no_retry_no_repair`. None produced a valid
+extractor-output hash. The frozen pilot required at least five valid outputs,
+so the observed `0/6` is a terminal model-usability rejection. The remaining 69
+calls were not opened.
+
+No market data or price row was opened. Trading actions, returns, costs,
+drawdowns, and buy-and-hold performance were not computed. No 2019-or-later
+data, paid API, broker, or real-money action was used. This branch will not
+create another SEC/Gemma correction version; research moves to a materially
+different trading hypothesis.
+
+The privacy-safe terminal evidence is preserved in
+`e/aapl_sec_gemma_content_risk_v1/PILOT_REJECTION.json` and `REJECTED.md`. Those
+artifacts contain no raw SEC text, raw model output, or SEC contact information.

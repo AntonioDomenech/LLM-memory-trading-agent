@@ -1,16 +1,11 @@
 # AAPL long/cash approach comparison
 
-Updated through the SEC/Gemma lean science v3.12 preregistration rejection on
-2026-07-19 Europe/Madrid (2026-07-19 UTC). Its inherited loaded-code encoder
-permits identity sentinels and locks only as module globals, while one exact
-shared module owns two sentinels, two weak registries, and one lock inside
-factory closures. A frozen slots dataclass also retains a distinct predecessor
-class with the exported class's same module and qualified name. V3.12 stopped
-before an implementation commit or official preflight. Read-only local replay
-confirmed the 75-row nullable SEC projection; no fresh SEC, Yahoo, Ollama,
-Gemma, market-value, performance, broker, or real-money effect occurred. V3.10
-remains the latest consumed science preflight, and SEC/Gemma lean evidence v3.8
-remains the latest external source result.
+Updated through the terminal SEC/Gemma corroborated-content risk v1 pilot
+rejection on 2026-07-19. The original 512-token calls were mechanically
+truncated. A fresh 8,192-context / 1,024-output pilot then completed all six
+fixed calls normally, but 0/6 passed the exact JSON/schema/evidence contract.
+The approach stopped before any market price or performance calculation and
+will not receive another cosmetic SEC/Gemma correction version.
 The three preceding
 SEC/Gemma entries stopped before
 official SEC, market-value, or generative-model effects. Lean v3 then made four
@@ -170,6 +165,7 @@ final and no later period or real capital is authorized.
 | SEC/Gemma lean science v3.19 | V3.18 science with the exact direction sanitizer, unchanged 75-request local Gemma plan, and repeated runtime-v2 binding | Passing F319 authenticated all 989 qualification nodes and all 75 canonical requests. Official development then rejected at the first `attempt_open` binding gate with zero external intents because preserved-source authentication lazily loaded stdlib `_strptime`, changing the dependency module-file count from 365 to 366; all 44 repository modules and 3,242 protected callables remained identical | No | Permanently rejected as an execution-protocol implementation, not for strategy performance. Production recovery was unreachable because of two authority-routing contradictions. No prediction, action, score, performance comparison, or V3.19 strategy result exists. A process-only successor may deterministically preload `_strptime` and repair the exact recovery routes without changing the science |
 | SEC/Gemma lean science v3.20 | V3.19 science with deterministic `_strptime` preload, direct publication-recovery authority, and exact zero-effect binding-rejection recovery | Required source/runtime node 34 completed its isolated workload in 1,153.83 seconds. The passing F319 receipt records 697.108 seconds for the inherited qualification phases, so the measured planning sum is 1,850.938 seconds before the other seven new tests or post-qualification work, exceeding V3.20's frozen 1,500-second whole-preflight deadline | No | Permanently rejected before `I320` or the official one-shot reservation. The exact twelve-file draft is hash-preserved but uncommitted; no external effect, prediction, score, performance comparison, or V3.20 strategy result exists. A process-only V3.21 may retain all science and freeze one measured 4,800-second shared deadline with no reset or retry |
 | SEC/Gemma lean science v3.21 | V3.20 science and process corrections with one measured 4,800-second shared deadline and no reset or retry | The integrated pre-implementation batch passed 340/340 in 431.73 seconds. The real isolated source-chain node then completed in 1,153.63 seconds with repository, dependency, loaded-code, and process-object equality intact and exact 44/366 inventories, but failed only because the protected callable count was 3,243 rather than the frozen 3,242. Two fast probes identified exactly one added row and zero removed rows: `build_v319_exceptional_rejection_pins`; the direct recovery binding is correct and the earlier V3.20 wrapper attribution was incomplete | No | Permanently rejected before `I321` or the official one-shot reservation. The twelve-file draft is hash-preserved but uncommitted; no external effect, prediction, score, performance comparison, or V3.21 strategy result exists. A process-only V3.22 may retain all science and the 4,800-second deadline while explicitly freezing the exact 3,243-callable graph, its one historical-pins helper, and the absence of a recovery wrapper |
+| SEC/Gemma corroborated-content risk v1 | Local `gemma4:12b` anonymous filing reader with a deterministic corroborated-warning long/cash rule | Original 512-token calls truncated mechanically. The corrected 8,192-context / 1,024-output pilot completed normally, but 0/6 outputs passed the exact schema/evidence contract, so the experiment did not earn permission to run the remaining 69 calls or evaluate the 68/75 usability gate | No | Rejected before market or performance; the model reader was unusable under the frozen contract. End the SEC/Gemma correction loop and move to a materially different trading hypothesis |
 
 ## Outside the current no-leverage contract
 
@@ -231,3 +227,5 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_sec_gemma_lean_science_v3_19/DEVELOPMENT_PREFLIGHT.json`
 - `docs/aapl_sec_gemma_lean_science_v3_19_exceptional_rejection.md`
 - `docs/aapl_sec_gemma_lean_science_v3_20_rejection.md`
+- `e/aapl_sec_gemma_content_risk_v1/PILOT_REJECTION.json`
+- `e/aapl_sec_gemma_content_risk_v1/REJECTED.md`

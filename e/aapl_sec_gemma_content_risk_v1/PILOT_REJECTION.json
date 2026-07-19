@@ -1,0 +1,160 @@
+{
+  "schema_version": "aapl-sec-gemma-content-risk-v1-pilot-rejection-v1",
+  "approach": "SEC/Gemma corroborated-content risk v1",
+  "status": "rejected_before_market",
+  "recorded_date_utc": "2026-07-19",
+  "scope": {
+    "stage": "development_model_pilot",
+    "development_sequences": {"first": 124, "last": 198, "count": 75},
+    "fixed_pilot_ordinals": [1, 15, 30, 45, 60, 75],
+    "pilot_valid_outputs_required": 5
+  },
+  "original_truncated_run": {
+    "model_options": {"context_tokens": 6144, "output_tokens": 512},
+    "checkpoint_summary": {
+      "completed_invalid": 44,
+      "sealed_in_progress": 1,
+      "missing": 30,
+      "completed_with_raw_output_hash": 0,
+      "completed_with_output_byte_count": 0,
+      "completed_with_model_timing": 0
+    },
+    "synthetic_non_sec_diagnostic": {
+      "http_status": 200,
+      "normal_ollama_envelope": true,
+      "message_role_and_content_present": true,
+      "done_reason": "length",
+      "eval_count": 512,
+      "message_content_byte_count": 1411,
+      "conclusion": "the original output ceiling mechanically truncated the response"
+    },
+    "used_by_corrected_pilot": false,
+    "request_hashes_repeated_by_corrected_pilot": false
+  },
+  "corrected_pilot": {
+    "model_options": {"context_tokens": 8192, "output_tokens": 1024},
+    "request_commitment": {
+      "request_size_bytes_min": 14577,
+      "request_size_bytes_max": 23921,
+      "commitment_bytes": 29101,
+      "commitment_sha256": "dda7adb2fbd5f662b9abadc8122d7ae03fb19128951351369ba40087a67672c8",
+      "ordered_payload_hash_sha256": "aed8bd8695622132a4c53a04c514c04a00f72835c69de2828256c99a0d3899dd"
+    },
+    "runtime_identity": {
+      "before_after_match": true,
+      "model_name": "gemma4:12b",
+      "ollama_version": "0.32.1",
+      "model_manifest_sha256": "4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c",
+      "semantic_runtime_fingerprint_sha256": "816a7c1a6b1e87d083f8e0f85654f80ba0db124bf09fe8dedce960c8124e1c77"
+    },
+    "calls": [
+      {
+        "ordinal": 1,
+        "sequence": 124,
+        "status": "invalid",
+        "elapsed_seconds": 22.259392,
+        "request_sha256": "b93bad306101ed3dd4de300ffd15bd6928079f83bb4b186a9b3c61682b350ddd",
+        "raw_output_sha256": "840dbd85cca8f59be444f481e022492c4a812f51f2f44c1b5072e41c334f8a3f",
+        "output_byte_count": 2236,
+        "extractor_output_sha256": null,
+        "reason": "invalid_json_schema_or_evidence_no_retry_no_repair",
+        "model_timing": {"prompt_eval_count": 1760, "eval_count": 796, "total_duration_nanoseconds": 22258471000}
+      },
+      {
+        "ordinal": 15,
+        "sequence": 138,
+        "status": "invalid",
+        "elapsed_seconds": 20.854458,
+        "request_sha256": "017913564952e17aae9496c27b394f3f7f4ab362f071e48c66005ca7865aeb2e",
+        "raw_output_sha256": "ccf20252cb171eb27ef57c0830775c7f77e0d33005b2886e9ba35236470208f4",
+        "output_byte_count": 2497,
+        "extractor_output_sha256": null,
+        "reason": "invalid_json_schema_or_evidence_no_retry_no_repair",
+        "model_timing": {"prompt_eval_count": 2874, "eval_count": 954, "total_duration_nanoseconds": 20853659400}
+      },
+      {
+        "ordinal": 30,
+        "sequence": 153,
+        "status": "invalid",
+        "elapsed_seconds": 20.65165,
+        "request_sha256": "b1c65b6f3d536a608ca39cb81897aeeca3586b2a535656a05348ecb1606473eb",
+        "raw_output_sha256": "2059b3be95ab0c46114b19996c5dcd4a1e5c942e2355bea95ffd63b6e9c398d9",
+        "output_byte_count": 2431,
+        "extractor_output_sha256": null,
+        "reason": "invalid_json_schema_or_evidence_no_retry_no_repair",
+        "model_timing": {"prompt_eval_count": 1726, "eval_count": 946, "total_duration_nanoseconds": 20650542800}
+      },
+      {
+        "ordinal": 45,
+        "sequence": 168,
+        "status": "invalid",
+        "elapsed_seconds": 21.654574,
+        "request_sha256": "4dd346bccd75da9d56770b1fb6e60a4f34fee47f1952bb92eff627bf07d78e31",
+        "raw_output_sha256": "fcefef2e29f3cbaa6a4948d644a962b0c559b368846615a732286f01f2e5074e",
+        "output_byte_count": 2527,
+        "extractor_output_sha256": null,
+        "reason": "invalid_json_schema_or_evidence_no_retry_no_repair",
+        "model_timing": {"prompt_eval_count": 2742, "eval_count": 980, "total_duration_nanoseconds": 21653788500}
+      },
+      {
+        "ordinal": 60,
+        "sequence": 183,
+        "status": "invalid",
+        "elapsed_seconds": 20.779318,
+        "request_sha256": "413cfd0c59c9a242b78a087497e081144affc22374a6ce40e859cda55f72a8e1",
+        "raw_output_sha256": "39e2411864a75681260cffa714ff22ce917718846938009816b440a138a209dc",
+        "output_byte_count": 2486,
+        "extractor_output_sha256": null,
+        "reason": "invalid_json_schema_or_evidence_no_retry_no_repair",
+        "model_timing": {"prompt_eval_count": 2948, "eval_count": 947, "total_duration_nanoseconds": 20778512500}
+      },
+      {
+        "ordinal": 75,
+        "sequence": 198,
+        "status": "invalid",
+        "elapsed_seconds": 17.331759,
+        "request_sha256": "0323d1287686804aa8546b2c9fde2c8fc31da3caad8ee78ff7d88c554c5cb4a2",
+        "raw_output_sha256": "501e28a52b2374ba72dafd065176f0191828fdc3d53673bfa8350cd213aeb95c",
+        "output_byte_count": 1845,
+        "extractor_output_sha256": null,
+        "reason": "invalid_json_schema_or_evidence_no_retry_no_repair",
+        "model_timing": {"prompt_eval_count": 3215, "eval_count": 712, "total_duration_nanoseconds": 17330887700}
+      }
+    ],
+    "summary": {
+      "completed_without_transport_or_output_cap_failure": 6,
+      "valid": 0,
+      "invalid": 6,
+      "transport_failures": 0,
+      "elapsed_seconds_min": 17.331759,
+      "elapsed_seconds_max": 22.259392,
+      "elapsed_seconds_median": 20.816888,
+      "elapsed_seconds_sum": 123.531151,
+      "pilot_gate_required_valid": 5,
+      "pilot_gate_passed": false,
+      "full_75_call_batch_opened": false,
+      "full_batch_68_of_75_usability_gate": "not_evaluated_due_to_pilot_rejection"
+    }
+  },
+  "market_and_performance": {
+    "market_data_opened": false,
+    "price_rows_opened": 0,
+    "trading_actions_computed": false,
+    "performance_computed": false,
+    "performance_result": null,
+    "later_2019_or_newer_data_opened": false,
+    "paid_api_calls": 0,
+    "broker_calls": 0,
+    "real_money_actions": 0
+  },
+  "privacy": {
+    "raw_sec_text_in_artifact": false,
+    "raw_model_output_in_artifact": false,
+    "sec_contact_in_artifact": false
+  },
+  "decision": {
+    "terminal": true,
+    "reason": "zero of six normally completed outputs passed the frozen JSON schema and evidence contract",
+    "next_action": "leave the SEC/Gemma correction loop and test a materially different trading hypothesis"
+  }
+}
