@@ -14,7 +14,6 @@ from agent_benchmark.sec_filing_gemma_contract import (
     DIMENSION_NAMES,
     EXTRACTOR_SCHEMA_VERSION,
     FLAG_NAMES,
-    build_extractor_model_payload,
 )
 from agent_benchmark.sec_gemma_content_risk_inputs import (
     EVENT_SEQUENCES,
@@ -25,6 +24,7 @@ from agent_benchmark.sec_gemma_content_risk_inputs import (
     OLLAMA_VERSION_ENDPOINT,
     PreparedRequest,
     SecGemmaContentRiskInputError,
+    build_content_risk_model_payload,
     input_commitment_bytes,
     inspect_model_identity,
     load_model_results,
@@ -106,7 +106,7 @@ def _prepared(ordinal: int, *, sentence_text: str | None = None) -> PreparedRequ
         },
         {"id": "P0001", "text": "Anonymous prior business sentence."},
     ]
-    payload = build_extractor_model_payload(sentences)
+    payload = build_content_risk_model_payload(sentences)
     request_bytes = canonical_json_bytes(payload)
     digest = _sha(request_bytes)
     filler = "a" * 64

@@ -26,3 +26,35 @@ unchanged, so at least 68 of the remaining 69 calls must be valid.
 Any result artifact must report both facts: the ordinary pilot gate did not
 pass, and the sealed pre-output parser continuation was used. No result from
 this run may be described as perfectly preregistration-compliant.
+
+## Mechanical completion-budget correction
+
+The continuation was stopped after 44 old-request calls plus one sealed
+in-progress marker because every completed call again failed before output
+extraction. A separate non-SEC diagnostic request then recorded the normal
+Ollama envelope and `done_reason == "length"`, with exactly 512 evaluated
+tokens. This proved the problem was the frozen completion ceiling, not filing
+semantics or wrapper metadata. The old checkpoints remain preserved and are
+not inputs to the corrected run.
+
+Before any corrected filing output or market value was opened, the same 75
+anonymous sentence payloads were rebuilt with only these mechanical option
+changes:
+
+- context allowance: `6144 -> 8192` tokens;
+- completion allowance: `512 -> 1024` tokens.
+
+The corrected request set has:
+
+- request sizes `14,577` through `23,921` bytes;
+- commitment bytes `29,101`;
+- commitment SHA-256
+  `dda7adb2fbd5f662b9abadc8122d7ae03fb19128951351369ba40087a67672c8`;
+- ordered payload-hash SHA-256
+  `aed8bd8695622132a4c53a04c514c04a00f72835c69de2828256c99a0d3899dd`.
+
+The SEC text, anonymized sentences, model digest, prompt, output schema,
+temperature, seed, trading rule, dates, costs, and gates are unchanged. The
+corrected request hashes make these new requests distinct from the truncated
+old requests. They use a fresh checkpoint directory and the ordinary fixed
+five-valid-of-six pilot gate.

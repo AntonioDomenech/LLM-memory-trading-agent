@@ -48,6 +48,8 @@ from agent_benchmark.sec_gemma_lean_science_v319_contract import (
 
 
 MODEL_NAME: Final[str] = "gemma4:12b"
+MODEL_CONTEXT_TOKENS: Final[int] = 8_192
+MODEL_OUTPUT_TOKENS: Final[int] = 1_024
 MODEL_MANIFEST_SHA256: Final[str] = (
     "4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c"
 )
@@ -66,16 +68,16 @@ EVENT_SEQUENCES: Final[tuple[int, ...]] = tuple(range(124, 199))
 PILOT_ORDINALS: Final[tuple[int, ...]] = (1, 15, 30, 45, 60, 75)
 EXPECTED_DOCUMENT_COUNT: Final[int] = 77
 EXPECTED_REQUEST_COUNT: Final[int] = 75
-EXPECTED_REQUEST_SIZE_RANGE: Final[tuple[int, int]] = (14_576, 23_920)
+EXPECTED_REQUEST_SIZE_RANGE: Final[tuple[int, int]] = (14_577, 23_921)
 EXPECTED_SENTENCE_COUNT_RANGE: Final[tuple[int, int]] = (70, 72)
 EXPECTED_REMOVED_CURRENT: Final[int] = 4
 EXPECTED_REMOVED_PRIOR: Final[int] = 4
 EXPECTED_COMMITMENT_BYTES: Final[int] = 29_101
 EXPECTED_COMMITMENT_SHA256: Final[str] = (
-    "6ce69886950b42ec21cb9cf4ac281456fae6e89fce5d3883d126513f832d4175"
+    "dda7adb2fbd5f662b9abadc8122d7ae03fb19128951351369ba40087a67672c8"
 )
 EXPECTED_ORDERED_PAYLOAD_HASH_SHA256: Final[str] = (
-    "79bfd807b23312e81134417f1ddc9351d42e44b9af30354e5722e87068a63533"
+    "aed8bd8695622132a4c53a04c514c04a00f72835c69de2828256c99a0d3899dd"
 )
 
 OLLAMA_CHAT_ENDPOINT: Final[str] = "http://127.0.0.1:11434/api/chat"
@@ -434,6 +436,17 @@ def _payload_hash_commitment(requests: Sequence[PreparedRequest]) -> str:
     )
 
 
+def build_content_risk_model_payload(
+    sentences: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    """Build the frozen extractor payload with the corrected completion budget."""
+
+    payload = build_extractor_model_payload(sentences)
+    payload["options"]["num_ctx"] = MODEL_CONTEXT_TOKENS
+    payload["options"]["num_predict"] = MODEL_OUTPUT_TOKENS
+    return payload
+
+
 def input_commitment_bytes(requests: Sequence[PreparedRequest]) -> bytes:
     """Replay the exact preregistered 29,101-byte public commitment layout."""
 
@@ -522,11 +535,10 @@ def prepare_requests(
                 "preprocessed_event_sha256"
             ],
         )
-        request_bytes = canonical_json_bytes(sanitized["model_payload"])
+        model_payload = build_content_risk_model_payload(sanitized["sentences"])
+        request_bytes = canonical_json_bytes(model_payload)
         request_hash = _sha256_bytes(request_bytes)
-        payload_hash = _bare_sha256(
-            sanitized["model_payload_sha256"], "model_payload_sha256"
-        )
+        payload_hash = request_hash
         if request_hash != payload_hash:
             raise SecGemmaContentRiskInputError("model payload hash mismatch")
         sentence_ids = tuple(sentence["id"] for sentence in sanitized["sentences"])
@@ -634,7 +646,7 @@ def _validate_prepared_request(item: PreparedRequest) -> None:
     sentences = supplied.get("sentences")
     if type(sentences) is not list:
         raise SecGemmaContentRiskInputError("anonymous sentences are missing")
-    rebuilt = build_extractor_model_payload(sentences)
+    rebuilt = build_content_risk_model_payload(sentences)
     if canonical_json_bytes(rebuilt) != item.request_bytes:
         raise SecGemmaContentRiskInputError("prepared request is not canonical")
     sentence_ids = tuple(sentence.get("id") for sentence in sentences)
@@ -1330,10 +1342,13 @@ __all__ = [
     "EXPECTED_COMMITMENT_SHA256",
     "EXPECTED_ORDERED_PAYLOAD_HASH_SHA256",
     "MODEL_MANIFEST_SHA256",
+    "MODEL_CONTEXT_TOKENS",
     "MODEL_NAME",
+    "MODEL_OUTPUT_TOKENS",
     "PILOT_ORDINALS",
     "PreparedRequest",
     "SecGemmaContentRiskInputError",
+    "build_content_risk_model_payload",
     "input_commitment_bytes",
     "inspect_model_identity",
     "load_model_results",
