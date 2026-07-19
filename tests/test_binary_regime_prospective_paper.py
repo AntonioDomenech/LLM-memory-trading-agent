@@ -11,6 +11,7 @@ from agent_benchmark.binary_regime_prospective_paper import (
     FIRST_AS_OF,
     ProspectivePaperError,
     _account_action_stream,
+    _frozen_state_compatibility,
     _load_audited_input,
     _prefix_price_compatibility,
     _publish,
@@ -171,6 +172,12 @@ def test_state_match_allows_only_tiny_replay_roundoff():
     assert _states_match_checkpoint(observed, expected) is True
     observed["states"]["risk_on"]["weighted_label_sum"] += 1e-6
     assert _states_match_checkpoint(observed, expected) is False
+
+    compatibility = _frozen_state_compatibility(observed, expected)
+    assert compatibility["decision_latches_exact"] is True
+    observed["states"]["risk_on"]["cash_selected"] = True
+    with pytest.raises(ProspectivePaperError, match="latch"):
+        _frozen_state_compatibility(observed, expected)
 
 
 def test_publish_is_append_only(tmp_path):

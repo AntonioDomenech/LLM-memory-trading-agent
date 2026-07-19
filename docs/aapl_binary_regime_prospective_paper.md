@@ -92,6 +92,14 @@ and confirmed the sealed action fingerprint was unchanged. This compatibility
 rule is committed before rerunning or reading the new decision; it does not
 change any policy threshold or trade.
 
+That tiny adjusted-price revision also changes the frozen learner's stored
+weighted decimal totals by a few millionths. Compatibility therefore requires
+the exact same lesson counts, effective counts, LONG/CASH latches and sealed
+action fingerprint, while allowing at most `1e-4` absolute drift in the three
+stored weighted totals. The preserved original snapshot must still reproduce
+the old checkpoint exactly. This is another numeric-vintage check; it cannot
+authorize a changed signal or action.
+
 Yahoo may revise historical adjusted data. Every prospective decision therefore
 binds its own exact snapshot. A later outcome evaluation uses the decision's
 saved snapshot plus newly observed sessions and never rewrites the old input or

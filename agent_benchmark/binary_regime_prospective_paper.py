@@ -75,6 +75,7 @@ REQUIRED_COLUMNS = (
 )
 RAW_PRICE_ABS_TOLERANCE = 1e-12
 ADJUSTED_PRICE_REL_TOLERANCE = 1e-4
+FROZEN_STATE_NUMERIC_DRIFT_TOLERANCE = 1e-4
 
 
 class ProspectivePaperError(RuntimeError):
@@ -267,6 +268,55 @@ def _states_match_checkpoint(
     return True
 
 
+def _frozen_state_compatibility(
+    observed: Mapping[str, Any], expected: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Require the same frozen decisions while recording tiny label drift."""
+
+    scalar_keys = (
+        "schema_version",
+        "regime_order",
+        "regime_feature_order",
+        "lesson_discount",
+        "minimum_effective_lessons",
+        "positive_mean_threshold",
+        "negative_mean_threshold",
+        "structural_default_cash",
+    )
+    if any(observed.get(key) != expected.get(key) for key in scalar_keys):
+        raise ProspectivePaperError("Frozen selector contract changed")
+    diagnostics: dict[str, Any] = {
+        "numeric_drift_tolerance": FROZEN_STATE_NUMERIC_DRIFT_TOLERANCE,
+        "regimes": {},
+    }
+    for regime in ("risk_on", "not_risk_on"):
+        left = observed["states"][regime]
+        right = expected["states"][regime]
+        if left["n_raw"] != right["n_raw"]:
+            raise ProspectivePaperError("Frozen selector lesson count changed")
+        if left["cash_selected"] != right["cash_selected"]:
+            raise ProspectivePaperError("Frozen selector LONG/CASH latch changed")
+        differences = {
+            key: abs(float(left[key]) - float(right[key]))
+            for key in (
+                "n_eff",
+                "weighted_label_sum",
+                "weighted_squared_label_sum",
+            )
+        }
+        if max(differences.values()) > FROZEN_STATE_NUMERIC_DRIFT_TOLERANCE:
+            raise ProspectivePaperError(
+                "Frozen selector numeric state changed too much"
+            )
+        diagnostics["regimes"][regime] = {
+            "n_raw_exact": True,
+            "cash_selected_exact": True,
+            "numeric_absolute_differences": differences,
+        }
+    diagnostics["decision_latches_exact"] = True
+    return diagnostics
+
+
 def _prefix_price_compatibility(
     *, fresh: pd.DataFrame, audited: pd.DataFrame
 ) -> dict[str, Any]:
@@ -361,9 +411,12 @@ def verify_fresh_history(
     checkpoint = json.loads((root / CHECKPOINT_RELATIVE).read_text(encoding="utf-8"))
     expected_states = checkpoint["serialized_regime_states"]
     if not _states_match_checkpoint(
-        fresh_forecast.attrs["final_states"], expected_states
+        audited_forecast.attrs["final_states"], expected_states
     ):
-        raise ProspectivePaperError("Frozen-through-2023 state changed")
+        raise ProspectivePaperError("Preserved frozen-through-2023 state changed")
+    state_compatibility = _frozen_state_compatibility(
+        fresh_forecast.attrs["final_states"], expected_states
+    )
     return {
         "audited_rows": int(len(audited)),
         "fresh_rows": int(len(data)),
@@ -371,7 +424,8 @@ def verify_fresh_history(
         "exact_prefix_prices": price_compatibility["all_values_exact"],
         "prefix_price_compatibility": price_compatibility,
         "exact_prefix_action_stream": True,
-        "frozen_checkpoint_state_match": True,
+        "preserved_frozen_checkpoint_state_exact": True,
+        "fresh_frozen_state_compatibility": state_compatibility,
         "audited_action_stream_sha256": AUDITED_ACTION_STREAM_SHA256,
         "audited_final_state": audited_forecast.attrs["final_states"],
     }
