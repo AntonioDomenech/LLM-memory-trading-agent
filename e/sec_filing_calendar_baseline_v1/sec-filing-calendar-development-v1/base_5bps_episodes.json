@@ -1,0 +1,520 @@
+[
+  {
+    "entry_open": "2000-02-03",
+    "exit_open": "2000-03-03",
+    "gross_aapl_log_return": 0.21902294357795618,
+    "net_cash_active_log_edge": -0.2200229436612894,
+    "sequence": 124
+  },
+  {
+    "entry_open": "2000-05-15",
+    "exit_open": "2000-06-13",
+    "gross_aapl_log_return": -0.16979222411587247,
+    "net_cash_active_log_edge": 0.16879222403253924,
+    "sequence": 125
+  },
+  {
+    "entry_open": "2000-08-02",
+    "exit_open": "2000-08-30",
+    "gross_aapl_log_return": 0.1857169436673513,
+    "net_cash_active_log_edge": -0.18671694375068454,
+    "sequence": 126
+  },
+  {
+    "entry_open": "2000-12-18",
+    "exit_open": "2001-01-18",
+    "gross_aapl_log_return": 0.2014481795705364,
+    "net_cash_active_log_edge": -0.20244817965386963,
+    "sequence": 127
+  },
+  {
+    "entry_open": "2001-02-14",
+    "exit_open": "2001-03-15",
+    "gross_aapl_log_return": 0.08429338112869013,
+    "net_cash_active_log_edge": -0.08529338121202336,
+    "sequence": 128
+  },
+  {
+    "entry_open": "2001-05-16",
+    "exit_open": "2001-06-14",
+    "gross_aapl_log_return": -0.14900480091897378,
+    "net_cash_active_log_edge": 0.14800480083564055,
+    "sequence": 129
+  },
+  {
+    "entry_open": "2001-08-15",
+    "exit_open": "2001-09-19",
+    "gross_aapl_log_return": -0.12836523355831186,
+    "net_cash_active_log_edge": 0.12736523347497863,
+    "sequence": 130
+  },
+  {
+    "entry_open": "2002-02-13",
+    "exit_open": "2002-03-14",
+    "gross_aapl_log_return": -0.017539506457214346,
+    "net_cash_active_log_edge": 0.016539506373881123,
+    "sequence": 131
+  },
+  {
+    "entry_open": "2002-05-16",
+    "exit_open": "2002-06-14",
+    "gross_aapl_log_return": -0.26428284262138313,
+    "net_cash_active_log_edge": 0.2632828425380499,
+    "sequence": 132
+  },
+  {
+    "entry_open": "2002-08-13",
+    "exit_open": "2002-09-11",
+    "gross_aapl_log_return": -0.038308220233760765,
+    "net_cash_active_log_edge": 0.03730822015042754,
+    "sequence": 133
+  },
+  {
+    "entry_open": "2002-12-23",
+    "exit_open": "2003-01-23",
+    "gross_aapl_log_return": -0.00779763435183803,
+    "net_cash_active_log_edge": 0.006797634268504806,
+    "sequence": 134
+  },
+  {
+    "entry_open": "2003-02-12",
+    "exit_open": "2003-03-13",
+    "gross_aapl_log_return": 0.013920537505324213,
+    "net_cash_active_log_edge": -0.014920537588657436,
+    "sequence": 135
+  },
+  {
+    "entry_open": "2003-05-15",
+    "exit_open": "2003-06-13",
+    "gross_aapl_log_return": -0.04677767466222628,
+    "net_cash_active_log_edge": 0.045777674578893056,
+    "sequence": 136
+  },
+  {
+    "entry_open": "2003-08-14",
+    "exit_open": "2003-09-12",
+    "gross_aapl_log_return": 0.10778084135657565,
+    "net_cash_active_log_edge": -0.10878084143990888,
+    "sequence": 137
+  },
+  {
+    "entry_open": "2003-12-23",
+    "exit_open": "2004-01-23",
+    "gross_aapl_log_return": 0.11822979436195213,
+    "net_cash_active_log_edge": -0.11922979444528536,
+    "sequence": 138
+  },
+  {
+    "entry_open": "2004-02-12",
+    "exit_open": "2004-03-12",
+    "gross_aapl_log_return": 0.1459485277120137,
+    "net_cash_active_log_edge": -0.14694852779534692,
+    "sequence": 139
+  },
+  {
+    "entry_open": "2004-05-10",
+    "exit_open": "2004-06-08",
+    "gross_aapl_log_return": 0.1324374142760223,
+    "net_cash_active_log_edge": -0.13343741435935552,
+    "sequence": 140
+  },
+  {
+    "entry_open": "2004-08-09",
+    "exit_open": "2004-09-07",
+    "gross_aapl_log_return": 0.17052644447861634,
+    "net_cash_active_log_edge": -0.17152644456194957,
+    "sequence": 141
+  },
+  {
+    "entry_open": "2004-12-07",
+    "exit_open": "2005-01-05",
+    "gross_aapl_log_return": -0.02254856844439779,
+    "net_cash_active_log_edge": 0.021548568361064568,
+    "sequence": 142
+  },
+  {
+    "entry_open": "2005-02-03",
+    "exit_open": "2005-03-04",
+    "gross_aapl_log_return": 0.07803767259190335,
+    "net_cash_active_log_edge": -0.07903767267523658,
+    "sequence": 143
+  },
+  {
+    "entry_open": "2005-05-06",
+    "exit_open": "2005-06-06",
+    "gross_aapl_log_return": 0.038292850418361696,
+    "net_cash_active_log_edge": -0.03929285050169492,
+    "sequence": 144
+  },
+  {
+    "entry_open": "2005-08-05",
+    "exit_open": "2005-09-02",
+    "gross_aapl_log_return": 0.0858730366840407,
+    "net_cash_active_log_edge": -0.08687303676737393,
+    "sequence": 145
+  },
+  {
+    "entry_open": "2005-12-05",
+    "exit_open": "2006-01-04",
+    "gross_aapl_log_return": 0.04324850583815959,
+    "net_cash_active_log_edge": -0.04424850592149281,
+    "sequence": 146
+  },
+  {
+    "entry_open": "2006-02-07",
+    "exit_open": "2006-03-08",
+    "gross_aapl_log_return": -0.0294314830712558,
+    "net_cash_active_log_edge": 0.028431482987922578,
+    "sequence": 147
+  },
+  {
+    "entry_open": "2006-05-09",
+    "exit_open": "2006-06-07",
+    "gross_aapl_log_return": -0.17815313313408915,
+    "net_cash_active_log_edge": 0.17715313305075592,
+    "sequence": 148
+  },
+  {
+    "entry_open": "2007-01-04",
+    "exit_open": "2007-02-02",
+    "gross_aapl_log_return": 0.0008325249850293122,
+    "net_cash_active_log_edge": -0.001832525068362536,
+    "sequence": 149
+  },
+  {
+    "entry_open": "2007-02-06",
+    "exit_open": "2007-03-07",
+    "gross_aapl_log_return": 0.041745724522935464,
+    "net_cash_active_log_edge": -0.04274572460626869,
+    "sequence": 151
+  },
+  {
+    "entry_open": "2007-05-14",
+    "exit_open": "2007-06-12",
+    "gross_aapl_log_return": 0.0850403671755096,
+    "net_cash_active_log_edge": -0.08604036725884283,
+    "sequence": 152
+  },
+  {
+    "entry_open": "2007-08-10",
+    "exit_open": "2007-09-10",
+    "gross_aapl_log_return": 0.1067483343523583,
+    "net_cash_active_log_edge": -0.10774833443569153,
+    "sequence": 153
+  },
+  {
+    "entry_open": "2007-11-19",
+    "exit_open": "2007-12-18",
+    "gross_aapl_log_return": 0.11594847424861589,
+    "net_cash_active_log_edge": -0.11694847433194912,
+    "sequence": 154
+  },
+  {
+    "entry_open": "2008-02-05",
+    "exit_open": "2008-03-05",
+    "gross_aapl_log_return": -0.053947968550165135,
+    "net_cash_active_log_edge": 0.05294796846683191,
+    "sequence": 155
+  },
+  {
+    "entry_open": "2008-05-05",
+    "exit_open": "2008-06-03",
+    "gross_aapl_log_return": 0.02679237046332046,
+    "net_cash_active_log_edge": -0.027792370546653684,
+    "sequence": 156
+  },
+  {
+    "entry_open": "2008-07-25",
+    "exit_open": "2008-08-22",
+    "gross_aapl_log_return": 0.09178998277553292,
+    "net_cash_active_log_edge": -0.09278998285886615,
+    "sequence": 157
+  },
+  {
+    "entry_open": "2008-11-07",
+    "exit_open": "2008-12-08",
+    "gross_aapl_log_return": -0.019947610294166633,
+    "net_cash_active_log_edge": 0.01894761021083341,
+    "sequence": 158
+  },
+  {
+    "entry_open": "2009-01-27",
+    "exit_open": "2009-02-25",
+    "gross_aapl_log_return": -0.003665230726000689,
+    "net_cash_active_log_edge": 0.0026652306426674655,
+    "sequence": 159
+  },
+  {
+    "entry_open": "2009-04-27",
+    "exit_open": "2009-05-26",
+    "gross_aapl_log_return": 0.015020632422962076,
+    "net_cash_active_log_edge": -0.0160206325062953,
+    "sequence": 160
+  },
+  {
+    "entry_open": "2009-07-24",
+    "exit_open": "2009-08-21",
+    "gross_aapl_log_return": 0.06595096658172442,
+    "net_cash_active_log_edge": -0.06695096666505765,
+    "sequence": 161
+  },
+  {
+    "entry_open": "2009-10-29",
+    "exit_open": "2009-11-27",
+    "gross_aapl_log_return": 0.02141016150670721,
+    "net_cash_active_log_edge": -0.022410161590040435,
+    "sequence": 162
+  },
+  {
+    "entry_open": "2010-01-27",
+    "exit_open": "2010-02-25",
+    "gross_aapl_log_return": -0.046863313830593056,
+    "net_cash_active_log_edge": 0.04586331374725983,
+    "sequence": 163
+  },
+  {
+    "entry_open": "2010-04-23",
+    "exit_open": "2010-05-21",
+    "gross_aapl_log_return": -0.1406835764423861,
+    "net_cash_active_log_edge": 0.13968357635905287,
+    "sequence": 164
+  },
+  {
+    "entry_open": "2010-07-23",
+    "exit_open": "2010-08-20",
+    "gross_aapl_log_return": -0.030408558567052185,
+    "net_cash_active_log_edge": 0.029408558483718962,
+    "sequence": 165
+  },
+  {
+    "entry_open": "2010-10-29",
+    "exit_open": "2010-11-29",
+    "gross_aapl_log_return": 0.03637469397680151,
+    "net_cash_active_log_edge": -0.03737469406013473,
+    "sequence": 166
+  },
+  {
+    "entry_open": "2011-01-21",
+    "exit_open": "2011-02-18",
+    "gross_aapl_log_return": 0.07206200660802795,
+    "net_cash_active_log_edge": -0.07306200669136118,
+    "sequence": 167
+  },
+  {
+    "entry_open": "2011-04-26",
+    "exit_open": "2011-05-24",
+    "gross_aapl_log_return": -0.05260070464772648,
+    "net_cash_active_log_edge": 0.05160070456439326,
+    "sequence": 168
+  },
+  {
+    "entry_open": "2011-07-22",
+    "exit_open": "2011-08-19",
+    "gross_aapl_log_return": -0.06971605291855583,
+    "net_cash_active_log_edge": 0.0687160528352226,
+    "sequence": 169
+  },
+  {
+    "entry_open": "2011-10-28",
+    "exit_open": "2011-11-28",
+    "gross_aapl_log_return": -0.07910225414050352,
+    "net_cash_active_log_edge": 0.07810225405717029,
+    "sequence": 170
+  },
+  {
+    "entry_open": "2012-01-27",
+    "exit_open": "2012-02-27",
+    "gross_aapl_log_return": 0.15975488499681972,
+    "net_cash_active_log_edge": -0.16075488508015295,
+    "sequence": 171
+  },
+  {
+    "entry_open": "2012-04-27",
+    "exit_open": "2012-05-25",
+    "gross_aapl_log_return": -0.06924487926875537,
+    "net_cash_active_log_edge": 0.06824487918542214,
+    "sequence": 172
+  },
+  {
+    "entry_open": "2012-07-27",
+    "exit_open": "2012-08-24",
+    "gross_aapl_log_return": 0.1413939451128763,
+    "net_cash_active_log_edge": -0.14239394519620954,
+    "sequence": 173
+  },
+  {
+    "entry_open": "2012-11-02",
+    "exit_open": "2012-12-03",
+    "gross_aapl_log_return": 0.0007901553536456544,
+    "net_cash_active_log_edge": -0.0017901554369788783,
+    "sequence": 174
+  },
+  {
+    "entry_open": "2013-01-28",
+    "exit_open": "2013-02-26",
+    "gross_aapl_log_return": 0.019399247551290535,
+    "net_cash_active_log_edge": -0.02039924763462376,
+    "sequence": 175
+  },
+  {
+    "entry_open": "2013-04-26",
+    "exit_open": "2013-05-24",
+    "gross_aapl_log_return": 0.0796082308592383,
+    "net_cash_active_log_edge": -0.08060823094257152,
+    "sequence": 176
+  },
+  {
+    "entry_open": "2013-07-26",
+    "exit_open": "2013-08-23",
+    "gross_aapl_log_return": 0.15167252847530888,
+    "net_cash_active_log_edge": -0.1526725285586421,
+    "sequence": 177
+  },
+  {
+    "entry_open": "2013-11-01",
+    "exit_open": "2013-12-02",
+    "gross_aapl_log_return": 0.06865073399734689,
+    "net_cash_active_log_edge": -0.06965073408068012,
+    "sequence": 178
+  },
+  {
+    "entry_open": "2014-01-30",
+    "exit_open": "2014-02-28",
+    "gross_aapl_log_return": 0.05743211937759856,
+    "net_cash_active_log_edge": -0.05843211946093178,
+    "sequence": 179
+  },
+  {
+    "entry_open": "2014-04-28",
+    "exit_open": "2014-05-27",
+    "gross_aapl_log_return": 0.07808532207511018,
+    "net_cash_active_log_edge": -0.07908532215844341,
+    "sequence": 180
+  },
+  {
+    "entry_open": "2014-07-25",
+    "exit_open": "2014-08-22",
+    "gross_aapl_log_return": 0.03986422530160535,
+    "net_cash_active_log_edge": -0.04086422538493857,
+    "sequence": 181
+  },
+  {
+    "entry_open": "2014-10-29",
+    "exit_open": "2014-11-26",
+    "gross_aapl_log_return": 0.10495026767291821,
+    "net_cash_active_log_edge": -0.10595026775625144,
+    "sequence": 182
+  },
+  {
+    "entry_open": "2015-01-30",
+    "exit_open": "2015-03-02",
+    "gross_aapl_log_return": 0.09161863774593554,
+    "net_cash_active_log_edge": -0.09261863782926877,
+    "sequence": 183
+  },
+  {
+    "entry_open": "2015-04-30",
+    "exit_open": "2015-05-29",
+    "gross_aapl_log_return": 0.024102093472449036,
+    "net_cash_active_log_edge": -0.02510209355578226,
+    "sequence": 184
+  },
+  {
+    "entry_open": "2015-07-24",
+    "exit_open": "2015-08-21",
+    "gross_aapl_log_return": -0.1219721968727374,
+    "net_cash_active_log_edge": 0.12097219678940417,
+    "sequence": 185
+  },
+  {
+    "entry_open": "2015-10-30",
+    "exit_open": "2015-11-30",
+    "gross_aapl_log_return": -0.020836681965259347,
+    "net_cash_active_log_edge": 0.019836681881926124,
+    "sequence": 186
+  },
+  {
+    "entry_open": "2016-01-29",
+    "exit_open": "2016-02-29",
+    "gross_aapl_log_return": 0.027014369416391994,
+    "net_cash_active_log_edge": -0.028014369499725217,
+    "sequence": 187
+  },
+  {
+    "entry_open": "2016-04-29",
+    "exit_open": "2016-05-27",
+    "gross_aapl_log_return": 0.0624361931242086,
+    "net_cash_active_log_edge": -0.06343619320754183,
+    "sequence": 188
+  },
+  {
+    "entry_open": "2016-07-29",
+    "exit_open": "2016-08-26",
+    "gross_aapl_log_return": 0.035840011361959336,
+    "net_cash_active_log_edge": -0.03684001144529256,
+    "sequence": 189
+  },
+  {
+    "entry_open": "2016-10-28",
+    "exit_open": "2016-11-28",
+    "gross_aapl_log_return": -0.016539863930822914,
+    "net_cash_active_log_edge": 0.01553986384748969,
+    "sequence": 190
+  },
+  {
+    "entry_open": "2017-02-03",
+    "exit_open": "2017-03-06",
+    "gross_aapl_log_return": 0.0870094198054206,
+    "net_cash_active_log_edge": -0.08800941988875383,
+    "sequence": 191
+  },
+  {
+    "entry_open": "2017-05-05",
+    "exit_open": "2017-06-05",
+    "gross_aapl_log_return": 0.05447883629807842,
+    "net_cash_active_log_edge": -0.05547883638141164,
+    "sequence": 192
+  },
+  {
+    "entry_open": "2017-08-04",
+    "exit_open": "2017-09-01",
+    "gross_aapl_log_return": 0.05834701229565504,
+    "net_cash_active_log_edge": -0.05934701237898826,
+    "sequence": 193
+  },
+  {
+    "entry_open": "2017-11-07",
+    "exit_open": "2017-12-06",
+    "gross_aapl_log_return": -0.03396617255604911,
+    "net_cash_active_log_edge": 0.03296617247271589,
+    "sequence": 194
+  },
+  {
+    "entry_open": "2018-02-06",
+    "exit_open": "2018-03-07",
+    "gross_aapl_log_return": 0.12618395446974967,
+    "net_cash_active_log_edge": -0.1271839545530829,
+    "sequence": 195
+  },
+  {
+    "entry_open": "2018-05-04",
+    "exit_open": "2018-06-04",
+    "gross_aapl_log_return": 0.07628057787470903,
+    "net_cash_active_log_edge": -0.07728057795804226,
+    "sequence": 196
+  },
+  {
+    "entry_open": "2018-08-03",
+    "exit_open": "2018-08-31",
+    "gross_aapl_log_return": 0.09342627214423159,
+    "net_cash_active_log_edge": -0.09442627222756482,
+    "sequence": 197
+  },
+  {
+    "entry_open": "2018-11-07",
+    "exit_open": "2018-12-07",
+    "gross_aapl_log_return": -0.16812736804388564,
+    "net_cash_active_log_edge": 0.16712736796055241,
+    "sequence": 198
+  }
+]

@@ -137,6 +137,7 @@ final and no later period or real capital is authorized.
 | One-session rare-loss forest v1 | Rare-event forest with IWM/VIX | Zero cash trades; exact tie; sentiment worsened accuracy | No | Rejected |
 | Sector-breadth residual edge v1 | Sector ETFs, IWM, VIX and residual momentum GAM | Full candidate: -0.8951 edge and -59.15% relative wealth. Post-rejection p99 tail: +9.82% at 10 bps, but only 3/7 folds and 4/14 years won | No | Rejected; tail retained only as an ensemble lead |
 | SEC numeric event drift v1 | AAPL 10-Q/10-K changes plus QQQ/VIX sentiment | Preflight found only 38 events from 2009-2018; after warm-up, 24 predictions and five helpful cash episodes | No | Rejected before implementation; too small for a reliable claim |
+| SEC filing-event cash baseline v1 | Authenticated Apple 10-K/10-Q availability dates only; no filing contents, model or LLM | From 2000-2018 at 10 bps, strategy +479.74% versus AAPL +4,687.59%, -87.89% relative ending wealth; 5/19 winning years and only 26/74 helpful cash episodes | No | Rejected; unconditional 20-session cash after filings missed too much AAPL upside, so filing timing alone is not an edge |
 | Chronological exhaustion expert v1 | Causal posterior trust gate over contextual and weak-trend exhaustion; no LLM | At 10 bps: +155.10% wealth vs buy-and-hold, 10/14 winning years, 7/7 positive folds and 3/3 negative-AAPL years; learner nevertheless trailed the plain union by 0.035357 log edge | No | Rejected; learning removed two winners and added no value |
 | Union contextual veto v1 | Discounted Bayesian pure veto using AAPL plus SPY/QQQ sentiment | Exactly reproduced the strong union: at 10 bps +164.28% wealth vs buy-and-hold, 11/14 positive years, 7/7 positive folds and 3/3 negative-AAPL years; 0 vetoes and 0 incremental edge | No | Rejected; learner was inert, underlying union remains a lead |
 | Regime-conditioned expert disagreement v1 | Fixed 2005-2011 choice between contextual-only and weak-trend-only union signals within a 20-session SPY/QQQ regime | Repeated 2012-2018 diagnostic still beat AAPL by +162.73 pp at 5 bps and +144.60 pp at 10 bps, but trailed the stronger fixed union by -0.0981 and -0.0821 log edge; incremental edge was positive in only 2/7 years | No | Rejected as a trading improvement; no 2019 or later row opened and no cosmetic successor allowed |
@@ -194,6 +195,7 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_sector_breadth_residual_edge_v1/REJECTED.md`
 - `e/aapl_sector_breadth_residual_edge_v1/SPARSE_TAIL_DIAGNOSTIC.md`
 - `e/sec_numeric_event_drift_v1/PREFLIGHT_REJECTED.md`
+- `e/sec_filing_calendar_baseline_v1/REJECTED.md`
 - `e/chronological_exhaustion_expert_v1/REJECTED.md`
 - `e/union_contextual_veto_v1/REJECTED.md`
 - `e/aapl_causal_contextual_expert_aggregation_v1/PREFLIGHT_REJECTED.md`

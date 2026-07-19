@@ -1,0 +1,42 @@
+{
+  "base_5bps_episodes.json": {
+    "bytes": 14524,
+    "sha256": "713c17441e183e3db852523b1b41235a11d0cea8034f26c1d36830c210f98196"
+  },
+  "base_5bps_ledgers.csv": {
+    "bytes": 2204654,
+    "sha256": "8ca42de3ab2de7c63b09967735594c4764c041762a485f3c60a90b25c8b42d4d"
+  },
+  "filing_manifest.json": {
+    "bytes": 30677,
+    "sha256": "eea1ff57f6f9f2db31ee341fb48494d81b7c56e9e6bf889278b955b5ff15dabb"
+  },
+  "filing_schedule.csv": {
+    "bytes": 7167,
+    "sha256": "5e2431ec89640ea31fcb5d96f0287d1ce8f1d77eb15f8f601a6c1975c4e6b7df"
+  },
+  "gate_report.json": {
+    "bytes": 879,
+    "sha256": "683711d41de1ac213d867a275ff6dffe57dd92dc7397c1a7fc6b633c4e55239d"
+  },
+  "metrics.json": {
+    "bytes": 61893,
+    "sha256": "ff193d7636c8385f25d903603fd864b265c0007eeb9cf1857bf02cb7237797c7"
+  },
+  "report.json": {
+    "bytes": 68293,
+    "sha256": "556b448f9aecdba850a7848121e8c9251400e52c1a510642e8f4a342030b73a1"
+  },
+  "stress_10bps_episodes.json": {
+    "bytes": 14517,
+    "sha256": "f8c8a40cd25159492b7bbccf18e7b63060364da5445d5818fec582a871ce99e8"
+  },
+  "stress_10bps_ledgers.csv": {
+    "bytes": 2209361,
+    "sha256": "3962a6376905bb63cf4b1b9d23732f0edbc06b23185c3a24051234d02b0c0351"
+  },
+  "target_history.csv": {
+    "bytes": 74811,
+    "sha256": "39c07bc9f7f80b87ee355f62dff6eff756346dfdb7f7197153fdbc27e1da9e2a"
+  }
+}

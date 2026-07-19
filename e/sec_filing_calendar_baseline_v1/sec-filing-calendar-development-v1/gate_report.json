@@ -1,0 +1,23 @@
+{
+  "failures": [
+    "base_cumulative_relative_wealth_positive",
+    "stress_cumulative_relative_wealth_positive",
+    "stress_winning_years_outnumber_losing_years",
+    "stress_mean_annual_excess_positive",
+    "stress_median_annual_excess_positive",
+    "stress_edge_positive_after_best_year_removed",
+    "stress_negative_aapl_year_edge_positive"
+  ],
+  "gates": {
+    "all_ledgers_unleveraged_and_nonnegative": true,
+    "always_long_matches_same_ledger_aapl": true,
+    "base_cumulative_relative_wealth_positive": false,
+    "stress_cumulative_relative_wealth_positive": false,
+    "stress_edge_positive_after_best_year_removed": false,
+    "stress_mean_annual_excess_positive": false,
+    "stress_median_annual_excess_positive": false,
+    "stress_negative_aapl_year_edge_positive": false,
+    "stress_winning_years_outnumber_losing_years": false
+  },
+  "passed": false
+}
