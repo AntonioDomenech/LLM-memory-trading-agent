@@ -1,11 +1,13 @@
 # AAPL long/cash approach comparison
 
-Updated through the terminal SEC/Gemma corroborated-content risk v1 pilot
-rejection on 2026-07-19. The original 512-token calls were mechanically
-truncated. A fresh 8,192-context / 1,024-output pilot then completed all six
-fixed calls normally, but 0/6 passed the exact JSON/schema/evidence contract.
-The approach stopped before any market price or performance calculation and
-will not receive another cosmetic SEC/Gemma correction version.
+Updated through the intraday-only exhaustion union v1 development rejection on
+2026-07-19. It used the exact 121 fixed-union signals and changed only the
+buyback from the following open to the same session's close. It remained very
+strong versus AAPL, but trailed the existing union by `-0.003136` log edge at
+both costs and improved it in only 2/7 folds. This is a trading-result
+rejection; no 2019-or-later row was opened. The preceding SEC/Gemma
+corroborated-content attempt was terminally rejected at its corrected 0/6
+model-usability pilot before any market price was opened.
 The three preceding
 SEC/Gemma entries stopped before
 official SEC, market-value, or generative-model effects. Lean v3 then made four
@@ -140,6 +142,7 @@ final and no later period or real capital is authorized.
 | Union-conditioned duration learner v1 | Proposed causal learner over one-, two-, and three-session CASH holds after every fixed union entry | Preflight fixed policies at 10 bps: duration 1 edge 0.971826, duration 2 edge 0.465302, duration 3 edge 0.533822. Extension rewards were negative in both 2005-2011 and 2012-2018; positive contexts were sparse or unstable | No | Rejected before implementation; longer holds lack stable incremental signal |
 | Additive residual shock v1 | Proposed one-session CASH addition after a causal 126-session AAPL residual z-score above 2.0 versus SPY/QQQ | At 10 bps, residual-only edge was -0.280002; adding it reduced union edge from 0.971826 to 0.577635. Incremental edge was positive in only 2/14 years and 1/7 folds | No | Exact candidate rejected before implementation; broad, crisis-concentrated underperformance |
 | Persistent market stress v1 | Proposed persistent CASH overlay while both SPY and QQQ are below completed-close 200-session averages | At 10 bps, risk-off-only edge was -0.492989 and union-plus-risk edge was -0.090969 versus union 0.971826. Incremental edge was positive only in 2008 and 2018 and 2/7 folds | No | Exact candidate rejected before implementation; crisis protection sacrificed too much recovery and growth |
+| Intraday-only exhaustion union v1 | Exact fixed exhaustion union with sell at next open and unconditional same-session adjusted-close buyback | At 5/10 bps, relative wealth versus AAPL was +197.34%/+163.45%, with 11/14 positive years at both costs and 7/7 and 6/7 positive folds. It nevertheless trailed the stronger open-to-open union by -0.003136 log edge at both costs and improved it in only 2/7 folds | No | Rejected as an improvement; keeping the intervening overnight exposure was slightly harmful overall, so no later row was opened |
 | SEC/Gemma online risk overlay v2 | Local Gemma semantic filing learner plus market regime features | Non-generative runtime preflight found that the preregistered raw Ollama `/api/show` hash included mutable metadata and no longer matched, despite the model content matching | No | Preflight rejected before SEC, market-value, or Gemma effects; corrected semantic runtime identity required v2.1 |
 | SEC/Gemma online risk overlay v2.1 | Same causal filing learner and long/cash policy with corrected model identity and hardened local execution | Local implementation review found a non-atomic interval after immutable remote pass/fail publication but before the local terminal anchor; a crash or deadline could leave contradictory terminal states | No | Preflight rejected before SEC, market-value, or Gemma effects; crash-safe terminal authority and recovery require a separately preregistered successor |
 | SEC/Gemma online risk overlay v2.2 | Same causal filing learner and long/cash policy with crash-safe publication and recovery | Source and non-generative Ollama identity checks passed, but the complete lifecycle resets a separate one-hour clock for four commands and permits later recovery time | No | Preflight rejected before SEC, market-value, or Gemma effects; a successor must bind the complete experiment to one shared one-hour deadline |
@@ -202,6 +205,8 @@ short behavior and are excluded from the eligible table.
 - `e/aapl_causal_union_duration_learner_v1/PREFLIGHT_REJECTED.md`
 - `e/aapl_additive_residual_shock_v1/PREFLIGHT_REJECTED.md`
 - `e/aapl_persistent_market_stress_v1/PREFLIGHT_REJECTED.md`
+- `e/intraday_exhaustion_union_v1/REJECTED.md`
+- `e/intraday_exhaustion_union_v1/intraday-exhaustion-union-development-v1/report.json`
 - `e/binary_regime_union_selector_v1/REJECTED.md`
 - `e/binary_regime_longrun_audit_v1/REJECTED.md`
 - `docs/aapl_sec_gemma_online_risk_overlay_v2_preflight_rejection.md`

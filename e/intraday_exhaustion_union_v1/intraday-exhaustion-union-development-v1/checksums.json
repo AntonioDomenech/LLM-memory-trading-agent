@@ -1,0 +1,66 @@
+{
+  "base_5bps_aapl_buy_hold_ledger.csv": {
+    "bytes": 827883,
+    "sha256": "947aa2b5504defd7d49fedab523f3ca1fc27134fac2b8387686beaf6e94e9cf3"
+  },
+  "base_5bps_candidate_episodes.csv": {
+    "bytes": 12283,
+    "sha256": "1cb051732d51baea8c3de0d931aa5cf22dc1ae048ef8987a6a9e6d0634e757af"
+  },
+  "base_5bps_candidate_events_ledger.csv": {
+    "bytes": 36935,
+    "sha256": "f89ca02c82540fbd527e9f6f7eead7209cc64f35b33cbfd1a8edc55e738ba423"
+  },
+  "base_5bps_candidate_open_ledger.csv": {
+    "bytes": 829659,
+    "sha256": "e6eceed9fcbdbf0aa1d7c7e9132dc0df9a1660b3f099dab8a955c3bc2cdb54c7"
+  },
+  "base_5bps_open_to_open_union_episodes.csv": {
+    "bytes": 12750,
+    "sha256": "b45e7dd81873b74bce3d2594d509c5ccdd16a2e73c09a22cac0b80cf4ac45e8c"
+  },
+  "base_5bps_open_to_open_union_ledger.csv": {
+    "bytes": 834121,
+    "sha256": "db5bb6c66b49d4002b07e0db60bd12edaac5cdc919029d5266d4a8156bd09e2c"
+  },
+  "development_forecast.csv": {
+    "bytes": 110030,
+    "sha256": "5cfea954aa3092a85f83aedd78d869d37db29bf45f787c66a32d0c356953cc3b"
+  },
+  "gate_report.json": {
+    "bytes": 1916,
+    "sha256": "f1a25e3ab8d141fe033d238d56c4ec491215848aad2ad8c1202bee72fa061d7c"
+  },
+  "metrics.json": {
+    "bytes": 99544,
+    "sha256": "6de207367891a6f5cfb9db6ebb5821ce61e2cd1eeccd4470aee3ad2d4e6e0150"
+  },
+  "report.json": {
+    "bytes": 111138,
+    "sha256": "31e90aef7a69603297a9a01dd9284a68cd7e0fb268fa48875602c3df2bee501a"
+  },
+  "stress_10bps_aapl_buy_hold_ledger.csv": {
+    "bytes": 827792,
+    "sha256": "a16c268be1c65d77d1afed4432b0250448974ab57040e051e2586c48662fd991"
+  },
+  "stress_10bps_candidate_episodes.csv": {
+    "bytes": 12270,
+    "sha256": "58b714fbb0849dec58b59c350033df0393340011e3bc9878115f1c40981bba95"
+  },
+  "stress_10bps_candidate_events_ledger.csv": {
+    "bytes": 36890,
+    "sha256": "b1e1bb3712b3cafa8a8774ee357a10dda2a8156d3616ddf4a390fcfcbbc66367"
+  },
+  "stress_10bps_candidate_open_ledger.csv": {
+    "bytes": 828567,
+    "sha256": "19332380df87488d2b7adaa0d4b41194708ac60e575d716428e203f18ca44955"
+  },
+  "stress_10bps_open_to_open_union_episodes.csv": {
+    "bytes": 12751,
+    "sha256": "6f439508b19b014fc67c4ca6ec58a1cdc0efd4f470d6964f9612552e6c7e1273"
+  },
+  "stress_10bps_open_to_open_union_ledger.csv": {
+    "bytes": 833873,
+    "sha256": "0493f366078bc770ab46ba445391784efa251dc4ea6718c44693b51562571449"
+  }
+}
