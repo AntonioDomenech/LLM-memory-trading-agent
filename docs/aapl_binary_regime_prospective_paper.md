@@ -17,10 +17,14 @@ continuous 2005 through 2026-07-09 audit passed all 41 declared long-run gates:
 - maximum drawdown near -43%, versus about -60% for AAPL; and
 - ending wealth about 4.08 times AAPL at 5 bps and 3.49 times AAPL at 10 bps.
 
-This passed the goal's separate long-term-success standard. It did not pass the
-stricter recent-year standard because it lost 2024, and all historical evidence
-is retrospective. The paper track exists to obtain evidence that is genuinely
-recorded before the market outcome.
+This passed the current goal's separate long-term-success standard. It did not
+pass the older sealed audit's stricter promotion contract because it lost 2024.
+That audit explicitly recorded
+`fixed_policy_candidate_for_prospective_paper=false`. Starting this paper track
+is therefore a disclosed post-hoc override under the current goal's long-term
+route, not a claim that the older audit authorized promotion. All historical
+evidence remains retrospective. The paper track exists to obtain evidence that
+is genuinely recorded before the market outcome.
 
 ## Exact frozen policy
 
@@ -71,8 +75,11 @@ AAPL, SPY and QQQ, ending at the preregistered as-of session. It must save the
 exact bounded CSV and its SHA-256 beside the decision.
 
 Before producing a decision, the downloaded history through 2026-07-09 must
-reproduce the preserved audited input and frozen action stream. A real value,
-date, corporate-action or action-stream mismatch stops this first decision;
+reproduce the preserved audited input and the sealed three-column action-stream
+fingerprint
+`f77c68462ced8158bca6bf5a0aec95b4161bacd811075048e7918ba1de4d15ed`.
+The exact post-audit sessions must be July 10, 13, 14, 15, 16 and 17. A real
+value, date, corporate-action or action-stream mismatch stops this first decision;
 the runner may report the mismatch but may not silently splice incompatible
 series or change thresholds. This is a trading-data integrity issue, not a
 runtime-count gate.
@@ -80,7 +87,18 @@ runtime-count gate.
 Yahoo may revise historical adjusted data. Every prospective decision therefore
 binds its own exact snapshot. A later outcome evaluation uses the decision's
 saved snapshot plus newly observed sessions and never rewrites the old input or
-decision.
+decision. Adjusted units are rebased between snapshots with the frozen formula
+`new units = old units * old anchor adjusted close / new snapshot anchor
+adjusted close`. This preserves the account value at the old boundary before
+new returns are applied.
+
+The outcome calculation is frozen before the first current-data download. A
+CASH decision sells all adjusted units at the next adjusted open with the
+preregistered sell slippage, holds cash for one session, and buys AAPL at the
+following adjusted open at a price multiplied by `1 + cost_bps/10,000`. A HOLD
+decision makes no changing trade and pays no cost. The benchmark keeps the same
+rebased AAPL units. The implementation rejects negative cash, negative units,
+shorting and any target other than exactly 0% or 100%.
 
 ## Append-only decision and outcome records
 
@@ -93,10 +111,12 @@ The first run must create, without overwriting:
 - a hash manifest covering both files; and
 - an initial paper-state JSON with the common AAPL starting position.
 
-The decision file is immutable. After the relevant future opens occur, a
-separate command may append an outcome JSON and updated state. It must not edit
-the original decision. Every later close repeats the same order: save the
-decision first, then wait for future data.
+The decision file is immutable. The first implementation freezes and tests the
+outcome/state calculation, but creates only the first decision packet. After
+the relevant future opens occur, a later command may use that already-frozen
+calculation to append an outcome JSON and updated state. It must not edit the
+original decision. Every later close repeats the same order: save the decision
+first, then wait for future data.
 
 The paper report must distinguish:
 
@@ -114,8 +134,15 @@ unless strong negative evidence rejects it sooner.
 The branch is `codex/aapl-binary-regime-prospective-paper`. The preregistration
 and implementation must be committed and pushed before the first current-data
 download. The runner must start from that clean pushed branch, bind its relevant
-files and dependency hashes, and fail if the first decision path already
-exists. No retry may replace a consumed decision; a transport failure may be
-resumed only if no market snapshot or decision was published.
+tracked files, and fail if the one canonical first-decision path already
+exists. No alternate output directory may create a second first decision. No
+retry may replace a consumed decision; a transport failure may be resumed only
+if no market snapshot or decision was published.
+
+The local packet is not yet prospective authority by itself. Its exact files
+must be committed and pushed to the declared GitHub branch before
+`2026-07-20T13:30:00Z`. That pushed packet is the pre-outcome record. If it is
+not pushed before the deadline, the first paper attempt is invalid and must not
+be scored as prospective.
 
 This is paper trading only. Broker calls and real-money actions are forbidden.

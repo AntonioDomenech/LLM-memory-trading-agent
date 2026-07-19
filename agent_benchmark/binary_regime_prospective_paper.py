@@ -41,12 +41,30 @@ AUDITED_INPUT_SHA256 = (
     "cf384e8218f97d4c6e7ca89860877ef5edb67e938af66886bdf81912bd35479b"
 )
 AUDITED_ROWS = 6_875
+AUDITED_ACTION_STREAM_SHA256 = (
+    "f77c68462ced8158bca6bf5a0aec95b4161bacd811075048e7918ba1de4d15ed"
+)
+EXPECTED_POST_AUDIT_SESSIONS = pd.DatetimeIndex(
+    pd.to_datetime(
+        [
+            "2026-07-10",
+            "2026-07-13",
+            "2026-07-14",
+            "2026-07-15",
+            "2026-07-16",
+            "2026-07-17",
+        ]
+    )
+)
 CHECKPOINT_RELATIVE = Path(
     "e/binary_regime_union_selector_v1/"
     "binary-regime-union-selector-validation-v1/"
     "validation_checkpoint_through_2023.json"
 )
 INITIAL_EQUITY = 1_000.0
+CANONICAL_OUTPUT_RELATIVE = Path(
+    "e/binary_regime_prospective_paper/decisions"
+)
 REQUIRED_COLUMNS = (
     "aapl_open",
     "aapl_close",
@@ -191,6 +209,29 @@ def _account_action_stream(
     return forecast, stream
 
 
+def _sealed_action_stream_sha256(stream: pd.DataFrame) -> str:
+    """Reproduce the exact action fingerprint stored by the sealed audit."""
+
+    action_frame = pd.DataFrame(
+        {
+            "decision_date": stream.index,
+            "selector_target": stream["target_exposure"].to_numpy(dtype=float),
+            "union_target": np.where(
+                stream["account_union_cash_signal"].to_numpy(dtype=bool),
+                0.0,
+                1.0,
+            ),
+        }
+    )
+    payload = action_frame.to_csv(
+        index=False,
+        date_format="%Y-%m-%d",
+        float_format="%.17g",
+        lineterminator="\n",
+    ).encode("utf-8")
+    return _sha256(payload)
+
+
 def _states_match_checkpoint(
     observed: Mapping[str, Any], expected: Mapping[str, Any]
 ) -> bool:
@@ -231,6 +272,11 @@ def verify_fresh_history(
     data = canonical_context_frame(fresh)
     if data.index.max() != FIRST_AS_OF or bool((data.index > FIRST_AS_OF).any()):
         raise ProspectivePaperError("Fresh snapshot does not end at the as-of close")
+    observed_post_audit = data.index[data.index > AUDITED_END]
+    if not observed_post_audit.equals(EXPECTED_POST_AUDIT_SESSIONS):
+        raise ProspectivePaperError(
+            "Fresh snapshot is missing or adds a post-audit market session"
+        )
     prefix = data.loc[data.index <= AUDITED_END]
     if not prefix.index.equals(audited.index):
         raise ProspectivePaperError("Fresh Yahoo prefix session dates changed")
@@ -247,18 +293,27 @@ def verify_fresh_history(
 
     audited_forecast, audited_stream = _account_action_stream(audited)
     fresh_forecast, fresh_stream = _account_action_stream(data)
+    audited_action_hash = _sealed_action_stream_sha256(audited_stream)
+    if audited_action_hash != AUDITED_ACTION_STREAM_SHA256:
+        raise ProspectivePaperError(
+            "Frozen policy no longer reproduces the sealed audit action stream"
+        )
     fresh_prefix_stream = fresh_stream.loc[fresh_stream.index <= AUDITED_END]
     if not fresh_prefix_stream.equals(audited_stream):
         raise ProspectivePaperError("Frozen action stream changed through 2026-07-09")
+    if (
+        _sealed_action_stream_sha256(fresh_prefix_stream)
+        != AUDITED_ACTION_STREAM_SHA256
+    ):
+        raise ProspectivePaperError(
+            "Fresh history changed the sealed action fingerprint"
+        )
     checkpoint = json.loads((root / CHECKPOINT_RELATIVE).read_text(encoding="utf-8"))
     expected_states = checkpoint["serialized_regime_states"]
     if not _states_match_checkpoint(
         fresh_forecast.attrs["final_states"], expected_states
     ):
         raise ProspectivePaperError("Frozen-through-2023 state changed")
-    action_payload = fresh_prefix_stream.reset_index(names="date").to_csv(
-        index=False, date_format="%Y-%m-%d", lineterminator="\n"
-    ).encode("utf-8")
     return {
         "audited_rows": int(len(audited)),
         "fresh_rows": int(len(data)),
@@ -266,7 +321,7 @@ def verify_fresh_history(
         "exact_prefix_prices": True,
         "exact_prefix_action_stream": True,
         "frozen_checkpoint_state_match": True,
-        "audited_action_stream_sha256": _sha256(action_payload),
+        "audited_action_stream_sha256": AUDITED_ACTION_STREAM_SHA256,
         "audited_final_state": audited_forecast.attrs["final_states"],
     }
 
@@ -298,7 +353,7 @@ def build_decision(
         action = "HOLD_AAPL"
         reason = "no accepted account-union cash signal"
     adjusted_close = float(data.iloc[-1]["aapl_adj_close"])
-    starting_shares = INITIAL_EQUITY / adjusted_close
+    starting_units = INITIAL_EQUITY / adjusted_close
     decision = {
         "schema_version": "binary-regime-prospective-paper-decision-v1",
         "contract_version": CONTRACT_VERSION,
@@ -307,6 +362,13 @@ def build_decision(
         "as_of_close": FIRST_AS_OF.date().isoformat(),
         "frozen_learning_cutoff": FROZEN_CUTOFF.date().isoformat(),
         "policy": "frozen_2023_binary_regime_union_selector",
+        "promotion_basis": (
+            "current_goal_long_term_success_post_hoc_override_of_the_older_"
+            "strict_recent_gate"
+        ),
+        "original_sealed_audit_fixed_policy_candidate": False,
+        "original_sealed_audit_strict_recent_history_pass": False,
+        "sealed_action_stream_sha256": AUDITED_ACTION_STREAM_SHA256,
         "account_union_cash_signal": union,
         "union_candidate_signal": bool(row["union_candidate_signal"]),
         "risk_on": bool(row["risk_on"]),
@@ -332,10 +394,29 @@ def build_decision(
         "created_at_utc": decision["created_at_utc"],
         "as_of_close": decision["as_of_close"],
         "initial_equity": INITIAL_EQUITY,
-        "initial_price_basis": "AAPL adjusted close",
-        "initial_adjusted_close": adjusted_close,
+        "price_basis": "AAPL adjusted prices with snapshot-to-snapshot rebasing",
+        "adjustment_rebase_formula": (
+            "new_units = old_units * old_anchor_adjusted_close / "
+            "new_snapshot_anchor_adjusted_close"
+        ),
         "common_starting_cash": 0.0,
-        "common_starting_shares": starting_shares,
+        "common_starting_adjusted_units": starting_units,
+        "cost_ledgers": {
+            f"{int(cost)}bps": {
+                "cost_bps_per_changing_leg": cost,
+                "strategy_cash": 0.0,
+                "strategy_adjusted_units": starting_units,
+                "benchmark_cash": 0.0,
+                "benchmark_adjusted_units": starting_units,
+                "strategy_equity": INITIAL_EQUITY,
+                "benchmark_equity": INITIAL_EQUITY,
+                "adjustment_anchor_date": decision["as_of_close"],
+                "adjustment_anchor_adjusted_close": adjusted_close,
+                "changing_legs": 0,
+                "estimated_costs": 0.0,
+            }
+            for cost in (5.0, 10.0)
+        },
         "strategy_target_for_next_open": decision["target_exposure_next_open"],
         "benchmark_target_for_next_open": 1.0,
         "no_pre_paper_return_scored": True,
@@ -346,8 +427,129 @@ def build_decision(
     return decision, state
 
 
+def settle_decision_outcome(
+    *,
+    decision: Mapping[str, Any],
+    state: Mapping[str, Any],
+    observed: pd.DataFrame,
+    cost_bps: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply the frozen next-open ledger without changing the saved decision."""
+
+    if cost_bps not in (5.0, 10.0):
+        raise ProspectivePaperError("Only the preregistered 5/10 bps costs are valid")
+    data = canonical_context_frame(observed)
+    as_of = pd.Timestamp(str(decision["as_of_close"]))
+    if as_of not in data.index:
+        raise ProspectivePaperError("Outcome snapshot lacks the saved as-of session")
+    target = float(decision["target_exposure_next_open"])
+    if target not in (0.0, 1.0):
+        raise ProspectivePaperError("Saved target is not exactly AAPL or cash")
+    future_sessions = data.index[data.index > as_of]
+    required = 2 if target == 0.0 else 1
+    if len(future_sessions) < required:
+        raise ProspectivePaperError("The saved decision outcome has not matured")
+
+    key = f"{int(cost_bps)}bps"
+    old_ledger = dict(state["cost_ledgers"][key])
+    anchor_date = pd.Timestamp(str(old_ledger["adjustment_anchor_date"]))
+    if anchor_date not in data.index:
+        raise ProspectivePaperError("Outcome snapshot lacks the adjustment anchor")
+    old_anchor = float(old_ledger["adjustment_anchor_adjusted_close"])
+    new_anchor = float(data.loc[anchor_date, "aapl_adj_close"])
+    if old_anchor <= 0.0 or new_anchor <= 0.0:
+        raise ProspectivePaperError("Adjustment anchor price is invalid")
+    unit_rebase = old_anchor / new_anchor
+    strategy_units = float(old_ledger["strategy_adjusted_units"]) * unit_rebase
+    benchmark_units = float(old_ledger["benchmark_adjusted_units"]) * unit_rebase
+    strategy_cash = float(old_ledger["strategy_cash"])
+    benchmark_cash = float(old_ledger["benchmark_cash"])
+    entry_date = pd.Timestamp(future_sessions[0])
+    entry_open = float(data.loc[entry_date, "aapl_adj_open"])
+    exit_date = entry_date
+    exit_open = entry_open
+    changing_legs = 0
+    costs_paid = 0.0
+    rate = cost_bps / 10_000.0
+
+    if target == 0.0:
+        if strategy_cash != 0.0 or strategy_units <= 0.0:
+            raise ProspectivePaperError(
+                "Cash episode must begin fully invested in AAPL"
+            )
+        gross_sale = strategy_units * entry_open
+        sale_cost = gross_sale * rate
+        strategy_cash = gross_sale - sale_cost
+        strategy_units = 0.0
+        changing_legs += 1
+        costs_paid += sale_cost
+
+        exit_date = pd.Timestamp(future_sessions[1])
+        exit_open = float(data.loc[exit_date, "aapl_adj_open"])
+        strategy_units = strategy_cash / (exit_open * (1.0 + rate))
+        buy_cost = strategy_units * exit_open * rate
+        strategy_cash = 0.0
+        changing_legs += 1
+        costs_paid += buy_cost
+
+    strategy_equity = strategy_cash + strategy_units * exit_open
+    benchmark_equity = benchmark_cash + benchmark_units * exit_open
+    if (
+        strategy_cash < -1e-10
+        or benchmark_cash < -1e-10
+        or strategy_units < -1e-12
+        or benchmark_units < -1e-12
+    ):
+        raise ProspectivePaperError("Prospective ledger breached cash-only safety")
+
+    outcome = {
+        "schema_version": "binary-regime-prospective-paper-outcome-v1",
+        "decision_as_of_close": str(decision["as_of_close"]),
+        "cost_bps_per_changing_leg": cost_bps,
+        "entry_open_date": entry_date.date().isoformat(),
+        "entry_adjusted_open": entry_open,
+        "exit_open_date": exit_date.date().isoformat(),
+        "exit_adjusted_open": exit_open,
+        "target_exposure": target,
+        "changing_legs": changing_legs,
+        "estimated_costs": costs_paid,
+        "strategy_equity": strategy_equity,
+        "benchmark_equity": benchmark_equity,
+        "excess_return_percentage_points_from_inception": (
+            (strategy_equity - benchmark_equity) / INITIAL_EQUITY * 100.0
+        ),
+        "relative_ending_wealth": strategy_equity / benchmark_equity,
+        "outcome_known": True,
+        "real_money": False,
+    }
+    new_ledger = {
+        **old_ledger,
+        "strategy_cash": strategy_cash,
+        "strategy_adjusted_units": strategy_units,
+        "benchmark_cash": benchmark_cash,
+        "benchmark_adjusted_units": benchmark_units,
+        "strategy_equity": strategy_equity,
+        "benchmark_equity": benchmark_equity,
+        "changing_legs": int(old_ledger["changing_legs"]) + changing_legs,
+        "estimated_costs": float(old_ledger["estimated_costs"]) + costs_paid,
+        "adjustment_anchor_date": exit_date.date().isoformat(),
+        "adjustment_anchor_adjusted_close": float(
+            data.loc[exit_date, "aapl_adj_close"]
+        ),
+    }
+    new_state = dict(state)
+    new_state["cost_ledgers"] = {
+        name: dict(value) for name, value in state["cost_ledgers"].items()
+    }
+    new_state["cost_ledgers"][key] = new_ledger
+    return outcome, new_state
+
+
 def _publish(
-    *, destination: Path, payloads: Mapping[str, bytes]
+    *,
+    destination: Path,
+    payloads: Mapping[str, bytes],
+    deadline_utc: datetime | None = None,
 ) -> Path:
     final = destination / FIRST_AS_OF.date().isoformat()
     pending = destination / f".{FIRST_AS_OF.date().isoformat()}.pending"
@@ -358,6 +560,8 @@ def _publish(
     try:
         for name, payload in payloads.items():
             (pending / name).write_bytes(payload)
+        if deadline_utc is not None and datetime.now(timezone.utc) >= deadline_utc:
+            raise ProspectivePaperError("Prospective publication missed its deadline")
         pending.rename(final)
     except Exception:
         shutil.rmtree(pending, ignore_errors=True)
@@ -365,22 +569,34 @@ def _publish(
     return final
 
 
-def create_first_decision(
-    *, root: Path, output_dir: Path, created_at: datetime | None = None
-) -> dict[str, Any]:
+def create_first_decision(*, root: Path) -> dict[str, Any]:
     repo = root.resolve()
     authority = _git_authority(repo)
     fresh = download_context_frame(
         "1999-03-10", FIRST_AS_OF.date().isoformat()
     )
     continuity = verify_fresh_history(root=repo, fresh=fresh)
-    decision_time = created_at or datetime.now(timezone.utc)
+    decision_time = datetime.now(timezone.utc)
     decision, state = build_decision(fresh, created_at=decision_time)
     snapshot = _frame_bytes(canonical_context_frame(fresh))
     decision["market_snapshot_sha256"] = _sha256(snapshot)
     decision["market_snapshot_rows"] = int(len(fresh))
     decision["continuity"] = continuity
     decision["implementation_authority"] = authority
+    prepublication_time = datetime.now(timezone.utc)
+    if prepublication_time >= FIRST_DECISION_DEADLINE_UTC:
+        raise ProspectivePaperError(
+            "The first prospective publication deadline passed"
+        )
+    decision["local_prepublication_check_utc"] = prepublication_time.isoformat().replace(
+        "+00:00", "Z"
+    )
+    decision["external_publication_requirement"] = {
+        "branch": BRANCH,
+        "must_commit_and_push_packet_before_utc": (
+            FIRST_DECISION_DEADLINE_UTC.isoformat().replace("+00:00", "Z")
+        ),
+    }
     decision_bytes = _json_bytes(decision)
     state["decision_sha256"] = _sha256(decision_bytes)
     state_bytes = _json_bytes(state)
@@ -400,8 +616,12 @@ def create_first_decision(
         },
     }
     payloads["manifest.json"] = _json_bytes(manifest)
-    destination = output_dir if output_dir.is_absolute() else repo / output_dir
-    final = _publish(destination=destination, payloads=payloads)
+    destination = (repo / CANONICAL_OUTPUT_RELATIVE).resolve()
+    final = _publish(
+        destination=destination,
+        payloads=payloads,
+        deadline_utc=FIRST_DECISION_DEADLINE_UTC,
+    )
     return {
         "decision_dir": str(final),
         "as_of_close": decision["as_of_close"],
@@ -416,11 +636,6 @@ def create_first_decision(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("e/binary_regime_prospective_paper/decisions"),
-    )
     return parser
 
 
@@ -428,7 +643,6 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     result = create_first_decision(
         root=args.repo_root,
-        output_dir=args.output_dir,
     )
     print(json.dumps(result, sort_keys=True))
     return 0
