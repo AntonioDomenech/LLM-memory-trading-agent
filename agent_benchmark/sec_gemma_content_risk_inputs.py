@@ -95,6 +95,9 @@ MODEL_IDENTITY_SCHEMA_VERSION: Final[str] = (
 CALL_CHECKPOINT_SCHEMA_VERSION: Final[str] = (
     "aapl-sec-gemma-content-risk-v1-model-call-v1"
 )
+ATTEMPT_CHECKPOINT_SCHEMA_VERSION: Final[str] = (
+    "aapl-sec-gemma-content-risk-v1-model-call-attempt-v1"
+)
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TAGGED_SHA256_RE = re.compile(r"sha256:([0-9a-f]{64})\Z")
@@ -135,6 +138,19 @@ _OLLAMA_RESPONSE_KEYS = frozenset(
         "prompt_eval_duration",
         "eval_count",
         "eval_duration",
+    }
+)
+_DANGEROUS_OUTPUT_EXTRA_KEYS = frozenset(
+    {
+        "audio",
+        "content_parts",
+        "error",
+        "function_call",
+        "images",
+        "response",
+        "thinking",
+        "tool_call",
+        "tool_calls",
     }
 )
 _MODEL_TIMING_KEYS = (
@@ -769,7 +785,14 @@ def _bind_identity_checkpoint(path: Path, current: Mapping[str, Any]) -> None:
         stored = _validate_identity_checkpoint(
             _strict_json_loads(path.read_bytes(), location="runtime identity checkpoint")
         )
-        if stored != validated_current:
+        semantic_fields = (
+            "schema_version",
+            "ollama_version",
+            "model_name",
+            "model_manifest_sha256",
+            "semantic_runtime_fingerprint_sha256",
+        )
+        if any(stored[field] != validated_current[field] for field in semantic_fields):
             raise SecGemmaContentRiskInputError(
                 "resumed batch runtime identity differs from its first observation"
             )
@@ -779,14 +802,19 @@ def _bind_identity_checkpoint(path: Path, current: Mapping[str, Any]) -> None:
 
 def _validate_ollama_envelope(value: Any) -> tuple[str, dict[str, int]]:
     envelope = _expect_mapping(value, "Ollama model response")
-    if set(envelope) != _OLLAMA_RESPONSE_KEYS:
-        raise SecGemmaContentRiskInputError("Ollama response envelope changed")
+    envelope_keys = set(envelope)
+    if not _OLLAMA_RESPONSE_KEYS.issubset(envelope_keys) or (
+        (envelope_keys - _OLLAMA_RESPONSE_KEYS) & _DANGEROUS_OUTPUT_EXTRA_KEYS
+    ):
+        raise SecGemmaContentRiskInputError("Ollama response envelope is unsafe")
     message = _expect_mapping(envelope.get("message"), "Ollama message")
+    message_keys = set(message)
     if (
         envelope.get("model") != MODEL_NAME
         or envelope.get("done") is not True
         or envelope.get("done_reason") != "stop"
-        or set(message) != {"role", "content"}
+        or not {"role", "content"}.issubset(message_keys)
+        or ((message_keys - {"role", "content"}) & _DANGEROUS_OUTPUT_EXTRA_KEYS)
         or message.get("role") != "assistant"
         or type(message.get("content")) is not str
     ):
@@ -937,6 +965,29 @@ def _base_result(
     }
 
 
+def _attempt_marker(item: PreparedRequest) -> dict[str, Any]:
+    return {
+        "schema_version": ATTEMPT_CHECKPOINT_SCHEMA_VERSION,
+        "ordinal": item.ordinal,
+        "sequence": item.sequence,
+        "accession_number": item.accession_number,
+        "form": item.form,
+        "availability_session": item.availability_session,
+        "request_sha256": item.request_sha256,
+        "supplied_sentence_ids": list(item.supplied_sentence_ids),
+        "status": "in_progress",
+    }
+
+
+def _validate_attempt_marker(value: Any, item: PreparedRequest) -> dict[str, Any]:
+    marker = dict(_expect_mapping(value, "model attempt checkpoint"))
+    _assert_public_safe(marker)
+    expected = _attempt_marker(item)
+    if marker != expected:
+        raise SecGemmaContentRiskInputError("model attempt checkpoint binding changed")
+    return marker
+
+
 def _assert_public_safe(value: Any, *, key: str | None = None) -> None:
     if isinstance(value, Mapping):
         for child_key, child in value.items():
@@ -1076,7 +1127,26 @@ def load_model_results(
         if path.is_symlink() or not path.is_file():
             raise SecGemmaContentRiskInputError("model checkpoint is not a regular file")
         value = _strict_json_loads(path.read_bytes(), location="model checkpoint")
-        results.append(_validate_loaded_result(value, item))
+        if isinstance(value, Mapping) and value.get("schema_version") == (
+            ATTEMPT_CHECKPOINT_SCHEMA_VERSION
+        ):
+            _validate_attempt_marker(value, item)
+            recovered = _base_result(
+                item,
+                status="transport_error",
+                elapsed_seconds=0.0,
+                extractor_output=None,
+                raw_output_sha256=None,
+                extractor_output_sha256=None,
+                output_byte_count=None,
+                exact_output_json_utf8_base64=None,
+                model_timing=None,
+                reason="interrupted_attempt_no_retry",
+            )
+            _atomic_write_json(path, recovered)
+            results.append(recovered)
+        else:
+            results.append(_validate_loaded_result(value, item))
     return results
 
 
@@ -1134,6 +1204,17 @@ def run_model_batch(
     directory.mkdir(parents=True, exist_ok=True)
     existing = load_model_results(directory, items)
     completed = {result["ordinal"]: result for result in existing}
+
+    if ordinals is not None and len(items) == EXPECTED_REQUEST_COUNT:
+        nonpilot_selected = set(selected) - set(PILOT_ORDINALS)
+        if nonpilot_selected:
+            if not all(ordinal in completed for ordinal in PILOT_ORDINALS) or sum(
+                completed[ordinal]["status"] == "valid"
+                for ordinal in PILOT_ORDINALS
+            ) < 5:
+                raise SecGemmaContentRiskInputError(
+                    "nonpilot ordinals require a completed healthy fixed pilot"
+                )
     owned = transport is None
     active: TransportLike = _RequestsTransport() if transport is None else transport
     try:
@@ -1155,6 +1236,10 @@ def run_model_batch(
         for ordinal in order:
             if ordinal in completed:
                 continue
+            _atomic_write_json(
+                _checkpoint_path(directory, ordinal),
+                _attempt_marker(by_ordinal[ordinal]),
+            )
             result = _call_model_once(by_ordinal[ordinal], transport=active, clock=clock)
             _atomic_write_json(_checkpoint_path(directory, ordinal), result)
             completed[ordinal] = result
@@ -1171,7 +1256,9 @@ def run_model_batch(
                     "sequence": result["sequence"],
                     "status": result["status"],
                     "elapsed_seconds": float(result["elapsed_seconds"]),
-                    "completed_count": len(completed),
+                    "completed_count": sum(
+                        item in completed for item in selected
+                    ),
                     "rolling_median_seconds": float(median),
                     "estimated_remaining_seconds": float(median * remaining_count),
                 },

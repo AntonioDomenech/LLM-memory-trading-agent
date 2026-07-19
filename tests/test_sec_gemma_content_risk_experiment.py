@@ -135,6 +135,10 @@ def test_model_identity_guard_requires_exact_unchanged_gemma() -> None:
     guard = {"before": copy.deepcopy(identity), "after": copy.deepcopy(identity)}
     assert _validate_model_identity_guard(guard)["passed"]
 
+    observational_change = copy.deepcopy(guard)
+    observational_change["after"]["tags_response_sha256"] = "d" * 64
+    assert _validate_model_identity_guard(observational_change)["passed"]
+
     changed = copy.deepcopy(guard)
     changed["after"]["model_manifest_sha256"] = "c" * 64
     with pytest.raises(SecGemmaContentRiskError, match="Gemma identity"):

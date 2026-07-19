@@ -170,9 +170,22 @@ class _Response:
 
 
 class _Transport:
-    def __init__(self, outputs: list[Any] | None = None, *, fail_posts: set[int] | None = None):
+    def __init__(
+        self,
+        outputs: list[Any] | None = None,
+        *,
+        fail_posts: set[int] | None = None,
+        crash_posts: set[int] | None = None,
+        envelope_extras: dict[str, Any] | None = None,
+        message_extras: dict[str, Any] | None = None,
+        extra_models: list[dict[str, Any]] | None = None,
+    ):
         self.outputs = list(outputs or [])
         self.fail_posts = set(fail_posts or set())
+        self.crash_posts = set(crash_posts or set())
+        self.envelope_extras = dict(envelope_extras or {})
+        self.message_extras = dict(message_extras or {})
+        self.extra_models = list(extra_models or [])
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
         self.post_count = 0
 
@@ -189,22 +202,27 @@ class _Transport:
                             "name": MODEL_NAME,
                             "model": MODEL_NAME,
                             "digest": MODEL_MANIFEST_SHA256,
-                        }
+                        },
+                        *self.extra_models,
                     ]
                 },
             )
         assert method == "POST" and url == OLLAMA_CHAT_ENDPOINT
         self.post_count += 1
+        if self.post_count in self.crash_posts:
+            raise KeyboardInterrupt("synthetic interrupted process")
         if self.post_count in self.fail_posts:
             raise ConnectionError("synthetic transport failure")
         output = self.outputs.pop(0)
         content = output if isinstance(output, str) else json.dumps(output)
-        return _Response(
-            url,
-            {
+        envelope = {
                 "model": MODEL_NAME,
                 "created_at": "2026-07-19T00:00:00Z",
-                "message": {"role": "assistant", "content": content},
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                    **self.message_extras,
+                },
                 "done": True,
                 "done_reason": "stop",
                 "total_duration": 10,
@@ -213,8 +231,9 @@ class _Transport:
                 "prompt_eval_duration": 2,
                 "eval_count": 20,
                 "eval_duration": 7,
-            },
-        )
+                **self.envelope_extras,
+            }
+        return _Response(url, envelope)
 
 
 class _Clock:
@@ -362,6 +381,68 @@ def test_transport_error_is_permanent_and_later_call_continues(tmp_path: Path):
     assert [row["status"] for row in results] == ["transport_error", "valid"]
 
 
+def test_interrupted_in_progress_attempt_is_never_resent(tmp_path: Path):
+    request = _prepared(1)
+    with pytest.raises(KeyboardInterrupt, match="interrupted process"):
+        run_model_batch(
+            [request],
+            tmp_path,
+            ordinals=[1],
+            progress=lambda event: None,
+            transport=_Transport([_extractor_output()], crash_posts={1}),
+            clock=_Clock(),
+        )
+    marker = json.loads((tmp_path / "model-call-0001.json").read_bytes())
+    assert marker["status"] == "in_progress"
+
+    resume_transport = _Transport([])
+    [result] = run_model_batch(
+        [request],
+        tmp_path,
+        ordinals=[1],
+        progress=lambda event: pytest.fail(f"attempt was repeated: {event}"),
+        transport=resume_transport,
+        clock=_Clock(),
+    )
+    assert resume_transport.post_count == 0
+    assert result["status"] == "transport_error"
+    assert result["reason"] == "interrupted_attempt_no_retry"
+
+
+def test_harmless_ollama_metadata_is_allowed_but_output_extras_are_invalid(
+    tmp_path: Path,
+):
+    requests = [_prepared(1), _prepared(2)]
+    harmless = _Transport(
+        [_extractor_output(), _extractor_output()],
+        envelope_extras={"context": [1, 2, 3], "runtime_metadata": {"gpu": True}},
+        message_extras={"metadata": {"format": "json"}},
+    )
+    [first] = run_model_batch(
+        requests,
+        tmp_path / "safe",
+        ordinals=[1],
+        progress=lambda event: None,
+        transport=harmless,
+        clock=_Clock(),
+    )
+    assert first["status"] == "valid"
+
+    dangerous = _Transport(
+        [_extractor_output()], message_extras={"thinking": "hidden output"}
+    )
+    results = run_model_batch(
+        requests,
+        tmp_path / "unsafe",
+        ordinals=[2],
+        progress=lambda event: None,
+        transport=dangerous,
+        clock=_Clock(),
+    )
+    second = next(row for row in results if row["ordinal"] == 2)
+    assert second["status"] == "invalid"
+
+
 def test_schema_valid_unusable_output_is_permanent_invalid(tmp_path: Path):
     request = _prepared(1)
     transport = _Transport([_extractor_output("unusable")])
@@ -427,6 +508,42 @@ def test_default_batch_continues_after_healthy_fixed_pilot(tmp_path: Path):
     assert all(row["status"] == "valid" for row in results)
 
 
+def test_explicit_nonpilot_cannot_bypass_fixed_pilot(tmp_path: Path):
+    requests = [_prepared(ordinal) for ordinal in range(1, 76)]
+    blocked_transport = _Transport([])
+    with pytest.raises(SecGemmaContentRiskInputError, match="healthy fixed pilot"):
+        run_model_batch(
+            requests,
+            tmp_path,
+            ordinals=[2],
+            progress=lambda event: None,
+            transport=blocked_transport,
+            clock=_Clock(),
+        )
+    assert blocked_transport.post_count == 0
+
+    pilot_transport = _Transport([_extractor_output() for _ in range(6)])
+    run_model_batch(
+        requests,
+        tmp_path,
+        ordinals=[1, 15, 30, 45, 60, 75],
+        progress=lambda event: None,
+        transport=pilot_transport,
+        clock=_Clock(),
+    )
+    nonpilot_transport = _Transport([_extractor_output()])
+    results = run_model_batch(
+        requests,
+        tmp_path,
+        ordinals=[2],
+        progress=lambda event: None,
+        transport=nonpilot_transport,
+        clock=_Clock(),
+    )
+    assert nonpilot_transport.post_count == 1
+    assert next(row for row in results if row["ordinal"] == 2)["status"] == "valid"
+
+
 def test_resume_rejects_changed_original_runtime_identity(tmp_path: Path):
     request = _prepared(1)
     run_model_batch(
@@ -453,6 +570,55 @@ def test_resume_rejects_changed_original_runtime_identity(tmp_path: Path):
             clock=_Clock(),
         )
     assert transport.post_count == 0
+
+
+def test_resume_ignores_observational_tag_hash_and_unrelated_models(tmp_path: Path):
+    request = _prepared(1)
+    run_model_batch(
+        [request],
+        tmp_path,
+        ordinals=[1],
+        progress=lambda event: None,
+        transport=_Transport([_extractor_output()]),
+        clock=_Clock(),
+    )
+    changed_tags = _Transport(
+        [],
+        extra_models=[{"name": "unrelated:latest", "digest": "c" * 64}],
+    )
+    results = run_model_batch(
+        [request],
+        tmp_path,
+        ordinals=[1],
+        progress=lambda event: None,
+        transport=changed_tags,
+        clock=_Clock(),
+    )
+    assert results[0]["status"] == "valid"
+    assert changed_tags.post_count == 0
+
+
+def test_progress_counts_only_selected_ordinals(tmp_path: Path):
+    requests = [_prepared(1), _prepared(2)]
+    run_model_batch(
+        requests,
+        tmp_path,
+        ordinals=[1],
+        progress=lambda event: None,
+        transport=_Transport([_extractor_output()]),
+        clock=_Clock(),
+    )
+    progress: list[dict[str, Any]] = []
+    run_model_batch(
+        requests,
+        tmp_path,
+        ordinals=[2],
+        progress=progress.append,
+        transport=_Transport([_extractor_output()]),
+        clock=_Clock(),
+    )
+    assert progress[0]["completed_count"] == 1
+    assert progress[0]["estimated_remaining_seconds"] == 0.0
 
 
 def test_load_revalidates_output_evidence_ids_and_hashes(tmp_path: Path):

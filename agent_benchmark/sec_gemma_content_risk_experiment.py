@@ -95,7 +95,17 @@ def _validate_model_identity_guard(value: Mapping[str, Any]) -> dict[str, Any]:
             ):
                 raise SecGemmaContentRiskError("Model identity response hash changed")
         identities[position] = identity
-    if identities["before"] != identities["after"]:
+    stable_fields = (
+        "schema_version",
+        "ollama_version",
+        "model_name",
+        "model_manifest_sha256",
+        "semantic_runtime_fingerprint_sha256",
+    )
+    if any(
+        identities["before"][name] != identities["after"][name]
+        for name in stable_fields
+    ):
         raise SecGemmaContentRiskError("Local Gemma identity changed during the batch")
     return {
         "passed": True,
@@ -380,9 +390,23 @@ def _chronology_proof(frame: pd.DataFrame, schedule: pd.DataFrame) -> dict[str, 
     nonoverlapping = True
     previous_exit = -1
     for row in scheduled.to_dict(orient="records"):
-        available_position = positions[str(row["availability_session"])]
-        entry_position = positions[str(row["entry_open"])]
-        exit_position = positions[str(row["exit_open"])]
+        available = str(row["availability_session"])
+        entry = row.get("entry_open")
+        exit_day = row.get("exit_open")
+        if (
+            available not in positions
+            or not isinstance(entry, str)
+            or entry not in positions
+            or not isinstance(exit_day, str)
+            or exit_day not in positions
+        ):
+            next_open = False
+            fixed_horizon = False
+            nonoverlapping = False
+            continue
+        available_position = positions[available]
+        entry_position = positions[entry]
+        exit_position = positions[exit_day]
         next_open &= entry_position == available_position + 1
         fixed_horizon &= exit_position == available_position + CASH_SESSIONS + 1
         nonoverlapping &= entry_position > previous_exit
