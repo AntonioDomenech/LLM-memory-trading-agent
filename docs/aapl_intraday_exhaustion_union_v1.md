@@ -37,26 +37,51 @@ reproduce exactly 121 complete fixed-union opportunities from 2005 through
 candidate buyback finishes earlier, so the candidate and the open-to-open union
 receive exactly the same opportunities.
 
+The inherited signal module is additionally bound to literal SHA-256
+`a30224763c9858aed905b76215c2c5a66eddd58f107182d751d8eb6a32688c6e`.
+The exact 121 accepted decision dates, serialized as ascending ISO dates with
+one `\n` after every date including the last, must hash to
+`b4bec71ac4159086edb1faa3151630bb524b6f2e8b7fdaebd2ebf5dab68dbb13`.
+Count equality without this date identity is not enough.
+
 ## Frozen trading rule
 
 For a union decision made after completed close `t`:
 
-1. Commit at close `t` to both legs without knowing any `t+1` value.
+1. Commit at close `t` to both the sell and unconditional same-day buyback
+   policy without knowing any `t+1` value.
 2. Sell all AAPL at adjusted open `t+1`, including adverse per-leg cost.
-3. Remain 100% in non-interest-bearing cash during session `t+1`.
-4. Buy AAPL with all available cash at adjusted close `t+1`, including the
-   same adverse per-leg cost.
+3. Once the sale proceeds are mechanically known, submit a broker-supported
+   notional market-on-close order for the full realized cash amount before the
+   closing-auction cutoff. The order size may depend only on those sale
+   proceeds, never on a later `t+1` price or signal.
+4. Remain 100% in non-interest-bearing cash during session `t+1` and fill the
+   unconditional order at adjusted close `t+1`, including the same adverse
+   per-leg cost.
 5. Hold AAPL overnight and thereafter until another canonical union signal.
 
-The close fill represents a precommitted market-on-close order. It is not a
-decision made after observing the close. The experiment may not cancel, delay
-or condition the buyback on any `t+1` observation.
+Adjusted close is the historical proxy for the official closing auction. The
+policy is precommitted; only its notional size is mechanically determined from
+the realized open-sale cash. It is not a decision made after observing the
+close. The experiment may not cancel, delay or condition the buyback on any
+other `t+1` observation. Auction rejection or a missing/non-positive close must
+fail the experiment; the ledger may not invent another fill.
 
 Target exposure is exactly 0% or 100% AAPL. Shorting, leverage, borrowing,
 negative cash and interest on cash are forbidden. Fractional shares are
 allowed. Adjusted open is `raw open * adjusted close / raw close`; adjusted
 close is used for the close fill. Every changing leg pays either 5 basis points
 or 10 basis points of adverse execution cost.
+
+For cost fraction `c`, exact fractional-share accounting is:
+
+- initial shares = starting cash / (`initial adjusted open * (1 + c)`);
+- open-sale cash = prior shares * `adjusted open * (1 - c)`;
+- close-buy shares = all sale cash / (`adjusted close * (1 + c)`);
+- cash after each all-in buy is exactly zero, apart from floating-point dust
+  smaller than `1e-10`, which is set to zero; and
+- there is no terminal liquidation or terminal fee because both strategy and
+  benchmark are valued while holding their positions.
 
 ## Period and controls
 
@@ -107,6 +132,13 @@ Failure rejects this exact hypothesis immediately. No 2019-or-later row may be
 opened. Passing permits a separately committed, unchanged 2019-2023 repeated
 historical continuation audit; only another pass may permit a repeated
 2024-onward audit.
+
+This document authorizes development only. It does not choose how a pending
+late-2018 signal, account state or cooldown crosses into 2019, nor how a
+late-2023 state crosses into 2024. Before any later-stage byte is opened, a
+separate pushed continuation preregistration must bind those boundary and
+carryover rules. Until then, the final two development rows remain permanently
+ineligible for this development score.
 
 ## Runtime and evidence scope
 
