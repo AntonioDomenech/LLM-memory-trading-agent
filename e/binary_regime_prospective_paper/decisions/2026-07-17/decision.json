@@ -1,0 +1,195 @@
+{
+  "account_union_cash_signal": false,
+  "action": "HOLD_AAPL",
+  "as_of_close": "2026-07-17",
+  "broker_calls": 0,
+  "continuity": {
+    "audited_action_stream_sha256": "f77c68462ced8158bca6bf5a0aec95b4161bacd811075048e7918ba1de4d15ed",
+    "audited_final_state": {
+      "lesson_discount": 0.995,
+      "minimum_effective_lessons": 12.0,
+      "negative_mean_threshold": -0.001,
+      "positive_mean_threshold": 0.001,
+      "regime_feature_order": [
+        "spy_return_20",
+        "qqq_return_20",
+        "risk_on"
+      ],
+      "regime_order": [
+        "risk_on",
+        "not_risk_on"
+      ],
+      "schema_version": "binary-regime-union-selector-state-v1",
+      "states": {
+        "not_risk_on": {
+          "cash_selected": true,
+          "n_eff": 116.39234446766753,
+          "n_raw": 174,
+          "weighted_label_sum": 0.9061124236771511,
+          "weighted_squared_label_sum": 0.13465402861355485
+        },
+        "risk_on": {
+          "cash_selected": false,
+          "n_eff": 26.189400890947976,
+          "n_raw": 28,
+          "weighted_label_sum": -0.09653239881787673,
+          "weighted_squared_label_sum": 0.015184634457865361
+        }
+      },
+      "structural_default_cash": {
+        "not_risk_on": true,
+        "risk_on": false
+      }
+    },
+    "audited_rows": 6875,
+    "exact_prefix_action_stream": true,
+    "exact_prefix_prices": false,
+    "fresh_frozen_state_compatibility": {
+      "decision_latches_exact": true,
+      "numeric_drift_tolerance": 0.0001,
+      "regimes": {
+        "not_risk_on": {
+          "cash_selected_exact": true,
+          "n_raw_exact": true,
+          "numeric_absolute_differences": {
+            "n_eff": 0.0,
+            "weighted_label_sum": 3.076052345507563e-06,
+            "weighted_squared_label_sum": 1.0314835702240899e-07
+          }
+        },
+        "risk_on": {
+          "cash_selected_exact": true,
+          "n_raw_exact": true,
+          "numeric_absolute_differences": {
+            "n_eff": 0.0,
+            "weighted_label_sum": 2.6527286606098377e-06,
+            "weighted_squared_label_sum": 1.4734583385009326e-07
+          }
+        }
+      }
+    },
+    "fresh_rows": 6881,
+    "fresh_rows_after_audit": 6,
+    "prefix_price_compatibility": {
+      "accepted_as_numerical_vendor_revision": true,
+      "adjusted_relative_tolerance": 0.0001,
+      "all_values_exact": false,
+      "columns": {
+        "aapl_adj_close": {
+          "changed_values": 5865,
+          "exact": false,
+          "maximum_absolute_difference": 7.62939453125e-05,
+          "maximum_relative_difference": 1.0524717205491946e-06
+        },
+        "aapl_adj_open": {
+          "changed_values": 6127,
+          "exact": false,
+          "maximum_absolute_difference": 7.862955828841223e-05,
+          "maximum_relative_difference": 1.0524717203476488e-06
+        },
+        "aapl_close": {
+          "changed_values": 2138,
+          "exact": false,
+          "maximum_absolute_difference": 5.684341886080802e-14,
+          "maximum_relative_difference": 4.306311148132514e-16
+        },
+        "aapl_open": {
+          "changed_values": 2156,
+          "exact": false,
+          "maximum_absolute_difference": 5.684341886080802e-14,
+          "maximum_relative_difference": 4.306311148132514e-16
+        },
+        "qqq_adj_close": {
+          "changed_values": 5893,
+          "exact": false,
+          "maximum_absolute_difference": 0.00018310546875,
+          "maximum_relative_difference": 1.430934941401881e-06
+        },
+        "spy_adj_close": {
+          "changed_values": 5889,
+          "exact": false,
+          "maximum_absolute_difference": 0.000213623046875,
+          "maximum_relative_difference": 1.3861658598076447e-06
+        }
+      },
+      "raw_absolute_tolerance": 1e-12
+    },
+    "preserved_frozen_checkpoint_state_exact": true
+  },
+  "contract_version": "aapl-binary-regime-prospective-paper-v1",
+  "cost_scenarios_bps_per_changing_leg": [
+    5.0,
+    10.0
+  ],
+  "created_at_utc": "2026-07-19T21:07:52.595084Z",
+  "evidence_classification": "prospective_paper_decision_before_outcome",
+  "exit_price": null,
+  "exit_role_if_cash": "following_actual_AAPL_adjusted_open",
+  "external_publication_requirement": {
+    "branch": "codex/aapl-binary-regime-prospective-paper",
+    "must_commit_and_push_packet_before_utc": "2026-07-20T13:30:00Z"
+  },
+  "fill_price": null,
+  "fill_role": "next_actual_AAPL_adjusted_open_after_as_of_close",
+  "frozen_learning_cutoff": "2023-12-31",
+  "implementation_authority": {
+    "branch": "codex/aapl-binary-regime-prospective-paper",
+    "clean_before_download": true,
+    "commit": "bb5779a98472bac4a6f0590c229ac428b6c79963",
+    "files": {
+      "agent_benchmark/binary_regime_prospective_paper.py": {
+        "git_blob": "e232ad4bdf1374192c2b8083b483933f6c2c5c79",
+        "literal_sha256": "b249deeb2452443717f227f83a05dd153aad0984e8cbf21afc03321440fc7e27"
+      },
+      "agent_benchmark/binary_regime_union_selector.py": {
+        "git_blob": "8f4fa42e0847f88d3dc28cf7e6e76af9334c617e",
+        "literal_sha256": "0527bf15a238c636577b09c095f7db3cec0f6dcf871265e935b352a0e3caefb5"
+      },
+      "agent_benchmark/chronological_exhaustion_expert.py": {
+        "git_blob": "3d01affe636f2917306358a7d80f285b5a10f1d4",
+        "literal_sha256": "a30224763c9858aed905b76215c2c5a66eddd58f107182d751d8eb6a32688c6e"
+      },
+      "agent_benchmark/unleveraged_aapl.py": {
+        "git_blob": "9670a75fda0cd3bb924d1be6a3707a48b95fb113",
+        "literal_sha256": "ad752cc5d57edb644b4134b37f0b86a5ee5b7f1bb9d65dda9eea0e2933c0f590"
+      },
+      "docs/aapl_binary_regime_prospective_paper.md": {
+        "git_blob": "c158cb5c838ebdd4071ec48e918811d8ce3cab88",
+        "literal_sha256": "9c72744358186879d26ba443384c535965c941603cafddb6cbdad1addd87f8e0"
+      },
+      "e/binary_regime_longrun_audit_v1/authorized_inputs/aapl_spy_qqq_through_2026_ytd.csv": {
+        "git_blob": "358ff80f066ae3ba36ee66613fc90d62dbc31a2f",
+        "literal_sha256": "cf384e8218f97d4c6e7ca89860877ef5edb67e938af66886bdf81912bd35479b"
+      },
+      "e/binary_regime_union_selector_v1/binary-regime-union-selector-validation-v1/validation_checkpoint_through_2023.json": {
+        "git_blob": "f6f0cbb9962b8796f0f25a4144d32cd406f93c6e",
+        "literal_sha256": "04eb9aab72ddf1ce51ea65a12aef276a7ad0e5135c2c9b29fdf91882af865b8a"
+      },
+      "tests/test_binary_regime_prospective_paper.py": {
+        "git_blob": "7dca65bb08e735a53e26021f5eb82e547757f0d1",
+        "literal_sha256": "ad830e8349568458cfd5cad43a80b4412d303c3ac5a171fdbc873d4c948b2d70"
+      }
+    },
+    "upstream_commit": "bb5779a98472bac4a6f0590c229ac428b6c79963"
+  },
+  "local_prepublication_check_utc": "2026-07-19T21:07:52.755218Z",
+  "market_snapshot_rows": 6881,
+  "market_snapshot_sha256": "5b6e0f3d6b95ce8eb741dd8af58b5c91e72a9e3eb177a314cfb267c4ef47d93c",
+  "original_sealed_audit_fixed_policy_candidate": false,
+  "original_sealed_audit_strict_recent_history_pass": false,
+  "outcome": null,
+  "outcome_known": false,
+  "policy": "frozen_2023_binary_regime_union_selector",
+  "promotion_basis": "current_goal_long_term_success_post_hoc_override_of_the_older_strict_recent_gate",
+  "qqq_return_20": -0.03656120891608339,
+  "real_money_actions": 0,
+  "reason": "no accepted account-union cash signal",
+  "risk_on": false,
+  "schema_version": "binary-regime-prospective-paper-decision-v1",
+  "sealed_action_stream_sha256": "f77c68462ced8158bca6bf5a0aec95b4161bacd811075048e7918ba1de4d15ed",
+  "selector_cash_prediction": false,
+  "selector_cash_signal": false,
+  "spy_return_20": 0.005728858950436733,
+  "target_exposure_next_open": 1.0,
+  "union_candidate_signal": false
+}

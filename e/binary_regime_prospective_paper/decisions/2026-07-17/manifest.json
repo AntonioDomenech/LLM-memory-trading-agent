@@ -1,0 +1,20 @@
+{
+  "as_of_close": "2026-07-17",
+  "contract_version": "aapl-binary-regime-prospective-paper-v1",
+  "files": {
+    "decision.json": {
+      "bytes": 7673,
+      "sha256": "f06758da0a512ce28e3971cb62756fb0e9179f4671c25a4e2cc5e8e79ffa6105"
+    },
+    "initial_paper_state.json": {
+      "bytes": 1688,
+      "sha256": "91f13ebdda2ab17741f10905bcf6eed7df7a4f1fb44b925b96dd7dc0f7b23196"
+    },
+    "market_snapshot.csv": {
+      "bytes": 852078,
+      "sha256": "5b6e0f3d6b95ce8eb741dd8af58b5c91e72a9e3eb177a314cfb267c4ef47d93c"
+    }
+  },
+  "outcome_known": false,
+  "schema_version": "binary-regime-prospective-paper-manifest-v1"
+}

@@ -1,0 +1,45 @@
+{
+  "adjustment_rebase_formula": "new_units = old_units * old_anchor_adjusted_close / new_snapshot_anchor_adjusted_close",
+  "as_of_close": "2026-07-17",
+  "benchmark_target_for_next_open": 1.0,
+  "common_starting_adjusted_units": 2.99634454743566,
+  "common_starting_cash": 0.0,
+  "completed_cash_episodes": 0,
+  "cost_ledgers": {
+    "10bps": {
+      "adjustment_anchor_adjusted_close": 333.739990234375,
+      "adjustment_anchor_date": "2026-07-17",
+      "benchmark_adjusted_units": 2.99634454743566,
+      "benchmark_cash": 0.0,
+      "benchmark_equity": 1000.0,
+      "changing_legs": 0,
+      "cost_bps_per_changing_leg": 10.0,
+      "estimated_costs": 0.0,
+      "strategy_adjusted_units": 2.99634454743566,
+      "strategy_cash": 0.0,
+      "strategy_equity": 1000.0
+    },
+    "5bps": {
+      "adjustment_anchor_adjusted_close": 333.739990234375,
+      "adjustment_anchor_date": "2026-07-17",
+      "benchmark_adjusted_units": 2.99634454743566,
+      "benchmark_cash": 0.0,
+      "benchmark_equity": 1000.0,
+      "changing_legs": 0,
+      "cost_bps_per_changing_leg": 5.0,
+      "estimated_costs": 0.0,
+      "strategy_adjusted_units": 2.99634454743566,
+      "strategy_cash": 0.0,
+      "strategy_equity": 1000.0
+    }
+  },
+  "created_at_utc": "2026-07-19T21:07:52.595084Z",
+  "decision_sha256": "f06758da0a512ce28e3971cb62756fb0e9179f4671c25a4e2cc5e8e79ffa6105",
+  "initial_equity": 1000.0,
+  "no_pre_paper_return_scored": true,
+  "pending_decision_as_of": "2026-07-17",
+  "price_basis": "AAPL adjusted prices with snapshot-to-snapshot rebasing",
+  "real_money": false,
+  "schema_version": "binary-regime-prospective-paper-state-v1",
+  "strategy_target_for_next_open": 1.0
+}
