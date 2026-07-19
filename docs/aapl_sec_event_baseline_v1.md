@@ -75,9 +75,11 @@ eligible filing whose conservative `availability_session` is market session
 4. buy AAPL again at adjusted open `t+21`.
 
 Equivalently, target exposure is zero on decision rows `t` through `t+19` and
-returns to one on decision row `t+20`. Multiple same-day or overlapping filing
-windows are combined by union. A later filing may therefore extend an active
-cash interval. Costs occur only when the combined 0/1 target changes.
+returns to one on decision row `t+20`. As in the inherited SEC overlay
+contract, a filing that arrives while a cash episode is already scheduled or
+active is audited but cannot schedule or extend another episode. Same-session
+filings therefore produce one trading episode while both metadata rows remain
+preserved. Costs occur only when the 0/1 target changes.
 
 The 20-session horizon is inherited unchanged from the already preregistered
 SEC overlay contract. It is not selected from this experiment's returns.
