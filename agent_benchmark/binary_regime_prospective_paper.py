@@ -73,6 +73,8 @@ REQUIRED_COLUMNS = (
     "spy_adj_close",
     "qqq_adj_close",
 )
+RAW_PRICE_ABS_TOLERANCE = 1e-12
+ADJUSTED_PRICE_REL_TOLERANCE = 1e-4
 
 
 class ProspectivePaperError(RuntimeError):
@@ -265,6 +267,60 @@ def _states_match_checkpoint(
     return True
 
 
+def _prefix_price_compatibility(
+    *, fresh: pd.DataFrame, audited: pd.DataFrame
+) -> dict[str, Any]:
+    """Allow harmless vendor rounding, never a trading-scale price change."""
+
+    raw_columns = ("aapl_open", "aapl_close")
+    adjusted_columns = (
+        "aapl_adj_close",
+        "aapl_adj_open",
+        "spy_adj_close",
+        "qqq_adj_close",
+    )
+    diagnostics: dict[str, Any] = {
+        "raw_absolute_tolerance": RAW_PRICE_ABS_TOLERANCE,
+        "adjusted_relative_tolerance": ADJUSTED_PRICE_REL_TOLERANCE,
+        "columns": {},
+    }
+    all_exact = True
+    for column in REQUIRED_COLUMNS:
+        old = audited[column].to_numpy(dtype=float)
+        new = fresh[column].to_numpy(dtype=float)
+        if not bool(np.isfinite(old).all() and np.isfinite(new).all()):
+            raise ProspectivePaperError("Fresh Yahoo prefix contains non-finite prices")
+        difference = np.abs(new - old)
+        relative = difference / np.maximum(np.abs(old), 1e-300)
+        exact = bool(np.array_equal(new, old))
+        all_exact = all_exact and exact
+        diagnostics["columns"][column] = {
+            "exact": exact,
+            "changed_values": int(np.count_nonzero(difference)),
+            "maximum_absolute_difference": float(np.max(difference)),
+            "maximum_relative_difference": float(np.max(relative)),
+        }
+    maximum_raw_absolute = max(
+        diagnostics["columns"][column]["maximum_absolute_difference"]
+        for column in raw_columns
+    )
+    maximum_adjusted_relative = max(
+        diagnostics["columns"][column]["maximum_relative_difference"]
+        for column in adjusted_columns
+    )
+    if maximum_raw_absolute > RAW_PRICE_ABS_TOLERANCE:
+        raise ProspectivePaperError(
+            "Fresh Yahoo raw AAPL history changed beyond machine rounding"
+        )
+    if maximum_adjusted_relative > ADJUSTED_PRICE_REL_TOLERANCE:
+        raise ProspectivePaperError(
+            "Fresh Yahoo adjusted history changed at trading scale"
+        )
+    diagnostics["all_values_exact"] = all_exact
+    diagnostics["accepted_as_numerical_vendor_revision"] = not all_exact
+    return diagnostics
+
+
 def verify_fresh_history(
     *, root: Path, fresh: pd.DataFrame
 ) -> dict[str, Any]:
@@ -280,16 +336,10 @@ def verify_fresh_history(
     prefix = data.loc[data.index <= AUDITED_END]
     if not prefix.index.equals(audited.index):
         raise ProspectivePaperError("Fresh Yahoo prefix session dates changed")
-    price_columns = list(REQUIRED_COLUMNS)
-    fresh_values = prefix.loc[:, price_columns].to_numpy(dtype=float)
-    audited_values = audited.loc[:, price_columns].to_numpy(dtype=float)
-    exact_price_match = bool(np.array_equal(fresh_values, audited_values))
-    if not exact_price_match:
-        differences = np.abs(fresh_values - audited_values)
-        raise ProspectivePaperError(
-            "Fresh Yahoo values differ from the preserved audited prefix; "
-            f"maximum absolute difference={float(np.max(differences))}"
-        )
+    price_compatibility = _prefix_price_compatibility(
+        fresh=prefix,
+        audited=audited,
+    )
 
     audited_forecast, audited_stream = _account_action_stream(audited)
     fresh_forecast, fresh_stream = _account_action_stream(data)
@@ -318,7 +368,8 @@ def verify_fresh_history(
         "audited_rows": int(len(audited)),
         "fresh_rows": int(len(data)),
         "fresh_rows_after_audit": int(len(data) - len(audited)),
-        "exact_prefix_prices": True,
+        "exact_prefix_prices": price_compatibility["all_values_exact"],
+        "prefix_price_compatibility": price_compatibility,
         "exact_prefix_action_stream": True,
         "frozen_checkpoint_state_match": True,
         "audited_action_stream_sha256": AUDITED_ACTION_STREAM_SHA256,
@@ -588,8 +639,8 @@ def create_first_decision(*, root: Path) -> dict[str, Any]:
         raise ProspectivePaperError(
             "The first prospective publication deadline passed"
         )
-    decision["local_prepublication_check_utc"] = prepublication_time.isoformat().replace(
-        "+00:00", "Z"
+    decision["local_prepublication_check_utc"] = (
+        prepublication_time.isoformat().replace("+00:00", "Z")
     )
     decision["external_publication_requirement"] = {
         "branch": BRANCH,

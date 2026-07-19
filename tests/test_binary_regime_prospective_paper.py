@@ -12,6 +12,7 @@ from agent_benchmark.binary_regime_prospective_paper import (
     ProspectivePaperError,
     _account_action_stream,
     _load_audited_input,
+    _prefix_price_compatibility,
     _publish,
     _sealed_action_stream_sha256,
     _states_match_checkpoint,
@@ -69,6 +70,19 @@ def test_preserved_input_reproduces_the_sealed_action_fingerprint():
     assert _sealed_action_stream_sha256(stream) == (
         "f77c68462ced8158bca6bf5a0aec95b4161bacd811075048e7918ba1de4d15ed"
     )
+
+
+def test_price_compatibility_accepts_rounding_but_rejects_trading_scale_change():
+    audited = _cash_signal_frame()
+    fresh = audited.copy()
+    fresh.loc[fresh.index[0], "aapl_open"] += 1e-13
+    fresh.loc[fresh.index[0], "qqq_adj_close"] *= 1.0 + 1e-6
+    result = _prefix_price_compatibility(fresh=fresh, audited=audited)
+    assert result["accepted_as_numerical_vendor_revision"] is True
+
+    fresh.loc[fresh.index[0], "qqq_adj_close"] *= 1.0 + 2e-4
+    with pytest.raises(ProspectivePaperError, match="trading scale"):
+        _prefix_price_compatibility(fresh=fresh, audited=audited)
 
 
 def test_cash_outcome_rebases_adjusted_units_and_applies_both_cost_legs():

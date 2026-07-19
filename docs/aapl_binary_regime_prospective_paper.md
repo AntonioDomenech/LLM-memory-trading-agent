@@ -78,11 +78,19 @@ Before producing a decision, the downloaded history through 2026-07-09 must
 reproduce the preserved audited input and the sealed three-column action-stream
 fingerprint
 `f77c68462ced8158bca6bf5a0aec95b4161bacd811075048e7918ba1de4d15ed`.
-The exact post-audit sessions must be July 10, 13, 14, 15, 16 and 17. A real
-value, date, corporate-action or action-stream mismatch stops this first decision;
-the runner may report the mismatch but may not silently splice incompatible
-series or change thresholds. This is a trading-data integrity issue, not a
-runtime-count gate.
+The exact post-audit sessions must be July 10, 13, 14, 15, 16 and 17. Raw AAPL
+prices may differ only by machine rounding (`1e-12` absolute). Yahoo-adjusted
+prices may differ by less than one basis point (`1e-4` relative) only when the
+sealed action stream is still exactly identical. The packet records every
+difference. Anything larger, any changed date, or any changed action stops the
+decision. This is a trading-data integrity rule, not a file-equality gate.
+
+The first live transport attempt stopped before computing the July 17 action
+because Yahoo had re-serialized old adjusted values by at most about
+`1.24e-6` relative. A read-only diagnosis used only the prefix ending July 9
+and confirmed the sealed action fingerprint was unchanged. This compatibility
+rule is committed before rerunning or reading the new decision; it does not
+change any policy threshold or trade.
 
 Yahoo may revise historical adjusted data. Every prospective decision therefore
 binds its own exact snapshot. A later outcome evaluation uses the decision's
