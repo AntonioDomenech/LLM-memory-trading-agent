@@ -1,11 +1,15 @@
 # AAPL long/cash approach comparison
 
-Updated through the intraday-only exhaustion union v1 development rejection on
-2026-07-19. It used the exact 121 fixed-union signals and changed only the
-buyback from the following open to the same session's close. It remained very
-strong versus AAPL, but trailed the existing union by `-0.003136` log edge at
-both costs and improved it in only 2/7 folds. This is a trading-result
-rejection; no 2019-or-later row was opened. The preceding SEC/Gemma
+Updated through the first frozen binary-regime prospective paper decision on
+2026-07-19. The exact pre-outcome packet was pushed at commit `6514eab` before
+the next market open. Its July 17 close decision is `HOLD_AAPL`, so the July 20
+open target remains 100% AAPL. No outcome or prospective return exists yet.
+The preceding intraday-only exhaustion union v1 development test used the exact
+121 fixed-union signals and changed only the buyback from the following open to
+the same session's close. It remained very strong versus AAPL, but trailed the
+existing union by `-0.003136` log edge at both costs and improved it in only
+2/7 folds. This is a trading-result rejection; no 2019-or-later row was opened.
+The preceding SEC/Gemma
 corroborated-content attempt was terminally rejected at its corrected 0/6
 model-usability pilot before any market price was opened.
 The three preceding
@@ -76,6 +80,18 @@ exposure, no shorting, no leverage, no negative cash, the same adjusted-open
 ledger as AAPL buy-and-hold, and no paid API. Published 2024-2026
 figures are repeated historical audits, not a fresh prospective track record.
 
+## Prospective paper record
+
+| Frozen policy | First as-of close | Saved action | Next-open target | Outcome known? | Pushed authority | Status |
+|---|---|---|---:|---|---|---|
+| Binary-regime union selector, frozen through 2023 | 2026-07-17 | HOLD AAPL | 100% AAPL | No | `6514eab` on `codex/aapl-binary-regime-prospective-paper` | Started; wait for genuinely future observations |
+
+This is the first evidence in the repository that was saved and pushed before
+its market outcome. It does not prove profit or reliability. The historical
+long-run result justified starting the paper record under the current goal's
+long-term route; the older sealed audit's stricter rejection remains accurately
+recorded.
+
 ## Approaches with published 2024-2026 audits
 
 Excess figures below are percentage points versus same-ledger AAPL
@@ -89,15 +105,17 @@ buy-and-hold at 5 bps per changing leg.
 | Weak-trend exhaustion v1 | 675-rule retrospective search | Won 16/24 years; +4.6839 pp mean annual excess | -3.5220 | +17.5368 | +1.5863 | +14.4778% | Strictly rejected; strongest lead, high selection-risk |
 | Sparse dual-trend exhaustion v1 | Sparse pre-2024 search | Won 11/24 years with many ties | -0.9844 | +5.0895 | 0.0000 | +3.8610% | Rejected; too inactive |
 | Hierarchical empirical-Bayes v1 | Genuine causal online learner | Broader 2000-2023 audit won 7 years; -0.2916 pp mean annual excess | -1.1820 | +8.7224 | +0.1518 | +7.1204% | Rejected; real 2025 edge but poor general reliability |
-| Binary-regime union selector v1 | Two-state causal selector over the fixed contextual-plus-weak-trend union; SPY/QQQ regime proxies | Rejected at 2019-2023 selector validation, but continuous 2005-2023 won 16/19 years at 5 bps and 14/19 at 10 bps | -3.4102 | +16.1942 | +1.9065 | +13.7815% | Strictly rejected on 2024; passed all 41 post-hoc long-run gates; strongest chronological long-run lead, but post-2023 learning changed no action |
+| Binary-regime union selector v1 | Two-state causal selector over the fixed contextual-plus-weak-trend union; SPY/QQQ regime proxies | Rejected at 2019-2023 selector validation, but continuous 2005-2023 won 16/19 years at 5 bps and 14/19 at 10 bps | -3.4102 | +16.1942 | +1.9065 | +13.7815% | Strict 2024 gate failed; all 41 post-hoc long-run gates passed; frozen policy moved to a disclosed prospective paper record on 2026-07-19 |
 
-The binary-regime selector is now the strongest chronological long-run lead.
+The binary-regime selector is the strongest chronological long-run lead.
 At 5 bps it beat AAPL in 18 of 22 reporting periods, passed all declared
 long-run robustness gates, and finished the 2024-2026-YTD window with 13.78%
-more wealth than AAPL. It still fails the main goal because it lost 2024 by
-3.41 percentage points. Its 21 new post-2023 lessons caused no threshold
-crossing and changed no trade, so the audit supports the already-learned fixed
-policy rather than useful continual learning.
+more wealth than AAPL. It failed strict success because it lost 2024 by 3.41
+percentage points. Its 21 new post-2023 lessons caused no threshold crossing and
+changed no trade, so the paper arm correctly uses the already-learned frozen
+policy. Under the current goal's separate long-term route, that policy has now
+made its first immutable prospective paper decision; there is not yet any
+prospective performance result.
 
 The contextual and weak-trend rules also have more historical winning years
 than losing years and positive continuous 2024-2026 relative wealth. All three
